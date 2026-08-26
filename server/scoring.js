@@ -36,6 +36,17 @@ const SOURCE = [
   { key: 'cam', score: -8000, re: /\b(cam|ts|telesync|telecine|hdcam|hdts|hc[ ._-]v\d+)\b|\b(?:2160p|1080p|720p)[ ._-]hc(?:[ ._-]v\d+)?[ ._-](?:x26[45]|h\.?26[45]|avc|hevc)\b/i },
 ];
 
+// Theater cams. Play never auto-picks them (score −8000). Sources hides them unless
+// the owner deletes the CAM keyword in Settings → Scoring.
+function isCamCandidate(c) {
+  if (!c) return false;
+  if ((c.attributes && c.attributes.source) === 'cam') return true;
+  if (c.source === 'cam') return true;
+  if ((c.reasons || []).some((r) => /\bsource cam\b/i.test(String(r)))) return true;
+  if (c.name && parseRelease(c.name).source === 'cam') return true;
+  return false;
+}
+
 // Video codecs — efficiency matters for streaming/direct-play compatibility.
 const CODEC = [
   { key: 'av1', score: 18, re: /\b(av1)\b/i },
@@ -72,6 +83,21 @@ const GROUP_TIER = [
   { score: 12, groups: ['RARBG', 'FGT', 'LEGION', 'LEGi0N', 'SPARKS', 'AMIABLE', 'GECKOS'] },
   { score: -50, groups: ['YTS', 'YIFY', 'GALAXYRG', 'RMTEAM', 'MEGUSTA', 'TGX', 'AOC', 'PSA'] }, // re-encoders
 ];
+const DEFAULT_TRUSTED_GROUPS = GROUP_TIER[0].groups.slice();
+const DEFAULT_AVOID_GROUPS = GROUP_TIER[2].groups.slice();
+// Shown in Settings → Scoring so the owner can delete CAM (or add more). Factory scoring
+// still uses the SOURCE table; this line is the on/off switch for that built-in penalty.
+const DEFAULT_SCORING_KEYWORDS = [{ term: 'CAM', score: -8000 }];
+const CAM_KEYWORD_RE = /^(cam|hdcam|hdts|telesync|telecine|ts|hc\.?v\d+)$/i;
+function isCamKeywordTerm(term) {
+  return CAM_KEYWORD_RE.test(String(term || '').trim());
+}
+function camScoringEnabled(customScoring) {
+  if (!customScoring) return true;
+  const kw = customScoring.keywords;
+  if (!Array.isArray(kw)) return true;
+  return kw.some((k) => isCamKeywordTerm(k && k.term));
+}
 const BAD_FLAGS = [
   // "HC" only means hardcoded subs when it sits next to a low source token (HC.HDRip / HC.HDTC) —
   // a bare "HC" (group fragment, unrelated token) must NOT eat a −200. korsub/hardsub/hardcoded are
@@ -258,7 +284,10 @@ function scoreRelease(candidate, policy = {}) {
     else if (years.length && !years.some((y) => Math.abs(y - policy.wantedYear) <= 1)) add('wrong year', -250);
   }
 
-  const src = matchOne(candidate.name, SOURCE); if (src) add(`source ${src.key}`, src.score);
+  const src = matchOne(candidate.name, SOURCE);
+  if (src && (src.key !== 'cam' || camScoringEnabled(policy.customScoring))) {
+    add(`source ${src.key}`, src.score);
+  }
   // Press-play, not archive: an unverified remux is usually the pretty dead NZB (NNTP 430 /
   // compressed). Prefer a same-res WEB-DL until health/store is proven. A verified store remux
   // keeps the raw remux bonus so remux fans still get the file they asked for.
@@ -379,6 +408,7 @@ function scoreRelease(candidate, policy = {}) {
   if (gScore) add(`group ${a.group} (${gClass})`, gScore);
   for (const k of cs.keywords || []) {
     if (!k || !k.term || !Number.isFinite(+k.score)) continue;
+    if (isCamKeywordTerm(k.term)) continue; // CAM on/off is the SOURCE cam rule, not a second penalty
     // Word-boundary match; spaces in the term match any scene separator (dot/dash/underscore).
     const safe = String(k.term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '[ ._-]');
     try {
@@ -547,4 +577,9 @@ function rankAudiobooks(candidates, policy = {}) {
     .map(({ _i, ...c }) => c);
 }
 
-module.exports = { parseRelease, scoreRelease, rankReleases, notTheMovie, normalizeLanguageCode, releaseLanguageTag, releaseLanguageTags, RES, SOURCE, parseAudiobook, scoreAudiobook, rankAudiobooks, audiobookLanguage };
+module.exports = {
+  parseRelease, scoreRelease, rankReleases, isCamCandidate, isCamKeywordTerm, camScoringEnabled,
+  DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
+  notTheMovie, normalizeLanguageCode, releaseLanguageTag, releaseLanguageTags, RES, SOURCE,
+  parseAudiobook, scoreAudiobook, rankAudiobooks, audiobookLanguage,
+};

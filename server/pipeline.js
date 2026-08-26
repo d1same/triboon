@@ -441,7 +441,12 @@ const TITLE_PREPARED_READY_MS = 180000;
 const ACTIVE_PLAYBACK_GRACE_MS = 120000;
 const PREPARED_CACHE_BYTES_1080 = 96 * 1024 * 1024;
 const PREPARED_CACHE_BYTES_4K = 192 * 1024 * 1024;
-const PREPARED_READ_AHEAD = 4;
+const PREPARED_CACHE_BYTES_1080_WIDE = 192 * 1024 * 1024;
+const PREPARED_CACHE_BYTES_4K_WIDE = 384 * 1024 * 1024;
+const PREPARED_PEEK_MIN = 4;
+const PREPARED_PEEK_MAX = 8;
+const PREPARED_PEEK_FRAC = 0.04;
+const PREPARED_PRESSURE_RATIO = 0.75;
 const PREPARED_RAM_FRACTION = 0.10;
 const PREPARED_TOTAL_MAX_BYTES = 512 * 1024 * 1024;
 const RESUME_WARM_COVERAGE_TTL_MS = 120000;
@@ -455,6 +460,293 @@ function mountHasActivePlayback(mount, now = Date.now()) {
   if ((Number(mount._activeStreamReads) || 0) > 0) return true;
   const touched = Number(mount._playbackTouched) || 0;
   return touched > 0 && now - touched < ACTIVE_PLAYBACK_GRACE_MS;
+}
+
+// Live connection allocator. Fair-share is the default. Auto mode may grow a starving
+// playhead and take extra read-ahead sockets from a fat one. Custom mode stays on even
+// split. Coverage is bytes AHEAD of the last player read — tail warmup must not look fat.
+const ALLOC_STARVE_SEC = 20;
+const ALLOC_FAT_SEC = 75;
+const ALLOC_STEAL_STEP = 2;
+const ALLOC_STARTUP_MS = 8000;
+const ALLOC_HOLD_MS = 8000;
+const ALLOC_STEAL_COOLDOWN_MS = 5000;
+const AUTO_BASE_CONNS = 10;
+const AUTO_HARD_MAX = 24;
+const DEFAULT_MBPS_PER_CONN = 8;
+
+function streamNeedMbps(vf) {
+  const big = (Number(vf && vf.size) || 0) > 4e9;
+  const durationSec = vf && vf._tracks && Number(vf._tracks.duration) > 0 ? Number(vf._tracks.duration) : 0;
+  const size = Number(vf && vf.size) || 0;
+  const measuredMbps = durationSec > 0 && size > 0 ? ((size * 8) / durationSec) / 1e6 : 0;
+  const avgMbps = Number.isFinite(measuredMbps) && measuredMbps > 0 ? measuredMbps : (big ? 45 : 12);
+  const need = Math.max(big ? 45 : 12, Math.min(big ? 120 : 50, avgMbps * (big ? 2.2 : 1.4)));
+  return Number.isFinite(need) && need > 0 ? need : (big ? 45 : 12);
+}
+
+function mountAheadBytes(vf) {
+  if (!vf) return null;
+  if (typeof vf.aheadCacheBytes !== 'function' && Number.isFinite(vf.aheadCacheBytes)) {
+    return Math.max(0, vf.aheadCacheBytes);
+  }
+  let n = 0;
+  let known = false;
+  for (const v of (vf.vols || [vf])) {
+    if (!v) continue;
+    if (typeof v.aheadCacheBytes === 'function') {
+      const a = v.aheadCacheBytes();
+      if (Number.isFinite(a)) { n += a; known = true; }
+    } else if (Number.isFinite(v.aheadCacheBytes)) {
+      n += v.aheadCacheBytes;
+      known = true;
+    }
+  }
+  return known ? Math.max(0, n) : null;
+}
+
+function fileIsFullyAhead(vf) {
+  const size = Number(vf && vf.size) || 0;
+  if (!(size > 0)) return false;
+  const ahead = mountAheadBytes(vf);
+  if (ahead == null) return false;
+  const offset = Number.isFinite(vf.lastPlaybackOffset) ? Math.max(0, vf.lastPlaybackOffset) : 0;
+  const remain = Math.max(0, size - offset);
+  return remain > 0 && ahead >= remain * 0.98;
+}
+
+function isIdleGraceViewer(vf) {
+  return (Number(vf && vf._activeStreamReads) || 0) <= 0;
+}
+
+function isStartupViewer(vf, now) {
+  const t = Number(vf && (vf._playbackTouched || vf._touched)) || 0;
+  return t > 0 && (now - t) >= 0 && (now - t) < ALLOC_STARTUP_MS;
+}
+
+function classifyStreamNeed(vf, now = Date.now()) {
+  if (!vf) return 'ok';
+  if (isStartupViewer(vf, now)) return 'ok';
+  const ahead = mountAheadBytes(vf);
+  if (ahead == null) return 'ok';
+  const mbps = streamNeedMbps(vf);
+  const coverage = mbps > 0 ? (ahead * 8) / (mbps * 1e6) : 0;
+  if (!Number.isFinite(coverage)) return 'ok';
+  if (isIdleGraceViewer(vf)) return coverage > ALLOC_FAT_SEC ? 'fat' : 'ok';
+  if (coverage < ALLOC_STARVE_SEC) return 'starve';
+  if (coverage > ALLOC_FAT_SEC) return 'fat';
+  return 'ok';
+}
+
+function heldAllocKind(vf, raw, now, holdMs) {
+  if (!vf || raw === 'ok') {
+    if (vf) { vf._allocKind = 'ok'; vf._allocKindSince = now; }
+    return 'ok';
+  }
+  if (vf._allocKind !== raw) {
+    vf._allocKind = raw;
+    vf._allocKindSince = now;
+    return 'ok';
+  }
+  const since = Number(vf._allocKindSince);
+  if (!Number.isFinite(since) || (now - since) < holdMs) return 'ok';
+  return raw;
+}
+
+// A 502 is one account saying it is full. With several providers that is not a
+// household-wide cap — only squeeze Auto grow when every usable provider is at 502.
+function mbpsPerConnection(perf = {}) {
+  const measured = Number(perf && perf.measuredMbpsPerConn);
+  if (Number.isFinite(measured) && measured > 0) return Math.max(2, Math.min(40, measured));
+  return DEFAULT_MBPS_PER_CONN;
+}
+
+function autoStreamCap(vf, perf = {}, { starving = false } = {}) {
+  const need = streamNeedMbps(vf);
+  const fromBw = Math.ceil(need / mbpsPerConnection(perf));
+  const want = Math.max(AUTO_BASE_CONNS, Number.isFinite(fromBw) ? fromBw : AUTO_BASE_CONNS);
+  const room = starving ? Math.ceil(want * 1.6) : want;
+  return Math.max(4, Math.min(AUTO_HARD_MAX, room));
+}
+
+function playbackRamFraction(totalMemMb = TOTAL_MEM_MB) {
+  const mb = Number(totalMemMb) || 0;
+  if (mb > 0 && mb < 4096) return 0.12;
+  if (mb > 0 && mb < 8192) return 0.15;
+  return 0.20;
+}
+
+function playbackCacheCapMb(big, totalMemMb = TOTAL_MEM_MB) {
+  const ramCapMb = Math.floor((Number(totalMemMb) || 0) * playbackRamFraction(totalMemMb));
+  const heapSafeMb = Math.max(big ? 96 : 48, Math.min(1536, Math.floor((Number(totalMemMb) || 0) * 0.08)));
+  const classCap = big ? 3072 : 1024;
+  const minMb = big ? 96 : 48;
+  return Math.max(minMb, Math.min(classCap, ramCapMb, heapSafeMb));
+}
+
+function cacheNeedWeight(vf, now = Date.now()) {
+  if (fileIsFullyAhead(vf)) return 0.35;
+  const kind = classifyStreamNeed(vf, now);
+  if (kind === 'starve') return 1.4;
+  if (kind === 'fat') return 0.75;
+  return 1;
+}
+
+function householdProviderLoad(providers) {
+  if (!Array.isArray(providers) || !providers.length) return { used: 0, cap: 0 };
+  let used = 0;
+  let cap = 0;
+  for (const p of providers) {
+    if (!p) continue;
+    cap += Math.max(0, Number(p.size) || 0);
+    used += ((p.busy && p.busy.size) || 0) + (Number(p.connecting) || 0) + ((p.queue && p.queue.length) || 0);
+  }
+  return { used, cap };
+}
+
+function preparedHouseHasRoom(providers) {
+  const { used, cap } = householdProviderLoad(providers);
+  if (!(cap > 0)) return true;
+  return used < cap * PREPARED_PRESSURE_RATIO;
+}
+
+function preparedPeekSockets(providers) {
+  const { used, cap } = householdProviderLoad(providers);
+  if (!(cap > 0)) return PREPARED_PEEK_MAX;
+  if (used >= cap * PREPARED_PRESSURE_RATIO) return PREPARED_PEEK_MIN;
+  return Math.max(PREPARED_PEEK_MIN, Math.min(PREPARED_PEEK_MAX, Math.floor(cap * PREPARED_PEEK_FRAC)));
+}
+
+function householdConnPressure(providers, now = Date.now()) {
+  if (!Array.isArray(providers) || !providers.length) return 1;
+  const live = providers.filter((p) => {
+    if (!p) return false;
+    if (typeof p.down === 'function') return !p.down();
+    return true;
+  });
+  const list = live.length ? live : providers.filter(Boolean);
+  if (!list.length) return 1;
+  const allCapped = list.every((p) => p.capHitAt && now - p.capHitAt < 60000);
+  return allCapped ? 0.5 : 1;
+}
+
+function allocateStreamConnections(mounts, perf = {}, opts = {}) {
+  const list = Array.isArray(mounts) ? mounts.filter(Boolean) : [];
+  const n = list.length;
+  if (!n) return Object.assign([], { stole: false });
+  const usable = Math.max(0, Number(perf.usableConnections) || 0);
+  const reserve = Math.max(0, Number(perf.reserveConnections) || 0);
+  const pool = usable > reserve ? usable - reserve : 0;
+  const downMbps = Number(perf.serverDownloadMbps) > 0 ? Number(perf.serverDownloadMbps) * 0.8 : 0;
+  const measuredPerConn = Number(perf.measuredMbpsPerConn) > 0 ? Number(perf.measuredMbpsPerConn) : 0;
+  const viewerChanged = opts.viewerChanged === true;
+  const custom = perf.connectionMode === 'custom' || opts.connectionMode === 'custom';
+  const growFrozen = opts.growFrozen === true;
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const holdMs = Number.isFinite(opts.holdMs) ? Math.max(0, opts.holdMs) : ALLOC_HOLD_MS;
+  const lastStealAt = Number(opts.lastStealAt) || 0;
+  const stealCooldown = Number.isFinite(opts.stealCooldownMs) ? opts.stealCooldownMs : ALLOC_STEAL_COOLDOWN_MS;
+  const caps = Array.isArray(opts.caps) ? opts.caps : null;
+
+  const meta = list.map((vf, i) => {
+    const floor = 4;
+    const raw = custom ? 'ok' : classifyStreamNeed(vf, now);
+    const kind = custom ? 'ok' : heldAllocKind(vf, raw, now, holdMs);
+    const configured = Number(caps && caps[i]);
+    const ownerCap = (Number(vf.size) || 0) > 4e9
+      ? Number(perf.maxConnPerStream4k)
+      : Number(perf.maxConnPerStream1080);
+    const autoCap = autoStreamCap(vf, perf, { starving: kind === 'starve' });
+    const fallback = custom
+      ? Math.max(floor, Number.isFinite(ownerCap) && ownerCap > 0 ? ownerCap : ((Number(vf.size) || 0) > 4e9 ? 20 : 12))
+      : (Number.isFinite(ownerCap) && ownerCap > 0 ? Math.min(autoCap, ownerCap) : autoCap);
+    const cap = Math.max(floor, Number.isFinite(configured) && configured > 0 ? configured : fallback);
+    return { vf, floor, cap, needMbps: streamNeedMbps(vf), kind };
+  });
+
+  const totalNeed = meta.reduce((sum, m) => sum + (Number.isFinite(m.needMbps) ? m.needMbps : 0), 0);
+  const bandwidthBound = downMbps > 0 && totalNeed > downMbps * 0.9;
+  const perConn = measuredPerConn > 0 ? measuredPerConn : mbpsPerConnection(perf);
+
+  let assignable = pool;
+  if (downMbps > 0 && perConn > 0) {
+    const pipeConns = Math.floor(downMbps / perConn);
+    if (Number.isFinite(pipeConns) && pipeConns >= 0) {
+      assignable = Math.min(assignable, Math.max(n * 4, pipeConns));
+    }
+  }
+  if (bandwidthBound && !custom) {
+    for (const m of meta) m.cap = Math.min(m.cap, Math.max(m.floor, Math.floor(assignable / n) + 2));
+  }
+
+  const noBudget = !(usable > 0);
+  const fair = assignable > 0 ? Math.max(4, Math.floor(assignable / n)) : 4;
+  const assigned = meta.map((m) => {
+    // No streaming-profile budget (tests / unset house): Auto still starts at 10.
+    const start = custom
+      ? (noBudget ? m.cap : fair)
+      : (noBudget ? AUTO_BASE_CONNS : Math.min(AUTO_BASE_CONNS, fair));
+    return Math.min(m.cap, Math.max(m.floor, start));
+  });
+    if (!custom) {
+    meta.forEach((m, i) => {
+      // A brand-new Play still starts at 10 even if the first articles already
+      // filled a small file. Drip to the floor only after that startup window.
+      if (fileIsFullyAhead(m.vf) && !isStartupViewer(m.vf, now)) assigned[i] = m.floor;
+      else if (m.kind === 'fat' && assigned[i] > AUTO_BASE_CONNS) assigned[i] = AUTO_BASE_CONNS;
+    });
+  }
+  let spare = Math.max(0, assignable - assigned.reduce((sum, v) => sum + v, 0));
+  const growCeiling = (growFrozen || bandwidthBound)
+    ? fair
+    : (custom || !(downMbps > 0) ? fair + 2 : Infinity);
+
+  const starve = [];
+  const fat = [];
+  const ok = [];
+  meta.forEach((m, i) => {
+    if (m.kind === 'starve') starve.push(i);
+    else if (m.kind === 'fat') fat.push(i);
+    else ok.push(i);
+  });
+
+  const grow = (i) => {
+    if (!custom && fileIsFullyAhead(meta[i].vf)) return false;
+    if (spare <= 0 || assigned[i] >= meta[i].cap || assigned[i] >= growCeiling) return false;
+    assigned[i]++;
+    spare--;
+    return true;
+  };
+  if (!growFrozen && !custom) {
+    const starting = [];
+    meta.forEach((m, i) => {
+      if (isStartupViewer(m.vf, now)) starting.push(i);
+    });
+    for (const i of starting) while (grow(i)) { /* a fresh Play/resume may use leftover spare immediately */ }
+    for (const i of starve) while (grow(i)) { /* leftover spare goes to starving streams first */ }
+  }
+
+  let stole = false;
+  const canSteal = !custom && !growFrozen && !viewerChanged && starve.length && fat.length
+    && (now - lastStealAt >= stealCooldown);
+  if (canSteal) {
+    for (const i of starve) {
+      let stolen = 0;
+      for (const j of fat) {
+        while (stolen < ALLOC_STEAL_STEP && assigned[j] > meta[j].floor && assigned[i] < meta[i].cap) {
+          assigned[j]--;
+          assigned[i]++;
+          stolen++;
+          stole = true;
+        }
+      }
+    }
+  }
+
+  if (spare > 0 && !growFrozen && !custom) {
+    for (const i of starve) while (grow(i)) { /* leftover spare stays unused unless a playhead is behind */ }
+  }
+  return Object.assign(assigned, { stole });
 }
 // Cold press-play races the top N candidates' fetch+mount+health concurrently and takes the first
 // HEALTHY one (startup win #2). Measured: a cold start is dominated by walking PAST dead/incomplete
@@ -717,6 +1009,8 @@ class Pipeline {
     this._playbackExpiryTimer = null;
     this._playbackExpiryAt = 0;
     this._playbackRuntimeDisposed = false;
+    this._allocActiveCount = -1;
+    this._allocLastStealAt = 0;
     this.sessions = new Map();    // id -> PlaySession
     this.searchCache = new Map(); // queryKey -> { at, results, errors } (prefetch-on-browse → instant play)
     this.searchInflight = new Map(); // queryKey -> Promise(hit), so Play can join an active prefetch
@@ -934,12 +1228,11 @@ class Pipeline {
   }
 
   _findTitleStandby(params, policy = {}) {
-    const now = Date.now();
     for (const key of this._standbyKeys(params, policy)) {
       const rec = this.titlePreparedStandby.get(key);
       if (!rec) continue;
       const live = rec.vf && rec.vf.id ? this.mounts.get(rec.vf.id) : null;
-      if (now - rec.at > TITLE_PREPARED_READY_MS || !live || !live.streamable) {
+      if (!live || !live.streamable) {
         this.titlePreparedStandby.delete(key);
         continue;
       }
@@ -974,6 +1267,27 @@ class Pipeline {
     return Number.isInteger(rank) ? rank : null;
   }
 
+  // A 4K Details warmup that times out used to park a 1080 leftover under the 4K key.
+  // Resume and Start Over then joined that 1080 forever and never raced the real 4K list.
+  _preparedFitsPolicy(rec, policy = {}) {
+    if (!rec || !rec.candidate) return false;
+    const want = Number.isInteger(policy.exactResolutionRank) ? policy.exactResolutionRank : null;
+    if (want == null) return true;
+    const have = this._standbyResolutionRank(rec.candidate);
+    return have == null || have === want;
+  }
+
+  _rememberPolicyForCandidate(policy = {}, candidate) {
+    const have = this._standbyResolutionRank(candidate);
+    const exact = Number.isInteger(policy.exactResolutionRank) ? policy.exactResolutionRank : null;
+    if (exact == null || have == null || have === exact) return policy;
+    const next = { ...policy };
+    delete next.exactResolutionRank;
+    next.preferResolutionRank = have;
+    next.maxResolutionRank = have;
+    return next;
+  }
+
   _pickStandbyCandidate(playable, primaryPickKey, primary = null) {
     const rest = (playable || []).filter((c) => c && c.pickKey && c.pickKey !== primaryPickKey && c.score > -5000);
     if (!rest.length) return null;
@@ -990,7 +1304,9 @@ class Pipeline {
     if (!next) return;
     const existing = this._findTitleStandby(params, policy);
     if (existing && existing.candidate && existing.candidate.pickKey === next.pickKey) {
-      if (resumeFrac) this._startPlaybackWarmup(existing.vf, existing.vf._playWin, resumeFrac);
+      if (resumeFrac) this._startPlaybackWarmup(existing.vf, existing.vf._playWin, resumeFrac, {
+        hot: this._prepareWarmIsHot(existing.vf),
+      });
       return;
     }
     this._tryCandidate(next, { ...mountOpts, startupPriority: 'prepare' }).then((res) => {
@@ -1004,7 +1320,9 @@ class Pipeline {
       this.mountByUrl.set(res.vf._mountIdentity || mountIdentity(next, mountOpts), res.vf.id);
       this._rememberTitleStandby(params, policy, res.vf, next);
       this.rebalancePlaybackWindows();
-      this._startPlaybackWarmup(res.vf, res.vf._playWin, resumeFrac);
+      this._startPlaybackWarmup(res.vf, res.vf._playWin, resumeFrac, {
+        hot: this._prepareWarmIsHot(res.vf),
+      });
     }).catch(() => {});
   }
 
@@ -1023,12 +1341,18 @@ class Pipeline {
     if (params.imdbid || params.tvdbid) {
       keys.push(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }));
     }
-    const now = Date.now();
     for (const key of keys) {
       const rec = this.titlePreparedReady.get(key);
       if (!rec) continue;
       const live = rec.vf && rec.vf.id ? this.mounts.get(rec.vf.id) : null;
-      if (now - rec.at > TITLE_PREPARED_READY_MS || !live || !live.streamable) {
+      // Eviction is the TTL. A 3-minute clock used to drop a parked RAM mount while the
+      // file was still live, so Resume remounted + re-parsed the NZB (~8s) for no reason.
+      if (!live || !live.streamable) {
+        this.titlePreparedReady.delete(key);
+        continue;
+      }
+      if (!this._preparedFitsPolicy(rec, policy)) {
+        console.log('[play] skip prepared ' + (rec.candidate && rec.candidate.name || '') + ' (want ' + (policy.exactResolutionRank || '') + ')');
         this.titlePreparedReady.delete(key);
         continue;
       }
@@ -1082,27 +1406,57 @@ class Pipeline {
     return pending;
   }
 
-  _streamConnCap(big, perf = {}) {
-    const configured = big ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12);
+  _streamConnCap(vfOrBig, perf = {}) {
+    const vf = (vfOrBig && typeof vfOrBig === 'object') ? vfOrBig : { size: vfOrBig ? 5e9 : 2e9 };
+    const custom = perf.connectionMode === 'custom';
+    const configured = custom
+      ? ((Number(vf.size) || 0) > 4e9 ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12))
+      : autoStreamCap(vf, perf);
     let pressure = 1;
     try {
       const pool = typeof this.pool === 'function' ? this.pool() : this.pool;
-      const providers = pool && pool.providers;
-      if (Array.isArray(providers) && providers.some((p) => p && p.capHitAt && Date.now() - p.capHitAt < 60000)) {
-        pressure = 0.5;
-      }
+      pressure = householdConnPressure(pool && pool.providers);
     } catch {}
     return Math.max(4, Math.floor(configured * pressure));
   }
 
-  _playbackWindowFor(vf, activeMounts, perf = this.performance() || {}) {
+  _allocateStreamConnections(active, perf, opts = {}) {
+    let growFrozen = opts.growFrozen === true;
+    try {
+      const pool = typeof this.pool === 'function' ? this.pool() : this.pool;
+      if (householdConnPressure(pool && pool.providers) < 1) growFrozen = true;
+    } catch {}
+    const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+    const assigned = allocateStreamConnections(active, perf, {
+      ...opts,
+      now,
+      growFrozen,
+      lastStealAt: this._allocLastStealAt || 0,
+      caps: perf.connectionMode === 'custom'
+        ? active.map((vf) => this._streamConnCap(vf, perf))
+        : null,
+    });
+    if (assigned.stole) this._allocLastStealAt = now;
+    const out = new Map();
+    active.forEach((vf, i) => out.set(vf, assigned[i]));
+    return out;
+  }
+
+  _playbackWindowFor(vf, activeMounts, perf = this.performance() || {}, assignedReadAhead, activeList) {
     const big = (vf.size || 0) > 4e9;
-    const activeCount = Math.max(1, activeMounts || 1);
+    const siblings = Array.isArray(activeList) && activeList.length ? activeList : null;
+    const activeCount = Math.max(1, siblings ? siblings.length : (activeMounts || 1));
     const usable = perf.usableConnections || 0;
     const reserve = perf.reserveConnections || 0;
     const perStreamBudget = usable > reserve ? Math.max(4, Math.floor((usable - reserve) / activeCount)) : Infinity;
-    const configuredWindow = this._streamConnCap(big, perf);
-    const readAhead = Math.max(4, Math.min(configuredWindow, perStreamBudget));
+    const baseCap = this._streamConnCap(vf, perf);
+    const configuredWindow = Number.isFinite(assignedReadAhead)
+      ? Math.max(baseCap, Math.floor(assignedReadAhead))
+      : baseCap;
+    const fairReadAhead = Math.max(4, Math.min(configuredWindow, perStreamBudget));
+    const readAhead = Number.isFinite(assignedReadAhead)
+      ? Math.max(4, Math.min(configuredWindow, Math.floor(assignedReadAhead)))
+      : fairReadAhead;
     const borrowedReserve = reserve > 2 ? Math.floor(reserve / 2) : 0;
     const adaptiveBudget = usable > reserve
       ? Math.max(readAhead, Math.floor((usable - Math.max(1, reserve - borrowedReserve)) / activeCount))
@@ -1130,14 +1484,19 @@ class Pipeline {
       const avgMbps = measuredMbps || (big ? 45 : 12);
       const streamMbps = Math.max(big ? 45 : 12, Math.min(big ? 120 : 50, avgMbps * (big ? 2.2 : 1.4)));
       const targetMb = Math.ceil((bufferSec * streamMbps) / 8);
-      // 4K cap raised 384 → 1024 so a ~80 Mbps stream can actually hold ~100s. Bounded by ~20% of
-      // system RAM (this totalMb is the TOTAL across active streams via the /activeCount split below),
-      // so smaller self-hosted boxes stay safe — they just get a proportionally shallower buffer.
-      const ramCapMb = Math.floor(TOTAL_MEM_MB * 0.2);
+      // 200s is the goal. One mount cannot keep ~3 GB on the Node heap — that GC-stalls
+      // Play. Cap one stream to ~8% RAM, never above 1536 MB, then split across viewers.
       const minMb = big ? 96 : 48;
-      const maxMb = Math.max(minMb, Math.min(big ? 1024 : 384, ramCapMb));
+      const maxMb = playbackCacheCapMb(big, TOTAL_MEM_MB);
       const totalMb = Math.max(minMb, Math.min(maxMb, targetMb));
-      const perActiveMb = Math.max(big ? 64 : 32, Math.floor(totalMb / activeCount));
+      let share = 1 / activeCount;
+      if (perf.connectionMode !== 'custom' && siblings && siblings.length > 1) {
+        const weights = siblings.map((m) => cacheNeedWeight(m));
+        const sum = weights.reduce((a, b) => a + b, 0) || siblings.length;
+        const idx = Math.max(0, siblings.indexOf(vf));
+        share = (weights[idx] || 1) / sum;
+      }
+      const perActiveMb = Math.max(big ? 64 : 32, Math.floor(totalMb * share));
       cacheMaxBytes = perActiveMb * 1024 * 1024;
       const segmentBytes = Number(vf.partSize)
         || (Array.isArray(vf.segments) && vf.segments.length ? Math.ceil((vf.size || 0) / vf.segments.length) : 0);
@@ -1153,10 +1512,10 @@ class Pipeline {
     };
   }
 
-  _applyPlaybackWindow(vf, activeMounts, perf = this.performance() || {}) {
+  _applyPlaybackWindow(vf, activeMounts, perf = this.performance() || {}, assignedReadAhead, activeList) {
     if (!vf) return null;
     const previousCacheMaxBytes = Math.max(1, Number(vf._playWin && vf._playWin.cacheMaxBytes) || Infinity);
-    const win = this._playbackWindowFor(vf, activeMounts, perf);
+    const win = this._playbackWindowFor(vf, activeMounts, perf, assignedReadAhead, activeList);
     if (win.cacheMaxBytes < previousCacheMaxBytes) {
       vf._warmedResumeFrac = null;
       vf._warmedResumeRange = null;
@@ -1181,15 +1540,49 @@ class Pipeline {
     return Math.min(PREPARED_TOTAL_MAX_BYTES, Math.max(PREPARED_CACHE_BYTES_1080, ramDerived));
   }
 
+  _preparedHouseHasRoom() {
+    try {
+      const pool = typeof this.pool === 'function' ? this.pool() : this.pool;
+      return preparedHouseHasRoom(pool && pool.providers);
+    } catch {
+      return true;
+    }
+  }
+
+  _prepareWarmIsHot(exceptVf = null) {
+    return this._preparedHouseHasRoom() && !this._hasActiveForeignPlayback(exceptVf);
+  }
+
+  _quietOtherPreparedWarms(exceptVf = null) {
+    const exceptId = exceptVf && exceptVf.id;
+    for (const other of this.mounts.values()) {
+      if (!other || (exceptId && other.id === exceptId)) continue;
+      if (other._preparedOnly && !mountHasActivePlayback(other)) this.cancelPlaybackWarmups(other);
+    }
+  }
+
+  _preparedPeekSockets() {
+    try {
+      const pool = typeof this.pool === 'function' ? this.pool() : this.pool;
+      return preparedPeekSockets(pool && pool.providers);
+    } catch {
+      return PREPARED_PEEK_MAX;
+    }
+  }
+
   _applyPreparedWindow(vf, win = {}, aggregateShare = Infinity) {
     if (!vf) return null;
+    const aheadCap = this._preparedPeekSockets();
+    const wide = aheadCap > PREPARED_PEEK_MIN;
     const activeWin = vf._activePlayWin || win;
-    const cap = (Number(vf.size) || 0) > 4e9 ? PREPARED_CACHE_BYTES_4K : PREPARED_CACHE_BYTES_1080;
+    const cap = (Number(vf.size) || 0) > 4e9
+      ? (wide ? PREPARED_CACHE_BYTES_4K_WIDE : PREPARED_CACHE_BYTES_4K)
+      : (wide ? PREPARED_CACHE_BYTES_1080_WIDE : PREPARED_CACHE_BYTES_1080);
     const previousCacheMaxBytes = Math.max(1, Number(vf._playWin && vf._playWin.cacheMaxBytes) || Infinity);
     const prepared = {
       ...activeWin,
-      readAhead: Math.min(PREPARED_READ_AHEAD, Math.max(0, Number(activeWin.readAhead) || 0)),
-      maxReadAhead: Math.min(PREPARED_READ_AHEAD, Math.max(0, Number(activeWin.maxReadAhead) || 0)),
+      readAhead: Math.min(aheadCap, Math.max(0, Number(activeWin.readAhead) || 0)),
+      maxReadAhead: Math.min(aheadCap, Math.max(0, Number(activeWin.maxReadAhead) || 0)),
       cacheMaxBytes: Math.min(cap, Math.max(1, Number(activeWin.cacheMaxBytes) || cap), aggregateShare),
     };
     // A REAL cap shrink can evict the warmed resume interval. Identical prepared reapplication is
@@ -1221,7 +1614,7 @@ class Pipeline {
     return prepared.length;
   }
 
-  _startPlaybackWarmup(vf, win, resumeFrac = 0) {
+  _startPlaybackWarmup(vf, win, resumeFrac = 0, opts = {}) {
     if (!vf || !vf.streamable || typeof vf.read !== 'function') return;
     const size = Number(vf.size) || 0;
     if (size <= 0) return;
@@ -1238,11 +1631,13 @@ class Pipeline {
       job.timer = setTimeout(() => {
         job.timer = null;
         job.promise = (async () => {
-          for await (const _chunk of vf.read(from, to, { priority: 'readAhead', signal: controller.signal })) {
-            // Drain intentionally: this warms the VFS cache without blocking Play. MUST stay on the
-            // read-ahead lane — a new stream's speculative warm must never outrank another user's
-            // active playback (docs-streaming-performance.md). The player reads the head itself at
-            // startup priority, so warming it higher would only steal connections, not help.
+          const hot = opts && opts.hot === true;
+          const frac = Number(resumeFrac) || 0;
+          const warmPriority = hot ? (frac > 0.02 && frac < 0.985 ? 'seek' : 'startup') : 'readAhead';
+          for await (const _chunk of vf.read(from, to, { priority: warmPriority, signal: controller.signal })) {
+            // Play/resume (hot) uses startup/seek so first picture beats health and background
+            // fill. Detail-page prepare stays on read-ahead so it cannot steal another user's
+            // playing sockets.
           }
         })().catch(() => {}).finally(() => {
           // VFS read-ahead is fire-and-forget. Ending the explicit generator does not mean its
@@ -1384,7 +1779,10 @@ class Pipeline {
     const active = [...this.mounts.values()]
       .filter((m) => mountHasActivePlayback(m, now));
     const activeCount = Math.max(1, active.length);
-    for (const vf of active) this._applyPlaybackWindow(vf, activeCount, perf);
+    const viewerChanged = this._allocActiveCount !== active.length;
+    this._allocActiveCount = active.length;
+    const shares = this._allocateStreamConnections(active, perf, { viewerChanged, now });
+    for (const vf of active) this._applyPlaybackWindow(vf, activeCount, perf, shares.get(vf), active);
     this.rebalancePreparedWindows(now);
     this.metrics.windowRebalances++;
     return active.length;
@@ -2017,7 +2415,10 @@ class Pipeline {
     // (Provider quirk, see bench/RESULTS.md: healthy STATs answer in ~60-250ms; only MISSES
     // are slow — so "no answer by 500ms" usually means trouble, but we never block on it.)
     const gateT0 = Date.now();
-    const triage = vf.triage(perf.healthProbeLimit || 6).catch(() => null);
+    const probeLimit = this._hasActiveForeignPlayback(vf)
+      ? 2
+      : (perf.healthProbeLimit || 6);
+    const triage = vf.triage(probeLimit).catch(() => null);
     const gate = await Promise.race([
       triage,
       new Promise((r) => setTimeout(r, GATE_MS, 'timeout')),
@@ -2072,19 +2473,24 @@ class Pipeline {
     if (ready) {
       this.metrics.titlePrepareJoins++;
       console.log('[play] joined prepared ' + (ready.candidate && ready.candidate.name || ''));
-      const { candidates } = await this.search(params, policy, { allowStale: true });
-      let playable = this._playableCandidates(candidates, params);
-      if (!playable.some((c) => c.pickKey === ready.candidate.pickKey)) {
-        playable = [ready.candidate, ...playable];
-      }
-      if (!playable.length) playable = [ready.candidate];
-      const session = new PlaySession(params, playable);
+      const session = new PlaySession(params, [ready.candidate]);
       session.policy = policy;
-      const readyIdx = playable.findIndex((c) => c.pickKey === ready.candidate.pickKey);
-      session.cursor = readyIdx >= 0 ? readyIdx + 1 : 1;
+      session.cursor = 1;
       this.sessions.set(session.id, session);
       const committed = this._commitMount(session, ready.candidate, ready.vf, [], mountOpts);
-      this._attachStandby(session, params, policy, mountOpts);
+      // Ranked backups can wait. First frame must not sit behind an indexer fan-out.
+      this.search(params, policy, { allowStale: true }).then(({ candidates }) => {
+        if (session.released) return;
+        let extra = this._playableCandidates(candidates, params);
+        if (!extra.some((c) => c.pickKey === ready.candidate.pickKey)) {
+          extra = [ready.candidate, ...extra];
+        }
+        if (!extra.length) return;
+        session.candidates = extra;
+        const readyIdx = extra.findIndex((c) => c.pickKey === ready.candidate.pickKey);
+        session.cursor = readyIdx >= 0 ? readyIdx + 1 : 1;
+        this._attachStandby(session, params, policy, mountOpts);
+      }).catch(() => {});
       return committed;
     }
     let { candidates } = await this.search(params, policy);
@@ -2114,6 +2520,11 @@ class Pipeline {
       delete relaxed.exactResolutionRank;
       const retry = await this.search(params, relaxed);
       playable = this._playableCandidates(retry.candidates, params);
+    }
+    if (!playable.length) {
+      const wide = await this._widenPlayable(params, policy, playable, candidates);
+      playable = wide.playable;
+      if (wide.candidates && wide.candidates.length) candidates = wide.candidates;
     }
     if (!playable.length) throw new Error('no playable releases found');
     const session = new PlaySession(params, playable);
@@ -2201,6 +2612,35 @@ class Pipeline {
     return [picked];
   }
 
+  // 1080 toggle: Play searches without the extra 2160p fan-out, so a title we JUST had in 4K
+  // can come back empty (first page is all over-cap 4K, or the 1080 cache miss is a 0-hit).
+  // Reuse the UHD search hit and re-score under the 1080 cap. If this title is 4K-only,
+  // start the 4K rather than toast "no playable".
+  async _widenPlayable(params, policy, playable, candidates) {
+    const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
+    const cap = policy.maxResolutionRank;
+    if (playable.length || explicitPick || !Number.isInteger(cap) || cap >= 4) {
+      return { playable, candidates, widened: false };
+    }
+    const uhdPolicy = { ...policy, preferResolutionRank: 4 };
+    delete uhdPolicy.exactResolutionRank;
+    const uhd = await this.search(params, uhdPolicy);
+    let next = this._playableCandidates(uhd.candidates, params);
+    if (next.length) {
+      console.log('[play] 1080 empty, reused 4K search');
+      return { playable: next, candidates: uhd.candidates, widened: true };
+    }
+    const relaxed = { ...uhdPolicy };
+    delete relaxed.maxResolutionRank;
+    const fallback = await this.search(params, relaxed);
+    next = this._playableCandidates(fallback.candidates, params);
+    if (next.length) {
+      console.log('[play] 1080 empty, fell back to best available');
+      return { playable: next, candidates: fallback.candidates, widened: true };
+    }
+    return { playable, candidates, widened: false };
+  }
+
   async prepare(params, policy = {}, mountOpts = {}) {
     const _we = wantedEpisodeOf(params);
     if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we }; // prewarm the SAME episode file play() will mount
@@ -2223,8 +2663,13 @@ class Pipeline {
   }
 
   async _runPrepare(params, policy = {}, mountOpts = {}) {
-    const { candidates } = await this.search(params, policy);
-    const playable = this._playableCandidates(candidates, params);
+    let { candidates } = await this.search(params, policy);
+    let playable = this._playableCandidates(candidates, params);
+    if (!playable.length) {
+      const wide = await this._widenPlayable(params, policy, playable, candidates);
+      playable = wide.playable;
+      if (wide.candidates && wide.candidates.length) candidates = wide.candidates;
+    }
     if (!playable.length) throw new Error('no playable releases found');
     const attempts = [];
     const started = Date.now();
@@ -2240,9 +2685,11 @@ class Pipeline {
           if (candidate.name) res.vf._releaseName = candidate.name;
           this.mounts.set(res.vf.id, res.vf);
           this.mountByUrl.set(res.vf._mountIdentity || mountIdentity(candidate, mountOpts), res.vf.id);
-          this._rememberTitlePrepared(params, policy, res.vf, candidate);
+          this._rememberTitlePrepared(params, this._rememberPolicyForCandidate(policy, candidate), res.vf, candidate);
           this.rebalancePlaybackWindows();
-          this._startPlaybackWarmup(res.vf, res.vf._playWin, params.resumeFrac);
+          this._startPlaybackWarmup(res.vf, res.vf._playWin, params.resumeFrac, {
+            hot: this._prepareWarmIsHot(res.vf),
+          });
           // Next-episode prepare runs while the current file is still playing. A second
           // standby mount here steals NNTP slots from that last scene and can remount it.
           if (!this._hasActiveForeignPlayback(res.vf)) {
@@ -2273,12 +2720,16 @@ class Pipeline {
   // Commit a winning mount to the session and warm its read-ahead. Shared by both walk modes.
   _commitMount(session, candidate, vf, attempts, mountOpts = {}) {
     vf._touched = Date.now();
+    vf._preparedOnly = false;
+    vf._playbackTouched = Date.now();
     if (candidate.name) vf._releaseName = candidate.name;
     this.mounts.set(vf.id, vf);
     this.mountByUrl.set(vf._mountIdentity || mountIdentity(candidate, mountOpts), vf.id);
     session.currentMountId = vf.id;
+    this._quietOtherPreparedWarms(vf);
     this.rebalancePlaybackWindows();
-    this._startPlaybackWarmup(vf, vf._playWin, session.query && session.query.resumeFrac);
+    this._rememberTitlePrepared(session.query || {}, this._rememberPolicyForCandidate(session.policy || {}, candidate), vf, candidate);
+    this._startPlaybackWarmup(vf, vf._playWin, session.query && session.query.resumeFrac, { hot: true });
     session.history.push({ name: candidate.name, outcome: 'playing' });
     session.activeCandidate = candidate; // recovery-advance demotes exactly this source
     session.policy = session.policy || {};
@@ -2513,4 +2964,8 @@ module.exports = {
   releaseFingerprint, applyNzbFingerprintFields,
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
   isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, ACTIVE_PLAYBACK_GRACE_MS,
+  allocateStreamConnections, classifyStreamNeed, streamNeedMbps, mountAheadBytes, fileIsFullyAhead,
+  householdConnPressure, preparedHouseHasRoom, preparedPeekSockets, autoStreamCap, cacheNeedWeight,
+  playbackRamFraction, playbackCacheCapMb,
+  AUTO_BASE_CONNS,
 };

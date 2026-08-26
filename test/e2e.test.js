@@ -43,6 +43,33 @@ test('nntp: aborted queued work is removed before it reaches a provider lane', a
   assert.strictEqual(err.code, 'ABORT_ERR');
 });
 
+test('nntp: a full Easynews-class pool spills the next article to Newshosting', () => {
+  const pool = new NntpPool([{ connections: 50 }, { connections: 100 }]);
+  const easy = pool.providers[0];
+  const news = pool.providers[1];
+  for (let i = 0; i < easy.size; i++) easy.busy.add({ i });
+  assert.strictEqual(pool._ordered()[0], news,
+    'when Easynews is at its plan cap, the next article must try Newshosting first');
+});
+
+test('nntp: idle providers prefer the larger unused plan instead of filling the 50-cap first', () => {
+  const pool = new NntpPool([{ connections: 50 }, { connections: 100 }]);
+  assert.strictEqual(pool._ordered()[0], pool.providers[1],
+    'an idle 100-connection account should take work before we fill the 50-connection account');
+});
+
+test('nntp: a 4K startup that cannot fit Easynews leftover spills to Newshosting', () => {
+  const pool = new NntpPool([{ connections: 50 }, { connections: 100 }]);
+  const easy = pool.providers[0];
+  const news = pool.providers[1];
+  for (let i = 0; i < 40; i++) easy.busy.add({ i });
+  assert.strictEqual(pool._ordered(18)[0], news,
+    'Easynews at 40/50 cannot host a 4K that wants 18 slots, so the next Play starts on Newshosting');
+  for (let i = 0; i < 90; i++) news.busy.add({ i });
+  assert.strictEqual(pool._ordered(10)[0], easy,
+    'a 1080 that fits in Easynews leftover 10 uses it when Newshosting is tighter');
+});
+
 test('nntp: generic run falls through to the next provider', async () => {
   const pool = new NntpPool([{}, {}], 1);
   pool.providers = [
@@ -253,6 +280,23 @@ test('vfs: decoded segment cache is capped by bytes, not only segment count', as
   assert.strictEqual(Buffer.concat(chunks).length, 180000);
   assert.ok(vf.cacheBytes <= vf.cacheMaxBytes, `cache kept ${vf.cacheBytes} bytes over ${vf.cacheMaxBytes}`);
   assert.ok(vf.cache.size <= 2, 'byte cap should evict older decoded segments even when segment cap is high');
+});
+
+test('vfs: ahead cache ignores tail warmup so a 0:00 play does not look fat', async () => {
+  const { articles, nzb } = makeRelease('Ahead.Cache.Test.mkv', 180000, 45000);
+  const pool = {
+    body: async (msgId) => articles.get(msgId),
+    stat: async () => true,
+  };
+  const vf = new VirtualFile(pool, nzb, { readAhead: 0, cacheSegments: 24, cacheBytes: 1024 * 1024 });
+  await vf.mount();
+  for await (const _ of vf.read(0, 45000)) { /* head */ }
+  const tailStart = 180000 - 45000;
+  for await (const _ of vf.read(tailStart, 180000, { priority: 'readAhead' })) { /* tail warmup */ }
+  vf.lastPlaybackOffset = 0;
+  const ahead = vf.aheadCacheBytes(0);
+  assert.ok(ahead < vf.cacheBytes, 'tail-index warmup must not count as seconds ahead of 0:00');
+  assert.ok(ahead <= 45000, 'ahead coverage is the contiguous head run only');
 });
 
 test('vfs: multi-volume decoded caches share one aggregate byte budget', async () => {

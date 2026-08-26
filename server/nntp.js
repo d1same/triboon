@@ -36,6 +36,29 @@ function isTooManyConnections(e) {
   return /too many connection|\b502\b/i.test(String((e && e.message) || e));
 }
 
+function providerHeadroom(p) {
+  const cap = Math.max(0, Number(p && p.size) || 0);
+  const used = ((p && p.busy && p.busy.size) || 0) + (Number(p && p.connecting) || 0) + ((p && p.queue && p.queue.length) || 0);
+  return cap - used;
+}
+
+function providerPickScore(p, needSlots = 0) {
+  if (!p || (typeof p.down === 'function' && p.down())) return Infinity;
+  const cap = Math.max(1, Number(p.size) || 1);
+  const used = ((p.busy && p.busy.size) || 0) + (Number(p.connecting) || 0) + ((p.queue && p.queue.length) || 0);
+  let load = used / cap;
+  if (p.capHitAt && Date.now() - p.capHitAt < 60000) load = Math.max(load, 0.99);
+  const headroom = cap - used;
+  if (needSlots > 0 && headroom < needSlots) load += 10;
+  else if (load >= 0.85) load += 1;
+  return load;
+}
+
+function streamStartupNeedSlots(size, priority) {
+  if (priority !== 'startup' && priority !== 'seek') return 0;
+  return (Number(size) || 0) > 4e9 ? 18 : 10;
+}
+
 function signalAborted(signal) {
   return !!(signal && signal.aborted);
 }
@@ -583,21 +606,33 @@ class NntpPool {
   // Warm every provider (combined mode uses them all) — primary a bit deeper than the rest.
   warm(n = 4) { this.providers.forEach((p, i) => p.warm(i === 0 ? n : Math.min(2, n))); }
 
-  // COMBINED multi-provider mode: each article goes to the least-loaded healthy provider, so
-  // several accounts add up instead of idling as failover. Load = (active + queued) / size.
-  // The sort is stable: while the primary keeps up (load 0) the configured order wins — extra
-  // providers only pull work once earlier ones saturate, and a circuit-broken provider sinks
-  // to the back but is still tried last (a wrong breaker can never lose an article).
-  _ordered() {
+  // COMBINED multi-provider mode: each article goes to the healthiest provider with room.
+  // Score is used/size. A provider at ≥85% (or a fresh 502) is pushed back so a new Play
+  // spills to Newshosting while Easynews is full, instead of opening the 502. Tie at idle
+  // prefers the larger unused plan so we do not fill the 50-cap account first. A circuit-
+  // broken provider sinks to the back but is still tried last (a wrong breaker cannot lose
+  // an article). If the winner does not have the article, body() fails over as before.
+  _ordered(needSlots = 0) {
     if (this.providers.length === 1) return this.providers;
-    const load = (p) => p.down() ? Infinity : (p.busy.size + p.queue.length) / Math.max(1, p.size);
-    return [...this.providers].sort((a, b) => load(a) - load(b));
+    const need = Math.max(0, Number(needSlots) || 0);
+    return [...this.providers].sort((a, b) => {
+      const ha = providerHeadroom(a);
+      const hb = providerHeadroom(b);
+      const aFit = need <= 0 || ha >= need;
+      const bFit = need <= 0 || hb >= need;
+      if (aFit !== bFit) return aFit ? -1 : 1;
+      if (!aFit && !bFit) return hb - ha;
+      const sa = providerPickScore(a, need);
+      const sb = providerPickScore(b, need);
+      if (sa !== sb) return sa - sb;
+      return hb - ha;
+    });
   }
 
   // True if ANY provider has the article.
   async stat(msgId, priority = 'health', opts = {}) {
     let reachedAny = false; // did at least one provider actually ANSWER (vs. all connections failing)?
-    for (const p of this._ordered()) {
+    for (const p of this._ordered(opts.needSlots)) {
       if (this.missCache.has(p, msgId)) continue;
       try {
         const ok = await p.stat(msgId, priority, opts);
@@ -620,7 +655,7 @@ class NntpPool {
   }
 
   async body(msgId, priority = 'playback', opts = {}) {
-    const ordered = this._ordered();
+    const ordered = this._ordered(opts.needSlots);
     if (!ordered.length) throw new Error('no usenet providers configured');
     // Plain sequential failover for single-provider setups and non-critical work (no speculative
     // double-fetch): a 430/connection error advances immediately to the next provider.
@@ -701,7 +736,7 @@ class NntpPool {
 
   async run(fn, priority = 'playback', opts = {}) {
     let lastErr;
-    for (const p of this._ordered()) {
+    for (const p of this._ordered(opts.needSlots)) {
       try { return await p.run(fn, priority, opts); } catch (e) { if (isAbortError(e)) throw e; lastErr = e; }
     }
     throw lastErr || new Error('no NNTP providers available');
@@ -720,4 +755,7 @@ class NntpPool {
   close() { for (const p of this.providers) p.close(); }
 }
 
-module.exports = { NntpConnection, NntpPool, ProviderPool, ArticleMissCache, isTooManyConnections };
+module.exports = {
+  NntpConnection, NntpPool, ProviderPool, ArticleMissCache, isTooManyConnections,
+  providerPickScore, providerHeadroom, streamStartupNeedSlots,
+};

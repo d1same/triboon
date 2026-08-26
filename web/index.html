@@ -4,8 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- yt3.googleusercontent.com album/playlist art REJECTS a full-URL referrer (covers came up blank);
-     send origin-only cross-origin so those thumbnails load, while YouTube trailer embeds still get an
-     origin referrer. Same-origin requests keep the full referrer. -->
+     send origin-only cross-origin so those thumbnails load. Same-origin requests keep the full referrer. -->
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Triboon</title>
 <link rel="icon" href="T-Logo.svg"><link rel="alternate icon" href="T-Logo.png">
@@ -805,8 +804,8 @@ body.tv #filterMenu{backdrop-filter:none}
 .trailerMeta{margin-top:6px;font:600 14px "Albert Sans";color:var(--amber);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .trailerStage{position:relative;border-radius:18px;overflow:hidden;background:#000;box-shadow:0 34px 92px rgba(0,0,0,.72);aspect-ratio:16/9}
 #trailer .box{position:absolute;inset:0;background:#000}
-#trailer iframe{width:100%;height:100%;border:0;opacity:0;transition:opacity .22s ease}
-#trailer.loaded iframe{opacity:1}
+#trailer video{width:100%;height:100%;border:0;opacity:0;transition:opacity .22s ease;object-fit:contain;background:#000}
+#trailer.loaded video{opacity:1}
 .trailerLoading{position:absolute;inset:0;z-index:1;display:grid;place-items:center;background:#050308;color:var(--muted);font:800 13px "Sora";letter-spacing:.12em;text-transform:uppercase}
 #trailer.loaded .trailerLoading{opacity:0;pointer-events:none;transition:opacity .18s ease}
 .trailerBar{min-height:58px;border-radius:0;padding:0 6px;display:flex;align-items:center;justify-content:space-between;gap:14px;background:transparent;backdrop-filter:none;box-shadow:none}
@@ -820,9 +819,7 @@ body.tv #filterMenu{backdrop-filter:none}
 #trailer .focusable::before{display:none}
 #trailer .focusable.focus,#trailer .focusable:focus-visible{transform:none}
 .trailerCtl.focus,.trailerCtl:focus-visible,.trailerBack.focus,.trailerBack:focus-visible{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.32)}
-#trailerPlay{background:var(--btnPrimary);color:var(--onAccent);border:1px solid transparent}
-#trailerPlay.focus,#trailerPlay:focus-visible{background:var(--btnPrimaryHover);color:var(--onAccent)}
-#trailerWl{background:var(--btn);border:1px solid rgba(255,255,255,.045)}
+#trailerPlay.btn.primary{padding:14px 30px;font-weight:700}
 #trailerWl.on{background:var(--btnSelected);color:var(--text);border-color:transparent;font-weight:700}
 #trailerWl.on.focus,#trailerWl.on:focus-visible{background:var(--btnSelectedHover);color:var(--text)}
 body.tv #trailer::before{animation:none;filter:brightness(.38);transform:none}
@@ -4272,11 +4269,11 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     </div>
     <div class="trailerBar">
       <div class="trailerActions">
-        <button id="trailerPlay" class="trailerCtl focusable" title="Play" aria-label="Play" style="display:none">
+        <button id="trailerPlay" class="btn primary trailerCtl focusable" title="Play" aria-label="Play" style="display:none">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
           <span>Play</span>
         </button>
-        <button id="trailerWl" class="trailerCtl focusable" title="Add to watchlist" aria-label="Add to watchlist" style="display:none">
+        <button id="trailerWl" class="btn trailerCtl focusable" title="Add to watchlist" aria-label="Add to watchlist" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M6 4h12v16l-6-3.6L6 20z"/></svg>
           <span>Watchlist</span>
         </button>
@@ -4583,7 +4580,8 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
   <div class="panel"><h2>Streaming performance</h2>
     <p>Triboon sizes connections from your provider, this server's network, and how many people watch
-       at once. Speeds are <strong>Mbps</strong>. Auto keeps Play and seek ahead of background download.</p>
+       at once. Speeds are <strong>Mbps</strong>. Auto grows a slow stream and gives extra sockets away
+       from a well-buffered one. Custom always splits evenly.</p>
     <div class="perfSummary" id="perfSummary" aria-live="polite">
       <div class="perfCard"><div class="k">Providers</div><div class="v">--</div><small>waiting for server</small></div>
       <div class="perfCard"><div class="k">Playback pool</div><div class="v">--</div><small>available articles</small></div>
@@ -4619,10 +4617,17 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <label class="settingsControl"><span>NNTP pipelining</span><input id="perfPipeline" type="number" min="0" max="4" inputmode="numeric" placeholder="0 = off, up to 4"></label>
       </div>
       <div class="settingsRow">
-        <label class="settingsControl"><span>1080p connections</span><input id="perfConn1080" type="number" min="4" max="60" inputmode="numeric" placeholder="per stream"></label>
-        <label class="settingsControl"><span>4K connections</span><input id="perfConn4k" type="number" min="6" max="80" inputmode="numeric" placeholder="per stream"></label>
+        <label class="settingsControl"><span>Connections</span><select id="perfConnMode">
+          <option value="auto">Auto — grow and give away</option>
+          <option value="custom">Custom — use my numbers</option>
+        </select></label>
+        <label class="settingsControl"><span>Max 1080p connections</span><input id="perfConn1080" type="number" min="4" max="60" inputmode="numeric" placeholder="per stream"></label>
+        <label class="settingsControl"><span>Max 4K connections</span><input id="perfConn4k" type="number" min="6" max="80" inputmode="numeric" placeholder="per stream"></label>
+      </div>
+      <div class="settingsRow">
         <label class="settingsControl"><span>Start/seek reserve</span><input id="perfReserve" type="number" min="10" max="50" inputmode="numeric" placeholder="% of connections"></label>
       </div>
+      <p class="hint" id="perfConnHint">Auto starts each Play at 10, adds sockets if that playhead falls behind, and gives them back when someone else needs them. Cache stays inside about 20% of this box's RAM.</p>
     </div>
     <div class="settingsActions">
       <button class="btn primary" id="perfTest">Calculate recommendation</button>
@@ -4811,11 +4816,11 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   </div>
 
   <div class="panel"><h2>Scoring</h2>
-    <p>Releases are ranked for instant streaming. Leave this empty to keep the default.
-       Group names match the release <b>-GROUP</b> suffix; keywords add a score when they appear in the name.</p>
-    <div class="field"><input id="scTrusted" placeholder="Trusted groups +50 — e.g. FLUX, NTb, FraMeSToR"></div>
-    <div class="field"><input id="scAvoid" placeholder="Avoid groups −50 — e.g. YTS, MeGusta"></div>
-    <div class="field"><textarea id="scKeywords" rows="4" placeholder="keyword = score (one per line, ±5000)&#10;Atmos = 25&#10;KORSUB = -300"></textarea></div>
+    <p>Releases are ranked for instant streaming. These boxes show Triboon's defaults — edit them, then Save.
+       Delete the <b>CAM</b> line if you want theater rips in Sources. Reset puts our list back.</p>
+    <div class="field"><input id="scTrusted" placeholder="Trusted groups"></div>
+    <div class="field"><input id="scAvoid" placeholder="Avoid groups"></div>
+    <div class="field"><textarea id="scKeywords" rows="6" placeholder="keyword = score (one per line)"></textarea></div>
     <div class="settingsActions">
       <button class="btn primary" id="scSave">Save scoring</button>
       <button class="btn ghost" id="scReset">Reset to defaults</button>
@@ -7747,14 +7752,15 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   if (!picked && it && it.key && Number(it.resume) > 0) {
     const w = S.watchMap && S.watchMap[it.key];
     const src = w && w.meta && w.meta.source;
-    if (src && (src.pickKey || src.name)) {
+    if (src && (src.pickKey || src.name) && sourceFitsQualityPref(src, qRank)) {
       picked = { name: src.name, pickKey: src.pickKey };
       // Auto-pin, not a human Sources choice: tell the server, so a pin that rotted since the
       // last session is skipped instantly and the resume keeps the ranked parallel race.
+      // A 4K pin must not ride along after the user tapped 1080 — that Play should pick a 1080.
       pinnedResume = true;
     }
   }
-  const body = { q: queryFor(it), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
+  const body = { q: queryFor(it) || queryFor(S.detailItem) || queryFor(S.playing && S.playing.item), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
   if (pinnedResume) body.pinnedResume = true;
   if (ids.imdbid) body.imdbid = ids.imdbid;
   if (ids.tvdbid) body.tvdbid = ids.tvdbid;
@@ -7782,7 +7788,7 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   // is cold and the first frame waits on it (the 20-30s native resume lag). The server can't compute
   // this itself (no duration probe at prepare/play); only the client knows the duration (watch state).
   const resumeSec = +it.resume || 0;
-  if (resumeSec > 0) {
+  if (resumeSec > 0 && pinnedResume) {
     const w = S.watchMap && it.key && S.watchMap[it.key];
     const dur = +(w && w.duration) || +it.duration || 0;
     if (dur > 0) body.resumeFrac = Math.max(0, Math.min(0.98, resumeSec / dur));
@@ -7801,7 +7807,7 @@ function maybePrepareFocusedHomeCard() {
   if (!view || !view.data) return;
   const ri = S.rowIdx || 0;
   const it = view.data[ri] && view.data[ri].items[S.colIdx[ri] || 0];
-  if (it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) preparePlaybackSource(it);
+  if (it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) preparePlaybackSource(it, 0);
 }
 function playbackWarmKey(it, qRank) {
   if (!it) return '';
@@ -8120,9 +8126,28 @@ function setHero(it) {
 /* ============ play pipeline ============ */
 function queryFor(it) {
   if (!it) return '';
-  const exact = `${it.title || ''} ${it.year || ''}`.trim();
+  const q = String(it.q || '').trim();
+  // Episode cards store a pretty title ("Show — S01E01 · Pilot"). That string is a terrible
+  // indexer query and made thumbnail Play / Sources look empty after the big Play button worked.
+  if (it.type === 'episode' && q) return q;
+  const title = it.title || it.name || it.showTitle || '';
+  const year = it.year || '';
+  const exact = `${title} ${year}`.trim();
   if (it.tmdbId && (it.type === 'movie' || it.type === 'tv') && exact) return exact;
-  return it.q || exact;
+  return q || exact;
+}
+function releaseRankOfSource(src) {
+  if (!src) return null;
+  const named = normalizeResolutionRank(src.resolutionRank);
+  if (named != null) return named;
+  return releaseResolutionRankFromName(src.name);
+}
+function sourceFitsQualityPref(src, qRank) {
+  if (!src || qRank == null) return true;
+  const rank = releaseRankOfSource(src);
+  if (rank == null) return true;
+  if (qRank >= 4) return rank >= 4;
+  return rank < 4 && rank <= qRank;
 }
 function applyExternalIds(it, d) {
   if (!it || !d) return it;
@@ -8509,6 +8534,10 @@ async function play(it, pick, opts = {}) {
     // The server now returns a human summary of WHY (sources removed / encrypted / incomplete /
     // timed out) — show that instead of the bare "all candidates failed" when present.
     const why = (e.detail && e.detail.summary) || `${e.message}${tried ? ` (${tried} tried)` : ''}`;
+    if (/no playable|not available yet/i.test(String(why))) {
+      toast('Not available yet');
+      return;
+    }
     toast(`Can't play this — ${why}`);
   } finally {
     clearPlayHandoffWatchdog();
@@ -8614,7 +8643,9 @@ async function openSources(it) {
     if (!current()) return;
     list.innerHTML = '';
     if (!r.candidates.length) {
-      list.innerHTML = '<div class="sub">No releases found.</div>';
+      list.innerHTML = r.camOnly
+        ? '<div class="sub">Not available yet.</div>'
+        : '<div class="sub">No releases found.</div>';
       applyFocus($('drawerClose'), false);
       return;
     }
@@ -9048,8 +9079,13 @@ async function openDetail(it, push = true) {
       if (p) p.style.backgroundImage = artBackground(it.poster, it.backdrop, artFallback(it.key || it.title, 30));
     }
     paintLibraryCardCover(it._idx, it.poster, it.backdrop);
-    const tr = pickBestTrailer(d.videos && d.videos.results, it.title);
-    if (tr) { S.detailTrailer = { key: tr.key, title: it.title, item: it }; $('dTrailer').style.display = ''; }
+    const trList = listPlayableTrailers(d.videos && d.videos.results, it.title);
+    const tr = trList[0];
+    if (tr) {
+      S.detailTrailer = { ...trailerClip(tr), title: it.title, item: it, alts: trList.slice(1).map(trailerClip) };
+      $('dTrailer').style.display = '';
+      prefetchTrailerStream(S.detailTrailer);
+    }
 
     // Meta line with dot separators (Plex style).
     const parts = [`<span class="rating">★ TMDB ${(d.vote_average || 0).toFixed(1)}</span>`];
@@ -11784,12 +11820,29 @@ function handleMultiViewKey(k, e) {
 }
 function clearPlaybackTimers() {
   clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
+  clearPauseIdleExit();
   clearWebRebufferRecovery();
   if (S._healthKickT) { clearTimeout(S._healthKickT); S._healthKickT = null; }
   if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
   if (S.healthTimer) { clearInterval(S.healthTimer); S.healthTimer = null; }
   if (S.watchTimer) { clearInterval(S.watchTimer); S.watchTimer = null; }
   if (S.activityTimer) { clearInterval(S.activityTimer); S.activityTimer = null; }
+}
+const PAUSE_IDLE_EXIT_MS = 15 * 60 * 1000;
+function clearPauseIdleExit() {
+  if (S._pauseIdleT) { clearTimeout(S._pauseIdleT); S._pauseIdleT = null; }
+}
+function armPauseIdleExit(p = S.playing) {
+  clearPauseIdleExit();
+  if (!p || !p.item || p.item.type === 'live' || S.view !== 'player') return;
+  S._pauseIdleT = setTimeout(() => {
+    S._pauseIdleT = null;
+    const cur = S.playing;
+    if (!cur || cur !== p || S.view !== 'player' || (cur.item && cur.item.type === 'live')) return;
+    const stillPaused = cur.usingNative ? !!cur.nativePaused : !!( $('video') && $('video').paused );
+    if (!stillPaused) return;
+    closePlayer();
+  }, PAUSE_IDLE_EXIT_MS);
 }
 function clearWebRebufferRecovery() {
   if (S._webRebufferT) clearTimeout(S._webRebufferT);
@@ -12034,7 +12087,7 @@ async function openPlayer(it, mount, opts = {}) {
   };
   v.onplaying = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
-    clearWebRebufferRecovery(); cancelPauseWarmAhead(); markVodPlaybackStarted(playingRef);
+    clearWebRebufferRecovery(); clearPauseIdleExit(); cancelPauseWarmAhead(); markVodPlaybackStarted(playingRef);
     bumpPlayClock(playingRef);
     clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame();
   };
@@ -12045,6 +12098,7 @@ async function openPlayer(it, mount, opts = {}) {
     // when the app is backgrounded or killed right after pausing.
     bumpPlayClock(playingRef);
     saveWatch(true);
+    armPauseIdleExit(playingRef);
     schedulePauseWarmAhead(playingRef); updPP();
   };
   v.onloadeddata = clearReadyFrame;
@@ -12932,6 +12986,7 @@ window.__tvNativeVideoPlaying = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
   p.nativePaused = false;
+  clearPauseIdleExit();
   bumpPlayClock(p);
   // READY means ExoPlayer parsed enough media to be ready; it does not prove a frame advanced.
   // Mark the recovery boundary only on real PLAYING so a frozen resume keeps the fast startup path.
@@ -12943,6 +12998,7 @@ window.__tvNativeVideoPaused = (pos, dur, token) => {
   applyNativeVideoProgress(pos, dur);
   p.nativePaused = true;
   bumpPlayClock(p);
+  armPauseIdleExit(p);
   // ExoPlayer reports the exact stop point here. Flush it before Android can suspend the hidden
   // WebView so Back, media-stop, Home/app background, and process death all resume accurately.
   saveWatch(true);
@@ -14611,7 +14667,7 @@ function takePlayedSeconds(p = S.playing) {
 async function saveWatch(final, opts = {}) {
   const p = S.playing; if (!p || !p.item) return;
   if (p.item.type === 'live' || String(p.item.key || '').startsWith('live:')) return; // live TV never lands in Continue Watching
-  const pos = currentTime();
+  let pos = currentTime();
   const playedSeconds = takePlayedSeconds(p);
   if (!final && Math.abs(pos - p.lastSaved) < 5 && playedSeconds < 1) return;
   p.lastSaved = pos;
@@ -14623,6 +14679,14 @@ async function saveWatch(final, opts = {}) {
   // EOF sets p._ended before teardown. A later close/back save can see duration=0 or
   // currentTime=0 and must not un-watch the episode we just finished.
   const watched = opts && opts.watched != null ? !!opts.watched : (nearEnd || !!(p && p._ended));
+  // One movie/episode owns one clock. A 4K→1080 hop (or any remount) can report 0:00
+  // before the seek lands. Writing that would give 1080 its own resume point and wipe 4K.
+  const resumeAt = Number(p.item && p.item.resume) || 0;
+  if (pos >= resumeAt - 5) p._resumeLanded = true;
+  if (!watched && !(p.item && p.item._startOver) && resumeAt > 30 && !p._resumeLanded && pos < resumeAt - 20) {
+    if (!final) return;
+    pos = resumeAt;
+  }
   // Pin the PLAYING source for resume once this session has really played ~30s past its start
   // point — resume used to re-run auto-pick, which forgot a manual Sources choice (back to the
   // "original" source) and happily re-served a source that had failed. A source that dies
@@ -14727,7 +14791,8 @@ async function closePlayer(opts = {}) {
   if (finished && S.nextEp) rememberPendingHomeNext(S.nextEp);
   else clearPendingHomeNextForItem(closingItem);
   S.nextEp = null; updateNextEpisodeButton();
-  releasePlaybackSession(closingSessionId, { keepPrepared: $('detail').classList.contains('open') });
+  const parkForResume = !finished && closingItem && closingItem.type !== 'live';
+  releasePlaybackSession(closingSessionId, { keepPrepared: parkForResume });
   S.playing = null;
   updatePlayerControlAvailability();
   if ($('detail').classList.contains('open')) {
@@ -14737,7 +14802,7 @@ async function closePlayer(opts = {}) {
     try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
     if (S.detailItem) syncDetailButtons(S.detailItem);
     applyPendingDetailNext();
-    if (S.detailItem && S.detailItem.type === 'tv' && S.detailSeason != null) loadSeason(S.detailItem, S.detailSeason);
+    if (S.detailItem && S.detailItem.type === 'tv' && S.detailSeason != null) openSeasonEpisodes(S.detailItem, S.detailSeason);
     // The player owns S.zone while open, so testing for a fictional "detail" zone stranded the
     // focus ring on the now-hidden player. Always return to a visible primary detail action.
     S.zone = '';
@@ -14779,7 +14844,7 @@ async function closePlayer(opts = {}) {
         if (S.detailItem && S.detailItem.tmdbId === cwDetailTarget.tmdbId) {
           syncDetailButtons(S.detailItem);
           applyPendingDetailNext();
-          if (S.detailItem.type === 'tv' && S.detailSeason != null) loadSeason(S.detailItem, S.detailSeason);
+          if (S.detailItem.type === 'tv' && S.detailSeason != null) openSeasonEpisodes(S.detailItem, S.detailSeason);
         }
       })();
       return;
@@ -17246,7 +17311,8 @@ async function loadDiscover() {
 // The old first-loose-match pick meant array order decided: a teaser could beat the real
 // trailer, a fan upload could beat the official one, and a mislabeled "Cast Q&A" typed as
 // Trailer slipped straight through. Rules:
-//   - YouTube only, type EXACTLY 'Trailer' or 'Teaser' (Featurette/Clip/BTS/Bloopers excluded);
+//   - YouTube or Vimeo, type EXACTLY 'Trailer' or 'Teaser' (Featurette/Clip/BTS/Bloopers excluded);
+//   - Vimeo wins when TMDB has one (usually a real 1080 file); otherwise YouTube 720/360;
 //   - the NAME is screened too — TMDB data mislabels, so interview/featurette/making-of/red
 //     carpet/BTS/sizzle/junket/etc words (plus common non-English interview/BTS words, which the
 //     English screen would otherwise miss) disqualify even a video typed 'Trailer'; the title's
@@ -17266,8 +17332,8 @@ function listPlayableTrailers(results, title) {
     while ((i = out.toLowerCase().indexOf(t)) !== -1) out = out.slice(0, i) + ' ' + out.slice(i + t.length);
     return out;
   };
-  return (Array.isArray(results) ? results : [])
-    .filter((v) => v && v.key && v.site === 'YouTube'
+  const ranked = (Array.isArray(results) ? results : [])
+    .filter((v) => v && v.key && (v.site === 'YouTube' || v.site === 'Vimeo')
       && (v.type === 'Trailer' || v.type === 'Teaser')
       && !NOT_A_TRAILER.test(scrub(String(v.name || ''))))
     .map((v) => {
@@ -17296,6 +17362,9 @@ function listPlayableTrailers(results, title) {
     })
     .sort((a, b) => b.s - a.s)
     .map((row) => row.v);
+  const vimeo = ranked.filter((v) => v.site === 'Vimeo');
+  const youtube = ranked.filter((v) => v.site !== 'Vimeo');
+  return vimeo.concat(youtube);
 }
 function pickBestTrailer(results, title) {
   const list = listPlayableTrailers(results, title);
@@ -17307,10 +17376,13 @@ async function buildTrailerRow(list) {
     const type = x.media_type === 'tv' || (x.name && !x.title) ? 'tv' : 'movie';
     try {
       const v = await api(`/api/tmdb/${type}/${x.id}/videos`);
-      const tr = pickBestTrailer(v.results, x.title || x.name);
+      const trList = listPlayableTrailers(v.results, x.title || x.name);
+      const tr = trList[0];
       if (!tr) return null;
+      const clip = trailerClip(tr);
+      prefetchTrailerStream(clip);
       const pub = tr.published_at ? new Date(tr.published_at).getTime() : 0;
-      return { ...mapTmdb(x), trailer: { key: tr.key, title: x.title || x.name }, _trailerPub: Number.isFinite(pub) ? pub : 0 };
+      return { ...mapTmdb(x), trailer: { ...clip, title: x.title || x.name, alts: trList.slice(1).map(trailerClip) }, _trailerPub: Number.isFinite(pub) ? pub : 0 };
     } catch { return null; }
   }));
   // "Latest" means newest trailer first — the old code kept trending order, so this-week's real
@@ -18012,16 +18084,96 @@ function paintTrailerPlay() {
   const btn = $('trailerPlay');
   btn.style.display = trailerCanPlay(S.trailerItem) ? '' : 'none';
 }
-function setTrailerFrame(key, title) {
+function trailerClip(v) {
+  if (!v || !v.key) return null;
+  const site = String(v.site || '').toLowerCase() === 'vimeo' ? 'vimeo' : 'youtube';
+  return { key: String(v.key), site };
+}
+function trailerClipId(clip) {
+  if (!clip) return '';
+  if (typeof clip === 'string') return 'youtube:' + clip;
+  return (clip.site || 'youtube') + ':' + clip.key;
+}
+function trailerTokenUrl(clip) {
+  const ref = typeof clip === 'string' ? { key: clip, site: 'youtube' } : clip;
+  if (ref.site === 'vimeo') return api(`/api/trailer/vimeo/${encodeURIComponent(ref.key)}`);
+  return api(`/api/trailer/${encodeURIComponent(ref.key)}`);
+}
+function prefetchTrailerStream(clip) {
+  const ref = typeof clip === 'string' ? { key: clip, site: 'youtube' } : clip;
+  if (!ref || !ref.key) return;
+  if (ref.site === 'vimeo' && !/^\d{6,12}$/.test(ref.key)) return;
+  if (ref.site !== 'vimeo' && !/^[\w-]{11}$/.test(ref.key)) return;
+  const id = trailerClipId(ref);
+  const memo = S._trailerPrefetch || (S._trailerPrefetch = new Map());
+  if (memo.has(id)) return;
+  memo.set(id, trailerTokenUrl(ref).catch((e) => {
+    memo.delete(id);
+    throw e;
+  }));
+}
+function stopTrailerVideo() {
+  const video = $('trailerBox') && $('trailerBox').querySelector('video');
+  if (!video) return;
+  try { video.pause(); video.removeAttribute('src'); video.load(); } catch { /* ignore */ }
+}
+function setTrailerFrame(clip, title, altClips) {
+  const first = typeof clip === 'string' ? { key: clip, site: 'youtube' } : clip;
   const trailerEl = $('trailer');
   trailerEl.classList.remove('loaded');
-  const origin = encodeURIComponent(location.origin || 'http://localhost');
-  // referrerpolicy matters: with no referrer YouTube refuses to authorize many embeds.
-  $('trailerBox').innerHTML =
-    `<iframe title="${esc(title)} trailer" src="https://www.youtube.com/embed/${encodeURIComponent(key)}?autoplay=1&rel=0&playsinline=1&controls=1&modestbranding=1&iv_load_policy=3&origin=${origin}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`;
-  const frame = $('trailerBox').querySelector('iframe');
-  if (frame) frame.addEventListener('load', () => $('trailer').classList.add('loaded'), { once: true });
-  S.trailerKey = key;
+  const gen = (S.trailerGen = (S.trailerGen || 0) + 1);
+  S.trailerKey = first && first.key;
+  const seen = new Set();
+  S.trailerQueue = [first].concat(altClips || []).map((c) => (typeof c === 'string' ? { key: c, site: 'youtube' } : c))
+    .filter((c) => {
+      const id = trailerClipId(c);
+      if (!c || !c.key || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  S.trailerQueueIdx = 0;
+  stopTrailerVideo();
+  $('trailerBox').innerHTML = '';
+  const video = document.createElement('video');
+  video.setAttribute('title', `${title} trailer`);
+  video.setAttribute('playsinline', '');
+  video.setAttribute('webkit-playsinline', '');
+  video.controls = true;
+  video.preload = 'auto';
+  video.autoplay = true;
+  video.addEventListener('playing', () => { if (S.trailerGen === gen) trailerEl.classList.add('loaded'); });
+  video.addEventListener('error', () => { if (S.trailerGen === gen) advanceTrailerSource(title, gen); });
+  $('trailerBox').appendChild(video);
+  loadTrailerSource(title, gen);
+}
+async function loadTrailerSource(title, gen) {
+  const clip = S.trailerQueue && S.trailerQueue[S.trailerQueueIdx];
+  if (!clip || S.trailerGen !== gen) return;
+  S.trailerKey = clip.key;
+  const video = $('trailerBox').querySelector('video');
+  if (!video) return;
+  try {
+    prefetchTrailerStream(clip);
+    const r = await (S._trailerPrefetch.get(trailerClipId(clip)) || trailerTokenUrl(clip));
+    if (S.trailerGen !== gen) return;
+    video.src = r.streamUrl;
+    const play = video.play();
+    if (play && typeof play.catch === 'function') play.catch(() => {});
+  } catch (e) {
+    if (S.trailerGen !== gen) return;
+    advanceTrailerSource(title, gen, e);
+  }
+}
+function advanceTrailerSource(title, gen, err) {
+  if (S.trailerGen !== gen) return;
+  S.trailerQueueIdx = (S.trailerQueueIdx || 0) + 1;
+  if (S.trailerQueue && S.trailerQueueIdx < S.trailerQueue.length) {
+    $('trailer').classList.remove('loaded');
+    loadTrailerSource(title, gen);
+    return;
+  }
+  const msg = String(err && err.message || '');
+  toast(/age-restricted|age restricted/i.test(msg) ? msg : 'Trailer is unavailable');
 }
 function openTrailer(tr, it) {
   if (!tr || !tr.key) return toast('Trailer is unavailable');
@@ -18042,7 +18194,7 @@ function openTrailer(tr, it) {
   paintTrailerPlay();
   paintTrailerWatchlist();
   warmTrailerPlayback(item);
-  setTrailerFrame(tr.key, title);
+  setTrailerFrame(trailerClip(tr) || tr, title, tr.alts);
   trailerEl.classList.add('open');
   const start = $('trailerPlay').style.display !== 'none' ? trailerControls().indexOf($('trailerPlay')) : 0;
   requestAnimationFrame(() => focusTrailerControl(Math.max(0, start)));
@@ -18066,6 +18218,8 @@ $('trailerWl').addEventListener('click', async () => {
   catch (e) { toast(e.message); }
 });
 function closeTrailer(opts = {}) {
+  S.trailerGen = (S.trailerGen || 0) + 1;
+  stopTrailerVideo();
   $('trailer').classList.remove('open', 'loaded');
   $('trailer').setAttribute('aria-hidden', 'true');
   $('trailer').style.removeProperty('--trailerBackdrop');
@@ -23029,6 +23183,21 @@ function mergeServerSettingsIntoPrefs() {
 mergeServerSettingsIntoPrefs();
 // One handler for the whole account menu: pref tabs (data-tab → [data-ptab]) and server tabs
 // (data-srv → [data-stab]). Server data loads lazily the first time a server tab is opened.
+function accountTabKey(btn) {
+  const b = btn || document.querySelector('#prefTabs button.on');
+  return (b && (b.dataset.srv || b.dataset.tab)) || 'dash';
+}
+function accountTabRoute(key) {
+  const k = String(key || accountTabKey() || 'dash').replace(/[^a-z0-9-]/gi, '') || 'dash';
+  return `#/prefs/${k}`;
+}
+function accountTabButton(key) {
+  const k = String(key || '').replace(/[^a-z0-9-]/gi, '');
+  if (!k) return null;
+  const el = document.querySelector(`#prefTabs button[data-srv="${k}"], #prefTabs button[data-tab="${k}"]`);
+  if (!el || el.style.display === 'none') return null;
+  return el;
+}
 function activateAccountTab(b) {
   if (!b || !b.matches || !b.matches('button')) return;
   const isSrv = !!b.dataset.srv;
@@ -23044,6 +23213,7 @@ function activateAccountTab(b) {
     const page = $('prefs');
     if (page) page.scrollTop = 0;
   }
+  if (S.view === 'prefs' && key) replaceRoute(accountTabRoute(key));
 }
 document.querySelectorAll('#prefTabs button').forEach((b) => {
   const run = () => activateAccountTab(b);
@@ -23228,7 +23398,8 @@ document.querySelectorAll('#userPeekRange button').forEach((b) => b.addEventList
 // Admin jumps here from setup / Trakt link — open the account page on the first Server-settings tab.
 function openServerSettings() {
   switchView('prefs');
-  const first = document.querySelector('#prefTabs .srvTab');
+  const fromHash = accountTabButton(routeParts()[1]);
+  const first = fromHash || document.querySelector('#prefTabs .srvTab');
   requestAnimationFrame(() => { if (first) activateAccountTab(first); });
 }
 // Profile PIN management — account password required so kids can't lift the lock.
@@ -24222,8 +24393,9 @@ function perfFormValues() {
     streamMix: $('perfMix').value || 'mixed',
     serverDownloadMbps: parseInt($('perfDown').value || '0', 10) || 0,
     serverUploadMbps: parseInt($('perfUp').value || '0', 10) || 0,
-    buffer1080Sec: parseInt($('perfBuf1080').value || '180', 10) || 180,
-    buffer4kSec: parseInt($('perfBuf4k').value || '90', 10) || 90,
+    buffer1080Sec: parseInt($('perfBuf1080').value || '200', 10) || 200,
+    buffer4kSec: parseInt($('perfBuf4k').value || '200', 10) || 200,
+    connectionMode: ($('perfConnMode') && $('perfConnMode').value === 'custom') ? 'custom' : 'auto',
     maxConnPerStream1080: parseInt($('perfConn1080').value || '12', 10) || 12,
     maxConnPerStream4k: parseInt($('perfConn4k').value || '20', 10) || 20,
     startupReservePct: parseInt($('perfReserve').value || '25', 10) || 25,
@@ -24240,11 +24412,13 @@ function setPerfForm(p = {}) {
   $('perfMix').value = p.streamMix || 'mixed';
   $('perfDown').value = p.serverDownloadMbps || '';
   $('perfUp').value = p.serverUploadMbps || '';
-  $('perfBuf1080').value = p.buffer1080Sec ?? 180;
-  $('perfBuf4k').value = p.buffer4kSec ?? 90;
+  $('perfBuf1080').value = p.buffer1080Sec ?? 200;
+  $('perfBuf4k').value = p.buffer4kSec ?? 200;
+  if ($('perfConnMode')) $('perfConnMode').value = p.connectionMode === 'custom' ? 'custom' : 'auto';
   $('perfConn1080').value = p.maxConnPerStream1080 ?? 12;
   $('perfConn4k').value = p.maxConnPerStream4k ?? 20;
   $('perfReserve').value = p.startupReservePct ?? 25;
+  syncConnModeUi();
   $('perfPreload').value = p.devicePreloadMb ?? 12;
   $('perfPipeline').value = p.nntpPipelineDepth ?? 0;
 }
@@ -24257,6 +24431,13 @@ function perfSetApplyEnabled(on) {
 }
 function perfProfileLabel(v) {
   return ({ auto: 'Auto (balanced)', quality: 'Maximize quality', concurrency: 'Maximize viewers', custom: 'Custom' })[v] || 'Auto (balanced)';
+}
+function syncConnModeUi() {
+  const hint = $('perfConnHint');
+  if (!hint) return;
+  hint.textContent = ($('perfConnMode') && $('perfConnMode').value === 'custom')
+    ? 'Custom splits connections evenly using the numbers you type. A 502 still lowers the window so the provider is not flooded.'
+    : 'Auto starts each Play at 10, adds sockets if that playhead falls behind, and gives them back when someone else needs them. The Max 1080/4K numbers are ceilings — Auto will not go above them. Cache stays inside about 20% of this box\'s RAM.';
 }
 function perfNum(v, suffix = '') {
   const n = Number(v) || 0;
@@ -24707,8 +24888,8 @@ async function refreshSettings() {
     $('scTrusted').value = (s.scoringGroupsTrusted || []).join(', ');
     $('scAvoid').value = (s.scoringGroupsAvoid || []).join(', ');
     $('scKeywords').value = (s.scoringKeywords || []).map((k) => `${k.term} = ${k.score}`).join('\n');
-    const scN = (s.scoringGroupsTrusted || []).length + (s.scoringGroupsAvoid || []).length + (s.scoringKeywords || []).length;
-    $('scStatus').textContent = scN ? `${scN} custom rule${scN > 1 ? 's' : ''} active on top of the defaults`
+    $('scStatus').textContent = s.scoringCustom
+      ? 'using your custom scoring — Reset restores Triboon defaults'
       : 'using the built-in defaults (recommended)';
     $('tmdbStatus').textContent = s.tmdbKey ? 'key saved ✓ — encrypted at rest' : 'no key yet';
     $('tmdbKey').placeholder = s.tmdbKey ? 'key saved ✓ — paste a new one to replace' : 'TMDB API key (v3)';
@@ -24947,6 +25128,7 @@ $('perfProfile').addEventListener('change', () => {
   if ($('perfProfile').value === 'custom') return; // hand-tune mode — leave fields as-is
   calcRecommendation().catch(() => {}); // auto / quality / concurrency → server computes scaled values
 });
+if ($('perfConnMode')) $('perfConnMode').addEventListener('change', syncConnModeUi);
 // Hand-editing any field means it's no longer a named preset.
 ['perfBuf1080', 'perfBuf4k', 'perfConn1080', 'perfConn4k', 'perfReserve'].forEach((id) => {
   const el = $(id);
@@ -25028,7 +25210,7 @@ $('scSave').addEventListener('click', async () => {
   refreshSettings();
 });
 $('scReset').addEventListener('click', async () => {
-  await api('/api/settings', { method: 'POST', body: { scoringGroupsTrusted: [], scoringGroupsAvoid: [], scoringKeywords: [] } });
+  await api('/api/settings', { method: 'POST', body: { scoringReset: true } });
   toast('Scoring reset to the built-in defaults');
   refreshSettings();
 });
@@ -25372,7 +25554,11 @@ function switchView(v, push = true, opts = {}) {
   // the Live TV channel list).
   const inkView = v === 'prefs' || v === 'settings' || v === 'livetv';
   if (!opts.preservePage && (inkView || !peekPageCache(v))) clearBackdrop();
-  if (push) setRoute(v === 'library' && S.currentLib ? `#/library/${S.currentLib.id}` : `#/${v}`);
+  if (push) {
+    if (v === 'library' && S.currentLib) setRoute(`#/library/${S.currentLib.id}`);
+    else if (v === 'prefs') setRoute(accountTabRoute());
+    else setRoute(`#/${v}`);
+  }
   const onDiscover = v === 'discover' || v === 'calendar';
   const isBrowse = ['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv'].includes(v);
   const shortBrowseBd = !document.body.classList.contains('tv') && (v === 'discover' || v === 'movies' || v === 'tv' || v === 'kids' || v === 'watchlist' || (v === 'library' && S.currentLib && S.currentLib.path));
@@ -25592,6 +25778,16 @@ function applyRoute() {
     // page the user would Back to anyway) rather than a blank detail shell.
     if (applyLibraryRoute(parts[1])) return;
     deferLibraryRoute(parts[1]);
+    return;
+  }
+  if (view === 'prefs' || view === 'settings') {
+    switchView('prefs', false);
+    const btn = accountTabButton(parts[1])
+      || (view === 'settings' ? document.querySelector('#prefTabs .srvTab') : document.querySelector('#prefTabs button[data-tab="dash"]'));
+    if (btn) activateAccountTab(btn);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (S.view === 'prefs' && !document.querySelector('#detail.open,#person.open,#player.open')) focusContent();
+    }));
     return;
   }
   const KNOWN = ['home', 'movies', 'tv', 'kids', 'search', 'discover', 'calendar', 'watchlist', 'livetv', 'music', 'audiobooks', 'settings', 'prefs'];
@@ -25848,7 +26044,7 @@ function focusCard(ri, ci, opts = {}) {
   // to the settled card (single shared prepareTimer → only one mount in flight), and play() joins
   // an in-flight prepare rather than duplicating it. Skipped when a local copy already fits.
   // Never start a usenet mount under the Android TV splash — wait until bootReady.
-  if (!S._booting && it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) preparePlaybackSource(it);
+  if (!S._booting && it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) preparePlaybackSource(it, 0);
   maybeLoadMoreHomeRow(view.root, ri);
 }
 function gridEls() { return [...(S.gridRoot || $('grid')).querySelectorAll('.pcard, .card, .chCard, .chGroupHead, .gRow.focusable, .lcat, .gridMore.focusable')]; }

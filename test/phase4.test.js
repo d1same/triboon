@@ -369,8 +369,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'manual source selection should re-resolve the latest resume point before mounting the exact picked release');
   assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+saveWatch\(true, S\.playing\._ended \? \{ watched: true \} : \{\}\);[\s\S]+if \(!opts\.preserveNativeSurface[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(!opts\.preserveGuide\) closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+releasePlaybackSession\(leavingSessionId\);[\s\S]+S\.playing = null;[\s\S]+\}/,
     'source replacement should stop active playback while allowing atomic native episode handoff and preserving forced-watched EOF');
-  assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+releasePlaybackSession\(closingSessionId, \{ keepPrepared: \$\('detail'\)\.classList\.contains\('open'\) \}\);[\s\S]+S\.playing = null;/,
-    'Back must tell the server to drop the old play session so the next title has connections');
+  assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+const parkForResume = !finished && closingItem && closingItem\.type !== 'live';[\s\S]+releasePlaybackSession\(closingSessionId, \{ keepPrepared: parkForResume \}\);[\s\S]+S\.playing = null;/,
+    'Back from a mid-watch movie parks the RAM mount so Home Continue Watching can join it');
   assert.match(ui, /function hideToast\(\) \{[\s\S]+classList\.remove\('show'\)/,
     'a later successful Play must clear a leftover no-playable toast');
   assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+beginPlaybackTransition\(it, \{\s*\.\.\.opts,\s*hot: !picked && playbackIsWarmed\(it, qRank\),\s*\}\);[\s\S]+await \(playbackIsWarmed\(it, qRank\)[\s\S]+it\._localLookupPromise \|\| ensureLocalPlaybackForItem\(it\)\)[\s\S]+localExact = !picked && localPlaybackForItem\(it\)[\s\S]+playLocal\(localExact, \{ replacementStarted: true, nativeFirst, playTicket \}\)/,
@@ -478,7 +478,9 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // Resume should feel local: settling focus on a resumable card warms the best source all the way
   // to a MOUNTED state (not just the search) — multi-volume RAR mounts cost seconds, so search-only
   // warming still left a long press-play gap (see bench/resume-latency.js).
-  assert.match(ui, /function focusCard\([\s\S]+if \(!S\._booting && it && it\.type !== 'live' && \(it\._cw \|\| it\._nextEp \|\| \(\+it\.resume \|\| 0\) > 0\)\) preparePlaybackSource\(it\);/,
+  assert.match(ui, /function maybePrepareFocusedHomeCard\(\) \{[\s\S]+preparePlaybackSource\(it, 0\);/,
+    'a focused Continue Watching / resume card must mount-warm immediately, not after the 900ms browse delay');
+  assert.match(ui, /function focusCard\([\s\S]+if \(!S\._booting && it && it\.type !== 'live' && \(it\._cw \|\| it\._nextEp \|\| \(\+it\.resume \|\| 0\) > 0\)\) preparePlaybackSource\(it, 0\);/,
     'focusing a resumable Continue Watching / next-episode card should mount-warm the best source (preparePlaybackSource) so resume reuses a live mount instantly');
   assert.match(ui, /function preparePlaybackSource\(it, delay = 900\) \{[\s\S]+if \(S\._booting\) return;[\s\S]+if \(S\.view === 'player'\) return;[\s\S]+it\.type === 'tv' && !episodeKeyParts\(it\)/,
     'home source prepare must not start while the splash is up, after Play, or for a bare TV show');
@@ -499,7 +501,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'episode targets created from details should inherit the current show quality preference');
   assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
     'player episode strip and Up Next should continue the same 4K/1080p class');
-  assert.match(ui, /async function saveWatch\(final, opts = \{\}\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5 && playedSeconds < 1\) return;[\s\S]+const nearEnd = isGenuineEpisodeEof\(p, pos, d\);[\s\S]+const watched = opts && opts\.watched != null \? !!opts\.watched : \(nearEnd \|\| !!\(p && p\._ended\)\);[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+watched, profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)/,
+  assert.match(ui, /async function saveWatch\(final, opts = \{\}\) \{[\s\S]+let pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5 && playedSeconds < 1\) return;[\s\S]+const nearEnd = isGenuineEpisodeEof\(p, pos, d\);[\s\S]+const watched = opts && opts\.watched != null \? !!opts\.watched : \(nearEnd \|\| !!\(p && p\._ended\)\);[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+watched, profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)/,
     'watch progress should save profile-scoped position immediately into the local cache and server (keepalive on final saves so close/pagehide flushes survive teardown), honoring a caller watched-override');
   assert.match(ui, /function flushPlaybackCheckpoints\(\) \{[\s\S]+if \(S\.playing\) saveWatch\(true\);[\s\S]+saveMultiViewVodProgress\(i, true\);[\s\S]+window\.__tvPlaybackBackgrounded = flushPlaybackCheckpoints;[\s\S]+window\.addEventListener\('pagehide', \(\) => \{[\s\S]+flushPlaybackCheckpoints\(\);[\s\S]+document\.addEventListener\('visibilitychange', \(\) => \{[\s\S]+document\.visibilityState === 'hidden'[\s\S]+flushPlaybackCheckpoints\(\);/,
     'pagehide, mobile visibility loss, and native backgrounding should flush main and Multiview watch positions before teardown');
@@ -513,7 +515,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // interview/featurette/BTS words (TMDB mislabels), official + real-Trailer preferred, and BOTH
   // pick sites (detail page + trailers row) share the one picker. Null beats playing an interview.
   assert.match(ui, /function listPlayableTrailers\(results, title\) \{[\s\S]+const NOT_A_TRAILER = \/[\s\S]+?\(v\.type === 'Trailer' \|\| v\.type === 'Teaser'\)[\s\S]+!NOT_A_TRAILER\.test\(scrub\(String\(v\.name \|\| ''\)\)\)[\s\S]+v\.type === 'Trailer' \? 100 : 40;[\s\S]+if \(v\.official\) s \+= 50;/,
-    'trailer selection scores exact-typed, name-screened YouTube videos (official Trailer > Teaser > nothing)');
+    'trailer selection scores exact-typed, name-screened YouTube/Vimeo videos (official Trailer > Teaser > nothing)');
   assert.match(ui, /function pickBestTrailer\(results, title\) \{[\s\S]+const list = listPlayableTrailers\(results, title\);[\s\S]+return list\.length \? list\[0\] : null/,
     'the best-trailer pick is the first playable trailer from the shared list');
   // The screen must catch the common non-trailer labels TMDB mislabels as Trailer/Teaser —
@@ -525,26 +527,40 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // titled "The Interview" or "Reunion" keeps its real trailer; both call sites pass the title.
   assert.match(ui, /const t = String\(title \|\| ''\)\.trim\(\)\.toLowerCase\(\);[\s\S]+?const scrub = \(name\) => \{/,
     'the picker scrubs the title out of video names so screen words inside titles cannot false-disqualify');
-  assert.match(ui, /pickBestTrailer\(d\.videos && d\.videos\.results, it\.title\)/,
+  assert.match(ui, /listPlayableTrailers\(d\.videos && d\.videos\.results, it\.title\)/,
     'the detail page passes the title into the trailer picker');
-  assert.match(ui, /pickBestTrailer\(v\.results, x\.title \|\| x\.name\)/,
+  assert.match(ui, /listPlayableTrailers\(v\.results, x\.title \|\| x\.name\)/,
     'the trailers row passes the title into the trailer picker');
   // Language tie-break: English (then language-less) beats other languages WITHIN a tier — the
   // word screen only knows listed languages, so unscreenable foreign mislabels must not win when
   // an English pick exists; weaker than official(+50) so original-language-only titles still work.
   assert.match(ui, /const lang = String\(v\.iso_639_1 \|\| ''\)\.toLowerCase\(\);\s*if \(lang === 'en'\) s \+= 25; else if \(!lang\) s \+= 10;/,
     'pickBestTrailer prefers English then language-neutral videos as a within-tier tie-break');
-  assert.ok((ui.match(/pickBestTrailer\(/g) || []).length >= 3,
+  assert.ok((ui.match(/listPlayableTrailers\(/g) || []).length >= 3,
     'both trailer pick sites (detail page + trailers row) route through the shared picker');
   assert.ok(!ui.includes(".find((v) => v.site === 'YouTube' && /Trailer|Teaser/i.test(v.type))")
     && !ui.includes(".find((r) => r.site === 'YouTube' && /Trailer|Teaser/i.test(r.type))"),
     'the old first-loose-match trailer picks are gone');
+  assert.match(ui, /id="trailerPlay" class="btn primary trailerCtl focusable"/,
+    'trailer Play uses the same white primary as details Play');
+  assert.match(ui, /id="trailerWl" class="btn trailerCtl focusable"/,
+    'trailer Watchlist uses the same dark secondary pill as details');
+  assert.doesNotMatch(ui, /#trailerPlay\{[^}]*btnPrimary/,
+    'trailer Play must not use gold at rest — that made focus look the same as Play');
   assert.match(ui, /id="trailerTitle"[\s\S]+id="trailerPlay"[\s\S]+function playFromTrailer\(\) \{[\s\S]+trailerPlayTarget\(S\.trailerItem\)[\s\S]+play\(it\);[\s\S]+closeTrailer\(\{ keepFocus: true \}\)/,
     'trailer Play covers with the player first so Details never flashes under a closed trailer');
   assert.match(ui, /function trailerPlayTarget\(it\) \{[\s\S]+detailPlayTarget[\s\S]+earlyNextUpTarget/,
     'a show trailer plays the next episode Details already prepared');
   assert.match(ui, /function openTrailer\([\s\S]+warmTrailerPlayback\(item\)/,
-    'opening a trailer starts the usenet mount while YouTube is playing');
+    'opening a trailer starts the usenet mount while the trailer is playing');
+  assert.ok(!ui.includes('youtube.com/embed') && !ui.includes('youtube-nocookie.com'),
+    'trailers play through Triboon, not a YouTube iframe');
+  assert.match(ui, /function setTrailerFrame\([\s\S]+createElement\('video'\)[\s\S]+loadTrailerSource/,
+    'the trailer modal plays a tokened same-origin video instead of a YouTube iframe');
+  assert.match(ui, /function trailerTokenUrl\(clip\) \{[\s\S]+\/api\/trailer\//,
+    'trailer playback mints a same-origin stream token, not a YouTube embed');
+  assert.match(ui, /function advanceTrailerSource\([\s\S]+S\.trailerQueueIdx/,
+    'an unplayable trailer (age-gate, dead key) advances to the next TMDB candidate');
   assert.match(ui, /function preparePlaybackSource\(it, delay = 900\) \{[\s\S]+startLocalPlaybackLookup\(it\);[\s\S]+if \(delay <= 0\) markPlaybackPrepared\(it, qRank\);/,
     'details and trailer prepare mark the exact Play target so Play joins that warmup');
   assert.match(ui, /function playFromTrailer\(\) \{[\s\S]+trailerPlayTarget\(S\.trailerItem\)[\s\S]+play\(it\);[\s\S]+closeTrailer\(\{ keepFocus: true \}\)/,
@@ -1193,8 +1209,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'detail availability should treat local TV episodes as playable local ownership');
   assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+localTitleHasPlayback\(it\)[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)/,
     'local-owned titles should not warm online source searches behind the detail page');
-  assert.match(ui, /function queryFor\(it\) \{[\s\S]+if \(it\.tmdbId && \(it\.type === 'movie' \|\| it\.type === 'tv'\) && exact\) return exact;[\s\S]+return it\.q \|\| exact;/,
-    'TMDB movie/show cards should play/search by the selected title and year, not a fuzzy raw search query');
+  assert.match(ui, /function queryFor\(it\) \{[\s\S]+if \(it\.type === 'episode' && q\) return q;[\s\S]+if \(it\.tmdbId && \(it\.type === 'movie' \|\| it\.type === 'tv'\) && exact\) return exact;[\s\S]+return q \|\| exact;/,
+    'movies/shows search by title+year; episode tiles must use the clean SxxExx query, not the pretty card title');
   assert.match(ui, /append_to_response=\$\{append\}/,
     'detail pages should fetch external IDs before source lookup so old/franchise titles can search by catalog identity');
   assert.match(ui, /credits,aggregate_credits,videos,content_ratings,release_dates,recommendations,similar,external_ids/,
@@ -2002,8 +2018,10 @@ test('near-end next-episode prepare fires once at the 2-minute boundary', () => 
   maybePrepareNextEpisode(80, 200);
   assert.strictEqual(calls.length, 1, 'a short reported duration must not warm the next episode in the middle of a sitcom');
   const pipeline = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
-  assert.match(pipeline, /const TITLE_PREPARED_READY_MS = 180000;[\s\S]+_findTitlePreparedReady\([\s\S]+async play\([\s\S]+_findTitlePreparedReady\(params, policy\)[\s\S]+await this\.search\(params, policy\)/,
-    'Play Next must join a finished prepare mount before it searches indexers again');
+  assert.match(pipeline, /const TITLE_PREPARED_READY_MS = 180000;[\s\S]+_findTitlePreparedReady\([\s\S]+async play\([\s\S]+_findTitlePreparedReady\(params, policy\)[\s\S]+_commitMount\(session, ready\.candidate, ready\.vf[\s\S]+this\.search\(params, policy, \{ allowStale: true \}\)\.then/,
+    'Play Next must join a finished prepare mount immediately; indexer search only refills backups after first frame');
+  assert.match(pipeline, /if \(!live \|\| !live\.streamable\) \{[\s\S]+this\.titlePreparedReady\.delete\(key\);/,
+    'a parked live mount stays joinable; eviction is the TTL, not a 3-minute clock');
   assert.match(pipeline, /const joiningPrepare = !explicitPick && this\._findTitlePrepare\(params, policy\);[\s\S]+const width = explicitPick \? 1 : \(joiningPrepare \? 2 : PLAY_RACE_WIDTH\);/,
     'smash Play during Details must join the warmup instead of opening a 5-wide race');
 });
@@ -2492,16 +2510,18 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'pause warm-ahead should be abortable when playback resumes, seeks, or closes');
   assert.match(ui, /function schedulePauseWarmAhead\(p = S\.playing\) \{[\s\S]+p\.item\.type === 'live'[\s\S]+p\.usingNative[\s\S]+p\.streamUrl[\s\S]+p\.size[\s\S]+const dur = totalDuration\(\);[\s\S]+if \(p\._pauseWarmAt && now - p\._pauseWarmAt < 12000\) return;[\s\S]+const targetSeconds = Math\.min\(dur - 1, Math\.max\(currentTime\(\) \+ 6, bufferedEnd \+ 2\)\);[\s\S]+url\.searchParams\.set\('priority', 'read-ahead'\);[\s\S]+headers: \{ Range: `bytes=\$\{start\}-\$\{start \+ bytes - 1\}` \}/,
     'pause warm-ahead should skip native ExoPlayer and issue one bounded low-priority range ahead of a paused web VOD');
-  assert.match(ui, /v\.onplaying = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+clearWebRebufferRecovery\(\); cancelPauseWarmAhead\(\);[\s\S]+v\.onpause = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+schedulePauseWarmAhead\(playingRef\); updPP\(\);/,
-    'web video should clear stale recovery state, warm on pause, and cancel warm-ahead immediately when playing again');
+  assert.match(ui, /v\.onplaying = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+clearWebRebufferRecovery\(\);[\s\S]+clearPauseIdleExit\(\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+v\.onpause = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+armPauseIdleExit\(playingRef\);[\s\S]+schedulePauseWarmAhead\(playingRef\); updPP\(\);/,
+    'web video should clear stale recovery state, warm on pause, arm the 15-minute idle exit, and cancel warm-ahead immediately when playing again');
   assert.match(ui, /v\.onpause = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+saveWatch\(true\);[\s\S]+schedulePauseWarmAhead\(playingRef\);/,
     'web pause should immediately persist its exact Continue Watching checkpoint');
   assert.match(ui, /function requestVideoPlay\(v, opts = \{\}\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+const r = v\.play\(\);[\s\S]+return r\.then\(\(\) => \{[\s\S]+cancelPauseWarmAhead\(\)/,
     'user-initiated resume should cancel pause warm-ahead before and after play starts');
   assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+if \(!p\) return;/,
     'manual seeks should cancel old pause warm-ahead ranges before changing position');
-  assert.match(ui, /window\.__tvNativeVideoPlaying = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+\};[\s\S]+window\.__tvNativeVideoPaused = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+saveWatch\(true\);/,
-    'native ExoPlayer should persist pause progress without a competing read-ahead fetch');
+  assert.match(ui, /window\.__tvNativeVideoPlaying = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+clearPauseIdleExit\(\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+\};[\s\S]+window\.__tvNativeVideoPaused = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+armPauseIdleExit\(p\);[\s\S]+saveWatch\(true\);/,
+    'native ExoPlayer should persist pause progress, arm the 15-minute idle exit, and skip competing read-ahead');
+  assert.match(ui, /const PAUSE_IDLE_EXIT_MS = 15 \* 60 \* 1000;[\s\S]+function armPauseIdleExit\([\s\S]+p\.item\.type === 'live'[\s\S]+closePlayer\(\);/,
+    'a VOD pause that sits 15 minutes must stop and return to details so morning-left playback cannot hold the pool');
   assert.match(ui, /function togglePlay\(\) \{[\s\S]+S\.playing\.usingNative[\s\S]+TriboonTV\.toggleVideo/,
     'OK / Space pause must talk to ExoPlayer, not a hidden web video with no src');
   assert.match(android, /public void toggleVideo\(\) \{[\s\S]+nativePlayer\.pause\(\)[\s\S]+resumeNativeVideoInPlace\(\)/,
@@ -2932,6 +2952,38 @@ test('Android native player: direct source and native chrome stay out of the web
     'a cache hit near expiry is proactively re-resolved so a long session never gets a soon-dead URL');
   assert.match(idxSrc, /const MAX_STREAM_ATTEMPTS = 3;[\s\S]+const lastResort = attempt \+ 1 >= MAX_STREAM_ATTEMPTS;[\s\S]+const cookiesPath = lastResort \? null :/,
     'the music stream proxy retries a stale URL a few times, ending with a public (no-cookie) re-resolve');
+  assert.match(ui, /v\.site === 'YouTube' \|\| v\.site === 'Vimeo'/,
+    'TMDB Vimeo trailers are playable, not YouTube-only');
+  assert.match(ui, /const vimeo = ranked\.filter\(\(v\) => v\.site === 'Vimeo'\);[\s\S]+return vimeo\.concat\(youtube\)/,
+    'a TMDB Vimeo trailer is preferred over YouTube because it is usually a real 1080 file');
+  assert.match(ytmusicSrc, /async function resolveVideoStream\(id/,
+    'trailers resolve through yt-dlp as muxed video, not a YouTube embed');
+  assert.match(ytmusicSrc, /const VIDEO_FORMAT = '22\/18\//,
+    'trailers pick one muxed YouTube file (720p/360p), not a DASH remux ladder');
+  assert.match(ytmusicSrc, /const VIMEO_FORMAT = 'best\[ext=mp4\]\[height<=1080\]/,
+    'Vimeo trailers pick one muxed file up to 1080p');
+  assert.match(ytmusicSrc, /url: `https:\/\/vimeo\.com\/\$\{key\}`/,
+    'Vimeo trailers resolve on vimeo.com, not youtube.com');
+  assert.match(idxSrc, /h: H\.trailerResolveVimeo/,
+    'Vimeo trailer mint is its own user-auth route');
+  assert.match(ytmusicSrc, /youtube:player_client=android';/,
+    'trailer resolve uses one YouTube client so mint does not sit for seconds');
+  assert.doesNotMatch(ytmusicSrc, /function videoFormatForHeight|bestvideo\[height<=/,
+    'trailer resolve has no height ladder or split DASH stitch');
+  assert.doesNotMatch(ui, /function trailerClientHeightCap\(/,
+    'the client does not send a bandwidth height hint for trailers');
+  assert.doesNotMatch(idxSrc, /function trailerMaxHeight\(|spawnTrailerRemux\(/,
+    'the server does not remux or height-cap trailers');
+  assert.match(idxSrc, /ytmusic\.resolveVideoStream\(id, \{ cookiesPath: cookiesFor\(ctx\.user\.id\) \}\)\.catch\(\(\) => \{\}\);\s*\n\s*send\(ctx\.res, 200, \{ streamUrl:/,
+    'trailer mint starts yt-dlp in the background so the video tag hits a warm stream');
+  assert.match(ytmusicSrc, /https:\/\/www\.youtube\.com\/watch\?v=\$\{id\}/,
+    'trailer resolve hits youtube.com, not music.youtube.com');
+  assert.match(idxSrc, /h: H\.trailerStream/,
+    'trailer bytes are stream-token scoped like Music');
+  assert.match(idxSrc, /h: H\.trailerResolve/,
+    'trailer URL mint is a user-auth route');
+  assert.match(idxSrc, /throttleUserRoute\(ctx, 'trailer-resolve'/,
+    'trailer token mint is rate-limited per user');
   assert.match(idxSrc, /if \(throttleUserRoute\(ctx, 'music-search', \{ max: 40/,
     'yt-dlp-backed music endpoints are rate-limited per user to prevent subprocess exhaustion');
   assert.match(android, /private void resetWebPageState\(\) \{[\s\S]+if \(musicPlaying\) \{\s*\n\s*musicPlaying = false;\s*\n\s*stopMusicService\(\);/,
@@ -3183,6 +3235,8 @@ test('Android native player: direct source and native chrome stay out of the web
     && ui.includes('Calculate recommendation')
     && ui.includes('1080p read-ahead goal')
     && ui.includes('4K read-ahead goal')
+    && ui.includes('id="perfConnMode"')
+    && ui.includes('Auto — grow and give away')
     && ui.includes('id="perfApply" disabled')
     && ui.includes('function perfSetApplyEnabled(')
     && ui.includes('playback: st.playback || {}')
@@ -3363,8 +3417,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'release scoring lives with Catalog (how titles are picked), not Libraries');
   assert.match(ui, /data-ptab="profiles" hidden>[\s\S]+id="apkUpdate"[\s\S]+data-ptab="connect"/,
     'Update app sits with Profile (this device), not Connections');
-  assert.match(ui, /function activateAccountTab\(b\) \{[\s\S]+const isSrv = !!b\.dataset\.srv;[\s\S]+syncSectionTabs\('prefTabs', b\)[\s\S]+#prefs \[data-ptab\][\s\S]+#prefs \.setGrid\[data-stab\][\s\S]+refreshSettings\(\)/,
-    'the unified account-tab handler shows the right pref/server panel and lazy-loads server data');
+  assert.match(ui, /function activateAccountTab\(b\) \{[\s\S]+const isSrv = !!b\.dataset\.srv;[\s\S]+syncSectionTabs\('prefTabs', b\)[\s\S]+#prefs \[data-ptab\][\s\S]+#prefs \.setGrid\[data-stab\][\s\S]+refreshSettings\(\)[\s\S]+replaceRoute\(accountTabRoute\(key\)\)/,
+    'the unified account-tab handler shows the right pref/server panel, lazy-loads server data, and keeps the section in the URL');
   assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]+activateAccountTab\(b\)[\s\S]+addEventListener\('click', run\)[\s\S]+addEventListener\('focus', run\)[\s\S]+addEventListener\('mouseenter', run\)/,
     'account tabs activate on click, D-pad focus, and hover');
   assert.match(ui, /function openServerSettings\(\) \{[\s\S]+switchView\('prefs'\)[\s\S]+#prefTabs \.srvTab[\s\S]+activateAccountTab\(first\)/,
@@ -4594,8 +4648,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Geometric grids (search/person/library) use the same row-by-row model: DOWN→first of next row, UP→restore the row column');
   assert.match(ui, /#discoverTitle,#browseTitle,#prefs>h1,#settings>h1\{display:none\}/,
     'Page-level titles (Discover / Movies / TV Shows / Preferences / Server settings) are hidden everywhere');
-  assert.match(ui, /function applyRoute\(\) \{[\s\S]+switchView\(target, false\);[\s\S]+requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => \{[\s\S]+focusContent\(\);[\s\S]+\}\)\);[\s\S]+\}/,
-    'browser Back/Forward should land focus on the visible route instead of leaving a stale rail focus ring');
+  assert.match(ui, /function applyRoute\(\) \{[\s\S]+if \(view === 'prefs' \|\| view === 'settings'\) \{[\s\S]+accountTabButton\(parts\[1\]\)[\s\S]+switchView\(target, false\);[\s\S]+requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => \{[\s\S]+focusContent\(\);[\s\S]+\}\)\);[\s\S]+\}/,
+    'refreshing Preferences restores the same Catalog/Dashboard section from the hash, then other routes still refocus content');
   assert.match(ui, /function setRoute\(hash\) \{[\s\S]+history\.pushState\(\{ triboonRoute: true, triboonIndex: routeIndex \}, '', hash\)[\s\S]+function backOneRoute\(fallback\) \{[\s\S]+Number\(state\.triboonIndex\) > 0[\s\S]+history\.back\(\)/,
     'every visited app page is an indexed history entry and shared Back moves exactly one entry');
   assert.match(ui, /function handleRouteTraversal\(\) \{[\s\S]+const parts = routeParts\(\);[\s\S]+if \(parts\[0\] === 'person' && parts\[1\]\) return openPerson\(parts\[1\], false\);[\s\S]+if \(\$\(\'person\'\)\.classList\.contains\('open'\)\) closePerson\(\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\('open'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);[\s\S]+window\.addEventListener\('popstate', handleRouteTraversal\)/,
@@ -5866,8 +5920,14 @@ test('Android native player: direct source and native chrome stay out of the web
   // the 30s clock so a dying source never stays pinned; Start Over (resume 0) never pins.
   assert.match(ui, /if \(!p\._resumeSourceOk && \(pos - \(Number\(p\.item\.resume\) \|\| 0\)\) >= 30\) p\._resumeSourceOk = true;[\s\S]{0,200}meta\.source = \{ name: p\.name \|\| undefined, pickKey: p\.sourcePickKey \|\| undefined \};/,
     'saveWatch pins the playing source into watch meta only after ~30s of real playback');
-  assert.match(ui, /if \(!picked && it && it\.key && Number\(it\.resume\) > 0\) \{[\s\S]{0,220}const src = w && w\.meta && w\.meta\.source;[\s\S]{0,120}picked = \{ name: src\.name, pickKey: src\.pickKey \};/,
+  assert.match(ui, /if \(!picked && it && it\.key && Number\(it\.resume\) > 0\) \{[\s\S]{0,220}const src = w && w\.meta && w\.meta\.source;[\s\S]{0,220}sourceFitsQualityPref\(src, qRank\)[\s\S]{0,80}picked = \{ name: src\.name, pickKey: src\.pickKey \};/,
     'a resume play replays the pinned source as a pick (explicit Sources picks still win)');
+  assert.match(ui, /function sourceFitsQualityPref\(src, qRank\) \{[\s\S]+if \(qRank >= 4\) return rank >= 4;[\s\S]+return rank < 4 && rank <= qRank;/,
+    'a 4K pin must not ride along after the user taps 1080 — Play should pick a 1080 source');
+  assert.match(ui, /if \(resumeSec > 0 && pinnedResume\) \{[\s\S]+body\.resumeFrac = Math\.max\(0, Math\.min\(0\.98, resumeSec \/ dur\)\);/,
+    'resumeFrac is only for the same pinned file — a 1080 hop must not treat 4K duration as a percent of the 1080');
+  assert.match(ui, /if \(pos >= resumeAt - 5\) p\._resumeLanded = true;[\s\S]+if \(!watched && !\(p\.item && p\.item\._startOver\) && resumeAt > 30 && !p\._resumeLanded && pos < resumeAt - 20\) \{[\s\S]+pos = resumeAt;/,
+    'a quality hop that still reports 0:00 must keep the shared title clock, not write a second resume point');
   assert.match(ui, /pinnedResume = true;[\s\S]{0,400}if \(pinnedResume\) body\.pinnedResume = true;/,
     'a replayed pin is FLAGGED as a pinned resume so the server may skip a rotted pin and keep the parallel race (a manual Sources pick stays unflagged)');
   assert.match(ui, /p\.sourcePickKey = \(r\.candidate && r\.candidate\.pickKey\) \|\| null; \/\/ resume must pin the REPLACEMENT, not the dead source[\s\S]{0,120}p\._resumeSourceOk = false;/,
@@ -6725,6 +6785,10 @@ test('web shell avoids known TV paint/focus regressions', () => {
   // Phase 3: Max release size controls live inside the Streaming Performance panel now (one capacity panel).
   assert.match(ui, /Streaming performance<\/h2>[\s\S]+id="perfSpeedResult"[\s\S]+>Max release size<\/h3>[\s\S]+id="szMode"[\s\S]+id="szSave"/,
     'Max release size controls are folded into the Streaming Performance panel');
+  assert.match(ui, /Delete the <b>CAM<\/b> line if you want theater rips in Sources[\s\S]+id="scKeywords"[\s\S]+scoringReset: true/,
+    'Scoring shows editable defaults and Reset restores the built-in CAM rule');
+  assert.match(ui, /if \(!r\.candidates\.length\) \{[\s\S]+r\.camOnly[\s\S]+Not available yet\.[\s\S]+No releases found\./,
+    'Sources says Not available yet when theater rips are hidden and that is all the title has');
   assert.doesNotMatch(ui, /<div class="panel"><h2>Max release size<\/h2>/,
     'the standalone Max release size panel was removed (no duplicate sz* controls)');
   // Settings labels are no longer CSS-uppercased (the "MBPS" megabits/megabytes confusion fix).

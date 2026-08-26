@@ -130,6 +130,9 @@ function friendlyYtdlpError(stderr, fallback) {
   const msg = String(stderr || '');
   const line = msg.split('\n').find((l) => /error|warning|429|403|forbidden|sign in|bot|captcha|rate/i.test(l)) || fallback || 'yt-dlp failed';
   if (/429|too many requests|rate.?limit/i.test(msg)) return new Error('yt-dlp provider rate-limited this request');
+  if (/sign in to confirm your age|age.?restrict/i.test(msg)) {
+    return new Error('this trailer is age-restricted — link YouTube Music in Preferences to play it');
+  }
   if (/sign in to confirm|confirm you.?re not a bot|bot|captcha/i.test(msg)) return new Error('yt-dlp provider bot-protection blocked this request');
   if (/403|forbidden/i.test(msg)) return new Error('yt-dlp provider rejected this request');
   return new Error(String(line || fallback || 'yt-dlp failed').trim());
@@ -665,6 +668,86 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
 }
 function _peekCached(id, cookiesPath) { return _streamCache.get(streamCacheKey(id, cookiesPath)) || null; }
 
+// Trailers: one muxed file. YouTube uses one Android client (720p/360p). Vimeo is a
+// real progressive file up to 1080p — no DASH remux. Extra YouTube clients made load sit.
+const VIDEO_FORMAT = '22/18/best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]';
+const VIMEO_FORMAT = 'best[ext=mp4][height<=1080][acodec!=none]/best[height<=1080][acodec!=none]/best[acodec!=none]';
+const VIDEO_EXTRACTOR_ARGS = 'youtube:player_client=android';
+const _videoStreamCache = new Map();
+const _videoStreamInflight = new Map();
+function trailerWatch(id, site) {
+  if (site === 'vimeo') {
+    const key = String(id || '');
+    if (!/^\d{6,12}$/.test(key)) throw new Error('bad trailer id');
+    return { id: key, site: 'vimeo', url: `https://vimeo.com/${key}`, format: VIMEO_FORMAT, extractor: null };
+  }
+  if (!/^[\w-]{11}$/.test(String(id || ''))) throw new Error('bad trailer id');
+  return { id: String(id), site: 'youtube', url: `https://www.youtube.com/watch?v=${id}`, format: VIDEO_FORMAT, extractor: VIDEO_EXTRACTOR_ARGS };
+}
+function videoCacheKey(id, cookiesPath, site) { return 'vid:' + (site || 'youtube') + ':' + streamCacheKey(id, cookiesPath); }
+function setVideoStreamCache(key, rec) {
+  while (_videoStreamCache.size >= 80) {
+    const oldest = _videoStreamCache.keys().next().value;
+    if (oldest === undefined) break;
+    _videoStreamCache.delete(oldest);
+  }
+  _videoStreamCache.set(key, rec);
+}
+function videoMimeFor(url, json, picked) {
+  const blob = `${url || ''} ${json && json.ext || ''} ${picked && picked.ext || ''}`;
+  if (/webm/i.test(blob)) return 'video/webm';
+  return 'video/mp4';
+}
+async function resolveVideoStream(id, { cookiesPath, force = false, site } = {}) {
+  const spec = trailerWatch(id, site);
+  const cookieFile = spec.site === 'vimeo' ? null : cookiesPath;
+  const cacheKey = videoCacheKey(spec.id, cookieFile, spec.site);
+  const hit = _videoStreamCache.get(cacheKey);
+  if (!force && hit && Date.now() < hit.expiresAt - STREAM_REFRESH_MARGIN_MS) return hit;
+  if (!force) {
+    const pending = _videoStreamInflight.get(cacheKey);
+    if (pending) return pending;
+  }
+  const work = (async () => {
+    const load = async (cookies) => {
+      const args = [];
+      if (spec.extractor) args.push('--extractor-args', spec.extractor);
+      args.push('-f', spec.format, '-J', spec.url);
+      const out = await runJson(args, { cookiesPath: cookies, timeoutMs: 15000, priority: 12 });
+      try { return JSON.parse(out); } catch { throw new Error('yt-dlp returned no JSON'); }
+    };
+    let j = await load(cookieFile);
+    if ((!j || typeof j !== 'object') && cookieFile) j = await load(null);
+    if (!j || typeof j !== 'object') throw new Error('yt-dlp returned no trailer data');
+    const picked = (j.requested_downloads && j.requested_downloads[0])
+      || (Array.isArray(j.formats) && [...j.formats].reverse().find((f) => (
+        f && f.url && f.vcodec && f.vcodec !== 'none' && f.acodec && f.acodec !== 'none'
+      )))
+      || null;
+    const url = j.url || (picked && picked.url);
+    if (!url) throw new Error('no trailer stream found');
+    const headers = { ...(j.http_headers || {}), ...((picked && picked.http_headers) || {}) };
+    const rec = {
+      url, at: Date.now(), expiresAt: Date.now() + STREAM_TTL_MS,
+      headers,
+      mime: videoMimeFor(url, j, picked),
+      title: cleanTitle(j.title) || j.title || 'Trailer',
+      duration: num(j.duration),
+    };
+    setVideoStreamCache(cacheKey, rec);
+    return rec;
+  })();
+  if (!force) _videoStreamInflight.set(cacheKey, work);
+  try {
+    return await work;
+  } catch (e) {
+    if (!force && hit && Date.now() < hit.expiresAt) return hit;
+    throw e;
+  } finally {
+    if (_videoStreamInflight.get(cacheKey) === work) _videoStreamInflight.delete(cacheKey);
+  }
+}
+
 // The user's OWN playlists (needs cookies). Prefers ytmusicapi BROWSER auth (clean structured
 // data + covers); falls back to yt-dlp's youtube:tab extractor on the YTM library page (entries
 // are playlist links, ids often prefixed 'VL') when ytmusicapi is absent or errors.
@@ -763,7 +846,7 @@ function _ytmApiQueueStats() { return { active: ytmApiActive, queued: ytmApiQueu
 
 module.exports = {
   detectYtdlp, detectYtMusicApi,
-  search, resolveStream, listPlaylists, playlistTracks, watchQueue, trackLyrics, rateSong, homeRows,
+  search, resolveStream, resolveVideoStream, listPlaylists, playlistTracks, watchQueue, trackLyrics, rateSong, homeRows,
   browserAuthFromCookies,
   thumbFor, cleanTitle, _upgradeThumbUrl: upgradeThumbUrl,
   _resetDetection, _resetYtMusicApiDetection, _setYtMusicApiRunnerForTest,

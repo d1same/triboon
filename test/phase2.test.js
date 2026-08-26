@@ -8,12 +8,13 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { parseRelease, scoreRelease, rankReleases } = require('../server/scoring');
+const { parseRelease, scoreRelease, rankReleases, isCamCandidate, camScoringEnabled, DEFAULT_SCORING_KEYWORDS } = require('../server/scoring');
 const { parseNewznabRss, dedupe, fanout, searchIndexer, normTitle } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
 const {
   Pipeline, GATE_MS, nzbVerdictKey, releaseFingerprint, summarizeAttempts, stubFeatureReason, mountHasActivePlayback,
-  ACTIVE_PLAYBACK_GRACE_MS,
+  ACTIVE_PLAYBACK_GRACE_MS, allocateStreamConnections, classifyStreamNeed,
+  autoStreamCap, cacheNeedWeight, playbackRamFraction, playbackCacheCapMb, preparedPeekSockets,
 } = require('../server/pipeline');
 const { NntpPool, ProviderPool } = require('../server/nntp');
 const { createMockNntp } = require('./mock-nntp');
@@ -590,7 +591,14 @@ test('scoring: HC.V2 theater cams are not auto-playable "best" sources', () => {
   const oak = parseRelease('The.End.of.Oak.Street.2026.1080p.HC.V2.x264-DKS');
   assert.strictEqual(oak.source, 'cam', '1080p.HC.V2 is a cam, not an unknown WEB');
   const scored = scoreRelease({ name: 'The.End.of.Oak.Street.2026.1080p.HC.V2.x264-DKS' }, {});
-  assert.ok(scored.score < -5000, 'auto-play skips the cam (Sources tap can still pick it)');
+  assert.ok(scored.score < -5000, 'auto-play skips the cam');
+  assert.equal(isCamCandidate(scored), true);
+  assert.equal(isCamCandidate({ name: 'Movie.2026.1080p.WEB-DL.HEVC-HC' }), false);
+  assert.equal(camScoringEnabled(undefined), true);
+  assert.equal(camScoringEnabled({ keywords: DEFAULT_SCORING_KEYWORDS }), true);
+  assert.equal(camScoringEnabled({ keywords: [] }), false, 'deleting the CAM keyword turns the penalty off');
+  const allowed = scoreRelease({ name: 'The.End.of.Oak.Street.2026.1080p.HC.V2.x264-DKS' }, { customScoring: { keywords: [] } });
+  assert.ok(allowed.score > -5000, 'without the CAM rule a theater rip can auto-play');
   assert.match(scored.reasons.join(' '), /source cam/);
   const ranked = rankReleases([
     { name: 'The.End.of.Oak.Street.2026.1080p.HC.V2.x264-DKS', sizeBytes: 2e9 },
@@ -2575,7 +2583,7 @@ test('pipeline e2e: ranks, skips dead + unstreamable candidates, plays the good 
   // Playback read-ahead boost: streamable mounts leave the conservative default behind, while
   // decoded segment retention stays byte-capped so large 4K posts cannot balloon memory.
   for (const v of (vf.vols || [vf])) {
-    assert.strictEqual(v.readAhead, 12, 'playback mount read-ahead boosted');
+    assert.strictEqual(v.readAhead, 10, 'playback mount starts at the Auto 10-connection window');
     assert.strictEqual(v.cacheMax, 36, 'playback mount cache window boosted without retaining too many decoded segments');
     assert.strictEqual(v.cacheMaxBytes, 96 * 1024 * 1024, 'playback mount cache byte budget set');
   }
@@ -3088,8 +3096,8 @@ test('pipeline: active mount rebalance shrinks read-ahead when another stream st
   const first = mk('first');
   mounts.set(first.id, first);
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1);
-  assert.strictEqual(first.readAhead, 12, 'single active stream gets the configured 1080p window');
-  assert.strictEqual(first.maxReadAhead, 12, 'single stream cannot boost past the configured 1080p cap');
+  assert.strictEqual(first.readAhead, 10, 'single Auto stream starts at 10 and leaves spare for the next Play');
+  assert.strictEqual(first.maxReadAhead, 10, 'a healthy Auto stream does not boost past the bandwidth cap');
   assert.strictEqual(first.cacheMaxBytes, 96 * 1024 * 1024, 'single stream gets the full 1080p cache budget');
   first._warmedResumeFrac = 0.5;
   first._warmedResumeRange = { start: 100, end: 200, at: now };
@@ -3110,6 +3118,200 @@ test('pipeline: active mount rebalance shrinks read-ahead when another stream st
     'identical active-window reapplication preserves fresh resume coverage');
   assert.ok(first.trimCalls >= 2, 'rebalance trims retained decoded bytes after shrinking');
   assert.strictEqual(pipeline.metricsSnapshot().windowRebalances, 3, 'rebalance telemetry should track every window recalculation');
+});
+
+test('pipeline: auto grow/give-away uses playhead coverage, not tail cache or a fresh Play', () => {
+  const now = 2_000_000;
+  const perf = {
+    usableConnections: 20,
+    reserveConnections: 4,
+    maxConnPerStream1080: 12,
+    maxConnPerStream4k: 20,
+    connectionMode: 'auto',
+  };
+  const held = (kind, ahead, extra = {}) => ({
+    size: 2e9,
+    aheadCacheBytes: ahead,
+    _activeStreamReads: 1,
+    _playbackTouched: now - 60_000,
+    _allocKind: kind,
+    _allocKindSince: now - 15_000,
+    ...extra,
+  });
+
+  const even = allocateStreamConnections(
+    [{ size: 2e9, _playbackTouched: now, _activeStreamReads: 1 }, { size: 2e9, _playbackTouched: now, _activeStreamReads: 1 }],
+    perf,
+    { viewerChanged: true, now, holdMs: 8000 },
+  );
+  assert.deepStrictEqual([...even], [8, 8], 'unknown coverage stays on even fair-share');
+
+  const join = allocateStreamConnections(
+    [held('fat', 200e6), held('starve', 0)],
+    perf,
+    { viewerChanged: true, now, holdMs: 8000, lastStealAt: 0 },
+  );
+  assert.deepStrictEqual([...join], [8, 8], 'a new Play must not dump a healthy stream to the floor');
+
+  const steal = allocateStreamConnections(
+    [held('fat', 200e6), held('starve', 0)],
+    perf,
+    { viewerChanged: false, now, holdMs: 8000, lastStealAt: 0 },
+  );
+  assert.ok(steal[1] > steal[0], 'a held starve takes read-ahead sockets from a held fat stream');
+  assert.ok(steal[0] >= 4, 'give-away never steals the playback-head floor');
+  assert.ok(steal.stole, 'a real give-away is reported so the cooldown can arm');
+
+  const custom = allocateStreamConnections(
+    [held('fat', 200e6), held('starve', 0)],
+    { ...perf, connectionMode: 'custom' },
+    { viewerChanged: false, now, holdMs: 0, lastStealAt: 0 },
+  );
+  assert.deepStrictEqual([...custom], [8, 8], 'Custom mode keeps even split even when one stream is starving');
+
+  const tailLooksFat = classifyStreamNeed({
+    size: 2e9,
+    cacheBytes: 200e6,
+    _activeStreamReads: 1,
+    _playbackTouched: now - 60_000,
+  }, now);
+  assert.strictEqual(tailLooksFat, 'ok', 'total cache without playhead-ahead bytes must not look fat');
+
+  const tailAhead = classifyStreamNeed({
+    size: 2e9,
+    aheadCacheBytes: 2e6,
+    cacheBytes: 200e6,
+    _activeStreamReads: 1,
+    _playbackTouched: now - 60_000,
+  }, now);
+  assert.strictEqual(tailAhead, 'starve', 'only bytes ahead of the playhead count as coverage');
+
+  const pausedEmpty = classifyStreamNeed({
+    size: 2e9,
+    aheadCacheBytes: 0,
+    _activeStreamReads: 0,
+    _playbackTouched: now - 10_000,
+  }, now);
+  assert.strictEqual(pausedEmpty, 'ok', 'a paused empty mount must not steal sockets as if it were starving');
+
+  const fresh = classifyStreamNeed({
+    size: 2e9,
+    aheadCacheBytes: 0,
+    _activeStreamReads: 1,
+    _playbackTouched: now - 1000,
+  }, now);
+  assert.strictEqual(fresh, 'ok', 'the first seconds of Play stay on fair-share');
+
+  const tight = allocateStreamConnections(
+    [
+      { size: 8e9, _tracks: { duration: 700 }, _activeStreamReads: 1, _playbackTouched: now - 60_000 },
+      { size: 8e9, _tracks: { duration: 700 }, _activeStreamReads: 1, _playbackTouched: now - 60_000 },
+    ],
+    { ...perf, usableConnections: 40, reserveConnections: 4, serverDownloadMbps: 40, maxConnPerStream4k: 20 },
+    { viewerChanged: false, now },
+  );
+  assert.ok(tight.every((n) => n <= 6), 'a tight download pipe must not grow extra sockets');
+
+  const frozen = allocateStreamConnections(
+    [held('fat', 200e6), held('starve', 0)],
+    perf,
+    { viewerChanged: false, now, holdMs: 0, lastStealAt: 0, growFrozen: true },
+  );
+  assert.deepStrictEqual([...frozen], [8, 8], 'a recent 502 freezes grow and give-away');
+
+  const cached = allocateStreamConnections(
+    [
+      {
+        size: 800e6,
+        lastPlaybackOffset: 0,
+        aheadCacheBytes: 800e6,
+        _tracks: { duration: 5400 },
+        _activeStreamReads: 1,
+        _playbackTouched: now - 60_000,
+      },
+      held('starve', 0, { size: 8e9, _tracks: { duration: 700 } }),
+    ],
+    perf,
+    { viewerChanged: false, now, holdMs: 0, lastStealAt: 0 },
+  );
+  assert.strictEqual(cached[0], 4, 'a small movie already in RAM drips to the floor so the next play can use those sockets');
+
+  const freshCached = allocateStreamConnections(
+    [{
+      size: 800e6,
+      lastPlaybackOffset: 0,
+      aheadCacheBytes: 800e6,
+      _tracks: { duration: 5400 },
+      _activeStreamReads: 1,
+      _playbackTouched: now,
+    }],
+    perf,
+    { viewerChanged: false, now },
+  );
+  assert.strictEqual(freshCached[0], 10, 'a fresh Play starts at 10 even if the small file is already in RAM');
+});
+
+test('pipeline: Auto starts at 10, grows only when behind, and sizes cache by RAM need', () => {
+  const now = 2_000_000;
+  const perf = { usableConnections: 24, reserveConnections: 4, connectionMode: 'auto' };
+  const alone = allocateStreamConnections(
+    [{ size: 2e9, _playbackTouched: now - 60_000, _activeStreamReads: 1 }],
+    perf,
+    { viewerChanged: false, now },
+  );
+  assert.deepStrictEqual([...alone], [10], 'a healthy Play starts at 10 and does not lock leftover sockets');
+
+  const behind = allocateStreamConnections(
+    [{
+      size: 8e9, _tracks: { duration: 700 }, aheadCacheBytes: 0,
+      _activeStreamReads: 1, _playbackTouched: now - 60_000,
+      _allocKind: 'starve', _allocKindSince: now - 15_000,
+    }],
+    perf,
+    { viewerChanged: false, now, holdMs: 0 },
+  );
+  assert.ok(behind[0] > 10, 'a 4K that is falling behind gets more than 10');
+
+  const fat = allocateStreamConnections(
+    [{
+      size: 2e9, aheadCacheBytes: 200e6,
+      _activeStreamReads: 1, _playbackTouched: now - 60_000,
+      _allocKind: 'fat', _allocKindSince: now - 15_000,
+    }],
+    perf,
+    { viewerChanged: false, now, holdMs: 0 },
+  );
+  assert.deepStrictEqual([...fat], [10], 'a fat Play stays at 10 so spare is ready for someone else');
+
+  assert.ok(autoStreamCap({ size: 8e9, _tracks: { duration: 700 } }, perf, { starving: true })
+    > autoStreamCap({ size: 2e9 }, perf),
+    'a starving 4K may use more sockets than a healthy 1080');
+  const starveW = cacheNeedWeight({
+    size: 2e9, aheadCacheBytes: 0, _activeStreamReads: 1, _playbackTouched: now - 60_000,
+  }, now);
+  const fatW = cacheNeedWeight({
+    size: 2e9, aheadCacheBytes: 200e6, _activeStreamReads: 1, _playbackTouched: now - 60_000,
+  }, now);
+  assert.ok(starveW > fatW, 'a falling-behind playhead gets a larger share of the RAM cache');
+  assert.ok(playbackRamFraction(3000) < playbackRamFraction(16000), 'a small box keeps a shallower RAM cache');
+
+  const starting = allocateStreamConnections(
+    [{ size: 8e9, _tracks: { duration: 700 }, _playbackTouched: now, _activeStreamReads: 1 }],
+    perf,
+    { viewerChanged: false, now },
+  );
+  assert.ok(starting[0] > 10, 'a fresh 4K Play may use leftover spare immediately so first picture fills faster');
+
+  const capped = allocateStreamConnections(
+    [{
+      size: 8e9, _tracks: { duration: 700 }, aheadCacheBytes: 0,
+      _activeStreamReads: 1, _playbackTouched: now - 60_000,
+      _allocKind: 'starve', _allocKindSince: now - 15_000,
+    }],
+    { ...perf, usableConnections: 80, reserveConnections: 8, maxConnPerStream4k: 12 },
+    { viewerChanged: false, now, holdMs: 0 },
+  );
+  assert.ok(capped[0] <= 12, 'Auto still honors Max 4K connections as a ceiling');
 });
 
 test('pipeline: prepared-only mounts keep a bounded speculative window without consuming a viewer share', () => {
@@ -3144,8 +3346,8 @@ test('pipeline: prepared-only mounts keep a bounded speculative window without c
     readAhead: 20, maxReadAhead: 20, cacheMax: 1024, cacheMaxBytes: 1024 * 1024 * 1024,
   });
   assert.strictEqual(mountHasActivePlayback(prepared, now), false, 'prepare/lifecycle touches are not real playback');
-  assert.strictEqual(prepared.readAhead, 4, 'speculative prepare uses only the low read-ahead window');
-  assert.strictEqual(prepared.cacheMaxBytes, 192 * 1024 * 1024, 'prepared 4K cache is capped independently of its future active share');
+  assert.strictEqual(prepared.readAhead, 8, 'with no live provider snapshot the details peek may use the wide default');
+  assert.strictEqual(prepared.cacheMaxBytes, 384 * 1024 * 1024, 'a 4K details peek stays deep until provider load is high');
   assert.strictEqual(prepared._warmedResumeRange, null, 'prepared cache trimming invalidates stale resume-byte coverage');
   prepared._warmedResumeFrac = 0.5;
   prepared._warmedResumeRange = { start: 100, end: 200, at: now };
@@ -3156,15 +3358,120 @@ test('pipeline: prepared-only mounts keep a bounded speculative window without c
     'identical prepared-window reapplication preserves fresh resume coverage');
 
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1, 'only the mount with a real player read consumes a viewer share');
-  assert.strictEqual(playing.readAhead, 12, 'focused/prepared cards do not shrink the live stream connection window');
+  assert.strictEqual(playing.readAhead, 10, 'focused/prepared cards do not shrink the live Auto window');
   assert.strictEqual(playing.cacheMaxBytes, 96 * 1024 * 1024, 'focused/prepared cards do not shrink the live stream cache window');
-  assert.strictEqual(prepared.cacheMaxBytes, 192 * 1024 * 1024, 'rebalance leaves the bounded speculative window intact');
+  assert.strictEqual(prepared.cacheMaxBytes, 384 * 1024 * 1024, 'rebalance leaves the wide details peek intact while the house has room');
 
   prepared._preparedOnly = false;
   prepared._playbackTouched = now;
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 2, 'promotion by a real player read joins fair-share accounting');
   assert.strictEqual(playing.readAhead, 8);
   assert.strictEqual(prepared.readAhead, 8);
+});
+
+test('pipeline: an idle details prepare uses leftover sockets so Play is further along', () => {
+  const now = Date.now();
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+    performance: () => ({ usableConnections: 24, reserveConnections: 4, connectionMode: 'auto' }),
+  });
+  const prepared = {
+    id: 'idle-prep', size: 7e9, streamable: true, _touched: now, _preparedOnly: true,
+    trimCache() {},
+  };
+  mounts.set(prepared.id, prepared);
+  pipeline._applyPreparedWindow(prepared, {
+    readAhead: 20, maxReadAhead: 20, cacheMax: 1024, cacheMaxBytes: 1024 * 1024 * 1024,
+  });
+  assert.strictEqual(prepared.readAhead, 8, 'an idle details peek may use 8 sockets');
+  assert.strictEqual(prepared.cacheMaxBytes, 384 * 1024 * 1024, 'an idle 4K peek may keep a deeper open');
+});
+
+test('pipeline: details prepare drops to 4 sockets only when the house is near its provider cap', () => {
+  const now = Date.now();
+  const tightPool = {
+    providers: [{ size: 200, busy: { size: 160 }, connecting: 0, queue: [] }],
+  };
+  const roomyPool = {
+    providers: [{ size: 200, busy: { size: 40 }, connecting: 0, queue: [] }],
+  };
+  const mk = (pool) => {
+    const mounts = new Map();
+    const pipeline = new Pipeline({
+      pool: () => pool,
+      verdicts: { get: () => null, set: () => {} },
+      mounts,
+    });
+    const playing = {
+      id: 'playing', size: 2e9, streamable: true, _touched: now, _playbackTouched: now, trimCache() {},
+    };
+    const prepared = {
+      id: 'prep', size: 7e9, streamable: true, _touched: now, _preparedOnly: true, trimCache() {},
+    };
+    mounts.set(playing.id, playing);
+    mounts.set(prepared.id, prepared);
+    pipeline._applyPreparedWindow(prepared, {
+      readAhead: 20, maxReadAhead: 20, cacheMax: 1024, cacheMaxBytes: 1024 * 1024 * 1024,
+    });
+    return prepared;
+  };
+  const tight = mk(tightPool);
+  assert.strictEqual(tight.readAhead, 4, 'a house at 80% of its own provider cap must shrink the details peek');
+  assert.strictEqual(tight.cacheMaxBytes, 192 * 1024 * 1024);
+  const roomy = mk(roomyPool);
+  assert.strictEqual(roomy.readAhead, 8, 'a large house with spare capacity keeps a deeper details peek even if someone is watching');
+  assert.strictEqual(roomy.cacheMaxBytes, 384 * 1024 * 1024);
+  const small = mk({ providers: [{ size: 50, busy: { size: 5 }, connecting: 0, queue: [] }] });
+  assert.strictEqual(small.readAhead, 4, 'a 50-connection house must not spend 8 sockets on a details peek');
+  assert.strictEqual(preparedPeekSockets([{ size: 50, busy: { size: 8 } }]), 4);
+  assert.strictEqual(preparedPeekSockets([{ size: 200, busy: { size: 20 } }]), 8);
+  assert.strictEqual(preparedPeekSockets([{ size: 50 }, { size: 50 }, { size: 100, busy: { size: 10 } }]), 8,
+    'combined provider caps, not one account, size the peek');
+});
+
+test('pipeline: one 4K cache cannot balloon the Node heap, and details warmup stays off the fast lane while someone is watching', () => {
+  assert.ok(playbackCacheCapMb(true, 8000) <= 640, 'an 8 GB box must not keep a 3 GB 4K bag');
+  assert.ok(playbackCacheCapMb(true, 32000) <= 1536, 'even a large box keeps one mount under 1.5 GB');
+  const now = Date.now();
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => ({ providers: [{ size: 200, busy: { size: 20 }, connecting: 0, queue: [] }] }),
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+  });
+  mounts.set('live', {
+    id: 'live', streamable: true, _playbackTouched: now, _activeStreamReads: 1,
+  });
+  assert.strictEqual(pipeline._prepareWarmIsHot(), false,
+    'a details peek must not use seek/startup while another title is playing');
+});
+
+test('pipeline: 4K play does not join a 1080 leftover parked under the 4K key', () => {
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+  });
+  const hd = { id: 'mutiny-1080', size: 3e9, streamable: true, tags: [] };
+  mounts.set(hd.id, hd);
+  const params = { q: 'Mutiny', imdbid: 'tt1' };
+  const policy4 = { exactResolutionRank: 4, preferResolutionRank: 4, maxResolutionRank: 4 };
+  const cand = { name: 'Mutiny.2026.Retail.DKsubs.1080p.WEB-DL.H.264.DDP5.1-ADDICTION', pickKey: 'h' };
+  pipeline._rememberTitlePrepared(params, policy4, hd, cand);
+  assert.equal(pipeline._findTitlePreparedReady(params, policy4), null,
+    'Resume/Start Over on 4K must skip the 1080 leftover and race 4K sources');
+  const remember = pipeline._rememberPolicyForCandidate(policy4, cand);
+  assert.equal(remember.exactResolutionRank, undefined);
+  assert.equal(remember.preferResolutionRank, 3);
+  pipeline._rememberTitlePrepared(params, remember, hd, cand);
+  assert.equal(pipeline._findTitlePreparedReady(params, policy4), null,
+    'a correctly parked 1080 must stay off the 4K join key');
+  const hdReady = pipeline._findTitlePreparedReady(params, { preferResolutionRank: 3, maxResolutionRank: 3 });
+  assert.ok(hdReady && hdReady.vf === hd, '1080 Play can still join that parked file');
 });
 
 test('pipeline: 4K stop then 1080 play drops the other-quality prepared mount', () => {
@@ -3198,7 +3505,29 @@ test('pipeline: provider 502 pressure shrinks the 4K connection window', () => {
     1,
     { usableConnections: 40, reserveConnections: 4, maxConnPerStream4k: 20, maxConnPerStream1080: 12 },
   );
-  assert.ok(win.readAhead <= 10, 'a 502 cap hit must give the next Play fewer sockets, not more');
+  assert.ok(win.readAhead <= 10, 'when every live provider is at 502, the next Play must use fewer sockets');
+});
+
+test('pipeline: one provider 502 does not squeeze the house when others have room', () => {
+  const pipeline = new Pipeline({
+    pool: () => ({
+      providers: [
+        { capHitAt: Date.now(), down: () => false },
+        { capHitAt: 0, down: () => false },
+        { capHitAt: 0, down: () => false },
+        { capHitAt: 0, down: () => false },
+      ],
+    }),
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  const win = pipeline._playbackWindowFor(
+    { size: 2e10 },
+    1,
+    { usableConnections: 160, reserveConnections: 20, maxConnPerStream4k: 20, maxConnPerStream1080: 12 },
+  );
+  assert.strictEqual(win.readAhead, autoStreamCap({ size: 2e10 }, { usableConnections: 160 }),
+    'spare providers keep the Auto 4K bandwidth window; one full account is not a household 502');
 });
 
 test('pipeline: many prepared 4K mounts share one RAM-derived speculative cache pool', () => {
@@ -3229,8 +3558,8 @@ test('pipeline: many prepared 4K mounts share one RAM-derived speculative cache 
   const retainedCaps = prepared.reduce((sum, vf) => sum + vf.cacheMaxBytes, 0);
   assert.ok(retainedCaps <= pipeline._preparedCacheTotalBytes(),
     `prepared caps ${retainedCaps} must fit aggregate pool ${pipeline._preparedCacheTotalBytes()}`);
-  assert.ok(prepared.every((vf) => vf.readAhead === 4 && vf.cacheMaxBytes < 96 * 1024 * 1024),
-    'as focus prepares accumulate, each mount shrinks instead of multiplying the per-title cap');
+  assert.ok(prepared.every((vf) => vf.readAhead === 8 && vf.cacheMaxBytes < 96 * 1024 * 1024),
+    'as focus prepares accumulate, each mount shrinks its cache instead of multiplying the per-title cap');
 });
 
 test('pipeline: grace expiry demotes stopped 4K mounts and restores a long-lived viewer share', async () => {
@@ -3290,6 +3619,7 @@ test('pipeline: 4K buffer seconds raise decoded segment retention for small arti
       usableConnections: 119,
       reserveConnections: 24,
       maxConnPerStream4k: 18,
+      connectionMode: 'custom',
       buffer4kSec: 120,
     }),
   });
@@ -3355,6 +3685,27 @@ test('pipeline: playback warmup is bounded and stays below active playback prior
     'every speculative warm read is independently cancellable');
   assert.ok(signals.every((signal) => signal.aborted),
     'normal warm completion closes its signal so trailing fire-and-forget VFS prefetch cannot linger');
+});
+
+test('pipeline: Play/resume warmup uses the startup lane so first picture beats background fill', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  const calls = [];
+  const vf = {
+    streamable: true,
+    size: 7 * 1024 * 1024 * 1024,
+    async *read(start, end, opts = {}) {
+      calls.push(opts.priority);
+      yield Buffer.alloc(1);
+    },
+  };
+  pipeline._startPlaybackWarmup(vf, { cacheMaxBytes: 360 * 1024 * 1024 }, 0.4, { hot: true });
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  assert.ok(calls.length >= 1 && calls.every((p) => p === 'seek'),
+    'Continue Watching warmup must use seek so it is not stuck behind health/read-ahead');
 });
 
 test('pipeline: resume warmup supersession and mount cleanup abort only tracked speculative jobs', async () => {
@@ -4121,6 +4472,37 @@ test('pipeline: 4K toggle with no 4K source falls back to the best available ins
     const chunks = [];
     for await (const c of r.vf.read(0, r.vf.size)) chunks.push(c);
     assert.ok(Buffer.concat(chunks).equals(hdPayload), 'fallback source streams byte-exact');
+  } finally {
+    pool.close(); await mock.close(); ix.server.close(); store.close();
+  }
+});
+
+test('pipeline: 1080 toggle with only 4K sources plays the 4K instead of failing', async () => {
+  // "I switched 4K → 1080 and Play said no playable": the 1080 search drops the extra 2160p
+  // fan-out and caps 4K as over-cap, so a UHD-only title used to throw. Play the 4K.
+  const uhdPayload = seededPayload(90 * 1024, 77);
+  const uhd = nzbFor(writeRar4Store([{ name: 'Only.2160p.mkv', data: uhdPayload }], { base: 'only-uhd' }), 30000, 'only-uhd');
+  const mock = createMockNntp({ articles: new Map([...uhd.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'OnlyUhd.Movie.2024.2160p.WEB-DL.H.265-FLUX', size: 20e9, nzb: uhd.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const r = await pipeline.play({ q: 'OnlyUhd Movie 2024' },
+      { maxResolutionRank: 3, preferResolutionRank: 3 });
+    assert.strictEqual(r.candidate.attributes.resolution, '2160p',
+      '1080 toggle must not toast no-playable when only 4K exists');
+    const chunks = [];
+    for await (const c of r.vf.read(0, r.vf.size)) chunks.push(c);
+    assert.ok(Buffer.concat(chunks).equals(uhdPayload), 'fallback 4K source streams byte-exact');
   } finally {
     pool.close(); await mock.close(); ix.server.close(); store.close();
   }

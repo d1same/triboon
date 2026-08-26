@@ -6,6 +6,7 @@
 
 const { decode } = require('./yenc');
 const { parseNzb, pickPrimaryFile, fileNameFromSubject } = require('./nzb');
+const { streamStartupNeedSlots } = require('./nntp');
 const crypto = require('crypto');
 
 const DEFAULT_CACHE_BYTES = 128 * 1024 * 1024;
@@ -131,6 +132,7 @@ class NzbFileStream {
     this.cacheMax = cacheSegments;
     this.cacheMaxBytes = Number.isFinite(cacheBytes) && cacheBytes > 0 ? cacheBytes : DEFAULT_CACHE_BYTES;
     this.cacheBytes = 0;
+    this.lastPlaybackOffset = null;
     this.sharedCacheBudget = null;
     this.inflight = new Map(); // segIndex -> Promise<Buffer>
     // Scoped to fetches needed to establish this mount. A hedged source-race loser aborts it so a
@@ -200,6 +202,21 @@ class NzbFileStream {
     this.playbackStats.lastBoostAt = new Date(now).toISOString();
   }
 
+  aheadCacheBytes(fromOffset = this.lastPlaybackOffset) {
+    if (!Number.isFinite(fromOffset)) return null;
+    if (!(this.partSize > 0) || !this.cache.size) return 0;
+    const startSeg = this._segForOffset(fromOffset);
+    let n = 0;
+    // Contiguous run from the playhead only. Tail-index warmup (mkv Cues / mp4 moov) is
+    // not seconds the player can read next, so it must not look like a fat buffer.
+    for (let i = startSeg; this.cache.has(i); i++) {
+      const buf = this.cache.get(i);
+      if (!buf) break;
+      n += buf.length;
+    }
+    return n;
+  }
+
   playbackSnapshot() {
     this._resetExpiredAdaptiveReadAhead();
     return {
@@ -209,6 +226,8 @@ class NzbFileStream {
       adaptiveUntil: this.adaptiveReadAheadUntil ? new Date(this.adaptiveReadAheadUntil).toISOString() : null,
       cacheSegments: this.cache.size,
       cacheBytes: this.cacheBytes,
+      aheadCacheBytes: this.aheadCacheBytes(),
+      lastPlaybackOffset: this.lastPlaybackOffset,
       inflightSegments: this.inflight.size,
       ...this.playbackStats,
     };
@@ -317,7 +336,9 @@ class NzbFileStream {
     };
     let rec = this.inflight.get(i);
     if (rec && priorityRank(priority) < priorityRank(rec.priority) && priorityRank(priority) <= priorityRank('playback')) {
-      return this.pool.body(this.segments[i].msgId, priority, { signal, drainMs: this.abortDrainMs })
+      return this.pool.body(this.segments[i].msgId, priority, {
+        signal, drainMs: this.abortDrainMs, needSlots: streamStartupNeedSlots(this.size, priority),
+      })
         .then((raw) => decodeAndCache(raw, 0))
         .catch((e) => {
           if (signalAborted(signal) || e.code === 'ABORT_ERR') throw e;
@@ -332,7 +353,9 @@ class NzbFileStream {
       // cache, connection preserved) instead of destroying the connection; a still-queued fetch is
       // dequeued immediately either way. This is what keeps a 4K pause/skip storm from killing the
       // whole pool's connections and lagging the next seek behind a reconnect storm.
-      rec.promise = this.pool.body(this.segments[i].msgId, priority, { signal: controller.signal, drainMs: this.abortDrainMs }).then((raw) => {
+      rec.promise = this.pool.body(this.segments[i].msgId, priority, {
+        signal: controller.signal, drainMs: this.abortDrainMs, needSlots: streamStartupNeedSlots(this.size, priority),
+      }).then((raw) => {
         this.inflight.delete(i);
         return decodeAndCache(raw, skipDecoded);
       }).catch((e) => { this.inflight.delete(i); throw e; });
@@ -390,7 +413,13 @@ class NzbFileStream {
     end = Math.min(end, this.size);
     let offset = start;
     this.playbackStats.reads++;
+    if (priority === 'playback' || priority === 'startup' || priority === 'seek') {
+      this.lastPlaybackOffset = start;
+    }
     while (offset < end) {
+      if (priority === 'playback' || priority === 'startup' || priority === 'seek') {
+        this.lastPlaybackOffset = offset;
+      }
       if (aborted()) return;
       this._resetExpiredAdaptiveReadAhead();
       const segIdx = this._segForOffset(offset);

@@ -15,6 +15,10 @@ const { LibraryDb } = require('./library-db');
 const { parseLibraryName, pickLibraryTmdbHit, libraryItemMatchesTmdb, unboundLibraryItem } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline, mountHasActivePlayback } = require('./pipeline');
+const {
+  isCamCandidate, camScoringEnabled,
+  DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
+} = require('./scoring');
 const { TmdbProxy } = require('./tmdb');
 const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInWorker, shutdownXmltvWorkers } = require('./xmltv');
 const { AudibleProxy } = require('./audible');
@@ -336,8 +340,16 @@ function normalizeStreamingPerformance(raw = {}) {
     streamMix: mix,
     serverDownloadMbps: clampInt(raw.serverDownloadMbps, 0, 0, 100000),
     serverUploadMbps: clampInt(raw.serverUploadMbps, 0, 0, 100000),
-    buffer1080Sec: clampInt(raw.buffer1080Sec, 180, 30, 600),
-    buffer4kSec: clampInt(raw.buffer4kSec, 90, 30, 360),
+    buffer1080Sec: clampInt(
+      (Number(raw.buffer4kSec) === 90 && (raw.buffer1080Sec == null || Number(raw.buffer1080Sec) === 180))
+        ? 200 : raw.buffer1080Sec,
+      200, 30, 600,
+    ),
+    buffer4kSec: clampInt(
+      (Number(raw.buffer4kSec) === 90 && (raw.buffer1080Sec == null || Number(raw.buffer1080Sec) === 180))
+        ? 200 : raw.buffer4kSec,
+      200, 30, 360,
+    ),
     startupReservePct: clampInt(raw.startupReservePct, 25, 10, 50),
     maxConnPerStream1080: clampInt(raw.maxConnPerStream1080, 12, 4, 60),
     maxConnPerStream4k: clampInt(raw.maxConnPerStream4k, 20, 6, 80),
@@ -350,12 +362,17 @@ function normalizeStreamingPerformance(raw = {}) {
     // LOW-LANE work (read-ahead/background only; player lanes never share a socket). 0 = off.
     // Capped at 4 — the bench curve flattens past it and deeper stacks make cancels expensive.
     nntpPipelineDepth: clampInt(raw.nntpPipelineDepth, 0, 0, 4),
+    measuredMbpsPerConn: Math.max(0, Math.min(1000, Number(raw.measuredMbpsPerConn) || 0)),
+    measuredConnCap: clampInt(raw.measuredConnCap, 0, 0, 1000),
+    connectionMode: raw.connectionMode === 'custom' ? 'custom' : 'auto',
   };
 }
 
 function totalProviderConnections(provs = providerList()) {
   return provs.reduce((n, p) => n + providerConnections(p.connections), 0);
 }
+
+const lastMeasuredProviderSpeed = { mbpsPerConn: 0, connCap: 0, at: 0 };
 
 function streamingRuntimeProfile() {
   const perf = normalizeStreamingPerformance(settings.get().streamingPerformance || {});
@@ -364,7 +381,13 @@ function streamingRuntimeProfile() {
   const reserveConnections = usableConnections
     ? Math.max(2, Math.ceil(usableConnections * perf.startupReservePct / 100))
     : 0;
-  return { ...perf, totalConnections, usableConnections, reserveConnections };
+  const measuredMbpsPerConn = Number(perf.measuredMbpsPerConn) > 0
+    ? Number(perf.measuredMbpsPerConn)
+    : (Number(lastMeasuredProviderSpeed.mbpsPerConn) || 0);
+  const measuredConnCap = Number(perf.measuredConnCap) > 0
+    ? Number(perf.measuredConnCap)
+    : (Number(lastMeasuredProviderSpeed.connCap) || 0);
+  return { ...perf, totalConnections, usableConnections, reserveConnections, measuredMbpsPerConn, measuredConnCap };
 }
 
 // Throttle the per-Range rebalance: the stream handler fired pipeline.rebalancePlaybackWindows() on
@@ -413,8 +436,8 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
 
   const rec1080 = Math.max(4, Math.min(24, perUser >= 16 ? 14 : perUser >= 10 ? 12 : perUser >= 6 ? 8 : 6));
   const rec4k = Math.max(6, Math.min(36, perUser >= 24 ? 24 : perUser >= 16 ? 18 : perUser >= 10 ? 14 : 10));
-  const buffer1080Sec = clampInt(Math.round((tightDownload ? 90 : generousDownload ? 240 : 180) * bufferScale), 180, 30, 600);
-  const buffer4kSec = clampInt(Math.round((tightDownload ? 60 : generousDownload ? 120 : 90) * bufferScale), 90, 30, 360);
+  const buffer1080Sec = clampInt(Math.round((tightDownload ? 120 : 200) * bufferScale), 200, 30, 600);
+  const buffer4kSec = clampInt(Math.round((tightDownload ? 120 : 200) * bufferScale), 200, 30, 360);
   const remotePerStreamMbps = current.remoteUsers && current.serverUploadMbps
     ? Math.max(1, Math.floor((current.serverUploadMbps * 0.8) / current.remoteUsers))
     : 0;
@@ -478,6 +501,9 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
     maxConnPerStream1080: perStream1080,
     maxConnPerStream4k: perStream4k,
     healthProbeLimit: perUser < 6 ? 4 : 6,
+    measuredMbpsPerConn: current.measuredMbpsPerConn || lastMeasuredProviderSpeed.mbpsPerConn || 0,
+    measuredConnCap: current.measuredConnCap || lastMeasuredProviderSpeed.connCap || 0,
+    connectionMode: current.connectionMode === 'custom' ? 'custom' : 'auto',
   });
 
   return {
@@ -619,11 +645,48 @@ function sizeCaps() {
 
 // Admin scoring tweaks (TRaSH-style custom-formats lite): custom group tiers override the
 // built-in tiers; keyword=score pairs extend the weights. Empty settings = pure defaults.
+function sameScoringGroups(a, b) {
+  const norm = (arr) => [...(arr || [])].map((g) => String(g).trim().toLowerCase()).filter(Boolean).sort();
+  return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+}
+function sameScoringKeywords(a, b) {
+  const norm = (arr) => [...(arr || [])]
+    .map((k) => `${String((k && k.term) || '').trim().toLowerCase()}=${Number(k && k.score)}`)
+    .filter((x) => !x.startsWith('='))
+    .sort();
+  return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+}
+function scoringIsFactory(s) {
+  return s.scoringCustom !== true;
+}
 function scoringPrefs() {
   const s = settings.get();
-  const t = s.scoringGroupsTrusted || [], av = s.scoringGroupsAvoid || [], kw = s.scoringKeywords || [];
-  if (!t.length && !av.length && !kw.length) return {};
-  return { customScoring: { groupsTrusted: t, groupsAvoid: av, keywords: kw } };
+  if (scoringIsFactory(s)) return {};
+  return {
+    customScoring: {
+      groupsTrusted: s.scoringGroupsTrusted || [],
+      groupsAvoid: s.scoringGroupsAvoid || [],
+      keywords: s.scoringKeywords || [],
+    },
+  };
+}
+function scoringForUi(s) {
+  if (scoringIsFactory(s)) {
+    return {
+      scoringCustom: false,
+      scoringGroupsTrusted: DEFAULT_TRUSTED_GROUPS.slice(),
+      scoringGroupsAvoid: DEFAULT_AVOID_GROUPS.slice(),
+      scoringKeywords: DEFAULT_SCORING_KEYWORDS.map((k) => ({ ...k })),
+    };
+  }
+  return {
+    scoringCustom: true,
+    scoringGroupsTrusted: (s.scoringGroupsTrusted && s.scoringGroupsTrusted.length)
+      ? s.scoringGroupsTrusted : DEFAULT_TRUSTED_GROUPS.slice(),
+    scoringGroupsAvoid: (s.scoringGroupsAvoid && s.scoringGroupsAvoid.length)
+      ? s.scoringGroupsAvoid : DEFAULT_AVOID_GROUPS.slice(),
+    scoringKeywords: Array.isArray(s.scoringKeywords) ? s.scoringKeywords : [],
+  };
 }
 
 // ---- per-indexer daily usage (API hits + NZB grabs) for admin-set limits ----
@@ -3775,8 +3838,15 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
   }
   return policy;
 }
+function showCamSources() {
+  return !camScoringEnabled(scoringPrefs().customScoring);
+}
 function sourceDrawerCandidates(candidates) {
-  const allowed = candidates.filter((c) => !(c.reasons || []).some((r) => r.startsWith('over-size-cap')));
+  const hideCam = !showCamSources();
+  const allowed = candidates.filter((c) => {
+    if (hideCam && isCamCandidate(c)) return false;
+    return !(c.reasons || []).some((r) => r.startsWith('over-size-cap'));
+  });
   const out = new Map();
   const keyOf = (c) => c.pickKey || c.nzbUrl || `${c.indexer || ''}:${c.name}:${c.sizeBytes || ''}`;
   const add = (c) => {
@@ -5019,12 +5089,14 @@ const H = {
         caps: parseCapsQuery(ctx.url.searchParams.get('caps')),
       })
     );
+    const visible = sourceDrawerCandidates(candidates);
     send(ctx.res, 200, {
       errors,
       // Sources is an override surface, not the auto-pick queue. Keep the best-ranked rows,
       // but also include the largest allowed rows so a 50GB cap really lets the admin choose
-      // a 48-50GB release manually.
-      candidates: sourceDrawerCandidates(candidates).map((c) => ({
+      // a 48-50GB release manually. Theater cams are hidden: Play already refuses them.
+      camOnly: !showCamSources() && !visible.length && candidates.some(isCamCandidate),
+      candidates: visible.map((c) => ({
         name: c.name, pickKey: c.pickKey, sizeBytes: c.sizeBytes, indexer: c.indexer, score: c.score,
         reasons: c.reasons, attributes: c.attributes, streamClass: c.streamClass, health: c.health,
       })),
@@ -5083,7 +5155,7 @@ const H = {
       // A maturity denial outranks a pipeline failure: a restricted profile must see "restricted",
       // not a generic playback error, whichever settled first (and it never leaks a source either way).
       if (!(await maturityAllowed)) return maturityBlockedResponse(ctx);
-      console.log('[play] fail ' + (e.message || 'error'));
+      console.log('[play] fail ' + (e.message || 'error') + (body && body.q ? ' q=' + body.q : ''));
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
@@ -7333,9 +7405,7 @@ Object.assign(H, {
       effectiveSizeCaps: sizeCaps(), // what's actually applied right now (auto-computed or manual)
       maxProviderConnections: MAX_PROVIDER_CONNECTIONS,
       streamingPerformance: normalizeStreamingPerformance(s.streamingPerformance || {}),
-      scoringGroupsTrusted: s.scoringGroupsTrusted || [],
-      scoringGroupsAvoid: s.scoringGroupsAvoid || [],
-      scoringKeywords: s.scoringKeywords || [],
+      ...scoringForUi(s),
       // Cast receiver app-id is a PUBLIC identifier (it ships to every sender), not a secret — show
       // the raw value so the owner can confirm/change it. Empty string = using the built-in default.
       castReceiverAppId: (s.castReceiverAppId || '').trim() || '',
@@ -7395,6 +7465,12 @@ Object.assign(H, {
     if (livePp) livePp.size = liveOpen; // freeze: pool won't open new connections during the test
     try {
       const r = await speedTestProvider(p, { targetConns: want });
+      if (r && r.ok !== false && Number(r.mbpsPerConn) > 0) {
+        lastMeasuredProviderSpeed.mbpsPerConn = Math.max(
+          lastMeasuredProviderSpeed.mbpsPerConn || 0, Number(r.mbpsPerConn));
+        lastMeasuredProviderSpeed.at = Date.now();
+        if (r.capHit && Number(r.connCap) > 0) lastMeasuredProviderSpeed.connCap = Number(r.connCap);
+      }
       send(ctx.res, 200, { ...r, reservedByPlayback: liveOpen });
     } catch (e) {
       send(ctx.res, 200, { ok: false, host: p.host, error: e.message });
@@ -7526,22 +7602,52 @@ Object.assign(H, {
         streamingPerformance: b.streamingPerformance !== undefined
           ? normalizeStreamingPerformance(b.streamingPerformance || {})
           : normalizeStreamingPerformance(s.streamingPerformance || {}),
-        // Scoring tweaks: group names (matched against the release's -GROUP suffix) and
-        // keyword=score custom formats. Empty = pure built-in TRaSH-style defaults.
-        scoringGroupsTrusted: b.scoringGroupsTrusted !== undefined
-          ? (Array.isArray(b.scoringGroupsTrusted) ? b.scoringGroupsTrusted.map((g) => String(g).trim().slice(0, 30)).filter(Boolean).slice(0, 100) : [])
-          : (s.scoringGroupsTrusted || []),
-        scoringGroupsAvoid: b.scoringGroupsAvoid !== undefined
-          ? (Array.isArray(b.scoringGroupsAvoid) ? b.scoringGroupsAvoid.map((g) => String(g).trim().slice(0, 30)).filter(Boolean).slice(0, 100) : [])
-          : (s.scoringGroupsAvoid || []),
-        scoringKeywords: b.scoringKeywords !== undefined
-          ? (Array.isArray(b.scoringKeywords)
-              ? b.scoringKeywords
-                  .filter((k) => k && String(k.term || '').trim() && Number.isFinite(+k.score))
-                  .map((k) => ({ term: String(k.term).trim().slice(0, 40), score: Math.max(-5000, Math.min(5000, Math.round(+k.score))) }))
-                  .slice(0, 100)
-              : [])
-          : (s.scoringKeywords || []),
+        // Scoring tweaks: the Settings form shows the built-in defaults. Saving the exact
+        // default lists stays on factory scoring. Reset clears custom. Deleting CAM from
+        // keywords turns off the theater-rip penalty and lists those files in Sources.
+        ...(() => {
+          const cleanGroups = (arr) => (Array.isArray(arr) ? arr.map((g) => String(g).trim().slice(0, 30)).filter(Boolean).slice(0, 100) : []);
+          const cleanKw = (arr) => (Array.isArray(arr)
+            ? arr.filter((k) => k && String(k.term || '').trim() && Number.isFinite(+k.score))
+              .map((k) => {
+                const term = String(k.term).trim().slice(0, 40);
+                const cap = /^(cam|hdcam|hdts|telesync|telecine|ts|hc\.?v\d+)$/i.test(term) ? 8000 : 5000;
+                return { term, score: Math.max(-cap, Math.min(cap, Math.round(+k.score))) };
+              }).slice(0, 100)
+            : []);
+          if (b.scoringReset === true || b.scoringCustom === false
+              || (b.scoringGroupsTrusted !== undefined && b.scoringGroupsAvoid !== undefined && b.scoringKeywords !== undefined
+                && !cleanGroups(b.scoringGroupsTrusted).length
+                && !cleanGroups(b.scoringGroupsAvoid).length
+                && !cleanKw(b.scoringKeywords).length)) {
+            return { scoringCustom: false, scoringGroupsTrusted: [], scoringGroupsAvoid: [], scoringKeywords: [] };
+          }
+          if (b.scoringGroupsTrusted === undefined && b.scoringGroupsAvoid === undefined && b.scoringKeywords === undefined) {
+            return {
+              scoringCustom: s.scoringCustom === true,
+              scoringGroupsTrusted: s.scoringGroupsTrusted || [],
+              scoringGroupsAvoid: s.scoringGroupsAvoid || [],
+              scoringKeywords: s.scoringKeywords || [],
+            };
+          }
+          const t = b.scoringGroupsTrusted !== undefined ? cleanGroups(b.scoringGroupsTrusted) : (s.scoringGroupsTrusted || []);
+          const av = b.scoringGroupsAvoid !== undefined ? cleanGroups(b.scoringGroupsAvoid) : (s.scoringGroupsAvoid || []);
+          const kw = b.scoringKeywords !== undefined
+            ? cleanKw(b.scoringKeywords)
+            : (scoringIsFactory(s) ? DEFAULT_SCORING_KEYWORDS.map((k) => ({ ...k })) : (s.scoringKeywords || []));
+          const factory = sameScoringGroups(t, DEFAULT_TRUSTED_GROUPS)
+            && sameScoringGroups(av, DEFAULT_AVOID_GROUPS)
+            && sameScoringKeywords(kw, DEFAULT_SCORING_KEYWORDS);
+          if (factory) return { scoringCustom: false, scoringGroupsTrusted: [], scoringGroupsAvoid: [], scoringKeywords: [] };
+          return {
+            scoringCustom: true,
+            scoringGroupsTrusted: sameScoringGroups(t, DEFAULT_TRUSTED_GROUPS) ? [] : t,
+            scoringGroupsAvoid: sameScoringGroups(av, DEFAULT_AVOID_GROUPS) ? [] : av,
+            scoringKeywords: sameScoringKeywords(kw, DEFAULT_SCORING_KEYWORDS)
+              ? DEFAULT_SCORING_KEYWORDS.map((k) => ({ ...k }))
+              : kw,
+          };
+        })(),
       };
       if (b.addProvider && b.addProvider.host) {
         next.providers.push({
@@ -8683,18 +8789,11 @@ Object.assign(H, {
     }
   },
 
-  // Range-proxy the audio: resolve (cached) the googlevideo URL, then pipe its bytes with the
-  // client's Range header. googlevideo URLs are IP-locked to US + expire, so a 403/410 means
-  // "stale" — we re-resolve ONCE and retry rather than failing the scrub.
-  musicStream: async (ctx) => {
-    const id = ctx.m[1];
-    if (ctx.claims.scope !== 'stream' || ctx.claims.sub !== `music:${id}`) return send(ctx.res, 401, { error: 'token not valid for this track' });
-    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp not available' });
+  // Range-proxy Music audio or a TMDB trailer: resolve (cached) the googlevideo URL, then pipe
+  // its bytes with the client's Range header. googlevideo URLs are IP-locked + expire, so a
+  // 403/410 means "stale" — we re-resolve and retry rather than failing the scrub.
+  proxyResolvedYoutube(ctx, id, resolveFn, failLabel) {
     const range = ctx.req.headers.range || null;
-    // googlevideo URLs are IP-locked + short-lived, so a 403/410 (or a re-resolve that itself
-    // fails) mid-play must not just drop the stream. Retry a few times with a small backoff, and
-    // on the final attempt fall back to a PUBLIC (no-cookie) re-resolve — a different cache scope
-    // that often yields a fresh, playable URL when the user-scoped one keeps staling.
     const MAX_STREAM_ATTEMPTS = 3;
     const retryLater = (attempt) => setTimeout(() => { if (!ctx.res.destroyed) pipeFrom(attempt + 1); }, 400 * (attempt + 1));
     const pipeFrom = async (attempt = 0) => {
@@ -8703,10 +8802,10 @@ Object.assign(H, {
       const lastResort = attempt + 1 >= MAX_STREAM_ATTEMPTS;
       const cookiesPath = lastResort ? null : cookiesFor(ctx.claims.uid); // public re-resolve as the last try
       let rec;
-      try { rec = await ytmusic.resolveStream(id, { cookiesPath, force }); }
+      try { rec = await resolveFn(id, { cookiesPath, force }); }
       catch (e) {
         if (attempt + 1 < MAX_STREAM_ATTEMPTS && !ctx.res.headersSent && !ctx.res.destroyed) return void retryLater(attempt);
-        if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'could not resolve track', detail: String(e.message).slice(0, 160) });
+        if (!ctx.res.headersSent) send(ctx.res, 502, { error: `could not resolve ${failLabel}`, detail: String(e.message).slice(0, 160) });
         return;
       }
       const u = new URL(rec.url);
@@ -8717,7 +8816,6 @@ Object.assign(H, {
       if (range) upstreamHeaders.range = range;
       const client = u.protocol === 'http:' ? http : https;
       const upstream = client.get(u, { headers: upstreamHeaders }, (up) => {
-        // Stale/expired URL → transparent re-resolve (bounded, with backoff) before giving up.
         if ((up.statusCode === 403 || up.statusCode === 410) && attempt + 1 < MAX_STREAM_ATTEMPTS && !ctx.res.headersSent) {
           up.resume(); return void retryLater(attempt);
         }
@@ -8731,6 +8829,40 @@ Object.assign(H, {
       ctx.req.on('close', () => upstream.destroy());
     };
     pipeFrom(0);
+  },
+  musicStream: async (ctx) => {
+    const id = ctx.m[1];
+    if (ctx.claims.scope !== 'stream' || ctx.claims.sub !== `music:${id}`) return send(ctx.res, 401, { error: 'token not valid for this track' });
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp not available' });
+    H.proxyResolvedYoutube(ctx, id, (trackId, opts) => ytmusic.resolveStream(trackId, opts), 'track');
+  },
+  // Mint the URL immediately and start yt-dlp in the background so Trailer is already warm
+  // by the time the <video> hits /stream. That is the "Loading trailer" wait.
+  trailerResolve: async (ctx) => {
+    if (throttleUserRoute(ctx, 'trailer-resolve', { max: 40, windowMs: 60000, lockMs: 8000 })) return;
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
+    const id = ctx.m[1];
+    ytmusic.resolveVideoStream(id, { cookiesPath: cookiesFor(ctx.user.id) }).catch(() => {});
+    send(ctx.res, 200, { streamUrl: `/api/trailer/stream/${id}?t=${auth.streamToken(ctx.user.id, `trailer:${id}`)}` });
+  },
+  trailerStream: async (ctx) => {
+    const id = ctx.m[1];
+    if (ctx.claims.scope !== 'stream' || ctx.claims.sub !== `trailer:${id}`) return send(ctx.res, 401, { error: 'token not valid for this trailer' });
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp not available' });
+    H.proxyResolvedYoutube(ctx, id, (videoId, opts) => ytmusic.resolveVideoStream(videoId, opts), 'trailer');
+  },
+  trailerResolveVimeo: async (ctx) => {
+    if (throttleUserRoute(ctx, 'trailer-resolve', { max: 40, windowMs: 60000, lockMs: 8000 })) return;
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
+    const id = ctx.m[1];
+    ytmusic.resolveVideoStream(id, { site: 'vimeo' }).catch(() => {});
+    send(ctx.res, 200, { streamUrl: `/api/trailer/stream/vimeo/${id}?t=${auth.streamToken(ctx.user.id, `trailer:vimeo:${id}`)}` });
+  },
+  trailerStreamVimeo: async (ctx) => {
+    const id = ctx.m[1];
+    if (ctx.claims.scope !== 'stream' || ctx.claims.sub !== `trailer:vimeo:${id}`) return send(ctx.res, 401, { error: 'token not valid for this trailer' });
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp not available' });
+    H.proxyResolvedYoutube(ctx, id, (videoId, opts) => ytmusic.resolveVideoStream(videoId, { ...opts, site: 'vimeo' }), 'trailer');
   },
 
   // Link state only — the cookie text NEVER returns to a client. Linking is cookie-based
@@ -9099,6 +9231,10 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/music\/lyrics\/([\w-]{11})$/, auth: 'user', h: H.musicLyrics },
   { m: 'POST', re: /^\/api\/music\/like$/, auth: 'user', h: H.musicLike },
   { m: 'GET', re: /^\/api\/music\/stream\/([\w-]{11})$/, auth: 'stream', h: H.musicStream },
+  { m: 'GET', re: /^\/api\/trailer\/stream\/vimeo\/(\d{6,12})$/, auth: 'stream', h: H.trailerStreamVimeo },
+  { m: 'GET', re: /^\/api\/trailer\/vimeo\/(\d{6,12})$/, auth: 'user', h: H.trailerResolveVimeo },
+  { m: 'GET', re: /^\/api\/trailer\/stream\/([\w-]{11})$/, auth: 'stream', h: H.trailerStream },
+  { m: 'GET', re: /^\/api\/trailer\/([\w-]{11})$/, auth: 'user', h: H.trailerResolve },
   { m: 'GET', re: /^\/api\/music\/status$/, auth: 'user', h: H.musicStatus },
   { m: 'POST', re: /^\/api\/music\/link$/, auth: 'user', h: H.musicLink },
   { m: 'POST', re: /^\/api\/music\/unlink$/, auth: 'user', h: H.musicUnlink },
@@ -9226,7 +9362,7 @@ const server = http.createServer(async (req, res) => {
         // content, and framing are locked out. img http(s) covers TMDB art + channel logos.
         headers['content-security-policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; " +
           "style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; media-src 'self' blob:; " +
-          "connect-src 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com; " +
+          "connect-src 'self'; frame-src 'none'; " +
           "object-src 'none'; base-uri 'self'; frame-ancestors 'self'";
         headers['x-frame-options'] = 'SAMEORIGIN';
         // NOT no-referrer: YouTube refuses to authorize many embeds without an origin referrer.

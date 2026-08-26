@@ -215,7 +215,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/transcode/abc'], ['GET', '/api/hls/abc'], ['GET', '/api/hls/abc/seg00001.m4s'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
     ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/home'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'], ['GET', '/api/music/radio/AAAAAAAAAAA'],
-    ['GET', '/api/music/lyrics/AAAAAAAAAAA'], ['POST', '/api/music/like'],
+    ['GET', '/api/music/lyrics/AAAAAAAAAAA'], ['POST', '/api/music/like'], ['GET', '/api/trailer/AAAAAAAAAAA'], ['GET', '/api/trailer/vimeo/1234567'],
   ];
   for (const [m, p] of probes) {
     assert.strictEqual((await httpJson(srv.port, m, p)).status, 401, `anon ${m} ${p}`);
@@ -471,6 +471,7 @@ test('settings: streaming performance handles high-connection providers and reco
   assert.strictEqual(s.json.providers[0].connections, 100, '100-connection usenet plans are preserved');
   assert.strictEqual(s.json.maxProviderConnections, 150);
   assert.strictEqual(s.json.streamingPerformance.expectedUsers, 8);
+  assert.strictEqual(s.json.streamingPerformance.connectionMode, 'auto', 'connections default to Auto grow/give-away');
 
   const rec = await httpJson(srv.port, 'POST', '/api/streaming/recommend', {
     expectedUsers: 10, remoteUsers: 4, streamMix: 'mixed',
@@ -1722,6 +1723,42 @@ test('settings: max release size — manual caps hide oversized sources; off res
   ix.close();
 });
 
+test('settings: deleting the CAM scoring keyword lists theater rips in Sources', async () => {
+  const http2 = require('http');
+  const ix = http2.createServer((req, res) => {
+    res.writeHead(200);
+    res.end(`<?xml version="1.0"?><rss xmlns:newznab="http://x"><channel>
+      <item><title>Oak.Street.2026.1080p.HDCAM.x264-DKS</title><enclosure url="http://x/1" length="2000000000"/></item>
+      <item><title>Oak.Street.2026.1080p.WEB-DL.H.264-NTb</title><enclosure url="http://x/2" length="7000000000"/></item>
+    </channel></rss>`);
+  });
+  await new Promise((r) => ix.listen(0, '127.0.0.1', r));
+  const prevIx = (await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json.indexers;
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    indexers: [{ name: 'cam', url: `http://127.0.0.1:${ix.address().port}`, apikey: 'x' }],
+    scoringReset: true,
+  }, admin);
+  const defaults = (await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json;
+  assert.equal(defaults.scoringCustom, false);
+  assert.ok((defaults.scoringKeywords || []).some((k) => String(k.term).toUpperCase() === 'CAM'),
+    'Settings shows the built-in CAM keyword');
+  const hidden = (await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Oak Street 2026'), null, admin)).json;
+  assert.deepStrictEqual(hidden.candidates.map((c) => c.name), ['Oak.Street.2026.1080p.WEB-DL.H.264-NTb'],
+    'default CAM rule: HDCAM is not listed next to the WEB-DL');
+
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    scoringGroupsTrusted: defaults.scoringGroupsTrusted,
+    scoringGroupsAvoid: defaults.scoringGroupsAvoid,
+    scoringKeywords: [],
+  }, admin);
+  const shown = (await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Oak Street 2026'), null, admin)).json;
+  assert.ok(shown.candidates.some((c) => /HDCAM/.test(c.name)), 'deleting CAM lists the theater rip');
+  assert.equal((await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json.scoringCustom, true);
+
+  await httpJson(srv.port, 'POST', '/api/settings', { scoringReset: true, indexers: prevIx }, admin);
+  ix.close();
+});
+
 test('search: Sources includes largest allowed releases beyond the best-score window', async () => {
   const http2 = require('http');
   const small = Array.from({ length: 300 }, (_, i) =>
@@ -2491,7 +2528,8 @@ test('security headers: CSP on the app shell, nosniff everywhere', async () => {
   assert.strictEqual(page.status, 200);
   const csp = String(page.headers['content-security-policy'] || '');
   assert.ok(csp.includes("object-src 'none'"), 'CSP present and blocks plugins');
-  assert.ok(csp.includes("frame-src https://www.youtube.com"), 'trailer iframe still allowed');
+  assert.ok(csp.includes("frame-src 'none'"), 'the app shell does not embed YouTube');
+  assert.ok(csp.includes("media-src 'self'"), 'same-origin trailer video is allowed');
   assert.strictEqual(page.headers['x-content-type-options'], 'nosniff');
   const api = await httpJson(srv.port, 'GET', '/api/server');
   assert.strictEqual(api.headers['x-content-type-options'], 'nosniff');
@@ -2616,6 +2654,7 @@ test('music: playlist parsers turn null yt-dlp JSON into useful link errors', ()
   assert.throws(() => ytmusic._parseListPlaylists('null'), /re-export cookies/i);
   assert.throws(() => ytmusic._parsePlaylistTracks('null'), /re-export cookies/i);
   assert.match(ytmusic._friendlyYtdlpError('ERROR: HTTP Error 429: Too Many Requests').message, /rate-limited/i);
+  assert.match(ytmusic._friendlyYtdlpError('ERROR: Sign in to confirm your age').message, /age-restricted/i);
   assert.match(ytmusic._friendlyYtdlpError('ERROR: Sign in to confirm you are not a bot').message, /bot-protection/i);
   assert.match(ytmusic._friendlyYtdlpError('ERROR: HTTP Error 403: Forbidden').message, /rejected/i);
   assert.deepStrictEqual(ytmusic._parseListPlaylists('{"entries":null}'), []);
@@ -3031,8 +3070,34 @@ test('music: auth + token scope binding; honest 503 when yt-dlp is absent', asyn
 
   // A music stream token is bound to ONE track id — a leaked URL can't fetch another track.
   const tA = srv.auth.streamToken(srv.auth._users().list[0].id, 'music:AAAAAAAAAAA');
+  const tTrailer = srv.auth.streamToken(srv.auth._users().list[0].id, 'trailer:AAAAAAAAAAA');
   assert.strictEqual((await httpRaw(srv.port, `/api/music/stream/BBBBBBBBBBB?t=${tA}`)).status, 401,
     'music token for track A rejected on track B');
+  assert.strictEqual((await httpRaw(srv.port, `/api/trailer/stream/AAAAAAAAAAA?t=${tA}`)).status, 401,
+    'a music token cannot stream a trailer');
+  assert.strictEqual((await httpRaw(srv.port, `/api/trailer/stream/BBBBBBBBBBB?t=${tTrailer}`)).status, 401,
+    'trailer token for key A rejected on key B');
+  assert.strictEqual((await httpRaw(srv.port, '/api/trailer/stream/CCCCCCCCCCC', { token: admin })).status, 401,
+    'session tokens cannot directly stream arbitrary trailer ids');
+  const minted = await httpJson(srv.port, 'GET', '/api/trailer/AAAAAAAAAAA', null, admin);
+  if (present) {
+    assert.strictEqual(minted.status, 200, 'trailer mint works when yt-dlp is installed');
+    assert.ok(/^\/api\/trailer\/stream\/AAAAAAAAAAA\?t=/.test(minted.json.streamUrl), 'mint returns a tokened trailer URL');
+  } else {
+    assert.strictEqual(minted.status, 503, 'no yt-dlp → honest trailer 503');
+  }
+  const tVimeo = srv.auth.streamToken(srv.auth._users().list[0].id, 'trailer:vimeo:1234567');
+  assert.strictEqual((await httpRaw(srv.port, `/api/trailer/stream/vimeo/1234567?t=${tTrailer}`)).status, 401,
+    'a YouTube trailer token cannot stream a Vimeo trailer');
+  const vimeoMint = await httpJson(srv.port, 'GET', '/api/trailer/vimeo/1234567', null, admin);
+  if (present) {
+    assert.strictEqual(vimeoMint.status, 200, 'Vimeo trailer mint works when yt-dlp is installed');
+    assert.ok(/^\/api\/trailer\/stream\/vimeo\/1234567\?t=/.test(vimeoMint.json.streamUrl), 'Vimeo mint returns a tokened Vimeo URL');
+    assert.strictEqual((await httpRaw(srv.port, `/api/trailer/stream/vimeo/7654321?t=${tVimeo}`)).status, 401,
+      'Vimeo trailer token for id A rejected on id B');
+  } else {
+    assert.strictEqual(vimeoMint.status, 503, 'no yt-dlp → honest Vimeo trailer 503');
+  }
   assert.strictEqual((await httpRaw(srv.port, '/api/music/stream/CCCCCCCCCCC', { token: admin })).status, 401,
     'session tokens cannot directly stream arbitrary YouTube ids');
   // Malformed ids never reach the handler (the route only matches 11-char ids).
@@ -3178,6 +3243,51 @@ test('music: stream proxy recovers from a stale (403) googlevideo URL by re-reso
   } finally {
     ytmusic.detectYtdlp = oldDetect;
     ytmusic.resolveStream = oldResolve;
+    upstream.close();
+  }
+});
+
+test('trailers: token mint + stream proxy forwards Range and rejects a music token', async () => {
+  const ytmusic = require('../server/ytmusic');
+  await assert.rejects(() => ytmusic.resolveVideoStream('nope'), /bad trailer id/);
+  await assert.rejects(() => ytmusic.resolveVideoStream('12', { site: 'vimeo' }), /bad trailer id/);
+  const ageErr = ytmusic._friendlyYtdlpError('ERROR: Sign in to confirm your age', 'fail');
+  assert.match(String(ageErr.message), /age-restricted/i);
+
+  const oldDetect = ytmusic.detectYtdlp;
+  const oldResolve = ytmusic.resolveVideoStream;
+  let upstreamHeaders = null;
+  const upstream = http.createServer((req, res) => {
+    upstreamHeaders = req.headers;
+    res.writeHead(206, {
+      'content-type': 'video/mp4',
+      'content-range': 'bytes 0-3/8',
+      'content-length': '4',
+    });
+    res.end('TRLR');
+  });
+  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+  try {
+    ytmusic.detectYtdlp = () => ({ cmd: ['mock-ytdlp'], version: 'test' });
+    ytmusic.resolveVideoStream = async () => ({
+      url: `http://127.0.0.1:${upstream.address().port}/video`,
+      mime: 'video/mp4',
+      headers: { 'User-Agent': 'TriboonTrailerTest' },
+    });
+    const minted = await httpJson(srv.port, 'GET', '/api/trailer/AAAAAAAAAAA', null, admin);
+    assert.strictEqual(minted.status, 200, minted.raw);
+    assert.ok(/^\/api\/trailer\/stream\/AAAAAAAAAAA\?t=/.test(minted.json.streamUrl));
+    const uid = srv.auth._users().list[0].id;
+    const tok = srv.auth.streamToken(uid, 'trailer:AAAAAAAAAAA');
+    const video = await httpRaw(srv.port, `/api/trailer/stream/AAAAAAAAAAA?t=${tok}`, { range: 'bytes=0-3' });
+    assert.strictEqual(video.status, 206);
+    assert.strictEqual(video.headers['content-type'], 'video/mp4');
+    assert.strictEqual(video.body.toString(), 'TRLR');
+    assert.strictEqual(upstreamHeaders.range, 'bytes=0-3');
+    assert.strictEqual(upstreamHeaders['user-agent'], 'TriboonTrailerTest');
+  } finally {
+    ytmusic.detectYtdlp = oldDetect;
+    ytmusic.resolveVideoStream = oldResolve;
     upstream.close();
   }
 });

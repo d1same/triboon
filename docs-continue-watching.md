@@ -106,6 +106,9 @@ flowchart LR
   Only a blocked health verdict changes release, never episode.
 - Source replacement retains the requested Continue Watching point even when
   it occurs before the native player reports its first position callback.
+- 4K and 1080p of the same title share one clock (`position` seconds on the
+  title/episode key). Tapping 1080 drops a 4K pin but must not start a second
+  resume point, and must not map the old file's duration onto the new file.
 
 ## Focus Rules
 

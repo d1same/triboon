@@ -31,10 +31,11 @@ Settings -> Streaming performance owns the capacity profile:
 | Expected users | Simultaneous viewers to plan for | Divides available playback connections across active streams. |
 | Remote users | Users outside the LAN | Drives upload warnings and quality-cap advice. |
 | Stream mix | Mostly 1080p, mostly 4K, or mixed | Estimates bandwidth pressure and picks safer defaults. |
-| Server download Mbps | Server-to-usenet download budget | Used by the recommendation flow; 80% is treated as safe usable capacity. |
+| Server download Mbps | Server-to-usenet download budget | Used by the recommendation flow and the live allocator; 80% is treated as safe usable capacity. Extra sockets cannot create bandwidth past this pipe. |
 | Server upload Mbps | Server-to-remote-user upload budget | Used for remote streaming warnings. |
+| Connections Auto / Custom | How live sockets are shared | Auto starts each Play at 10, adds sockets only when that playhead is falling behind, and gives extras back when another viewer needs them. The live cap is bitrate ÷ measured (or 8 Mbps) per connection, never past 24. Custom keeps even fair-share using the typed 1080/4K numbers. A 502 still shrinks either mode. |
 | 1080p / 4K read-ahead goals | Owner-facing server-side read-ahead goal | Saved as seconds, translated into bounded article windows by the engine. |
-| Per-stream 1080p / 4K connections | Maximum article window for one active stream | Caps read-ahead so a single stream does not monopolize the pool. |
+| Per-stream 1080p / 4K connections | Maximum article window for one active stream | Used in Custom. Auto ignores these and sizes from bandwidth + who is behind. |
 | Startup reserve | Percentage of usable connections held back | Keeps new starts and seeks responsive. |
 | Device preload | MB of opening bytes an Android TV may pre-cache ahead of press-play (detail open + Up Next) | Direct-play mounts only; `/api/prepare` offers a tokened prefetch target within this budget, the shell stores it in a 100MB on-device LRU, and press-play buffers its first seconds from disk. 0 disables. |
 | NNTP pipelining | Article requests each provider connection keeps on the wire for read-ahead/background work | Low lanes only — startup/seek/playback/health never share a socket, and stacking stands down while player work is queued. Rides provider pool opts; saving rebuilds pools live. Bench: ~2.2x per-connection read-ahead throughput at depth 4 on a latency-dominated provider. |
@@ -113,15 +114,32 @@ web playback, while Android uses `/api/iptv/native/:idx` and ExoPlayer.
 ## Provider Combining
 
 Multiple usenet accounts add capacity, but each account keeps its own
-connection limit. `NntpPool` orders providers by current load:
+connection limit. `NntpPool` orders providers by current load, then unused
+room:
 
 ```text
-load = (busy connections + queued work) / provider connection cap
+load = (busy + connecting + queued) / provider connection cap
+if load >= 85% or a fresh 502: push that account back
+tie at idle: prefer the larger unused plan
+startup/seek also asks: does this account have leftover room for this Play?
+  4K wants ~18 slots, 1080 wants ~10
+  if Easynews is 40/50, a 4K starts on Newshosting
+  a 1080 that fits in leftover 10 can stay on Easynews
 ```
 
-Healthy lower-load providers receive article work first. A provider with recent
-connection failure is treated as down and tried last, but it is not removed
-forever; the circuit breaker self-heals.
+A new Play therefore spills to Newshosting when Easynews is at its plan cap,
+or when leftover Easynews slots cannot host that Play, instead of opening a
+502 on the full account. If the winner does not have the article, the existing
+failover/hedge still tries the next provider.
+
+A small movie that is already cached from the playhead to the end drips back
+to the 4-connection floor while still playing, so those sockets go to the next
+user. A watching 4K that is only fat (minutes ahead, file not done) keeps
+filling. 10 connections per user can be enough once this balancer is on Auto;
+do not drop the typed caps just because the picker got smarter.
+
+A provider with recent connection failure is treated as down and tried last, but
+it is not removed forever; the circuit breaker self-heals.
 
 This means two accounts with 100 and 50 connections are modeled as 150 total
 connections, not one account replacing the other.
@@ -228,7 +246,24 @@ activeMounts = mounts with a real non-background /api/stream read active now,
 usable = floor(totalProviderConnections * 0.85)
 reserve = ceil(usable * startupReservePct)
 perStreamBudget = floor((usable - reserve) / activeMounts)
-targetReadAhead = min(configured per-stream cap, perStreamBudget)
+fairReadAhead = min(configured per-stream cap, max(4, perStreamBudget))
+targetReadAhead (Custom) = fairReadAhead
+targetReadAhead (Auto) = min(10, fairReadAhead), then:
+  coverage = cached bytes AHEAD of the last player read / peak bitrate
+  (tail warmup and old-seek bytes do not count)
+  starve = coverage < 20s and held 8s after the first 8s of Play
+  fat = coverage > 75s and held 8s
+  Auto cap = max(10, ceil(peak Mbps / Mbps-per-connection)), up to 24
+  a starve may grow from leftover spare, then take at most 2 sockets from a
+    fat mount, never below 4, and at most once every 5s
+  a new viewer first snaps to even share, then a fresh Play/resume may use
+    leftover spare immediately so first picture fills faster
+  leftover spare is not given to a healthy or fat Play after that burst
+  if sum(peak Mbps) > serverDownloadMbps * 0.8, assignable sockets follow the
+    pipe (Mbps / Mbps-per-connection), not extra NNTP logins
+  a recent provider 502 freezes grow (the existing 50% cap still applies)
+  decoded cache stays inside ~12–20% of host RAM (smaller boxes keep less);
+    a starving playhead gets a larger share than a fat one
 targetCache = max(targetReadAhead * 3, 36 or 48 segments)
 targetCacheBytes = the owner buffer target (seconds) x the file's REAL average
   bitrate (size / probed duration; a sane per-class default before the probe lands),
@@ -242,14 +277,19 @@ A high-bitrate 4K stream (Dolby Vision / HDR10+, ~60-90 Mbps) therefore gets a m
 deeper buffer than a light WEB-DL, so the configured seconds-goal actually holds and
 brief upstream latency spikes do not drain it (the old fixed 24 Mbps / 384 MB sizing
 held only ~38s on an ~80 Mbps file and stalled every few minutes on a jittery line).
-The 4K byte cap is ~1 GB but bounded to ~20% of system RAM so smaller self-hosted
-boxes stay safe (they get a proportionally shallower buffer). Do not revert to a
-fixed-bitrate byte budget without re-checking this latency behavior + the P14 contract.
+The 4K byte goal can ask for up to ~3 GB, but one mount is clamped to ~8% of
+RAM and never above 1536 MB so the Node heap does not GC-stall Play. Smaller
+boxes get a shallower buffer. Do not revert to a fixed-bitrate byte budget
+without re-checking this latency behavior + the P14 contract.
 
 Lifecycle `_touched` activity is not a viewer: focus prepare, track/subtitle probes,
 health work, and explicit `background`/`readAhead` stream reads must not divide an active
-player's share. A prepared-only mount keeps a deliberately small speculative window
-(read-ahead 4; decoded cache at most 96 MB for 1080p or 192 MB for 4K). Its first real
+player's share. A prepared-only mount sizes its peek from that house's own provider cap
+(about 4% of combined connections, clamped 4–8). It keeps that peek while
+load is under ~75% of that same cap, and drops to 4 sockets plus the
+smaller 96/192 MB cache when the house is tight. A 50-connection box
+therefore stays on 4; a 200-connection box can use 8 until it is actually
+busy. People watching does not, by itself, shrink the peek. Its first real
 player read (including a direct multi-file audiobook track) promotes the parent mount
 immediately into normal fair-share sizing. All prepared mounts also divide one separate
 speculative pool: 10% of host RAM with a 96 MB low-memory floor and a 512 MB ceiling.
@@ -401,9 +441,10 @@ Each active file also tracks coarse playback read pressure: segment waits,
 maximum segment wait, cache hits, bytes served, and temporary adaptive
 read-ahead boosts. A boost is allowed only after a real playback segment waits
 past the drain threshold, expires automatically, and is capped by the same
-streaming profile. The base window remains the fair-share value; adaptive
+streaming profile. The base window remains the fair-share value; Auto may then grow or give away
+from that base using playhead coverage, never from tail-cache totals. Adaptive
 read-ahead may borrow only bounded spare reserve and must never exceed the
-per-stream cap.
+per-stream cap. Custom mode stays on even fair-share.
 
 `/api/status` exposes aggregate pipeline and playback counters without release
 names, NZB URLs, provider credentials, or stream tokens. Use those counters
@@ -598,6 +639,11 @@ not wait behind background read-ahead.
   a decoded-byte budget too.
 - Do not treat total provider connections as available playback connections;
   keep usable and reserve budgets.
+- Do not treat total cached bytes as "seconds buffered." Head+tail warmup parks
+  index bytes at the end of the file; only bytes ahead of the last player read
+  may grow or give away sockets.
+- Do not dump a healthy stream to the floor on the first tick of a new Play.
+  New viewers start on even fair-share; steal only after hold + cooldown.
 - Do not add a server runtime npm dependency for this area without owner
   approval.
 - Do not log provider credentials or credential-bearing article/source URLs.

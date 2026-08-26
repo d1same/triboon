@@ -342,6 +342,22 @@ them when the table is reorganized:
   `clients/windows-px8/src-tauri/src/player.rs` `mpv_alang`.
   Verification: audio-language and audio-bridge pins in `test/phase4.test.js`
   and `test/windows-px8-player.test.js`.
+- **P14 - live connection grow and give-away.** Auto starts each Play at 10.
+  It may grow a starving playhead from leftover spare or take extra sockets
+  from a fat mount, never below 4. A healthy Play does not eat spare sockets.
+  Coverage is bytes ahead of the last player read, not total cache (tail warmup
+  and a just-started Play must not look fat or dump a healthy 4K). Steal waits
+  for an 8s hold plus 5s cooldown; a new viewer first gets even fair-share.
+  Custom mode keeps even split using the typed caps. Download Mbps and a
+  measured Mbps/connection cap the pool; a recent 502 freezes grow. A fully
+  cached small file drips to the floor while still playing. Startup/seek also
+  pick the provider that can fit that Play (4K ~18 leftover slots, 1080 ~10)
+  so Easynews at 40/50 does not 502 a 4K that Newshosting can take. Code:
+  `server/pipeline.js` `allocateStreamConnections`, `classifyStreamNeed`,
+  `fileIsFullyAhead`; `server/nntp.js` `_ordered`; `server/vfs.js`
+  `aheadCacheBytes`; Settings `connectionMode`.
+  Verification: grow/give-away pins in `test/phase2.test.js` and provider-fit
+  pins in `test/e2e.test.js`.
 - **P14 - playback resource isolation.** Viewer fairness is driven only by real
   non-background `/api/stream` reads (plus a 120-second grace from range end),
   never by prepare/probe lifecycle touches; direct audiobook tracks use the same

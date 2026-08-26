@@ -126,6 +126,47 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-26, v3.1.10 ship — resume parks the file, trailers stay in-app:
+
+- Version contract: `package.json` 3.1.10; Android `versionName` 3.1.10 /
+  `versionCode` 355; Windows client package/Tauri/Cargo 3.1.10.
+- Continue Watching / Back parks the VFS so Resume joins the live mount.
+  Play does not wait on indexer search when that mount is ready. A 4K Play
+  will not join a 1080 leftover parked under the 4K key.
+- Trailers play in our `<video>` via yt-dlp (Vimeo first, then YouTube 720).
+  Trailer Play starts the movie, not the clip.
+- Auto starts a fresh Play at 10 sockets even if a tiny file is already
+  cached. A finished small file still drips to 4 after the startup window.
+- Play Next / Up Next / autoplay still share `playNextEpisode()` and the
+  last-two-minute prepare. Episode handoff was not re-clicked on the TV.
+- `npm.cmd run verify:full` on Shield `10.1.20.11`: focused IPTV/P9 47,
+  engine 51, pipeline 8, player 25, security 7; full Node suite **645/645**;
+  isolated `/api/server` 3.1.10; household VOD/IPTV pass. Overlapping Play
+  404'd on leftover mounts still served by the installed v3.1.9 service.
+  Android ExoPlayer stress: WebView CDP did not attach after the debug APK.
+  Windows GPU not run.
+
+2026-08-25, trailer player — no YouTube iframe, age-gate uses yt-dlp:
+
+- Trailers still come from TMDB `/videos`. Playback is a same-origin
+  `<video>` via `/api/trailer/:id` + `/api/trailer/stream/:id` (yt-dlp,
+  Music cookies, one android client, one muxed file). Age-restricted
+  embeds that said "watch on YouTube" no longer use that iframe.
+  Mint starts yt-dlp in the background so "Loading trailer" is not a
+  5s DASH remux wait. If TMDB has Vimeo, that file (up to 1080) plays
+  first; otherwise YouTube 720/360. Vimeo fail falls through to YouTube.
+- If the top trailer fails, the next TMDB Trailer/Teaser is tried.
+- `node --test test/phase4.test.js test/security.test.js`: **193/193**.
+- Cold Matrix trailer resolve (`vKQi3bBA1y8`) was **1.9s** after dropping
+  the DASH remux / extra YouTube clients. A second resolve is cache-hit.
+- Local `http://127.0.0.1:7799/api/trailer/AAAAAAAAAAA` returns 401
+  (route exists). Served HTML has `<video>` and no `youtube.com/embed`.
+- Shield `10.1.20.11` still hits the installed Windows service on
+  `:7777` (this box cannot stop/replace that service). Owner must
+  restart that service from this repo, or open a trailer on `:7799`.
+- Web Player VOD / IPTV / ExoPlayer live smokes: **not run** (trailer
+  modal only).
+
 2026-08-25, v3.1.9 ship — stall stays on the file, 4K stop frees 1080 Play:
 
 - Version contract: `package.json` 3.1.9; Android `versionName` 3.1.9 /
