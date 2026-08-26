@@ -5986,9 +5986,13 @@ public class MainActivity extends Activity {
                         (HttpDataSource.InvalidResponseCodeException) t;
                 String reason = nativeHeader(http.headerFields, "x-triboon-iptv-error");
                 if (reason == null || reason.trim().isEmpty()) {
-                    reason = http.responseCode == 401 || http.responseCode == 403
-                            ? "provider rejected this channel"
-                            : "live stream unavailable";
+                    if (!"live".equals(nativeMode) && http.responseCode == 404) {
+                        reason = "mount not found";
+                    } else {
+                        reason = http.responseCode == 401 || http.responseCode == 403
+                                ? "provider rejected this channel"
+                                : "live stream unavailable";
+                    }
                 }
                 return reason + " (HTTP " + http.responseCode + ")";
             }

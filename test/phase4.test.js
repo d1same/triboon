@@ -399,7 +399,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'qualityRankForItem must cap browser playback at 1080p unless 4K-in-browser is opted in');
   assert.match(ui, /function isWebBrowserClient\(\) \{ return !nativePlaybackCaps\(\); \}/,
     'a plain browser (no native ExoPlayer bridge) is the client that gets the 1080p cap');
-  assert.match(ui, /if \(it\._nextEp\) \{[\s\S]{0,400}return it\._local \? playLocal\(it\) : play\(it\);/,
+  assert.match(ui, /if \(it\._nextEp\) \{[\s\S]{0,400}return resumeContinueWatching\(it\);/,
     'a Continue-Watching next-episode card plays immediately on every client');
   assert.match(ui, /const has4k = res\.has\('2160p'\);[\s\S]+it\._has4k = has4k;/,
     'checkAvailability must persist real 4K availability on the item so a no-4K title never requests 4K');
@@ -1358,10 +1358,16 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching should rehydrate fresh local artwork before falling back');
   assert.match(ui, /const loc = S\.localMap && S\.localMap\[w\.key\];[\s\S]+item\._local = \{ streamUrl: loc\.streamUrl, playUrl: loc\.playUrl, name: loc\.name \}/,
     'Continue Watching attaches the personal-library stream so a click does not usenet-search');
-  assert.match(ui, /function paintHomeWatchNow\(/,
+  assert.match(ui, /function paintHomeWatchNow\(opts = \{\}\) \{\s*if \(S\.view !== 'home'\) return;/,
     'watch saves immediately repaint Home Continue Watching without an app restart');
-  assert.match(ui, /if \(v === 'home' && !opts\.preservePage\) \{[\s\S]+if \(cachedWatchRowsForHome\(\)\.length\) paintHomeWatchNow\(\);/,
+  assert.match(ui, /S\._homeWatchDirty = true;[\s\S]+paintHomeWatchNow\(\)/,
+    'a watch save marks Home dirty so a later Home visit rebuilds Continue Watching');
+  assert.match(ui, /if \(v === 'home' && !opts\.preservePage\) \{[\s\S]+if \(cachedWatchRowsForHome\(\)\.length \|\| S\._homeWatchDirty\) paintHomeWatchNow\(\);/,
     'Home from IR Movies / IR TV rebuilds Continue Watching from the upserted watch cache');
+  assert.match(ui, /async function resumeContinueWatching\(it\) \{[\s\S]+ensureLocalPlaybackForItem\(it\)[\s\S]+playLocal\(\{ \.\.\.it, _local: loc \}\)[\s\S]+isPersonalLibraryWatchItem\(it\)[\s\S]+That library file is not available[\s\S]+return play\(it\);/,
+    'Continue Watching looks up the personal-library file before falling through to usenet');
+  assert.match(ui, /function isPersonalLibraryWatchItem\(it\) \{[\s\S]+if \(\/\^local:\/i\.test\(String\(it\.key \|\| ''\)\)\) return true;[\s\S]+if \(it\.tmdbId\) return false;/,
+    'matched TMDB titles still use usenet when no local file is attached');
   assert.match(ui, /function localLookupKeysForItem\(it\) \{[\s\S]+it\.key/,
     'local playback lookup includes unmatched local: library keys, not only TMDB ids');
   assert.match(ui, /function ensureLocalMap\(\) \{[\s\S]+Leave the map unset/,
@@ -2575,6 +2581,8 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'direct retry must stay on the live ExoPlayer');
   assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)/,
     'a real stall still remounts the same file quietly, never a new search');
+  assert.match(ui, /mountGone[\s\S]+reMountAndResume\(reason \|\| 'playback session expired'\)/,
+    'a swept mount 404 must mint a new mount for the same title, not retry the dead URL');
   assert.match(ui, /if \(sourceDead\) \{[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true/,
     'a new NZB is only when health says the release is dead');
 });
@@ -5715,7 +5723,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // Continue Watching covers resume on one press everywhere: movies match episodes and the
   // hero Resume button; browsers already cap at 1080p; fresh titles still open details;
   // Details stays on the hold-OK/⋯ card menu.
-  assert.match(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0\) \{[\s\S]{0,700}const loc = localPlaybackForItem\(it\);[\s\S]{0,200}return loc \? playLocal\(\{ \.\.\.it, _local: loc \}\) : play\(it\);/,
+  assert.match(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0\) \{[\s\S]{0,400}return resumeContinueWatching\(it\);/,
     'a Continue Watching cover with real resume plays directly on every client, including personal-library files');
   assert.doesNotMatch(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0\) \{[\s\S]{0,700}isWebBrowserClient\(\)/,
     'web browsers no longer stop Continue Watching at the details page');

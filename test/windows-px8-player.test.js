@@ -188,6 +188,18 @@ test('Windows client: live player chrome matches the Live TV page, not an empty 
     'Guide stays on the live control bar');
   assert.match(js, /\$\('favorite'\)\.hidden = state\.mode !== 'live'/,
     'Favorite stays on the live control bar');
+  assert.match(js, /function sessionMode\(session, current\) \{[\s\S]+isLive !== undefined[\s\S]+'vod'/,
+    'a movie after Live TV must leave live chrome so the seek bar comes back');
+  assert.match(js, /case 'closed':[\s\S]+state\.mode = 'vod'/,
+    'closing the player drops leftover IPTV chrome before the next VOD');
+  const boolFn = js.match(/function bool\(value, fallback\) \{[\s\S]*?\n  \}/)[0];
+  const modeFn = js.match(/function sessionMode\(session, current\) \{[\s\S]*?\n  \}/)[0];
+  const sessionMode = new Function(`${boolFn}\n${modeFn}\nreturn sessionMode;`)();
+  assert.strictEqual(sessionMode({ isLive: false }, 'live'), 'vod',
+    'Iran International leftover live chrome must not hide the movie seek bar');
+  assert.strictEqual(sessionMode({ isLive: true }, 'vod'), 'live');
+  assert.strictEqual(sessionMode({}, 'live'), 'live',
+    'a slim live progress event without isLive keeps Live TV chrome');
   const rust = read('clients/windows-px8/src-tauri/src/player.rs');
   assert.match(rust, /windows_player_play_live[\s\S]+if request\.guide \{[\s\S]+request\.guide = false;[\s\S]+__tvNativeGuideClosed/,
     'a guide channel pick must not start a chrome-less live session');
@@ -196,8 +208,15 @@ test('Windows client: live player chrome matches the Live TV page, not an empty 
 test('Windows client: VOD fullscreen does not reopen leftover guide PiP', () => {
   const rust = read('clients/windows-px8/src-tauri/src/player.rs');
   const js = read('clients/windows-px8/ui/player.js');
-  assert.match(rust, /fn show_player\([\s\S]+clear_guide_pip\(app\);[\s\S]+set_fullscreen\(false\)/,
-    'starting playback clears a leftover Live TV PiP slot and stays windowed');
+  assert.match(rust, /fn show_player\([\s\S]+clear_guide_pip\(app\);[\s\S]+restore_windowed_player[\s\S]+player\.show\(\)[\s\S]+main\.hide\(\)/,
+    'Play covers the catalog window first, then hides it, so the desktop does not flash');
+  assert.match(rust, /\.transparent\(true\)/,
+    'the player window stays transparent so libmpv video shows through the WebView');
+  const css = read('clients/windows-px8/ui/player.css');
+  assert.match(css, /html, body \{[^}]*background: transparent/,
+    'playing chrome must not paint an opaque body over the video');
+  assert.match(css, /body\[data-state="loading"\],[\s\S]+body\[data-state="error"\] \{ background: #000; \}/,
+    'the loader stays black so Play does not flash the wallpaper');
   assert.match(rust, /fn toggle_player_fullscreen\([\s\S]+if stored_guide_pip\(app\)\.is_some\(\) \{[\s\S]+set_fullscreen\(true\)/,
     'the fullscreen button leaves guide PiP into exclusive fullscreen, it does not restore the leftover slot');
   assert.match(rust, /fn leave_guide_mode\([\s\S]+restore_windowed_player/,
@@ -206,8 +225,20 @@ test('Windows client: VOD fullscreen does not reopen leftover guide PiP', () => 
     'the fullscreen icon expands guide PiP instead of shrinking the live player');
   assert.match(js, /function canHideControls\(\) \{[\s\S]+state\.playback === 'ready'/,
     'ready video hides chrome the same way playing does');
-  assert.match(js, /if \(Math\.abs\(x - lastMouseX\) < 3 && Math\.abs\(y - lastMouseY\) < 3\) return;/,
-    'WebView2 must not keep chrome up with zero-delta mouse events');
+  assert.match(js, /if \(value === state\.playback\) return;/,
+    'progress ticks must not restart the chrome hide timer');
+  assert.match(js, /if \(!document\.body\.classList\.contains\('controls-hidden'\)\) return;[\s\S]+if \(Math\.abs\(x - lastMouseX\) < 24 && Math\.abs\(y - lastMouseY\) < 24\) return;/,
+    'mouse jitter cannot keep chrome up; a real move after hide brings it back');
+  assert.match(css, /body\.controls-hidden \{ cursor: none; \}/,
+    'hidden fullscreen chrome also hides the cursor');
+  assert.match(js, /case 'progress':[\s\S]+data\.playing !== false && !data\.paused && !data\.buffering[\s\S]+setPlayback\('playing'\)/,
+    'progress ticks keep the playing state without treating every second as a fresh start');
+  assert.match(js, /if \(value === state\.playback\) return;[\s\S]+scheduleHide\(\)/,
+    'progress while the picture is up hides chrome even if ready never arrived first');
+  assert.match(rust, /session\.ui\.event_type = if session\.ui\.playing \{[\s\S]+"playing"\.into\(\)[\s\S]+"ready"\.into\(\)/,
+    'first decoded frame publishes playing so the overlay can hide');
+  assert.match(rust, /show_catalog\(app\);[\s\S]+__tvNativeVideoClosed/,
+    'Windows shows the catalog before the close checkpoint so hidden WebView2 cannot drop saveWatch');
 });
 
 test('Windows client: Live TV guide PiP docks to the slot and can return to full screen', () => {
@@ -396,6 +427,8 @@ test('Windows client: Rust owns a persistent, observable D3D11/libmpv player', (
     'native errors/logs have a URL-token redaction path');
   assert.match(playerUi, /ArrowLeft|ArrowRight|MediaPlayPause|fullscreen/i,
     'native chrome handles keyboard/media/fullscreen controls');
+  assert.match(player, /if let Some\(error\) = event_error \{[\s\S]+SessionMode::Live && try_live_fallback[\s\S]+native media error/,
+    'Raw(-16) / nothing-to-play on HLS must try the server remux before the error dialog');
 });
 
 test('Windows client: Up Next is a small Next chip plus X', () => {

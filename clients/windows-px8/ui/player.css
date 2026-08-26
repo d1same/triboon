@@ -22,13 +22,16 @@
 }
 
 * { box-sizing: border-box; }
-html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
 body {
-  background: transparent;
   color: var(--text);
   font: 400 16px/1.35 "Albert Sans", system-ui, sans-serif;
   user-select: none;
 }
+/* Opaque only while there is no picture, so Play does not flash the desktop. */
+body[data-state="loading"],
+body[data-state="error"] { background: #000; }
+body:not([data-state="loading"]):not([data-state="error"]) .art { display: none; }
 body.guide-pip { cursor: pointer; }
 body.guide-pip .art,
 body.guide-pip .shade,
@@ -67,7 +70,9 @@ body[data-state="loading"] .art, body[data-state="error"] .art { opacity: .44; }
   display: flex; align-items: flex-start; justify-content: space-between; gap: 24px;
   opacity: 1; transition: opacity .2s ease, transform .2s ease;
 }
+body.controls-hidden { cursor: none; }
 body.controls-hidden .topbar { opacity: 0; transform: translateY(-12px); pointer-events: none; }
+body.controls-hidden .shade { display: none; }
 .identity { min-width: 0; max-width: min(70vw, 900px); }
 .eyebrow { display: flex; align-items: center; gap: 9px; min-height: 18px; color: var(--muted); font-size: 12px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
 .identity h1 { overflow: hidden; margin: 2px 0 0; font: 800 clamp(18px, 2vw, 26px)/1.12 "Sora"; letter-spacing: -.02em; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 2px 20px rgba(0,0,0,.8); }

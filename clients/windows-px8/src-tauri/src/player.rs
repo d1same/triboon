@@ -1233,6 +1233,9 @@ fn ensure_player_window(app: &tauri::AppHandle) -> Result<WebviewWindow, String>
     .min_inner_size(880.0, 560.0)
     .fullscreen(false)
     .visible(false)
+    // libmpv draws into this HWND. The WebView must stay transparent so the
+    // picture shows through; chrome and the black loader sit on top. An opaque
+    // window paints ink over the video (sound and buttons still work).
     .transparent(true)
     .on_navigation(|url| crate::is_internal_app_url(url.as_str()))
     .build()
@@ -1272,16 +1275,6 @@ fn player_surface_id(window: &WebviewWindow) -> Result<i64, String> {
 #[cfg(not(target_os = "windows"))]
 fn player_surface_id(_window: &WebviewWindow) -> Result<i64, String> {
     Err("native player surfaces are available only on Windows".into())
-}
-
-fn player_needs_windowed_restore(player: &WebviewWindow) -> bool {
-    if player.is_fullscreen().unwrap_or(false) {
-        return true;
-    }
-    match player.inner_size() {
-        Ok(size) => size.width < 640 || size.height < 400,
-        Err(_) => true,
-    }
 }
 
 fn restore_windowed_player(app: &tauri::AppHandle, player: &WebviewWindow) {
@@ -1332,15 +1325,10 @@ fn toggle_player_fullscreen(app: &tauri::AppHandle) -> Result<(), String> {
 fn show_player(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
     // A leftover Live TV guide slot must not steal the next VOD/live session into PiP.
     // Play stays windowed; exclusive fullscreen is only the F / fullscreen button.
-    let was_pip = stored_guide_pip(app).is_some();
+    // Cover the catalog first, then hide it — hiding first flashes the desktop.
     clear_guide_pip(app);
     let player = ensure_player_window(app)?;
-    if was_pip || player_needs_windowed_restore(&player) {
-        restore_windowed_player(app, &player);
-    } else {
-        let _ = player.set_always_on_top(false);
-        let _ = player.set_fullscreen(false);
-    }
+    restore_windowed_player(app, &player);
     player.show().map_err(|e| e.to_string())?;
     let _ = player.set_focus();
     if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
@@ -1391,6 +1379,8 @@ fn publish_current_ui(app: &tauri::AppHandle, shared: &Arc<Mutex<PlayerUiState>>
 
 fn close_without_engine(app: &tauri::AppHandle, shared: &Arc<Mutex<PlayerUiState>>, notify: bool) {
     let snapshot = shared.lock().map(|state| state.clone()).unwrap_or_default();
+    // Hidden WebView2 drops eval. Show the catalog first so the close checkpoint actually runs.
+    show_catalog(app);
     if notify {
         if snapshot.token > 0 {
             eval_callback(
@@ -1415,7 +1405,6 @@ fn close_without_engine(app: &tauri::AppHandle, shared: &Arc<Mutex<PlayerUiState
             ..PlayerUiState::default()
         },
     );
-    show_catalog(app);
 }
 
 fn eval_callback(app: &tauri::AppHandle, name: &str, args: Vec<Value>) {
@@ -1636,13 +1625,13 @@ fn enter_guide_mode(app: &tauri::AppHandle) -> Result<(), String> {
 
 fn leave_guide_mode(app: &tauri::AppHandle) -> Result<(), String> {
     clear_guide_pip(app);
-    if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
-        let _ = main.hide();
-    }
     if let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
         restore_windowed_player(app, &player);
         player.show().map_err(|e| e.to_string())?;
         let _ = player.set_focus();
+    }
+    if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
+        let _ = main.hide();
     }
     Ok(())
 }
@@ -2301,6 +2290,13 @@ fn tick_session(
     }
     let (eof, event_error) = drain_session_events(mpv, session);
     if let Some(error) = event_error {
+        // HLS that 200s with no playable child (relative URIs, CDN blocked on this PC)
+        // is MPV_ERROR_NOTHING_TO_PLAY / Raw(-16). The browser remux already works;
+        // walk that same-origin fallback instead of stopping on the first native miss.
+        if session.mode == SessionMode::Live && try_live_fallback(mpv, session) {
+            publish_ui(app, shared, session.ui.clone());
+            return;
+        }
         notify_error(app, session, &format!("native media error: {error}"));
         publish_ui(app, shared, session.ui.clone());
         return;
@@ -2362,8 +2358,13 @@ fn tick_session(
             let _ = mpv.command("seek", &[target_string.as_str(), "absolute+keyframes"]);
         }
         session.ready = true;
-        session.ui.event_type = "state_snapshot".into();
+        session.ui.playing = !paused && !buffering;
         session.ui.buffering = false;
+        session.ui.event_type = if session.ui.playing {
+            "playing".into()
+        } else {
+            "ready".into()
+        };
         if session.mode == SessionMode::Vod {
             eval_callback(
                 app,
@@ -2449,6 +2450,11 @@ fn tick_session(
 
     if session.last_paused != Some(paused) && session.ready {
         session.last_paused = Some(paused);
+        session.ui.event_type = if paused {
+            "paused".into()
+        } else {
+            "playing".into()
+        };
         if session.mode == SessionMode::Vod {
             eval_callback(
                 app,
@@ -2469,6 +2475,7 @@ fn tick_session(
 
     if now.duration_since(session.last_progress) >= Duration::from_secs(1) {
         session.last_progress = now;
+        session.ui.event_type = "progress".into();
         if session.mode == SessionMode::Vod {
             eval_callback(
                 app,
@@ -2966,36 +2973,41 @@ fn close_session(
     notify: bool,
     shared: &Arc<Mutex<PlayerUiState>>,
 ) {
-    if let Some(active) = session.as_mut() {
+    let closed = session.as_mut().map(|active| {
         flush_progress(app, Some(active));
-        if notify {
-            if active.mode == SessionMode::Vod {
+        (
+            active.mode == SessionMode::Vod,
+            active.last_position,
+            active.last_duration,
+            active.token,
+        )
+    });
+    let _ = mpv.command("stop", &[]);
+    *session = None;
+    // Hidden WebView2 drops eval. Show the catalog first so saveWatch / Home paint run.
+    show_catalog(app);
+    if notify {
+        if let Some((vod, pos, duration, token)) = closed {
+            if vod {
                 eval_callback(
                     app,
                     "__tvNativeVideoClosed",
-                    vec![
-                        json!(active.last_position),
-                        json!(active.last_duration),
-                        json!(false),
-                        json!(active.token),
-                    ],
+                    vec![json!(pos), json!(duration), json!(false), json!(token)],
                 );
             } else {
                 eval_callback(app, "__tvNativeLiveClosed", Vec::new());
             }
-        }
-    } else if notify {
-        let snapshot = shared.lock().map(|state| state.clone()).unwrap_or_default();
-        if snapshot.token > 0 {
-            eval_callback(
-                app,
-                "__tvNativeVideoClosed",
-                vec![json!(0), json!(0), json!(false), json!(snapshot.token)],
-            );
+        } else {
+            let snapshot = shared.lock().map(|state| state.clone()).unwrap_or_default();
+            if snapshot.token > 0 {
+                eval_callback(
+                    app,
+                    "__tvNativeVideoClosed",
+                    vec![json!(0), json!(0), json!(false), json!(snapshot.token)],
+                );
+            }
         }
     }
-    let _ = mpv.command("stop", &[]);
-    *session = None;
     publish_ui(
         app,
         shared,
@@ -3004,7 +3016,6 @@ fn close_session(
             ..PlayerUiState::default()
         },
     );
-    show_catalog(app);
 }
 
 #[cfg(test)]

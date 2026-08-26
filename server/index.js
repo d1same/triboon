@@ -3814,11 +3814,25 @@ function releasePlaySession(session, uid, opts = {}) {
   if (evicted) pipeline.rebalancePreparedWindows();
   return { ok: true, evicted };
 }
+// Two overlapping Plays on one account (second TV, verify-live --concurrent) must not
+// 404 the first streamUrl. A same-player hop already calls /api/play/stop. This only
+// sweeps idle leftovers from a crashed client that never stopped.
+const CONCURRENT_PLAY_HOLD_MS = 45000;
+function sessionHasIndependentPlayback(session, now = Date.now()) {
+  if (!session || session.released) return false;
+  const vf = session.currentMountId ? mounts.get(session.currentMountId) : null;
+  if (!vf) return false;
+  if (mountHasActivePlayback(vf, now)) return true;
+  const started = Number(session.createdAt || 0);
+  return started > 0 && now - started < CONCURRENT_PLAY_HOLD_MS;
+}
 function releaseUserPlaySessions(uid, keepId = null) {
   if (!uid) return [];
+  const now = Date.now();
   const released = [];
   for (const [id, s] of [...pipeline.sessions]) {
     if (!s || s.uid !== uid || id === keepId) continue;
+    if (sessionHasIndependentPlayback(s, now)) continue;
     releasePlaySession(s, uid);
     released.push(id);
   }

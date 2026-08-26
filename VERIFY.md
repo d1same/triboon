@@ -126,6 +126,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-26, v3.1.13 ship — Windows chrome hide, library Continue Watching, leftover mounts:
+
+- Version contract: `package.json` 3.1.13; Android `versionName` 3.1.13 /
+  `versionCode` 358; Windows client package/Tauri/Cargo 3.1.13.
+- Windows fullscreen chrome now hides. Progress ticks no longer restart the
+  2.4s hide timer. Mouse jitter while chrome is up is ignored; after hide,
+  a 24px move brings it back. Cursor hides with the overlay.
+- Leaving a personal-library title writes Continue Watching immediately.
+  Home paints from that dirty cache. CW cards play the disk file; unmatched
+  library-only items toast instead of usenet. Matched TMDB titles still
+  fall through to Play.
+- Overlapping Plays keep an active mount for 45s so a second Play cannot
+  404 the first remux. Android 404s on a dead VOD URL report
+  `mount not found` so web remounts.
+- `npm.cmd run verify:full` on emulator `emulator-5554` (not the Shield):
+  IPTV/P9, CC/P11, and isolated `/api/server` 3.1.13 pass. Node suite
+  **658/658**. Household VOD play/seek/resume/CC pass (Mario ready 4316ms
+  SLOW, FROM ready 1495ms). IPTV web+native retune pass. Overlapping Play
+  pass (FROM first-byte 10ms, Mario 12ms, both remux). Android ExoPlayer
+  stress PASS. Windows GPU not instrumented.
+
 2026-08-26, v3.1.12 ship — Windows windowed play, web-paced loader, HLS live:
 
 - Version contract: `package.json` 3.1.12; Android `versionName` 3.1.12 /

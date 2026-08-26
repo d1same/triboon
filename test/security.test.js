@@ -3484,20 +3484,61 @@ test('back to details parks a watched mount so it is not an active 4K viewer', (
   srv.pipeline.titlePreparedReady.delete('park-key');
 });
 
-test('new play releases other sessions for the same user', () => {
+test('new play releases idle leftover sessions for the same user', () => {
   const now = Date.now();
   const mk = (id) => ({ id, _touched: now, name: id, size: 1, streamable: true, tags: [] });
   srv.mounts.set('old-a', mk('old-a'));
   srv.mounts.set('keep-a', mk('keep-a'));
-  srv.pipeline.sessions.set('old-s', { id: 'old-s', uid: 'user-a', createdAt: now, currentMountId: 'old-a' });
+  srv.pipeline.sessions.set('old-s', {
+    id: 'old-s', uid: 'user-a', createdAt: now - 120000, currentMountId: 'old-a',
+  });
   srv.pipeline.sessions.set('keep-s', { id: 'keep-s', uid: 'user-a', createdAt: now, currentMountId: 'keep-a' });
   srv.releaseUserPlaySessions('user-a', 'keep-s');
   assert.ok(srv.pipeline.sessions.has('keep-s'), 'the new play session stays');
   assert.ok(srv.mounts.has('keep-a'), 'the new mount stays');
-  assert.ok(!srv.pipeline.sessions.has('old-s'), 'the previous title session is gone');
-  assert.ok(!srv.mounts.has('old-a'), 'the previous title mount is gone');
+  assert.ok(!srv.pipeline.sessions.has('old-s'), 'an idle leftover session is gone');
+  assert.ok(!srv.mounts.has('old-a'), 'an idle leftover mount is gone');
   srv.pipeline.sessions.delete('keep-s');
   srv.mounts.delete('keep-a');
+});
+
+test('new play keeps another account session that is still watching', () => {
+  const now = Date.now();
+  const watching = {
+    id: 'watch-a', _touched: now, _playbackTouched: now, _activeStreamReads: 0,
+    name: 'watch-a', size: 1, streamable: true, tags: [],
+  };
+  srv.mounts.set('watch-a', watching);
+  srv.mounts.set('keep-a', { id: 'keep-a', _touched: now, name: 'keep-a', size: 1, streamable: true, tags: [] });
+  srv.pipeline.sessions.set('watch-s', {
+    id: 'watch-s', uid: 'user-a', createdAt: now - 10 * 60000, currentMountId: 'watch-a',
+  });
+  srv.pipeline.sessions.set('keep-s', { id: 'keep-s', uid: 'user-a', createdAt: now, currentMountId: 'keep-a' });
+  srv.releaseUserPlaySessions('user-a', 'keep-s');
+  assert.ok(srv.pipeline.sessions.has('watch-s'), 'a live watch on another device stays');
+  assert.ok(srv.mounts.has('watch-a'), 'the live watch mount stays');
+  srv.pipeline.sessions.delete('watch-s');
+  srv.pipeline.sessions.delete('keep-s');
+  srv.mounts.delete('watch-a');
+  srv.mounts.delete('keep-a');
+});
+
+test('overlapping Plays on one account keep both mounts', () => {
+  const now = Date.now();
+  const mk = (id) => ({ id, _touched: now, name: id, size: 1, streamable: true, tags: [] });
+  srv.mounts.set('from-a', mk('from-a'));
+  srv.mounts.set('mario-a', mk('mario-a'));
+  srv.pipeline.sessions.set('from-s', { id: 'from-s', uid: 'user-a', createdAt: now, currentMountId: 'from-a' });
+  srv.pipeline.sessions.set('mario-s', { id: 'mario-s', uid: 'user-a', createdAt: now, currentMountId: 'mario-a' });
+  srv.releaseUserPlaySessions('user-a', 'mario-s');
+  assert.ok(srv.pipeline.sessions.has('mario-s'), 'the new play session stays');
+  assert.ok(srv.mounts.has('mario-a'), 'the new mount stays');
+  assert.ok(srv.pipeline.sessions.has('from-s'), 'the other overlapping Play session stays');
+  assert.ok(srv.mounts.has('from-a'), 'the other overlapping Play mount stays so its streamUrl cannot 404');
+  srv.pipeline.sessions.delete('from-s');
+  srv.pipeline.sessions.delete('mario-s');
+  srv.mounts.delete('from-a');
+  srv.mounts.delete('mario-a');
 });
 
 test('back to details can keep a still-prepared mount', () => {

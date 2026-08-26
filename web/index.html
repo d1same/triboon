@@ -7006,7 +7006,7 @@ function maybeBootHomeReady(rows) {
   if (homeRowsReadyForBoot(rows)) bootReady();
 }
 function paintHomeWatchNow(opts = {}) {
-  if (S.view !== 'home' || S._booting) return;
+  if (S.view !== 'home') return;
   const snap = opts.focusSnapshot || (S.view === 'home' ? homeFocusSnapshot() : null);
   publishHomeRows(homeRowsFromWatch(cachedWatchRowsForHome(), false), {
     preserveFocus: true,
@@ -7492,15 +7492,14 @@ function makeCard(it, poster, onFocus) {
       // Next-up is resume: play the episode. Details stay on hold-OK (TV) / ⋯ (web).
       // Browsers already cap at 1080p unless 4K-in-browser is on, so they do not need a
       // detail-first quality stop.
-      return it._local ? playLocal(it) : play(it);
+      return resumeContinueWatching(it);
     }
     if (isContinueWatchingItem(it) && (+it.resume || 0) > 0) {
       // A Continue Watching cover IS the resume: one press picks up where you left off — movies
       // match episodes, the hero Resume button, and the pre-cache warmed on focus. Details stay
       // one hold-OK (TV) / ⋯ (web) away on the card menu. Personal-library files play the disk
       // copy; usenet titles still go through play().
-      const loc = localPlaybackForItem(it);
-      return loc ? playLocal({ ...it, _local: loc }) : play(it);
+      return resumeContinueWatching(it);
     }
     if (it._showOpen !== undefined) {
       // From the home "Recently added" row the library view isn't open yet — enter it first.
@@ -8460,9 +8459,30 @@ function releaseResolutionRankFromName(name) {
   if (/\b480p\b/.test(s)) return 0;
   return null;
 }
+function isPersonalLibraryWatchItem(it) {
+  if (!it) return false;
+  if (/^local:/i.test(String(it.key || ''))) return true;
+  // Matched TMDB titles can still use usenet. Only unmatched library files
+  // must never fall through to "Not available yet".
+  if (it.tmdbId) return false;
+  return !!(it._local || it._lib || (typeof isLocalLibraryTitle === 'function' && isLocalLibraryTitle(it)));
+}
 function localPlaybackForItem(it) {
   if (!it) return null;
   return it._local || (S.localMap && it.key && S.localMap[it.key]) || null;
+}
+async function resumeContinueWatching(it) {
+  if (!it) return;
+  let loc = localPlaybackForItem(it);
+  if (!loc || !loc.streamUrl) {
+    try { loc = await ensureLocalPlaybackForItem(it); } catch { loc = null; }
+  }
+  if (loc && loc.streamUrl) return playLocal({ ...it, _local: loc });
+  if (isPersonalLibraryWatchItem(it)) {
+    toast('That library file is not available');
+    return;
+  }
+  return play(it);
 }
 function localPlaybackRankForItem(it) {
   const loc = localPlaybackForItem(it);
@@ -8578,6 +8598,11 @@ async function play(it, pick, opts = {}) {
     localExact = !picked && localPlaybackForItem(it) ? { ...it, _local: localPlaybackForItem(it) } : null;
     if (localExact && localPlaybackFitsQuality(localExact, qRank)) {
       return await playLocal(localExact, { replacementStarted: true, nativeFirst, playTicket });
+    }
+    if (!picked && isPersonalLibraryWatchItem(it) && !localExact) {
+      closePlayer();
+      toast('That library file is not available');
+      return;
     }
     const body = playbackRequestBody(it, picked, qRank);
     if (preferredRank !== null) it.qualityRank = preferredRank;
@@ -13464,6 +13489,13 @@ function recoverSamePlaybackSource(reason = '') {
   const now = appMs();
   const decoderFailure = /decode|decoder|codec|renderer|format/i.test(String(reason || ''));
   const sourceDead = /blocked|health|missing|no such article/i.test(String(reason || ''));
+  // A swept/restarted mount 404s. Retrying the same URL spins the loader on credits.
+  // Re-create this title's mount; do not hunt a new NZB and do not replay the dead link.
+  const mountGone = /HTTP 404|mount not found|session expired|stream unavailable \(HTTP 404\)/i.test(String(reason || ''));
+  if (mountGone && !p._reMounting) {
+    reMountAndResume(reason || 'playback session expired');
+    return true;
+  }
   // Next-episode startup often wobbles once (new remux, new Exo). Remounting that
   // replayed the opening. Stay put unless the source is actually dead.
   if (!sourceDead && S._handoffQuietUntil && now < S._handoffQuietUntil) return false;
@@ -14789,6 +14821,7 @@ async function saveWatch(final, opts = {}) {
     key: payload.key, position: payload.position, duration: payload.duration,
     watched: payload.watched, meta: payload.meta, updatedAt: Date.now(),
   });
+  S._homeWatchDirty = true;
   if (typeof paintHomeWatchNow === 'function') paintHomeWatchNow();
   // keepalive on final saves (player close / pagehide) so the request survives the page being torn
   // down or the app backgrounding — a normal fetch would be cancelled and the last position lost.
@@ -25789,8 +25822,10 @@ function switchView(v, push = true, opts = {}) {
     if (peekPageCache('home')) {
       // IR Movies / IR TV play upserts watch while Home stays hidden. Restoring the
       // last-painted S.rows would keep the old Continue Watching row until restart.
-      if (cachedWatchRowsForHome().length) paintHomeWatchNow();
+      if (cachedWatchRowsForHome().length || S._homeWatchDirty) paintHomeWatchNow();
       else setRowsView($('rows'), S.rows, true);
+      S._homeWatchDirty = false;
+      warmLocalPlaybackForWatch().catch(() => {});
       loadRows({ preserveFocus: true, background: true }).catch(() => {});
       if (S.zone === 'rail') paintRailPreviewHero();
     } else loadRows();

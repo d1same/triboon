@@ -74,6 +74,15 @@
     return value === undefined || value === null ? !!fallback : !!value;
   }
 
+  function sessionMode(session, current) {
+    if (session.isLive !== undefined && session.isLive !== null) return bool(session.isLive) ? 'live' : 'vod';
+    if (session.mode === 'live' || session.kind === 'live') return 'live';
+    if (session.mode === 'vod' || session.kind === 'direct' || session.kind === 'remux' || session.kind === 'transcode') {
+      return 'vod';
+    }
+    return current || 'vod';
+  }
+
   function text(value, max) {
     return String(value == null ? '' : value).slice(0, max || 500);
   }
@@ -184,10 +193,7 @@
       return;
     }
     if (value === 'buffering' && !sawFirstFrame) value = 'loading';
-    if (value === state.playback) {
-      if (value === 'playing') scheduleHide();
-      return;
-    }
+    if (value === state.playback) return;
     state.playback = value;
     state.playing = value === 'playing';
     state.buffering = value === 'buffering' || value === 'loading';
@@ -267,7 +273,7 @@
   function copySession(data) {
     const session = data.session && typeof data.session === 'object' ? data.session : data;
     state.token = finite(session.playbackToken ?? session.token, state.token);
-    state.mode = bool(session.isLive, session.mode === 'live' || session.kind === 'live') ? 'live' : (session.mode || state.mode);
+    state.mode = sessionMode(session, state.mode);
     state.title = text(session.title || state.title, 300);
     state.episodeLabel = text(session.episodeLabel ?? session.episode ?? state.episodeLabel, 180);
     state.source = text(session.source ?? state.source, 260);
@@ -415,7 +421,7 @@
         $('loadingStage').textContent = 'Buffering...';
         break;
       case 'progress':
-        if (state.playback === 'ready' && data.playing !== false) setPlayback('playing');
+        if (data.playing !== false && !data.paused && !data.buffering) setPlayback('playing');
         break;
       case 'stats':
         mergeStats(data);
@@ -429,6 +435,8 @@
         sawFirstFrame = false;
         loadingStarted = false;
         loadingHot = false;
+        state.mode = 'vod';
+        state.liveEpg = [];
         clearLoadingStages();
         setPlayback('idle');
         break;
@@ -491,7 +499,9 @@
   }
 
   function canHideControls() {
-    return (state.playing || state.playback === 'ready') && !isPanelOpen();
+    return (state.playing || state.playback === 'ready' || state.playback === 'playing')
+      && state.playback !== 'paused'
+      && !isPanelOpen();
   }
 
   function scheduleHide() {
@@ -905,9 +915,13 @@
   let lastMouseX = -1;
   let lastMouseY = -1;
   document.addEventListener('mousemove', (event) => {
+    // Progress ticks and WebView2 jitter must not keep chrome up. While the
+    // bar is visible, only clicks/keys reset the hide timer. After it hides,
+    // a real mouse move brings it back.
+    if (!document.body.classList.contains('controls-hidden')) return;
     const x = event.clientX;
     const y = event.clientY;
-    if (Math.abs(x - lastMouseX) < 3 && Math.abs(y - lastMouseY) < 3) return;
+    if (Math.abs(x - lastMouseX) < 24 && Math.abs(y - lastMouseY) < 24) return;
     lastMouseX = x;
     lastMouseY = y;
     showControls(false);
