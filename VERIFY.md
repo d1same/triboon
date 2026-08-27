@@ -126,6 +126,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-26, v3.1.14 ship — phone/tablet catalog, opt-in server debug logging:
+
+- Version contract: `package.json` 3.1.14; Android `versionName` 3.1.14 /
+  `versionCode` 359; Windows client package/Tauri/Cargo 3.1.14.
+- Phone and tablet catalog hide the leftover backdrop still. Details Play
+  stays one full-size left row. Landscape trailer is a large left player
+  with Play on the right. Spotlight focus does not zoom those pills.
+- Server debug logging is off by default. Settings → Engine → Debug
+  logging or `TRIBOON_DEBUG=1` writes extra `[debug]` Play / prepare /
+  stop / sweep lines. Tokens and passwords are redacted.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  (house install stayed on 7777) and emulator `emulator-5554` (not the
+  Shield). Node suite **660/660**. Isolated `/api/server` 3.1.14.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 5362ms SLOW, then first-byte/seek/resume OK; FROM ready 2343ms).
+  IPTV web+native retune PASS (8185 channels). Overlapping Play PASS
+  (both ready in 34ms). Android lint/unit/debug build PASS.
+- First Android ExoPlayer stress CDP timed out right after APK install.
+  Same stress script retry on `emulator-5554` PASS (native Live TV zaps,
+  Mario 1080p ExoPlayer seek/About/CC). Windows GPU not instrumented.
+
 2026-08-26, phone/tablet catalog + opt-in server debug logging (no version bump):
 
 - Phone/tablet catalog hides the leftover backdrop still. Details Play stays
