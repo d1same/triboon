@@ -73,8 +73,10 @@ store.flushIntervals = {
   'audible-book': 30000,   // audiobook detail cache (effectively immutable)
   'audible-chapters': 30000, // audiobook chapter cache (effectively immutable)
 };
+const debug = require('./debug');
 const auth = new Auth(store, process.env.TRIBOON_SECRET);
 const settings = new SecureSettings(store, auth.secret);
+debug.bindSettings(() => settings.get());
 const verdicts = new VerdictCache(store);
 const mounts = new Map(); // id -> virtual file
 const scanStates = new Map(); // library id -> { running, startedAt, progress, ...summary }
@@ -4883,6 +4885,7 @@ const H = {
     // alass sidecar present → the player auto-syncs non-matched subtitles in the background.
     subSync: !!detectSubSync(),
     builtInSubtitlesEnabled: settings.get().builtInSubtitlesEnabled === true,
+    debugLogging: debug.enabled(),
     iptv: iptvConfigured(settings.get()),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
     musicCatalog: !!ytmusic.detectYtMusicApi(),
@@ -5256,6 +5259,7 @@ const H = {
     const maturityAllowed = maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType)
       .catch(() => true);
     const t0 = Date.now();
+    debug.log('play', `request q=${body.q} tmdb=${body.tmdbId || '-'} s${body.season || '-'}e${body.ep || '-'}`);
     // HD/UHD toggle: a per-play resolution preference may tighten the cap DOWNWARD, never
     // above the admin-set cap (Plex semantics — user picks within their ceiling).
     const policy = playbackPolicyFor(ctx.user, body);
@@ -5285,8 +5289,10 @@ const H = {
       // hard-coded constant. The client already has size+duration to turn seconds into bytes.
       const __prof = streamingRuntimeProfile();
       const bufferGoalSec = (vf.size > 4e9 ? __prof.buffer4kSec : __prof.buffer1080Sec) || 0;
+      const mountMs = Date.now() - t0;
+      debug.log('play', `ok "${candidate.name}" mount=${vf.id} session=${session.id} ms=${mountMs} live=${mounts.size}`);
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
-        sessionId: session.id, mountMs: Date.now() - t0,
+        sessionId: session.id, mountMs,
         candidate: { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer, reasons: candidate.reasons, attributes: candidate.attributes },
         attempts,
         relaxedResolution: relaxedResolution || undefined,
@@ -5297,6 +5303,7 @@ const H = {
       // not a generic playback error, whichever settled first (and it never leaks a source either way).
       if (!(await maturityAllowed)) return maturityBlockedResponse(ctx);
       console.log('[play] fail ' + (e.message || 'error') + (body && body.q ? ' q=' + body.q : ''));
+      debug.log('play', `fail q=${body && body.q || '-'} ${e.message || 'error'}`);
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
@@ -5307,10 +5314,12 @@ const H = {
     if (!id) return send(ctx.res, 400, { error: 'sessionId required' });
     const session = pipeline.sessions.get(id);
     if (!session || (session.uid && session.uid !== ctx.user.id)) {
+      debug.log('play', `stop session=${id} missing=true`);
       return send(ctx.res, 200, { ok: true, evicted: false });
     }
     const result = releasePlaySession(session, ctx.user.id, { keepPrepared: !!body.keepPrepared });
     console.log('[play] stop evicted=' + !!result.evicted);
+    debug.log('play', `stop session=${id} evicted=${!!result.evicted} keepPrepared=${!!body.keepPrepared} live=${mounts.size}`);
     send(ctx.res, 200, { ok: true, evicted: !!result.evicted });
   },
 
@@ -5359,7 +5368,9 @@ const H = {
         attempts,
         prefetch: prefetch || undefined,
       });
+      debug.log('prepare', `${prepared ? 'ready' : 'miss'} q=${body.q} ms=${Date.now() - t0} name=${(candidate && candidate.name) || '-'}`);
     } catch (e) {
+      debug.log('prepare', `fail q=${body.q} ${e.message || 'error'}`);
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
@@ -7528,6 +7539,9 @@ Object.assign(H, {
       tmdbKey: s.tmdbKey ? '•••' : null,
       openSubsKey: effectiveOpenSubsKey(s) ? '•••' : null,
       builtInSubtitlesEnabled: s.builtInSubtitlesEnabled === true,
+      debugLogging: debug.enabled(),
+      debugLoggingSaved: s.debugLogging === true,
+      debugLoggingEnvForced: debug.envForced(),
       viewerGeolocationEnabled: viewerGeolocationEnabled(),
       viewerGeolocationSavedEnabled: s.viewerGeolocationEnabled === true,
       viewerGeolocationEnvForced: envFlag('TRIBOON_VIEWER_GEO'),
@@ -7695,6 +7709,9 @@ Object.assign(H, {
         builtInSubtitlesEnabled: b.builtInSubtitlesEnabled !== undefined
           ? b.builtInSubtitlesEnabled === true
           : s.builtInSubtitlesEnabled === true,
+        debugLogging: b.debugLogging !== undefined
+          ? b.debugLogging === true
+          : s.debugLogging === true,
         viewerGeolocationEnabled: b.viewerGeolocationEnabled !== undefined
           ? b.viewerGeolocationEnabled === true
           : s.viewerGeolocationEnabled === true,
@@ -7873,7 +7890,12 @@ Object.assign(H, {
       ok: true,
       viewerGeolocationEnabled: viewerGeolocationEnabled(),
       viewerGeolocationEnvForced: envFlag('TRIBOON_VIEWER_GEO'),
+      debugLogging: debug.enabled(),
+      debugLoggingEnvForced: debug.envForced(),
     });
+    if (b.debugLogging !== undefined) {
+      console.log(`[debug] ${debug.enabled() ? 'ON' : 'off'}${debug.envForced() ? ' (TRIBOON_DEBUG)' : ''}`);
+    }
     if (iptvSourceChanged || iptvAccessChanged) {
       clearAllIptvRuntime();
       scheduleIptvWarmSoon('settings');
@@ -9583,7 +9605,10 @@ function sweep(now = Date.now()) {
   const idle = [...mounts.values()].filter((vf) =>
     !protectedIds.has(vf.id) && !mountHasActivePlayback(vf, now)
       && now - (vf._touched || vf.mountedAt || 0) > MOUNT_IDLE_MS);
-  for (const vf of idle) { releaseMountResources(vf); mounts.delete(vf.id); evicted.push(vf.id); }
+  for (const vf of idle) {
+    debug.log('sweep', `idle ${vf.id} "${String(vf.name || '').slice(0, 80)}" idleMs=${now - (vf._touched || vf.mountedAt || 0)}`);
+    releaseMountResources(vf); mounts.delete(vf.id); evicted.push(vf.id);
+  }
   if (mounts.size > MOUNT_CAP) {
     const removable = [...mounts.values()]
       .filter((vf) => !protectedIds.has(vf.id) && !mountHasActivePlayback(vf, now))
@@ -9591,6 +9616,7 @@ function sweep(now = Date.now()) {
     let overflow = mounts.size - MOUNT_CAP;
     for (const vf of removable) {
       if (overflow <= 0) break;
+      debug.log('sweep', `cap ${vf.id} "${String(vf.name || '').slice(0, 80)}" live=${mounts.size} cap=${MOUNT_CAP}`);
       releaseMountResources(vf);
       mounts.delete(vf.id);
       evicted.push(vf.id);
@@ -9643,6 +9669,7 @@ if (require.main === module) {
   server.listen(PORT, () => {
     console.log(`Triboon → http://localhost:${PORT}`);
     console.log(`[triboon] data dir: ${DATA_DIR}`); // where settings/users/secret live — verify it's persistent (e.g. C:\\ProgramData\\Triboon\\data on Windows), NOT inside the install folder
+    if (debug.enabled()) console.log(`[debug] server debug logging ON${debug.envForced() ? ' (TRIBOON_DEBUG)' : ' (Settings)'}`);
     try { getPool(); } catch { /* no provider configured yet — fine */ }
     // Startup should stay responsive first. Stale Live TV caches are served instantly on demand;
     // the heavy network refresh can begin after login/playback/TV navigation have settled.

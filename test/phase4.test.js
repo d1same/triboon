@@ -1065,8 +1065,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Android TV cover size is never overridden by a desktop browse helper');
   assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
     'browser poster browse pages should compact the focused-title band without touching TV');
-  assert.match(ui, /const phoneCovers = document\.body\.classList\.contains\('mobileShell'\) \|\| window\.innerWidth <= 600;[\s\S]+const px = phoneCovers\s*\? \(COVER_SIZES_PHONE\[s\] \|\| COVER_SIZES_PHONE\.M\)\s*: \(table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
-    'Home, Movies, TV, Search, and details use the same Small/Medium/Large table; phones keep their compact table');
+  assert.match(ui, /const phoneCovers = !document\.body\.classList\.contains\('tv'\)[\s\S]+mobileShell[\s\S]+innerWidth <= 600\);[\s\S]+COVER_SIZES_PHONE[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
+    'Home, Movies, TV, Search, and details use the same Small/Medium/Large table; phones keep their compact table; TV never takes the phone path');
   assert.match(ui, /const COVER_SIZES_PHONE = \{ S: '118px', M: '140px', L: '158px' \}/,
     'phone Small/Medium/Large stay compact so two posters still fit a narrow screen');
   assert.match(ui, /S\.browseLoading = false;\s*saveBrowseCache\(view\);\s*maybeFillBrowseWindow\(\);/,
@@ -2319,6 +2319,10 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'profile subtitle mode should fall back to the legacy global always/manual setting');
   assert.match(ui, /function builtInSubtitlesEnabled\(\) \{[\s\S]+S\.serverInfo && S\.serverInfo\.builtInSubtitlesEnabled === true[\s\S]+\}/,
     'built-in subtitle behavior should come from server settings instead of a hardcoded test flag');
+  assert.match(ui, /<select id="debugLoggingMode"[\s\S]+Save debug logging/,
+    'Engine settings expose an opt-in server debug log toggle');
+  assert.match(ui, /body: \{ debugLogging: enabled \}/,
+    'saving debug logging posts only that flag');
   assert.match(ui, /<select id="builtInSubsMode"[\s\S]+<option value="off">Online only<\/option>[\s\S]+<option value="on">Built-in first, then online<\/option>/,
     'admin Settings should expose an online-only/built-in-first subtitle toggle');
   assert.match(ui, /const body = \{ builtInSubtitlesEnabled: \$\('builtInSubsMode'\)\.value === 'on' \};[\s\S]+if \(key\) body\.openSubsKey = key;/,
@@ -2946,6 +2950,13 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(storeSrc, /\[store\] flush failed for/,
     'persistent store flush failures are surfaced to the operator, not silently swallowed');
   const idxSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const debugSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'debug.js'), 'utf8');
+  assert.match(debugSrc, /TRIBOON_DEBUG/,
+    'server debug logging is gated by TRIBOON_DEBUG or Settings');
+  assert.match(debugSrc, /t\|token\|access_token/,
+    'debug lines redact stream tokens');
+  assert.match(idxSrc, /debug\.bindSettings\(\(\) => settings\.get\(\)\)/,
+    'the HTTP server honors the Settings debug-logging toggle');
   assert.match(idxSrc, /TRIBOON_ALLOW_PRIVATE_IPTV is ENABLED/,
     'a startup warning fires when IPTV SSRF protection is disabled via env');
   // Live TV / IPTV resilience batch: shorter provider-protection backoff, UA-scoped negative cache
@@ -3126,8 +3137,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android setup should normalize encoded colon/slash server URLs so native bridge origin checks keep working');
   assert.ok(ui.includes("if (/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('tv');")
     && ui.includes("if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('androidApp');")
-    && ui.includes("if (/TriboonAndroid/.test(navigator.userAgent) && !/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('mobileShell');"),
-    'phone WebView should not receive TV-only CSS just because it runs inside the Android shell');
+    && ui.includes("if (!document.body.classList.contains('tv') && !/TriboonTV/i.test(navigator.userAgent)")
+    && ui.includes("(/TriboonAndroid/.test(navigator.userAgent) || /Android/i.test(navigator.userAgent))"),
+    'phone WebView and Android Chrome get mobileShell; Android TV (TriboonTV / body.tv) never does');
   assert.match(ui, /body\.mobileShell #backdrop \.layer\{display:none!important;opacity:0!important\}[\s\S]+body\.mobileShell #burger\{display:grid\}[\s\S]+body\.mobileShell #home\{padding:62px 16px 18px 16px!important;justify-content:flex-start\}/,
     'Android phone WebView should get the compact mobile shell even when its CSS viewport is wider than 600px');
   assert.match(ui, /function androidBurgerHit\(e\) \{[\s\S]+const burger = \$\('burger'\);[\s\S]+burger\.contains\(e\.target\)[\s\S]+t\.closest\('button,a,input,select,textarea,label,\.focusable,#prefTabs,#setTabs,#rail,#searchBar'\)[\s\S]+return p\.clientX <= 72 && p\.clientY <= 72;/,
@@ -3160,14 +3172,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android phones should rotate only full-screen native playback, not guide PiP handoffs');
   assert.match(android, /private void closeNativePlayback\(boolean notifyClosed\) \{[\s\S]+releaseNativePlayer\(notifyClosed\);[\s\S]+setPhonePlaybackOrientation\(false\);/,
     'Android phone playback rotation should be released when the native player closes');
-  assert.ok(ui.includes('#heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}')
-    && ui.includes('#hero h1{font-size:clamp(24px,7.4vw,32px)')
-    && ui.includes('#dBtns{flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;overflow:visible')
+  assert.ok(ui.includes('#dBtns{flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;overflow:visible')
     && ui.includes('#dBtns #dPlay{flex:1 1 132px;min-width:118px;max-width:176px}')
     && ui.includes('#dBtns #dStartOver{flex:1 1 132px;min-width:126px;max-width:176px}')
-    && ui.includes('body.mobileShell #dBtns{flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;overflow:visible')
-    && ui.includes('body.mobileShell #dBtns #dStartOver{flex:1 1 132px;min-width:126px;max-width:176px}'),
-    'mobile hero should stay centered while detail actions wrap into stable readable rows');
+    && ui.includes('body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;max-width:100%;padding:4px 8px 6px 4px')
+    && ui.includes('body.mobileShell #dBtns #dPlay{flex:0 0 auto;min-width:118px;max-width:none;margin-left:4px}')
+    && ui.includes('body.mobileShell #dBtns #dStartOver{flex:0 0 auto;min-width:126px;max-width:none}')
+    && ui.includes('body.mobileShell .qToggle button{height:42px;padding:0 16px;font-size:12px}'),
+    'phone detail actions stay on one left-aligned row at full Play and quality size');
   assert.ok(ui.includes("if (document.querySelector('#detail.open,#person.open,#settings.open,#prefs.open,#music.open')) return false;")
     && ui.includes('#osd .ctl{display:flex;grid-template-columns:none;gap:8px;overflow-x:auto;overflow-y:visible')
     && ui.includes('#player:not(.live) #chGuide{display:none}')
@@ -3186,10 +3198,22 @@ test('Android native player: direct source and native chrome stay out of the web
     && ui.includes('body.mobileShell #person .personHead .pInfo{width:100%;text-align:center}'),
     'mobile person pages should stack the profile header instead of squeezing text beside the poster');
   assert.ok(ui.includes('#detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:62px}')
-    && ui.includes('body.mobileShell #detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:62px}')
-    && ui.includes('body.mobileShell #dTitle{height:auto;min-height:0;justify-content:center;margin-bottom:10px}')
+    && ui.includes('body.mobileShell #detail .detailHero{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:14px;min-height:0;padding-top:calc(12px + var(--safeT))}')
+    && ui.includes('body.mobileShell #dTitle{height:auto;min-height:0;justify-content:flex-start;margin-bottom:10px}')
     && !ui.includes('#detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:82px}'),
-    'phone details should drop the desktop 140px title slot and the extra 82px hero pad');
+    'phone details sit under the burger on the left, not in a tall centered hero');
+  assert.match(ui, /body\.mobileShell:not\(\.tv\) #backdrop \.layer,[\s\S]+display:none!important;opacity:0!important[\s\S]+height:56px!important;max-height:56px!important/,
+    'phone catalog and details hide the leftover backdrop still so it cannot grow or follow scroll');
+  assert.ok(ui.includes('body.mobileShell:not(.tv) #trailer .trailerCtl,')
+    && ui.includes('flex:0 0 auto;min-height:52px;padding:14px 28px;font-size:15px')
+    && ui.includes('@media (orientation:landscape){')
+    && ui.includes('body.mobileShell:not(.tv) #trailer .trailerShell{')
+    && ui.includes('grid-template-columns:minmax(0,1.7fr) minmax(220px,.85fr)'),
+    'phone trailer landscape uses a large left player with title and Play on the right');
+  assert.ok(ui.includes('body[data-spotlight] #dBtns .btn.focusable.focus,')
+    && ui.includes('body[data-spotlight] #dBtns .btn.focusable:focus-visible,')
+    && ui.includes('body[data-spotlight] #trailer .trailerCtl.focusable:focus-visible{transform:none}'),
+    'phone Play and trailer pills do not scale on focus so the left curve is not clipped');
   assert.match(ui, /const DETAIL_CAST_BATCH = 20;[\s\S]+function appendCastBatch\(row\)[\s\S]+row\.addEventListener\('scroll', maybeLoadMoreCast, \{ passive: true \}\)/,
     'detail cast rows should keep the first render bounded and append more cast as the row scrolls');
   assert.match(ui, /function detailCastList\(d\) \{[\s\S]+d\.credits && d\.credits\.cast[\s\S]+aggregate_credits[\s\S]+DETAIL_CAST_MAX/,
@@ -6606,8 +6630,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'TV Cast Known For heading+row is bottom-anchored');
   assert.match(ui, /body\.tv #personGrid\{flex:none;margin-top:0;max-height:calc\(var\(--rowH\) - 2px\);padding-top:10px;padding-bottom:0;box-sizing:border-box;overflow-x:hidden;overflow-y:hidden;margin-bottom:0;scroll-padding:0\}/,
     'TV Cast clips one poster row and pages by whole rows, so Down cannot shove art under the bio');
-  assert.match(ui, /const paged = \(\$\('browse'\)\.classList\.contains\('rowsWin'\) && root === \$\('grid'\)\)\s*\n\s*\|\| \(document\.body\.classList\.contains\('tv'\) && S\.view === 'person' && root === \$\('personGrid'\)\);/,
-    'TV Cast Known For uses the same whole-row pager as Movies');
+  assert.match(ui, /const paged = !phoneCatalog && \(\$\('browse'\)\.classList\.contains\('rowsWin'\) && root === \$\('grid'\)\)\s*\n\s*\|\| \(document\.body\.classList\.contains\('tv'\) && S\.view === 'person' && root === \$\('personGrid'\)\);/,
+    'TV Cast Known For uses the same whole-row pager as Movies; phone Movies is a page grid');
   assert.match(ui, /async function openPerson\(id, push = true\) \{[\s\S]+\$\('detail'\)\.style\.visibility = 'hidden';[\s\S]+\$\('bdInfo'\)\.classList\.remove\('show'\);[\s\S]+S\.zone = 'grid'/,
     'opening Cast hides the Home/Movies title band but keeps the origin art');
   assert.match(ui, /if \(S\.view !== 'search' && S\.view !== 'livetv' && !liveGuideRow\) \{ setBackdrop\(it\.backdrop \|\| it\.poster\); if \(S\.view !== 'person'\) setBdInfo\(it\); \}/,
@@ -6648,25 +6672,36 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'TV Home row window fits the focused row so a short Live TV shelf cannot peek chopped posters');
   assert.doesNotMatch(ui, /view\.root\.style\.maxHeight = \(rowEl\.offsetHeight \+ 8\) \+ 'px';/,
     'TV Home focus resizes through sizeRowsWindow, not an inline +8px jump');
-  assert.match(ui, /@media \(max-width:600px\)\{[\s\S]+#hero \.meta,#heroCredits,#hero p\{display:none!important\}[\s\S]+#rows\{max-height:calc\(100vh - 176px\);/,
-    'mobile Home should drop backdrop-style hero copy and give the rows most of the screen');
-  assert.match(ui, /#hero h1\{font-size:clamp\(24px,7\.4vw,32px\);line-height:1\.08;margin-bottom:8px;height:2\.16em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden\}/,
-    'mobile Home title should reserve a stable two-line height so rows do not jump between cards');
-  assert.match(ui, /body\.mobileShell #hero \.meta,body\.mobileShell #heroCredits,body\.mobileShell #hero p\{display:none!important\}[\s\S]+body\.mobileShell #rows\{max-height:calc\(100vh - 176px\);/,
-    'Android mobile shell should get the same compact Home treatment as narrow browsers');
-  assert.match(ui, /body\.mobileShell #hero h1\{font-size:clamp\(24px,7\.4vw,32px\);line-height:1\.08;margin-bottom:8px;height:2\.16em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden\}/,
-    'Android mobile shell Home title should use the same stable two-line height');
-  assert.ok(ui.includes('#rows{max-height:calc(100vh - 176px);gap:22px}')
-    && ui.includes('#discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:22px}')
-    && ui.includes('#grid,#personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px;padding-top:0}')
-    && ui.includes('#dSections,#calList{gap:22px}')
-    && ui.includes('body.mobileShell #rows{max-height:calc(100vh - 176px);gap:22px}')
-    && ui.includes('body.mobileShell #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:22px}')
-    && ui.includes('body.mobileShell #grid,body.mobileShell #personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px}')
-    && ui.includes('body.mobileShell #dSections,body.mobileShell #calList{gap:22px}')
-    && !ui.includes('#rows{max-height:calc(100vh - 176px);gap:14px}')
-    && !ui.includes('#discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:16px}'),
-    'phone Home and Discover share a 22px row gap; Movies/TV/Kids/Library lock to two posters per row');
+  assert.match(ui, /@media \(max-width:600px\)\{[\s\S]+body:not\(\.tv\) #hero,body:not\(\.tv\) #bdInfo,body:not\(\.tv\) #colorGlow\{display:none!important/,
+    'mobile Home drops the TV hero/backdrop text; Android TV is excluded');
+  assert.match(ui, /body\.mobileShell #hero,body\.mobileShell #bdInfo,body\.mobileShell #colorGlow\{display:none!important/,
+    'Android phone/tablet shell hides hero and backdrop chrome');
+  assert.match(ui, /function phoneCatalogCols\(\) \{[\s\S]+if \(w <= h\) return 3;[\s\S]+return w >= 960 \? 6 : 5;/,
+    'phone catalog is 3 posters in portrait and 5 or 6 in landscape');
+  assert.match(ui, /const phoneCovers = !document\.body\.classList\.contains\('tv'\)[\s\S]+mobileShell[\s\S]+innerWidth <= 600/,
+    'phone cover math never runs on Android TV');
+  assert.ok(ui.includes('body.mobileShell:not(.tv) .cards{display:flex;flex-wrap:nowrap')
+    && ui.includes('body.mobileShell:not(.tv) #grid,body.mobileShell:not(.tv) #personGrid{grid-template-columns:repeat(auto-fill,minmax(102px,1fr))')
+    && ui.includes('body.mobileShell:not(.tv) #grid .pcard,body.mobileShell:not(.tv) #personGrid .pcard{width:100%;min-width:0;max-width:none')
+    && ui.includes('body.mobileShell:not(.tv) #browseTitle{position:static')
+    && !ui.includes('#rows{max-height:calc(100vh - 176px);gap:14px}'),
+    'phone Home shelves stay one row; Movies/TV pack as many covers as fit; TV rails stay untouched');
+  assert.match(ui, /body\.tv #hero\{margin-bottom:18px\}/,
+    'Android TV keeps the Home hero');
+  assert.match(ui, /if \(!tvLayout\) \{\s*grid\.style\.maxHeight = '';\s*return;\s*\}/,
+    'phone Movies/TV skip the TV one-row backdrop window so covers fill the page');
+  assert.match(ui, /if \(document\.body\.classList\.contains\('mobileShell'\) && !document\.body\.classList\.contains\('tv'\)\) return false;/,
+    'phone Movies/TV do not use the TV one-row virtual window');
+  assert.match(ui, /const paged = !phoneCatalog && \(\$\('browse'\)\.classList\.contains\('rowsWin'\) && root === \$\('grid'\)\)/,
+    'phone Movies/TV do not page as a one-row TV window');
+  assert.match(ui, /body\.mobileShell:not\(\.tv\) #grid \.pcard,body\.mobileShell:not\(\.tv\) #personGrid \.pcard\{width:100%;min-width:0;max-width:none;flex:none;scroll-margin:0\}/,
+    'phone Movies/TV drop the 80px TV scroll-margin so the first row stays under the filters');
+  assert.match(ui, /body\.tv #browse\.rowsWin #grid\{max-height:calc\(var\(--rowH\) - 2px\)/,
+    'Android TV Movies/TV stay a one-row backdrop window');
+  assert.doesNotMatch(ui, /body\.tv[^{]*#hero\{display:none/,
+    'Android TV hero is never forced hidden');
+  assert.doesNotMatch(ui, /body\.tv[^{]*#backdrop \.layer\{display:none/,
+    'Android TV backdrop art is never forced hidden');
   assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+if \(!document\.body\.classList\.contains\('tv'\)\) \{ root\.style\.maxHeight = ''; return; \}/,
     'mobile and desktop Home should not receive an inline TV row-window max-height');
   assert.match(ui, /let searchTimer = null, searchSeq = 0;[\s\S]+function clearSearchResults\(opts = \{\}\) \{[\s\S]+if \(opts\.invalidate\) searchSeq\+\+;[\s\S]+grid\.innerHTML = '';/,
@@ -6702,7 +6737,7 @@ test('web shell avoids known TV paint/focus regressions', () => {
   assert.ok(ui.includes('--appClockReserve:144px;')
     && ui.includes('.browseHead .filterBar{position:fixed;top:calc(18px + var(--safeT) + var(--overscan));right:calc(var(--appClockReserve) + var(--safeR) + var(--overscan));z-index:22')
     && ui.includes('body.railOpen .browseHead{transform:translateX(-152px)}')
-    && ui.includes('#browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}')
+    && ui.includes('#browse .browseHead{margin-left:48px;margin-top:0;margin-bottom:8px;justify-content:flex-start;padding-right:0;min-height:42px;align-items:center}')
     && ui.includes('body.mobileShell #browse .filterBar{position:static;top:auto;right:auto;z-index:auto;flex-wrap:wrap;max-width:100%}'),
     'browse genre/sort controls should sit beside the fixed clock on desktop while dropping cleanly on phone shells');
   assert.match(ui, /function clearPlaybackTimers\(\) \{[\s\S]+S\.healthTimer[\s\S]+S\.watchTimer[\s\S]+\}/,

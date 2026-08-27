@@ -33,6 +33,9 @@ services:
       # TRIBOON_SECRET pins the token-signing/settings-encryption key across redeploys.
       # Generate one: `openssl rand -hex 32`. If unset, a key is generated and stored in /data.
       # TRIBOON_SECRET: "<64 hex chars>"
+      #
+      # Extra [debug] Play / prepare / sweep lines. Same as Settings → Engine → Debug logging.
+      # TRIBOON_DEBUG: "1"
 
 volumes:
   triboon-data:

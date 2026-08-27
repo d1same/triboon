@@ -479,6 +479,13 @@ body[data-spotlight] .pgBackTop.focusable.focus,
 body[data-spotlight] .mCard.focusable.focus,
 body[data-spotlight] .musicRow.focusable.focus,
 body[data-spotlight] .mArtistHit.focusable.focus{transform:none}
+body[data-spotlight] #dBtns .btn.focusable.focus,
+body[data-spotlight] #dBtns .btn.focusable:focus-visible,
+body[data-spotlight] #dBtns .iconBtn.focusable.focus,
+body[data-spotlight] #dBtns .iconBtn.focusable:focus-visible,
+body[data-spotlight] #dBtns .qToggle button.focus,
+body[data-spotlight] #trailer .trailerCtl.focusable.focus,
+body[data-spotlight] #trailer .trailerCtl.focusable:focus-visible{transform:none}
 body[data-spotlight] .userNameBtn.focusable.focus,
 body[data-spotlight] .dashRecentItem.focusable.focus{transform:none}
 /* Guide keeps the one professional steel accent even on spotlight themes (no gold fill), so the
@@ -1998,22 +2005,16 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
   #audiobooks,#abDetail{padding-left:16px!important;padding-right:16px!important}
   #searchBar{left:16px;right:16px}
   #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
-  #hero{max-width:calc(100vw - 32px);margin:0 auto 8px;padding:0;text-align:center;align-items:center}
-  #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
-  #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px;height:2.16em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  #hero .meta,#heroCredits,#hero p{display:none!important}
-  #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
-  #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
-  #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
-  #rows{max-height:calc(100vh - 176px);gap:22px}
-  #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
-  #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
-  #browse{padding-top:62px!important}
-  #grid,#personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px;padding-top:0}
-  #grid .pcard,#personGrid .pcard{width:100%;min-width:0;flex:none}
+  body:not(.tv) #hero,body:not(.tv) #bdInfo,body:not(.tv) #colorGlow{display:none!important;opacity:0!important}
+  body:not(.tv) #rows{max-height:none!important;flex:1!important;gap:22px}
+  #browse.rowsWin #grid{flex:1 1 auto!important;min-height:0!important;max-height:none!important;margin-top:0!important;align-content:start;overflow-y:auto!important}
+  #browse .browseHead{margin-left:48px;margin-top:0;margin-bottom:8px;justify-content:flex-start;padding-right:0;min-height:42px;align-items:center}
+  #browse{justify-content:flex-start;padding-top:calc(12px + var(--safeT))!important}
+  body:not(.tv) #grid,body:not(.tv) #personGrid{grid-template-columns:repeat(auto-fill,minmax(102px,1fr));gap:10px 6px;justify-content:stretch;padding-top:0}
+  body:not(.tv) #grid .pcard,body:not(.tv) #personGrid .pcard{width:100%;min-width:0;max-width:none;flex:none}
   #discover{padding-top:62px!important}
   #discover h1{margin-left:48px;margin-bottom:10px}
-  #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:22px}
+  body:not(.tv) #discoverRows{margin-top:0;max-height:none!important;flex:1!important;gap:22px}
   #dSections,#calList{gap:22px}
   .abRow{margin-bottom:22px}
   #detail .back{top:14px;left:66px!important}
@@ -2045,7 +2046,7 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
 body.mobileShell #backdrop .layer{display:none!important;opacity:0!important}
 body.mobileShell.fullBd #bdInfo.show,body.mobileShell #bdInfo{display:none!important;opacity:0!important}
 body.mobileShell #scrim{background:var(--scrim)}
-body.mobileShell #colorGlow{opacity:.72}
+body.mobileShell #colorGlow{display:none!important;opacity:0!important}
 body.mobileShell #burger{display:grid}
 body.mobileShell nav#rail{transform:translateX(-110%);transition:transform .28s cubic-bezier(.22,1,.36,1);
   width:248px!important;z-index:40;box-shadow:18px 0 50px rgba(0,0,0,.5);
@@ -2081,37 +2082,87 @@ body.mobileShell #chBar{padding-left:48px}
    same 36px (146px). Higher-specificity !important beats the generic mobileShell #browse 62px. */
 body.mobileShell #browse.searchMode{padding-top:146px!important}
 body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
-body.mobileShell #hero{max-width:calc(100vw - 32px);margin:0 auto 8px;padding:0;text-align:center;align-items:center}
-body.mobileShell #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
-body.mobileShell #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px;height:2.16em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-body.mobileShell #hero .meta,body.mobileShell #heroCredits,body.mobileShell #hero p{display:none!important}
-body.mobileShell #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
-body.mobileShell #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
-body.mobileShell #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
-body.mobileShell #rows{max-height:calc(100vh - 176px);gap:22px}
-body.mobileShell #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
-body.mobileShell #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
+body.mobileShell #hero,body.mobileShell #bdInfo,body.mobileShell #colorGlow{display:none!important;opacity:0!important}
+/* Phone: no leftover still. The TV/desktop backdrop is a fixed vh band; on a phone
+   that band stays while you scroll and looks like a thick hollow under the burger. */
+html:has(body.mobileShell:not(.tv)),
+body.mobileShell:not(.tv),
+body.mobileShell:not(.tv).shortBrowseBd,
+html:has(body.mobileShell:not(.tv).detailOpen),
+body.mobileShell:not(.tv).detailOpen{--bdH:56px;--bdW:0px}
+body.mobileShell:not(.tv) #scrim{background:transparent}
+body.mobileShell:not(.tv) #colorBase{opacity:0}
+body.mobileShell:not(.tv) #backdrop .layer,
+body.mobileShell:not(.tv).detailOpen #backdrop .layer{
+  display:none!important;opacity:0!important;width:0!important;height:56px!important;max-height:56px!important}
+/* Trailer: landscape uses the width (big player left, title/Play right).
+   Portrait stays stacked. Soft still only — no leftover top band. */
+body.mobileShell:not(.tv) #trailer{
+  place-items:stretch;padding:12px 16px;background:#050308}
+body.mobileShell:not(.tv) #trailer::before,
+body.mobileShell:not(.tv) #trailer.open::before{
+  display:block!important;inset:0;opacity:.2!important;animation:none!important;
+  filter:blur(42px) brightness(.32);transform:none}
+body.mobileShell:not(.tv) #trailer::after{
+  background:linear-gradient(90deg,rgba(5,3,9,.28),rgba(5,3,9,.7))}
+body.mobileShell:not(.tv) #trailer .trailerBack{left:66px;top:14px}
+body.mobileShell:not(.tv) #trailer .trailerShell{
+  width:100%;max-width:none;height:100%;gap:10px 20px;align-items:stretch}
+body.mobileShell:not(.tv) #trailer .trailerHead{text-align:left;padding:0}
+body.mobileShell:not(.tv) #trailer .trailerBar,
+body.mobileShell:not(.tv) #trailer .trailerActions{
+  justify-content:flex-start;width:auto;margin:0}
+body.mobileShell:not(.tv) #trailer .trailerCtl,
+body.mobileShell:not(.tv) #trailer #trailerPlay.btn.primary{
+  flex:0 0 auto;min-height:52px;padding:14px 28px;font-size:15px}
+@media (orientation:portrait){
+  body.mobileShell:not(.tv) #trailer{padding:calc(56px + var(--safeT)) 16px 16px}
+  body.mobileShell:not(.tv) #trailer .trailerHead{padding-left:48px}
+  body.mobileShell:not(.tv) #trailer .trailerStage{width:100%;max-height:none}
+  body.mobileShell:not(.tv) #trailer .trailerBar,
+  body.mobileShell:not(.tv) #trailer .trailerActions{margin-left:0;width:100%}
+}
+@media (orientation:landscape){
+  body.mobileShell:not(.tv) #trailer .trailerShell{
+    display:grid;grid-template-columns:minmax(0,1.7fr) minmax(220px,.85fr);
+    grid-template-rows:minmax(0,1fr) auto;align-items:end}
+  body.mobileShell:not(.tv) #trailer .trailerStage{
+    grid-column:1;grid-row:1/-1;width:auto;max-width:100%;
+    height:calc(100vh - 24px);max-height:calc(100vh - 24px);
+    align-self:center;justify-self:start}
+  body.mobileShell:not(.tv) #trailer .trailerHead{grid-column:2;grid-row:1;align-self:end}
+  body.mobileShell:not(.tv) #trailer .trailerBar{grid-column:2;grid-row:2;align-self:start}
+}
+body.mobileShell #rows{max-height:none!important;flex:1!important;gap:22px;margin-top:0}
+body.mobileShell #browse.rowsWin #grid{flex:1 1 auto!important;min-height:0!important;max-height:none!important;margin-top:0!important;align-content:start;overflow-y:auto!important}
+body.mobileShell #browse .browseHead{margin-left:48px;margin-top:0;margin-bottom:8px;justify-content:flex-start;padding-right:0;min-height:42px;align-items:center}
 body.mobileShell #browse .filterBar{position:static;top:auto;right:auto;z-index:auto;flex-wrap:wrap;max-width:100%}
 body.mobileShell #browse .filterBar select{min-width:0}
-body.mobileShell #browse{padding-top:62px!important}
-body.mobileShell #grid,body.mobileShell #personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px;padding-top:0}
-body.mobileShell #grid .pcard,body.mobileShell #personGrid .pcard{width:100%;min-width:0;flex:none}
-body.mobileShell #discover{padding-top:62px!important}
+body.mobileShell #browse{justify-content:flex-start;padding-top:calc(12px + var(--safeT))!important}
+body.mobileShell #grid,body.mobileShell #personGrid{grid-template-columns:repeat(auto-fill,minmax(102px,1fr));gap:10px 6px;justify-content:stretch;padding-top:0}
+body.mobileShell #grid .pcard,body.mobileShell #personGrid .pcard{width:100%;min-width:0;max-width:none;flex:none}
+body.mobileShell #discover{padding-top:62px!important;justify-content:flex-start}
 body.mobileShell #discover h1{margin-left:48px;margin-bottom:10px}
-body.mobileShell #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:22px}
+body.mobileShell #discoverRows{margin-top:0;max-height:none!important;flex:1!important;gap:22px}
 body.mobileShell #dSections,body.mobileShell #calList{gap:22px}
 body.mobileShell .abRow{margin-bottom:22px}
 body.mobileShell #detail .back{top:14px;left:66px!important}
-body.mobileShell #detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:62px}
-body.mobileShell #dBtns{flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;overflow:visible;max-width:100%;padding:0 0 6px}
+body.mobileShell #detail .detailHero{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:14px;min-height:0;padding-top:calc(12px + var(--safeT))}
+body.mobileShell #detail .dInfo{width:100%;max-width:none;padding-left:48px;text-align:left;--infoCap:calc(100vw - 80px)}
+body.mobileShell #dTitle,body.mobileShell #dOverview,body.mobileShell #dCrew,body.mobileShell #dMeta{max-width:100%;margin-left:0;margin-right:0;text-align:left}
+body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;max-width:100%;padding:4px 8px 6px 4px;margin-left:48px}
 body.mobileShell #dBtns::-webkit-scrollbar{display:none}
-body.mobileShell #dBtns .btn{min-width:0;white-space:nowrap;justify-content:center;padding:11px 13px;font-size:12.8px}
-body.mobileShell #dBtns .btn.primary{padding:11px 16px}
-body.mobileShell #dBtns #dPlay{flex:1 1 132px;min-width:118px;max-width:176px}
-body.mobileShell #dBtns #dStartOver{flex:1 1 132px;min-width:126px;max-width:176px}
-body.mobileShell #dBtns .iconBtn{flex:0 0 44px;width:44px;height:44px}
-body.mobileShell .qToggle{margin-left:0;flex:0 0 auto;min-height:44px;padding:3px}
-body.mobileShell .qToggle button{height:36px;padding:0 8px;font-size:11px}
+body.mobileShell #dBtns::before{content:"";flex:0 0 2px}
+@media (orientation:landscape){
+  body.mobileShell #dBtns{overflow:visible}
+}
+body.mobileShell #dBtns .btn{min-width:0;white-space:nowrap;justify-content:center;padding:14px 22px;font-size:14px;min-height:52px}
+body.mobileShell #dBtns .btn.primary{padding:14px 28px}
+body.mobileShell #dBtns #dPlay{flex:0 0 auto;min-width:118px;max-width:none;margin-left:4px}
+body.mobileShell #dBtns #dStartOver{flex:0 0 auto;min-width:126px;max-width:none}
+body.mobileShell #dBtns .iconBtn{flex:0 0 52px;width:52px;height:52px}
+body.mobileShell .qToggle{margin-left:0;flex:0 0 auto;min-height:52px;padding:4px}
+body.mobileShell .qToggle button{height:42px;padding:0 16px;font-size:12px}
 body.mobileShell #person .personHead{flex-direction:column;align-items:center;gap:16px;margin:14px 0 24px}
 body.mobileShell #person .personHead .pPhoto{flex:0 0 auto;width:min(42vw,150px)}
 body.mobileShell #person .personHead .pInfo{width:100%;text-align:center}
@@ -2541,16 +2592,47 @@ body.tv .ctWells{display:none}
    desktop grid gap above would otherwise win on a narrow browser. Android WebView
    uses body.mobileShell (can be wider than 600px). TV is untouched. */
 @media (max-width:600px){
-  #rows,#discoverRows,#dSections,#calList{gap:22px}
-  #grid,#personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px}
-  #grid .pcard,#personGrid .pcard{width:100%;min-width:0;flex:none}
-  .abRow{margin-bottom:22px}
+  body:not(.tv) #rows,body:not(.tv) #discoverRows,body:not(.tv) #dSections,body:not(.tv) #calList{gap:22px}
+  body:not(.tv) #grid,body:not(.tv) #personGrid{grid-template-columns:repeat(auto-fill,minmax(102px,1fr));gap:10px 6px;justify-content:stretch}
+  body:not(.tv) #grid .pcard,body:not(.tv) #personGrid .pcard{width:100%;min-width:0;max-width:none;flex:none}
+  body:not(.tv) .abRow{margin-bottom:22px}
 }
-body.mobileShell #rows,body.mobileShell #discoverRows,
-body.mobileShell #dSections,body.mobileShell #calList{gap:22px}
-body.mobileShell #grid,body.mobileShell #personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px}
-body.mobileShell #grid .pcard,body.mobileShell #personGrid .pcard{width:100%;min-width:0;flex:none}
-body.mobileShell .abRow{margin-bottom:22px}
+body.mobileShell:not(.tv) #rows,body.mobileShell:not(.tv) #discoverRows,
+body.mobileShell:not(.tv) #dSections,body.mobileShell:not(.tv) #calList{gap:22px}
+body.mobileShell:not(.tv) #grid,body.mobileShell:not(.tv) #personGrid{grid-template-columns:repeat(auto-fill,minmax(102px,1fr));gap:10px 6px;justify-content:stretch}
+@media (min-width:720px){
+  body.mobileShell:not(.tv) #grid,body.mobileShell:not(.tv) #personGrid{grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:14px 12px}
+}
+@media (min-width:1024px){
+  body.mobileShell:not(.tv) #grid,body.mobileShell:not(.tv) #personGrid{grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:16px 14px}
+}
+body.mobileShell:not(.tv) #grid .pcard,body.mobileShell:not(.tv) #personGrid .pcard{width:100%;min-width:0;max-width:none;flex:none;scroll-margin:0}
+body.mobileShell:not(.tv) #grid,body.mobileShell:not(.tv) #personGrid{scroll-padding:0}
+body.mobileShell:not(.tv) #grid .pcard .cap,body.mobileShell:not(.tv) #grid .pcard .sub{opacity:.92}
+body.mobileShell:not(.tv) .abRow{margin-bottom:22px}
+
+/* Phone/tablet catalog. body.tv is never this class.
+   Home/Discover shelves stay ONE horizontal row (Continue Watching, Trending, Kids…).
+   Movies / TV / Watchlist / Library / Search fill the page with a 3/5/6 cover grid. */
+body.mobileShell:not(.tv){--phoneCols:3}
+@media (max-width:600px){body:not(.tv){--phoneCols:3}}
+@media (max-width:600px){
+  body:not(.tv) .cards{display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:8px;padding:4px 0 8px;margin:0}
+  body:not(.tv) .cards .pcard{flex:0 0 var(--poster);width:var(--poster);min-width:var(--poster)}
+  body:not(.tv) .cards .card,body:not(.tv) .cards .trailerCard{flex:0 0 var(--thumb);width:var(--thumb);min-width:var(--thumb)}
+  body:not(.tv) #browseTitle{position:static;width:auto;height:auto;clip:auto;overflow:visible;white-space:normal;font:800 22px "Sora";letter-spacing:-.02em;margin:0 0 10px}
+}
+body.mobileShell:not(.tv) .cards{display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:8px;padding:4px 0 8px;margin:0}
+body.mobileShell:not(.tv) .cards .pcard{flex:0 0 var(--poster);width:var(--poster);min-width:var(--poster)}
+body.mobileShell:not(.tv) .cards .card,
+body.mobileShell:not(.tv) .cards .trailerCard,
+body.mobileShell:not(.tv) .cards .chCard{flex:0 0 var(--thumb);width:var(--thumb);min-width:var(--thumb)}
+body.mobileShell:not(.tv) #browseTitle{position:static;width:auto;height:auto;clip:auto;overflow:visible;white-space:normal;font:800 22px "Sora";letter-spacing:-.02em;margin:0 0 10px}
+body.mobileShell:not(.tv) #rows,
+body.mobileShell:not(.tv) #discoverRows,
+body.mobileShell:not(.tv) #browse.rowsWin #grid,
+body.mobileShell:not(.tv) #personGrid{scroll-snap-type:none;max-height:none!important;margin-top:0}
+body.mobileShell:not(.tv) #browse{justify-content:flex-start}
 
 /* Bigger rail logo. */
 #rail .logo{width:46px;height:46px;padding-left:7px;margin-bottom:24px}
@@ -3654,9 +3736,9 @@ body.mobileShell #heroTitle.hasLogo img{margin:0 auto;object-position:center bot
   #dTitle.hasLogo img{max-height:72px;margin:0 auto;object-position:center bottom}
   #detail .detailHero{padding-top:62px;min-height:0}
 }
-body.mobileShell #dTitle{height:auto;min-height:0;justify-content:center;margin-bottom:10px}
-body.mobileShell #dTitle.hasLogo img{max-height:72px;margin:0 auto;object-position:center bottom}
-body.mobileShell #detail .detailHero{padding-top:62px;min-height:0}
+body.mobileShell #dTitle{height:auto;min-height:0;justify-content:flex-start;margin-bottom:10px}
+body.mobileShell #dTitle.hasLogo img{max-height:72px;margin:0;object-position:left bottom}
+body.mobileShell #detail .detailHero{padding-top:calc(12px + var(--safeT));min-height:0}
 /* Detail overview: clamp so page height (and the space above) stays consistent across titles. */
 #detail .dInfo #dOverview{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 /* Story/meta text reads NEAR-WHITE (owner call, 2026-08-06): the muted grey washed out over
@@ -4595,7 +4677,18 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   </div>
 
   <div class="setGrid" data-stab="server">
-  <div class="panel"><h2>Engine</h2><p>Live status from the Triboon server.</p><div id="engineStatus"><div class="kv"><span>Engine</span><span>Checking...</span></div></div></div>
+  <div class="panel"><h2>Engine</h2><p>Live status from the Triboon server.</p><div id="engineStatus"><div class="kv"><span>Engine</span><span>Checking...</span></div></div>
+    <h3 style="font:800 15px 'Sora';margin:22px 0 2px;color:var(--text)">Debug logging</h3>
+    <p>Off by default. When on, the server writes extra <code>[debug]</code> lines for Play, prepare, stop, and idle-file sweep. Use this when you want to paste a log. Tokens and passwords are never written.</p>
+    <div class="field">
+      <select id="debugLoggingMode" style="max-width:320px">
+        <option value="off">Off - quiet server log</option>
+        <option value="on">On - extra Play / prepare / sweep lines</option>
+      </select>
+      <button class="btn primary focusable" id="debugLoggingSave">Save debug logging</button>
+    </div>
+    <div class="hint" id="debugLoggingStatus"></div>
+  </div>
 
   <div class="panel"><h2>Streaming performance</h2>
     <p>Triboon sizes connections from your provider, this server's network, and how many people watch
@@ -5250,7 +5343,12 @@ const $ = (id) => document.getElementById(id);
 // remote owns volume; the app is permanently fullscreen) and prefers direct play.
 if (/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('tv');
 if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('androidApp');
-if (/TriboonAndroid/.test(navigator.userAgent) && !/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('mobileShell');
+// One APK: phones, tablets, and Android Chrome use the compact catalog.
+// Android TV (TriboonTV / body.tv) never gets this class — couch layout stays.
+if (!document.body.classList.contains('tv') && !/TriboonTV/i.test(navigator.userAgent)
+    && (/TriboonAndroid/.test(navigator.userAgent) || /Android/i.test(navigator.userAgent))) {
+  document.body.classList.add('mobileShell');
+}
 try { if (window.TriboonTV && window.TriboonTV.__triboonWindowsBridge === true) document.body.classList.add('windowsDesktop'); } catch {}
 // iPhone Safari is not mobileShell. The desktop 3-column OSD clips Fullscreen
 // off the right edge, so park the expand control in the top-right chrome.
@@ -5587,16 +5685,43 @@ function tvHomeCoverCapPx() {
   const chrome = 96; // section heading + title + year + row air
   return Math.max(158, Math.floor((innerHeight - heroH - padBot - chrome) / 1.5));
 }
+function phoneCatalogCols() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  if (!(w > 0) || !(h > 0)) return 3;
+  if (w <= h) return 3;
+  return w >= 960 ? 6 : 5;
+}
 function applyCoverSize() {
   const s = (() => { try { return localStorage.getItem('triboon.cover') || 'M'; } catch { return 'M'; } })();
   const table = document.body.classList.contains('tv') ? COVER_SIZES_TV : COVER_SIZES;
   // Phones always get compact covers — 220px posters mean ONE giant column on a 375px screen.
   // Android WebView can report a CSS width over 600px, so mobileShell counts as phone too.
-  const phoneCovers = document.body.classList.contains('mobileShell') || window.innerWidth <= 600;
+  const phoneCovers = !document.body.classList.contains('tv')
+    && (document.body.classList.contains('mobileShell') || window.innerWidth <= 600);
   const px = phoneCovers
     ? (COVER_SIZES_PHONE[s] || COVER_SIZES_PHONE.M)
     : (table[s] || table.M);
   let posterPx = px;
+  if (phoneCovers && !document.body.classList.contains('tv')) {
+    const cols = phoneCatalogCols();
+    const gap = 8;
+    const pad = 32;
+    const cell = Math.max(86, Math.floor((window.innerWidth - pad - (cols - 1) * gap) / cols));
+    posterPx = cell + 'px';
+    document.documentElement.style.setProperty('--phoneCols', String(cols));
+    document.documentElement.style.setProperty('--thumb', posterPx);
+    document.documentElement.style.removeProperty('--homePoster');
+    document.documentElement.style.setProperty('--poster', posterPx);
+    try { if (window.TriboonTV && window.TriboonTV.coverSize) window.TriboonTV.coverSize(s); } catch {}
+    const grid = $('grid');
+    if (grid) void grid.offsetWidth;
+    adaptRowWindows();
+    refreshVirtualGridGeometry();
+    scheduleVirtualGridGeometryRefresh();
+    maybeFillBrowseWindow();
+    return s;
+  }
   if (document.body.classList.contains('tv') && !phoneCovers) {
     const avail = tvCoverRowAvail();
     const target = parseFloat(px) || 170;
@@ -5648,7 +5773,9 @@ function adaptRowWindows() {
   const grid = $('grid'), browse = $('browse');
   if (!grid || !browse) return;
   if (!browse.classList.contains('rowsWin')) { grid.style.maxHeight = ''; return; }
-  if (!tvLayout && !phoneLayout && !document.body.classList.contains('mobileShell')) {
+  // Phone/tablet Movies/TV are a full-page cover grid. Only Android TV keeps
+  // the one-row window under the backdrop.
+  if (!tvLayout) {
     grid.style.maxHeight = '';
     return;
   }
@@ -5694,6 +5821,7 @@ function adaptRowWindows() {
   grid.style.maxHeight = pitch > 50 ? `${n * pitch - 4}px` : `calc(var(--rowH) * ${n} - ${n * 2}px)`;
 }
 window.addEventListener('resize', () => { clearTimeout(adaptRowWindows._t); adaptRowWindows._t = setTimeout(applyCoverSize, 80); });
+window.addEventListener('orientationchange', () => { clearTimeout(adaptRowWindows._t); adaptRowWindows._t = setTimeout(applyCoverSize, 80); });
 function showGate(which) {
   if (which) $('appLoader').classList.add('hide'); // gate screens: drop the boot loader (app path hides it after content loads)
   if (which === 'login') setLogin2faMode(null);
@@ -17796,6 +17924,9 @@ function mainGridRoot(root = S.gridRoot || $('grid')) { return root && root === 
 function shouldVirtualizeGrid(root = S.gridRoot || $('grid')) {
   if (!mainGridRoot(root) || !VIRTUAL_GRID_VIEWS.has(S.view)) return false;
   if (!$('browse').classList.contains('rowsWin') || !(S.gridItems || []).length) return false;
+  // Phone Movies/TV is a wrapping page grid. The TV one-row virtual window
+  // would paint a single strip and leave a hollow above and below it.
+  if (document.body.classList.contains('mobileShell') && !document.body.classList.contains('tv')) return false;
   // A local-library SHOW view (episode list) keeps its inline "Fix TMDB match" affordance and is
   // bounded to one show's episodes — don't window those. Only the potentially-huge flat library
   // listing (and Movies/TV/Watchlist) gets the virtual window. The footer admin bar for the flat
@@ -17817,8 +17948,17 @@ function resetGridVirtual(root = S.gridRoot || $('grid')) {
 }
 function measureBrowseGridCols(root = $('grid')) {
   if (!root) return 1;
-  const poster = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--poster')) || 170;
+  const phone = !document.body.classList.contains('tv')
+    && (document.body.classList.contains('mobileShell') || window.innerWidth <= 600);
   const cs = getComputedStyle(root);
+  if (phone) {
+    const tpl = cs.gridTemplateColumns;
+    if (tpl && tpl !== 'none') {
+      const n = tpl.trim().split(/\s+/).filter(Boolean).length;
+      if (n > 0) return n;
+    }
+  }
+  const poster = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--poster')) || 170;
   const gap = parseFloat(cs.columnGap) || parseFloat(cs.gap) || 22;
   const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
   const w = root.clientWidth || 0;
@@ -25119,6 +25259,16 @@ async function refreshSettings() {
     if ($('osPass')) $('osPass').placeholder = s.openSubsPass ? 'password saved ✓ — type to replace' : 'opensubtitles.com password';
     if ($('subSourceMode')) $('subSourceMode').value = s.subtitleSource || 'wyzie-first';
     $('builtInSubsMode').value = s.builtInSubtitlesEnabled ? 'on' : 'off';
+    if ($('debugLoggingMode')) {
+      $('debugLoggingMode').value = s.debugLogging ? 'on' : 'off';
+      $('debugLoggingMode').disabled = s.debugLoggingEnvForced === true;
+    }
+    if ($('debugLoggingSave')) $('debugLoggingSave').disabled = s.debugLoggingEnvForced === true;
+    if ($('debugLoggingStatus')) $('debugLoggingStatus').textContent = s.debugLoggingEnvForced
+      ? 'enabled by TRIBOON_DEBUG; change the server environment to disable it'
+      : s.debugLogging
+        ? 'on — extra [debug] Play / prepare / sweep lines in the server log'
+        : 'off — server log stays quiet';
     if ($('viewerGeoMode')) {
       $('viewerGeoMode').value = s.viewerGeolocationEnabled ? 'on' : 'off';
       $('viewerGeoMode').disabled = s.viewerGeolocationEnvForced === true;
@@ -25704,6 +25854,22 @@ $('sec2faDisable').addEventListener('click', async () => {
     $('sec2faMsg').textContent = 'Two-factor sign-in disabled.';
     await refreshSecurity();
   } catch (e) { $('sec2faMsg').textContent = e.message; }
+});
+$('debugLoggingSave').addEventListener('click', async () => {
+  const enabled = $('debugLoggingMode').value === 'on';
+  try {
+    const result = await api('/api/settings', { method: 'POST', body: { debugLogging: enabled } });
+    const effective = result.debugLogging === true;
+    $('debugLoggingMode').value = effective ? 'on' : 'off';
+    $('debugLoggingMode').disabled = result.debugLoggingEnvForced === true;
+    $('debugLoggingSave').disabled = result.debugLoggingEnvForced === true;
+    $('debugLoggingStatus').textContent = result.debugLoggingEnvForced
+      ? 'enabled by TRIBOON_DEBUG; change the server environment to disable it'
+      : effective
+      ? 'on — extra [debug] Play / prepare / sweep lines in the server log'
+      : 'off — server log stays quiet';
+    toast(effective ? 'Debug logging on' : 'Debug logging off');
+  } catch (e) { $('debugLoggingStatus').textContent = 'Save failed: ' + e.message; }
 });
 $('viewerGeoSave').addEventListener('click', async () => {
   const enabled = $('viewerGeoMode').value === 'on';
@@ -26669,7 +26835,10 @@ function focusGrid(i) {
   }
   const liveGuideRow = S.view === 'livetv' && el.classList.contains('gRow');
   const root = S.gridRoot || $('grid');
-  const paged = ($('browse').classList.contains('rowsWin') && root === $('grid'))
+  const phoneCatalog = document.body.classList.contains('mobileShell') && !document.body.classList.contains('tv');
+  // Phone Movies/TV is a wrapping page grid. The TV rowsWin pager would keep
+  // one row in a hollow band and scroll the rest away.
+  const paged = !phoneCatalog && ($('browse').classList.contains('rowsWin') && root === $('grid'))
     || (document.body.classList.contains('tv') && S.view === 'person' && root === $('personGrid'));
   if (liveGuideRow) {
     applyFocus(el, false);
@@ -26684,9 +26853,10 @@ function focusGrid(i) {
       else if (bottom > viewBottom) guide.scrollTo({ top: bottom - guide.clientHeight + bottomPad, behavior: 'auto' });
     } else if (!S.pointer) el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
   } else if (!paged) {
-    // Full-page grids (search): plain nearest scrolling — row pitch is irregular
-    // there (section headers) and the window is the whole page anyway.
-    applyFocus(el, !S.pointer);
+    // Full-page grids (search + phone Movies/TV): plain nearest scrolling.
+    // Phone must not inherit the 80px TV scroll-margin; that shoved the first
+    // row off the top and left a hollow under the filters.
+    applyFocus(el, !phoneCatalog && !S.pointer);
   } else {
     applyFocus(el, false);
     // WHOLE-ROW paging: 'nearest' scrolling leaves half a row peeking at the top AND

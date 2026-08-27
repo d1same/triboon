@@ -6,6 +6,7 @@
 // candidate and the client resumes at its last timestamp.
 
 const os = require('os');
+const debug = require('./debug');
 // System RAM is fixed for the process lifetime — read it ONCE at load, not per Range request. The
 // read-ahead window sizing below (_playbackWindowFor) runs on the hot streaming path, and
 // os.totalmem() was being re-read on every rebalance. ~20% is the cross-stream buffer budget.
@@ -2554,6 +2555,7 @@ class Pipeline {
     if (ready) {
       this.metrics.titlePrepareJoins++;
       console.log('[play] joined prepared ' + (ready.candidate && ready.candidate.name || ''));
+      debug.log('play', `joined prepared pick=${(ready.candidate && ready.candidate.pickKey) || '-'} mount=${ready.vf && ready.vf.id || '-'}`);
       const session = new PlaySession(params, [ready.candidate]);
       session.policy = policy;
       session.cursor = 1;
@@ -2623,6 +2625,7 @@ class Pipeline {
     // starves the same NNTP slots the warmup already holds. One hedge is enough to skip a
     // dead top pick; waiting on Details stays instant because the mount is already live.
     const width = explicitPick ? 1 : (joiningPrepare ? 2 : PLAY_RACE_WIDTH);
+    debug.log('play', `advance width=${width} joiningPrepare=${!!joiningPrepare} explicitPick=${!!explicitPick}`);
     try {
       return await this._advance(session, mountOpts, { width });
     } catch (e) {

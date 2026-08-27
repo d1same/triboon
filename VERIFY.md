@@ -126,6 +126,22 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-26, phone/tablet catalog + opt-in server debug logging (no version bump):
+
+- Phone/tablet catalog hides the leftover backdrop still. Details Play stays
+  one full-size left row. Landscape trailer is a large left player with Play
+  on the right. Spotlight focus no longer zooms those pills (Music tiles
+  stay on their own no-scale rule).
+- Server debug logging is off by default. Settings → Engine → Debug logging
+  or `TRIBOON_DEBUG=1` writes extra `[debug]` Play / prepare / stop / sweep
+  lines. Tokens and passwords are redacted.
+- Focused: debug redact + settings toggle, phone layout, Android native
+  chrome. Full Node suite **660/660**. Isolated `/api/server` 3.1.13.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (first FROM
+  run socket-hung during the full gate; retry OK). IPTV web+native retune
+  PASS. Overlapping Play PASS. Android ExoPlayer stress on `emulator-5554`
+  PASS. Windows GPU not instrumented. Not tagged.
+
 2026-08-26, v3.1.13 ship — Windows chrome hide, library Continue Watching, leftover mounts:
 
 - Version contract: `package.json` 3.1.13; Android `versionName` 3.1.13 /

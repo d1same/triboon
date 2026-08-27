@@ -549,6 +549,57 @@ test('settings: quality vs concurrency presets scale per-stream from REAL total 
   }
 });
 
+test('debug log redacts tokens and passwords', () => {
+  const debug = require('../server/debug');
+  assert.match(debug.redact('/api/stream/x?t=supersecret'), /\?t=\*\*\*/);
+  assert.doesNotMatch(debug.redact('pass=hunter22'), /hunter22/);
+  assert.doesNotMatch(debug.redact('apikey: abc123'), /abc123/);
+});
+
+test('settings: debug logging is opt-in and environment-forced', async () => {
+  const originalDebug = process.env.TRIBOON_DEBUG;
+  const originalData = process.env.TRIBOON_DATA;
+  const originalTmdbBase = process.env.TMDB_BASE;
+  const dbgSrv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null, TRIBOON_DEBUG: null });
+  const dbgAdmin = await setupAdmin(dbgSrv.port, 'debug-owner', 'hunter22');
+  try {
+    delete process.env.TRIBOON_DEBUG;
+    let s = await httpJson(dbgSrv.port, 'GET', '/api/settings', null, dbgAdmin);
+    assert.strictEqual(s.json.debugLogging, false, 'debug logging defaults off');
+    assert.strictEqual(s.json.debugLoggingEnvForced, false);
+    assert.strictEqual((await httpJson(dbgSrv.port, 'GET', '/api/server')).json.debugLogging, false,
+      'players see debug logging off by default');
+
+    const on = await httpJson(dbgSrv.port, 'POST', '/api/settings', { debugLogging: true }, dbgAdmin);
+    assert.strictEqual(on.json.debugLogging, true);
+    s = await httpJson(dbgSrv.port, 'GET', '/api/settings', null, dbgAdmin);
+    assert.strictEqual(s.json.debugLogging, true);
+    assert.strictEqual(s.json.debugLoggingSaved, true);
+    assert.strictEqual((await httpJson(dbgSrv.port, 'GET', '/api/server')).json.debugLogging, true,
+      '/api/server reports the effective debug flag');
+
+    await httpJson(dbgSrv.port, 'POST', '/api/settings', { debugLogging: false }, dbgAdmin);
+    process.env.TRIBOON_DEBUG = '1';
+    s = await httpJson(dbgSrv.port, 'GET', '/api/settings', null, dbgAdmin);
+    assert.strictEqual(s.json.debugLogging, true, 'TRIBOON_DEBUG forces debug on');
+    assert.strictEqual(s.json.debugLoggingSaved, false, 'the saved preference stays distinct from the env override');
+    assert.strictEqual(s.json.debugLoggingEnvForced, true);
+    const forced = await httpJson(dbgSrv.port, 'POST', '/api/settings', { debugLogging: false }, dbgAdmin);
+    assert.strictEqual(forced.json.debugLogging, true, 'Settings cannot turn off an environment-forced debug log');
+    delete process.env.TRIBOON_DEBUG;
+    await httpJson(dbgSrv.port, 'POST', '/api/settings', { debugLogging: false }, dbgAdmin);
+  } finally {
+    if (originalDebug === undefined) delete process.env.TRIBOON_DEBUG;
+    else process.env.TRIBOON_DEBUG = originalDebug;
+    if (originalTmdbBase === undefined) delete process.env.TMDB_BASE;
+    else process.env.TMDB_BASE = originalTmdbBase;
+    if (originalData === undefined) delete process.env.TRIBOON_DATA;
+    else process.env.TRIBOON_DATA = originalData;
+    await dbgSrv.shutdown();
+    if (srv && srv.settings) require('../server/debug').bindSettings(() => srv.settings.get());
+  }
+});
+
 test('settings: built-in subtitle mode round-trips to player server info', async () => {
   await httpJson(srv.port, 'POST', '/api/settings', { builtInSubtitlesEnabled: true }, admin);
   let s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
