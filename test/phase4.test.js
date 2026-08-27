@@ -376,7 +376,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Back from a mid-watch movie parks the RAM mount so Home Continue Watching can join it');
   assert.match(ui, /function hideToast\(\) \{[\s\S]+classList\.remove\('show'\)/,
     'a later successful Play must clear a leftover no-playable toast');
-  assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+beginPlaybackTransition\(it, \{\s*\.\.\.opts,\s*hot: !picked && playbackIsWarmed\(it, qRank\),\s*\}\);[\s\S]+await \(playbackIsWarmed\(it, qRank\)[\s\S]+it\._localLookupPromise \|\| ensureLocalPlaybackForItem\(it\)\)[\s\S]+localExact = !picked && localPlaybackForItem\(it\)[\s\S]+playLocal\(localExact, \{ replacementStarted: true, nativeFirst, playTicket \}\)/,
+  assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+beginPlaybackTransition\(it, \{\s*\.\.\.opts,\s*hot: !picked && \(playbackIsWarmed\(it, qRank\) \|\| localReady\),\s*\}\);[\s\S]+await \(playbackIsWarmed\(it, qRank\)[\s\S]+it\._localLookupPromise \|\| ensureLocalPlaybackForItem\(it\)\)[\s\S]+localExact = !picked && localPlaybackForItem\(it\)[\s\S]+playLocal\(localExact, \{ replacementStarted: true, nativeFirst, playTicket \}\)/,
     'manual source selection and local quality routing should enter one loading surface before lookup and reuse that transition');
   assert.match(ui, /const pickRank = picked \? normalizeResolutionRank\(picked\.resolutionRank\) : null;[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+const body = playbackRequestBody\(it, picked, qRank\);/,
     'manual source selection should pass the picked source quality into the shared request builder');
@@ -580,8 +580,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the Play Next hang timer is armed only for episode handoff and cleared when Play finishes');
   assert.match(ui, /item\._preparedAt = Date\.now\(\);[\s\S]+api\('\/api\/prepare'/,
     'the last-two-minute next-episode prepare marks that episode as already warm');
-  assert.match(ui, /hot: !picked && playbackIsWarmed\(it, qRank\)/,
-    'Play skips the cold Finding-source theater when details, trailer, or Next already prepared');
+  assert.match(ui, /hot: !picked && \(playbackIsWarmed\(it, qRank\) \|\| localReady\)/,
+    'Play skips the cold Finding-source theater when details, trailer, Next, or a local library file is already ready');
   {
     const start = ui.indexOf('function playbackWarmKey(it, qRank)');
     const end = ui.indexOf('function preparePlaybackSource(it, delay = 900)');
@@ -2020,12 +2020,13 @@ test('near-end next-episode prepare fires once at the 2-minute boundary', () => 
   const calls = [];
   const item = { key: 'tmdb:tv:77:s2e4', season: 2, episode: 4, qualityRank: 3 };
   const S = { nextEp: { item }, nextEpPrepared: false };
-  const maybePrepareNextEpisode = new Function('S', 'localTitleHasPlayback', 'qualityRankForItem', 'api', 'playbackRequestBody', 'maybeNativePrefetch',
+  const maybePrepareNextEpisode = new Function('S', 'localTitleHasPlayback', 'qualityRankForItem', 'api', 'playbackRequestBody', 'maybeNativePrefetch', 'markPlaybackPrepared',
     `${ui.slice(helpersStart, helpersEnd)}\n${ui.slice(start, end)}\nreturn maybePrepareNextEpisode;`)(
       S, () => false, (it) => it.qualityRank,
       (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); },
       (it, pick, rank) => ({ key: it.key, season: it.season, episode: it.episode, pick, rank }),
-      () => {} /* prefetch handoff is covered by its own contract */);
+      () => {},
+      (it) => { it._preparedAt = Date.now(); });
 
   maybePrepareNextEpisode(79, 200);
   assert.strictEqual(calls.length, 0, '121 seconds remaining is outside the warm window');
@@ -2052,6 +2053,41 @@ test('near-end next-episode prepare fires once at the 2-minute boundary', () => 
     'a parked live mount stays joinable; eviction is the TTL, not a 3-minute clock');
   assert.match(pipeline, /const joiningPrepare = !explicitPick && this\._findTitlePrepare\(params, policy\);[\s\S]+const width = explicitPick \? 1 : \(joiningPrepare \? 2 : PLAY_RACE_WIDTH\);/,
     'smash Play during Details must join the warmup instead of opening a 5-wide race');
+});
+
+test('next-episode prepare: 4K usenet warms, local library skips the usenet mount', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const helpersStart = ui.indexOf('function catalogRuntimeSeconds(item)');
+  const helpersEnd = ui.indexOf('function knownPlaybackSeconds(p, dur)', helpersStart);
+  const start = ui.indexOf('const NEXT_EP_PREP_LEAD_SECONDS = 120;');
+  const end = ui.indexOf('const UP_NEXT_COUNTDOWN_SECONDS = 10;', start);
+  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart && start >= 0 && end > start);
+  const compile = (S, hasLocal, qRank) => {
+    const calls = [];
+    const fn = new Function('S', 'localTitleHasPlayback', 'qualityRankForItem', 'api', 'playbackRequestBody', 'maybeNativePrefetch', 'markPlaybackPrepared',
+      `${ui.slice(helpersStart, helpersEnd)}\n${ui.slice(start, end)}\nreturn maybePrepareNextEpisode;`)(
+        S, () => hasLocal, () => qRank,
+        (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); },
+        (it, pick, rank) => ({ key: it.key, pick, rank }),
+        () => {},
+        (it) => { it._preparedAt = Date.now(); });
+    return { fn, calls };
+  };
+
+  const usenet4k = { key: 'tmdb:tv:77:s2e5', qualityRank: 4 };
+  const usenetS = { nextEp: { item: usenet4k }, nextEpPrepared: false };
+  const usenet = compile(usenetS, false, 4);
+  usenet.fn(80, 200);
+  assert.strictEqual(usenet.calls.length, 1, '4K usenet next-episode still warms /api/prepare');
+  assert.deepStrictEqual(usenet.calls[0].opts.body, { key: usenet4k.key, pick: null, rank: 4 });
+  assert.ok(usenet4k._preparedAt, '4K next-episode stays marked warm for the quiet handoff');
+
+  const localItem = { key: 'tmdb:tv:77:s2e6', qualityRank: 3, _local: { streamUrl: '/local/s2e6' } };
+  const localS = { nextEp: { item: localItem }, nextEpPrepared: false };
+  const local = compile(localS, true, 3);
+  local.fn(80, 200);
+  assert.strictEqual(local.calls.length, 0, 'local-library next-episode must not open a usenet prepare');
+  assert.ok(localItem._preparedAt, 'the local file is still marked hot so Play Next skips Finding source');
 });
 
 test('autoplay with no Next click plays the same warmed next episode', () => {
@@ -2585,7 +2621,7 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'direct retry must stay on the live ExoPlayer');
   assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)/,
     'a real stall still remounts the same file quietly, never a new search');
-  assert.match(ui, /mountGone[\s\S]+reMountAndResume\(reason \|\| 'playback session expired'\)/,
+  assert.match(ui, /playbackServerGone\(reason\)[\s\S]+reMountAndResume\(reason \|\| 'playback session expired'\)/,
     'a swept mount 404 must mint a new mount for the same title, not retry the dead URL');
   assert.match(ui, /if \(sourceDead\) \{[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true/,
     'a new NZB is only when health says the release is dead');
@@ -3202,8 +3238,14 @@ test('Android native player: direct source and native chrome stay out of the web
     && ui.includes('body.mobileShell #dTitle{height:auto;min-height:0;justify-content:flex-start;margin-bottom:10px}')
     && !ui.includes('#detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:82px}'),
     'phone details sit under the burger on the left, not in a tall centered hero');
-  assert.match(ui, /body\.mobileShell:not\(\.tv\) #backdrop \.layer,[\s\S]+display:none!important;opacity:0!important[\s\S]+height:56px!important;max-height:56px!important/,
+  assert.match(ui, /body\.mobileShell:not\(\.tv\) #backdrop,[\s\S]+body\.mobileShell:not\(\.tv\) #backdrop \.layer,[\s\S]+display:none!important[\s\S]+height:0!important;max-height:0!important/,
     'phone catalog and details hide the leftover backdrop still so it cannot grow or follow scroll');
+  assert.match(ui, /body\.mobileShell:not\(\.tv\) #home,[\s\S]+#discover,[\s\S]+#browse,[\s\S]+#person,[\s\S]+#settings,[\s\S]+#prefs,[\s\S]+#music,[\s\S]+#audiobooks,[\s\S]+#abDetail\{[\s\S]+justify-content:flex-start!important/,
+    'phone Home, Discover, Movies/TV, Search, Live, Music, Settings, details, and person all pin under the burger');
+  assert.match(ui, /body\.mobileShell:not\(\.tv\) \.detailHero\{min-height:0!important\}/,
+    'phone details drop the 44vh TV hero hollow');
+  assert.match(ui, /@media \(hover:none\) and \(pointer:coarse\)\{[\s\S]+body:not\(\.tv\) #backdrop[\s\S]+body:not\(\.tv\) #home\{justify-content:flex-start!important\}[\s\S]+body:not\(\.tv\) #rows/,
+    'landscape phones still pin the catalog under the burger when the CSS viewport is wider than 600px');
   assert.ok(ui.includes('body.mobileShell:not(.tv) #trailer .trailerCtl,')
     && ui.includes('flex:0 0 auto;min-height:52px;padding:14px 28px;font-size:15px')
     && ui.includes('@media (orientation:landscape){')
@@ -3755,8 +3797,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'source recovery must never enter the next-episode path');
   assert.match(sourceRecoveryBlock, /S\._handoffQuietUntil/,
     'next-episode startup must not remount the opening after a one-time remux wobble');
-  assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\) \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
-    'reMountAndResume should re-play the same title, reject stale ownership, resume at position, and retry with backoff then fall back');
+  assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+typeof waitForTriboonServer === 'function'[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\) \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
+    'reMountAndResume should wait for the server, re-play the same title, reject stale ownership, resume at position, and retry with backoff then fall back');
+  assert.match(ui, /function playbackServerGone\(reason\) \{[\s\S]+Source error[\s\S]+function recoverSamePlaybackSource/,
+    'a server restart (404/502/Source error) remounts instead of replaying the dead URL');
+  assert.match(ui, /function holdPlaybackAcrossRestart\(\) \{[\s\S]+clearPlayerLoadingStages\(\)[\s\S]+playerLoader[\s\S]+showSeekHoldFrame/,
+    'a restart remount holds the last frame and must not cycle Preparing');
+  assert.match(ui, /function cwNextFingerprint\(cw\) \{[\s\S]+getFullYear\(\)[\s\S]+HOME_NEXT_STALE_MS = 30 \* 60 \* 1000/,
+    'Home next-up must expire by local day and every 30 minutes so a weekly episode appears');
   assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+p\._sourceAdvancePending = true;[\s\S]+const reportedAt = Number\(currentTime\(\)\);[\s\S]+Number\(p\.item && p\.item\.resume\)[\s\S]+markPlaybackSourceSwap\(p\);[\s\S]+p\.nativePos = at;[\s\S]+p\.started = false; p\.startedAt = 0;/,
     'source advance should coalesce callbacks, preserve an early Continue Watching timestamp, and give the replacement a fresh startup boundary');
   assert.match(ui, /const quiet = !!opts\.allowMidstreamAdvance;[\s\S]+tryNativePlaybackLadder\(at, startKind, quiet \? \{ quietSeek: true \} : \{\}\)[\s\S]+startSource\(startKind, at, quiet \? \{ quietSeek: true \} : \{\}\)/,
@@ -3939,8 +3987,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android episode focus should use one throttled scroll path instead of stacking repeated smooth-scroll calls');
   assert.match(android, /card\.setOnFocusChangeListener\(\(v, hasFocus\) -> \{[\s\S]+v\.animate\(\)\.cancel\(\);[\s\S]+v\.animate\(\)\.translationY\(-dp\(3\)\)\.setDuration\(120\)\.start\(\);[\s\S]+scrollNativeEpisodeIntoView\(v\);[\s\S]+v\.animate\(\)\.translationY\(0f\)\.setDuration\(100\)\.start\(\);[\s\S]+\}\);/,
     'native Android episode cards should animate their focus lift without resizing the strip');
-  assert.match(android, /int thumbW = nativeEpisodeThumbDp\(\);[\s\S]+int stillH = Math\.round\(thumbW \* 9f \/ 16f\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(stillH\)[\s\S]+label\.setText\(ep\.watched \? getString\(R\.string\.watched_episode, ep\.tag\) : ep\.tag\);[\s\S]+TextView name = new TextView\(this\);[\s\S]+name\.setMaxLines\(2\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(thumbW\), dp\(stillH \+ 56\)\)/,
-    'native Android episode cards should show a 16:9 still that follows cover size, with the episode name below');
+  assert.match(android, /int thumbW = nativeEpisodeThumbDp\(\);[\s\S]+int stillH = Math\.round\(thumbW \* 9f \/ 16f\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(stillH\)[\s\S]+if \(ep\.watched && !ep\.about\) \{[\s\S]+check\.setText\("✓"\)[\s\S]+label\.setText\(ep\.tag\);[\s\S]+TextView name = new TextView\(this\);[\s\S]+name\.setMaxLines\(2\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(thumbW\), dp\(stillH \+ 56\)\)/,
+    'native Android episode cards should show a 16:9 still that follows cover size, with a check on watched episodes and the name below');
   assert.match(androidStrings, /<string name="watched_episode">WATCHED  %1\$s<\/string>/,
     'native Android watched labels remain localized while preserving the episode tag');
   assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused\) d\.setStroke\(dp\(2\), 0xFFC6B37A\);[\s\S]+else if \(current\) d\.setStroke\(dp\(1\), 0x66C6B37A\);[\s\S]+return d;/,
@@ -4123,6 +4171,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'top app clock should render tight time and AM/PM spans while other clocks keep plain text');
   assert.match(ui, /#screensaver\{position:fixed;inset:0;z-index:55[\s\S]+#ssTime\{font:900 clamp\(54px,8\.5vw,132px\)\/\.9 "Sora";letter-spacing:0\}[\s\S]+#ssDeck\{position:absolute;right:clamp\(22px,5vw,86px\)/,
     'app screensaver should own a polished fullscreen visual layer with large time and art deck');
+  assert.match(ui, /@media \(orientation:landscape\) and \(max-height:640px\)\{[\s\S]+#screensaver \.ssClock\{[\s\S]+#ssDeck\{[\s\S]+grid-template-columns:repeat\(3,minmax\(0,1fr\)\)[\s\S]+#ssDeck \.ssTile:nth-child\(n\+4\)\{display:none\}/,
+    'landscape phones get a compact screensaver clock and a 3-poster row instead of a colliding TV deck');
   assert.match(ui, /<div id="screensaver" aria-hidden="true">[\s\S]+<div class="ssBg" id="ssBg"><\/div>[\s\S]+<div class="ssDeck" id="ssDeck"><\/div>[\s\S]+<div id="ssTime"><\/div>/,
     'app screensaver markup should include background, art deck, and clock regions');
   assert.match(ui, /#screensaver \.ssBrand\{[\s\S]+width:clamp\(172px,14vw,270px\);height:clamp\(58px,5vw,96px\);overflow:hidden[\s\S]+#screensaver \.ssBrand img\{width:100%;height:auto;display:block;[\s\S]+transform:translateY\(-25%\);/,
@@ -6449,6 +6499,8 @@ test('Artwork regression: season and episode surfaces keep layered deterministic
   const playerEpisodes = ui.slice(ui.indexOf('function renderPlayerEpisodes()'), ui.indexOf('function nativeEpisodeChoices()', ui.indexOf('function renderPlayerEpisodes()')));
   assert.match(playerEpisodes, /style\.setProperty\('--still', artBackground\(ep\.still, ep\.backdrop, ep\.poster,[\s\S]{0,120}artFallback\(ep\.item && ep\.item\.key/,
     'the in-player episode strip should retain still, backdrop, and poster candidates plus a stable item-key fallback');
+  assert.match(playerEpisodes, /ep\.watched \? '<span class="wbadge">/,
+    'the in-player episode strip should put a check mark on watched episode stills');
   const nativeEpisodes = ui.slice(ui.indexOf('function nativeEpisodeChoices()'), ui.indexOf('function canOpenPlayerEpisodes()', ui.indexOf('function nativeEpisodeChoices()')));
   assert.match(nativeEpisodes, /still: absoluteArtworkUrl\(ep\.still, ep\.backdrop, ep\.poster\)/,
     'native episode cards should receive only an absolute real URL, never a CSS gradient or relative path');
@@ -7446,6 +7498,7 @@ test('player backend: remux with audio selection emits fMP4; subtitle extract em
 // pre-production audit so a refactor can't silently reintroduce them.
 test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in place', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const traktSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'trakt.js'), 'utf8');
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
 
   // (1) watchBulk: season/group marks send EXACT per-season episode payloads — never a bare-show
@@ -7467,6 +7520,19 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
     'traktSyncDown precomputes which keys local profiles already own');
   assert.match(server, /if \(anyProfileKnows\(w\.key\)\) continue;[\s\S]+if \(anyProfileKnows\(p\.key\)\) continue;/,
     'both the watched and playback imports consult the any-profile index (stops cards echoing across profiles)');
+
+  // Two-way sync: leftover local watched + in-progress go UP (not only outbox retries), then
+  // Trakt history/playback come DOWN. A failed pull must throw instead of "sync ✓ — 0 watched".
+  assert.match(server, /async function pushLocalWatchToTrakt\(uid, watched, playback\)/,
+    'Sync now exports leftover local watched/in-progress, not only the failed-scrobble outbox');
+  assert.match(server, /const exported = await pushLocalWatchToTrakt\(uid, watched, playback\)/,
+    'traktSyncDown awaits the local→Trakt export before writing the pull');
+  assert.match(traktSrc, /async _getList\(uid, path, label\) \{[\s\S]+if \(r\.status !== 200\) \{[\s\S]+e\.status = 502;[\s\S]+throw e;/,
+    'a failed Trakt pull must fail the sync instead of importing nothing and looking successful');
+  assert.match(traktSrc, /async pushHistoryItems\(uid, items, chunk = 200\)/,
+    'leftover local watched rows batch-export through /sync/history');
+  assert.match(traktSrc, /async pushPlaybackItems\(uid, items, max = 40\)/,
+    'leftover local in-progress rows export through /scrobble/stop');
 
   // (3) Broken Trakt tokens: surfaced, not silent. Tick skips them; manual sync 400s with a real
   // message; the settings box renders the re-link flow.
@@ -7774,6 +7840,10 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
   // instead of the 20 most recently watched shows.
   assert.match(server, /const byShow = new Map\(\);[\s\S]{0,800}for \(const \[showId, top\] of \[\.\.\.byShow\]\.slice\(0, 20\)\)/,
     'nextWatchEpisodes keeps recency order via a Map');
+  assert.match(server, /function aired\(date\) \{[\s\S]+localCalendarYmd\(\)/,
+    'next-up air dates use the local calendar day so tonight\'s weekly episode is not UTC-hidden');
+  assert.match(server, /tmdb\.get\(`\/tv\/\$\{showId\}\/season\/\$\{s\.season_number\}`, \{ maxAge: 0 \}\)/,
+    'nextWatchEpisodes refetches a stale season when TMDB has no later episode cached');
 
   // Music: playlist pages append IN PLACE so the live queue grows; the queue auto-extends at the
   // end instead of stopping at track 24; nearing the end prefetches the next page; the fail-streak

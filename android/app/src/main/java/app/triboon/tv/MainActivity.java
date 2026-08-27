@@ -48,6 +48,7 @@ import android.util.Rational;
 import android.util.Base64;
 import android.util.Log;
 import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -6797,12 +6798,31 @@ public class MainActivity extends Activity {
             still.setBackground(stillBg);
             still.setForeground(nativeEpisodeStillFrame(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep.current));
             still.setClipToOutline(true);
-            card.addView(still, new LinearLayout.LayoutParams(
+            FrameLayout stillWrap = new FrameLayout(this);
+            stillWrap.addView(still, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(stillH)));
+            if (ep.watched && !ep.about) {
+                TextView check = new TextView(this);
+                check.setText("✓");
+                check.setTextColor(0xFFFFFFFF);
+                check.setTextSize(12);
+                check.setTypeface(Typeface.DEFAULT_BOLD);
+                check.setGravity(Gravity.CENTER);
+                GradientDrawable badge = new GradientDrawable();
+                badge.setColor(0xFF2BBB6A);
+                badge.setShape(GradientDrawable.OVAL);
+                check.setBackground(badge);
+                FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(dp(22), dp(22));
+                blp.gravity = Gravity.TOP | Gravity.END;
+                blp.setMargins(0, dp(6), dp(6), 0);
+                stillWrap.addView(check, blp);
+            }
+            card.addView(stillWrap, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(stillH)));
             // Stills load LAZILY around the focus (loadNativeEpisodeStillsAround) — never all at once.
 
             TextView label = new TextView(this);
-            label.setText(ep.watched ? getString(R.string.watched_episode, ep.tag) : ep.tag);
+            label.setText(ep.tag);
             label.setSingleLine(true);
             label.setTextColor(0xEFFFCC67);
             label.setTextSize(10);

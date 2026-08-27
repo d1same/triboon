@@ -1270,7 +1270,8 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 #player #playerEpisodes .playerEpCard:focus-visible .peStill{box-shadow:0 0 0 2px var(--focus),0 10px 22px rgba(0,0,0,.52) !important}
 .playerEpCard.about .peStill{background-color:#120e18}
 .playerEpCard.about .peStill::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;z-index:2;background:linear-gradient(180deg,#E35D8A,#F2B45C)}
-.playerEpCard.watched .peTag::after{content:"  ✓";color:#bdf3c5}
+.playerEpCard .wbadge{top:6px;right:6px;width:22px;height:22px}
+.playerEpCard .wbadge svg{width:13px;height:13px}
 #playerAbout{position:absolute;inset:0;z-index:8;display:flex;align-items:flex-end;padding:clamp(32px,5vh,56px) clamp(48px,6vw,80px) clamp(148px,22vh,220px);opacity:0;pointer-events:none;transition:opacity .35s;
   background:linear-gradient(180deg,rgba(0,0,0,.72) 0%,rgba(0,0,0,.42) 28%,rgba(0,0,0,.36) 46%,rgba(0,0,0,.68) 78%,rgba(0,0,0,.90) 100%)}
 #playerAbout.open{opacity:1;pointer-events:none}
@@ -1354,6 +1355,22 @@ body.screensaverOn{cursor:none}
 @keyframes ssPan{from{transform:scale(1.04) translate3d(-1.4%,0,0)}to{transform:scale(1.1) translate3d(1.4%,-1.2%,0)}}
 @keyframes ssDeckFloat{from{transform:translateY(-50%) translate3d(0,-8px,0)}to{transform:translateY(-50%) translate3d(0,10px,0)}}
 @media (max-width:900px){#ssDeck{opacity:.34;width:78vw;right:-18vw}#screensaver .ssClock{max-width:82vw}#ssTitle{max-width:22ch}}
+/* Phone/tablet landscape is short. The TV deck + huge clock collide and leave a hollow
+   strip. Compact clock on the left, three posters on the right. */
+@media (orientation:landscape) and (max-height:640px){
+  #screensaver .ssBrand{width:clamp(110px,16vh,168px);height:clamp(36px,5.5vh,56px);
+    top:max(10px,env(safe-area-inset-top));left:max(16px,env(safe-area-inset-left))}
+  #screensaver .ssClock{left:max(16px,env(safe-area-inset-left));bottom:max(12px,env(safe-area-inset-bottom));
+    max-width:min(58vw,520px)}
+  #ssTime{font:900 clamp(32px,14vh,72px)/.9 "Sora"}
+  #ssDate{margin-top:4px;font-size:11px}
+  #ssTitle{margin-top:6px;font-size:clamp(13px,3.4vh,18px);-webkit-line-clamp:1;max-width:20ch}
+  #ssDeck{top:auto;bottom:max(12px,env(safe-area-inset-bottom));right:max(16px,env(safe-area-inset-right));
+    width:min(42vw,380px);height:auto;transform:none;opacity:.92;gap:8px;
+    grid-template-columns:repeat(3,minmax(0,1fr));animation:none}
+  #ssDeck .ssTile{--ssY:0;--ssR:0deg;border-radius:10px}
+  #ssDeck .ssTile:nth-child(n+4){display:none}
+}
 #vlcPanel{position:absolute;inset:0;display:none;place-items:center;background:rgba(0,0,0,.82);padding:24px;box-sizing:border-box}
 #vlcPanel.show{display:grid}
 #vlcPanel .gateCard{text-align:center;margin-left:0;width:min(520px,calc(100vw - 48px))}
@@ -2005,6 +2022,7 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
   #audiobooks,#abDetail{padding-left:16px!important;padding-right:16px!important}
   #searchBar{left:16px;right:16px}
   #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
+  body:not(.tv) #backdrop,body:not(.tv) #backdrop .layer{display:none!important;opacity:0!important;width:0!important;height:0!important}
   body:not(.tv) #hero,body:not(.tv) #bdInfo,body:not(.tv) #colorGlow{display:none!important;opacity:0!important}
   body:not(.tv) #rows{max-height:none!important;flex:1!important;gap:22px}
   #browse.rowsWin #grid{flex:1 1 auto!important;min-height:0!important;max-height:none!important;margin-top:0!important;align-content:start;overflow-y:auto!important}
@@ -2083,18 +2101,43 @@ body.mobileShell #chBar{padding-left:48px}
 body.mobileShell #browse.searchMode{padding-top:146px!important}
 body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
 body.mobileShell #hero,body.mobileShell #bdInfo,body.mobileShell #colorGlow{display:none!important;opacity:0!important}
-/* Phone: no leftover still. The TV/desktop backdrop is a fixed vh band; on a phone
-   that band stays while you scroll and looks like a thick hollow under the burger. */
+/* Phone: no leftover still. The TV backdrop is a fixed vh band; on a phone that
+   band stays while you scroll and reads as a black hollow under the burger. */
 html:has(body.mobileShell:not(.tv)),
 body.mobileShell:not(.tv),
 body.mobileShell:not(.tv).shortBrowseBd,
 html:has(body.mobileShell:not(.tv).detailOpen),
-body.mobileShell:not(.tv).detailOpen{--bdH:56px;--bdW:0px}
+body.mobileShell:not(.tv).detailOpen{--bdH:0px;--bdW:0px}
 body.mobileShell:not(.tv) #scrim{background:transparent}
 body.mobileShell:not(.tv) #colorBase{opacity:0}
+body.mobileShell:not(.tv) #backdrop,
 body.mobileShell:not(.tv) #backdrop .layer,
+body.mobileShell:not(.tv).detailOpen #backdrop,
 body.mobileShell:not(.tv).detailOpen #backdrop .layer{
-  display:none!important;opacity:0!important;width:0!important;height:56px!important;max-height:56px!important}
+  display:none!important;visibility:hidden!important;opacity:0!important;width:0!important;height:0!important;max-height:0!important}
+/* Every phone page — Home, Discover, Movies, TV, Search, Live, Music, Settings,
+   details, person, audiobooks. TV parks rows under a backdrop band; on a phone
+   that band is a black hollow. Pin content to the burger. */
+body.mobileShell:not(.tv) #home,
+body.mobileShell:not(.tv) #discover,
+body.mobileShell:not(.tv) #browse,
+body.mobileShell:not(.tv) #person,
+body.mobileShell:not(.tv) #settings,
+body.mobileShell:not(.tv) #prefs,
+body.mobileShell:not(.tv) #music,
+body.mobileShell:not(.tv) #audiobooks,
+body.mobileShell:not(.tv) #abDetail{
+  justify-content:flex-start!important;align-content:flex-start!important}
+body.mobileShell:not(.tv) #rows,
+body.mobileShell:not(.tv) #discoverRows,
+body.mobileShell:not(.tv) #browse.rowsWin #grid,
+body.mobileShell:not(.tv) #personGrid,
+body.mobileShell:not(.tv) #dSections,
+body.mobileShell:not(.tv) #calList{
+  margin-top:0!important;max-height:none!important}
+body.mobileShell:not(.tv) #person.open{display:block!important;overflow-y:auto!important}
+body.mobileShell:not(.tv) #person h2{margin-top:14px!important}
+body.mobileShell:not(.tv) .detailHero{min-height:0!important}
 /* Trailer: landscape uses the width (big player left, title/Play right).
    Portrait stays stacked. Soft still only — no leftover top band. */
 body.mobileShell:not(.tv) #trailer{
@@ -2633,6 +2676,19 @@ body.mobileShell:not(.tv) #discoverRows,
 body.mobileShell:not(.tv) #browse.rowsWin #grid,
 body.mobileShell:not(.tv) #personGrid{scroll-snap-type:none;max-height:none!important;margin-top:0}
 body.mobileShell:not(.tv) #browse{justify-content:flex-start}
+/* Landscape phones report a wide CSS viewport, so the 600px sheet never runs.
+   Coarse touch + not-TV still gets a top-aligned catalog with no backdrop band. */
+@media (hover:none) and (pointer:coarse){
+  body:not(.tv){--bdH:0px;--bdW:0px}
+  body:not(.tv) #backdrop,body:not(.tv) #backdrop .layer,body:not(.tv) #hero,body:not(.tv) #bdInfo,body:not(.tv) #colorGlow,body:not(.tv) #colorBase{
+    display:none!important;visibility:hidden!important;opacity:0!important;height:0!important;max-height:0!important;margin:0!important;padding:0!important}
+  body:not(.tv) #home{justify-content:flex-start!important}
+  body:not(.tv) #discover,body:not(.tv) #browse,body:not(.tv) #person{justify-content:flex-start!important}
+  body:not(.tv) #rows,body:not(.tv) #discoverRows{max-height:none!important;flex:1!important;margin-top:0!important}
+  body:not(.tv) #browse.rowsWin #grid,body:not(.tv) #personGrid{margin-top:0!important;max-height:none!important;flex:1 1 auto!important}
+  body:not(.tv) .detailHero{min-height:0!important}
+  body:not(.tv) #person h2{margin-top:14px}
+}
 
 /* Bigger rail logo. */
 #rail .logo{width:46px;height:46px;padding-left:7px;margin-bottom:24px}
@@ -5751,7 +5807,8 @@ function applyCoverSize() {
 function adaptRowWindows() {
   const rowH = (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--poster')) || 190) * 1.5 + 106;
   const h = window.innerHeight;
-  const phoneLayout = window.innerWidth <= 600 && !document.body.classList.contains('tv');
+  const phoneLayout = !document.body.classList.contains('tv') && (
+    document.body.classList.contains('mobileShell') || window.innerWidth <= 600);
   const tvLayout = document.body.classList.contains('tv');
   // Home + Discover rows: desktop keeps room for the hero/backdrop text; phones hide the
   // backdrop and use a compact hero, so they need a much smaller reserve.
@@ -6481,12 +6538,15 @@ function compareContinueWatchingItems(a, b) {
   return String(a.title || a.key || '').localeCompare(String(b.title || b.key || ''));
 }
 function cwNextFingerprint(cw) {
-  return (S.profile && S.profile.id || 'default') + ':' + (cw || [])
+  const now = new Date();
+  const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return day + ':' + (S.profile && S.profile.id || 'default') + ':' + (cw || [])
     .filter((w) => /^tmdb:tv:\d+:s\d+e\d+$/i.test(String(w.key || '')))
     .map((w) => [w.key, w.watched ? 1 : 0, Math.floor(w.position || 0), w.updatedAt || 0].join('@'))
     .sort().join('|');
 }
 const HOME_NEXT_WAIT_MS = 900;
+const HOME_NEXT_STALE_MS = 30 * 60 * 1000;
 function waitMs(ms, value) {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms));
 }
@@ -6495,6 +6555,7 @@ function resetHomeTvNextFor(cw) {
   if (S._homeTvNextFp !== fp) {
     S._homeTvNextFp = fp;
     S._homeTvNext = undefined;
+    S._homeTvNextAt = 0;
     S._homeTvNextJob = null;
   }
   return fp;
@@ -6505,7 +6566,8 @@ async function prepareHomeTvNext(cw, timeoutMs = HOME_NEXT_WAIT_MS) {
     S._homeTvNext = [];
     return true;
   }
-  if (Array.isArray(S._homeTvNext)) return true;
+  if (Array.isArray(S._homeTvNext) && (Date.now() - (S._homeTvNextAt || 0)) < HOME_NEXT_STALE_MS) return true;
+  if (Array.isArray(S._homeTvNext)) S._homeTvNext = undefined;
   if (!S._homeTvNextJob) {
     // Ordered behind pending watch POSTs: /api/watch/next is computed from the SERVER's watch
     // store, so answering before the just-finished episode's save landed produced a stale
@@ -6516,6 +6578,7 @@ async function prepareHomeTvNext(cw, timeoutMs = HOME_NEXT_WAIT_MS) {
         if (S._homeTvNextFp !== fp) return S._homeTvNext;
         const list = items || [];
         S._homeTvNext = list;
+        S._homeTvNextAt = Date.now();
         const pending = S._pendingHomeNext;
         if (pending && list.some((x) => x && (x.key === pending.key || continueWatchingIdentity(x) === continueWatchingIdentity(pending)))) {
           S._pendingHomeNext = null;
@@ -8706,9 +8769,10 @@ async function play(it, pick, opts = {}) {
   // loading surface instead of looking frozen on details.
   // Begin that transition BEFORE the local-library lookup: the lookup is normally fast, but a
   // busy disk/server must never turn into ten seconds visibly parked on the show details page.
+  const localReady = !picked && localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank);
   const { nativeFirst, playTicket } = beginPlaybackTransition(it, {
     ...opts,
-    hot: !picked && playbackIsWarmed(it, qRank),
+    hot: !picked && (playbackIsWarmed(it, qRank) || localReady),
   });
   if (opts.directHandoff) armPlayHandoffWatchdog(playTicket);
   let localExact = null;
@@ -13609,6 +13673,12 @@ function showPlaybackInterrupted(reason = '') {
   $('vlcCopy').style.display = url ? '' : 'none';
   $('vlcPanel').classList.add('show');
 }
+function playbackServerGone(reason) {
+  const msg = String(reason || '');
+  // Web failover and an empty native error both land here after a restart.
+  if (/^(playback interrupted|native playback interrupted)$/i.test(msg)) return true;
+  return /HTTP 404|HTTP 500|HTTP 502|HTTP 503|mount not found|session expired|stream unavailable|Failed to connect|ECONNRESET|ECONNREFUSED|connection refused|Unable to connect|UnknownHost|Source error|502 Bad Gateway|503 Service|ERR_CONNECTION|network is unreachable/i.test(msg);
+}
 function recoverSamePlaybackSource(reason = '') {
   const p = S.playing; if (!vodPlaybackStarted(p)) return false;
   const kind = currentPlayerKind(p);
@@ -13617,18 +13687,18 @@ function recoverSamePlaybackSource(reason = '') {
   const now = appMs();
   const decoderFailure = /decode|decoder|codec|renderer|format/i.test(String(reason || ''));
   const sourceDead = /blocked|health|missing|no such article/i.test(String(reason || ''));
-  // A swept/restarted mount 404s. Retrying the same URL spins the loader on credits.
-  // Re-create this title's mount; do not hunt a new NZB and do not replay the dead link.
-  const mountGone = /HTTP 404|mount not found|session expired|stream unavailable \(HTTP 404\)/i.test(String(reason || ''));
-  if (mountGone && !p._reMounting) {
-    reMountAndResume(reason || 'playback session expired');
-    return true;
-  }
   // Next-episode startup often wobbles once (new remux, new Exo). Remounting that
   // replayed the opening. Stay put unless the source is actually dead.
   if (!sourceDead && S._handoffQuietUntil && now < S._handoffQuietUntil) return false;
   // A user pause is not a dead source. Remounting here rebuilds 4K from scratch (~30s).
   if (p.usingNative && p.nativePaused && !sourceDead && !decoderFailure) return false;
+  // Server restart / swept mount: do not replay the dead URL (that flickers Preparing).
+  // Wait, remount the same title, resume. Decoder failures stay on the codec path.
+  const mountGone = playbackServerGone(reason) && !decoderFailure;
+  if (mountGone && !p._reMounting) {
+    reMountAndResume(reason || 'playback session expired');
+    return true;
+  }
   if (decoderFailure && p.usingNative && (clientCaps() || {}).lowPower
       && tryNextNativeKind(kind, at, reason || 'playback failed')) return true;
   // A wifi blip or throttle stall is not a new movie. Retry the SAME file.
@@ -13647,17 +13717,49 @@ function recoverSamePlaybackSource(reason = '') {
   p.usingNative = false;
   return startSource(kind, at, { quietSeek: true }) || (showPlaybackInterrupted(reason), true);
 }
+function holdPlaybackAcrossRestart() {
+  try { clearPlayerLoadingStages(); } catch {}
+  try { const loader = $('playerLoader'); if (loader) loader.classList.remove('show'); } catch {}
+  try {
+    if (typeof showSeekHoldFrame === 'function' && showSeekHoldFrame()) {
+      clearTimeout(_seekHoldT);
+      _seekHoldT = setTimeout(hideSeekHoldFrame, 95000);
+    }
+  } catch {}
+}
+async function waitForTriboonServer(ms = 90000) {
+  const deadline = Date.now() + Math.max(2000, ms);
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch('/api/server', { signal: AbortSignal.timeout(2500) });
+      if (r.ok) return true;
+    } catch {}
+    await new Promise((ok) => setTimeout(ok, 2000));
+  }
+  return false;
+}
 // Re-mount the SAME title on a fresh server mount and resume at the current position. Used when the
 // in-memory mount is gone (server restarted/updated, or swept after inactivity) so the existing
-// stream URL 404s. Retries with backoff to ride out a quick restart, then falls back to the
-// interrupted notice. Only ever runs from the recovery (failure) path — never during healthy play.
+// stream URL 404s. Wait for /api/server first so we do not flicker Preparing on a dead URL, then
+// retry /api/play with backoff. Only ever runs from the recovery (failure) path.
 async function reMountAndResume(reason = '', attempt = 0) {
   const p = S.playing;
   if (!vodPlaybackStarted(p) || !p.item) { showPlaybackInterrupted(reason); return; }
+  if (attempt === 0 && p._reMounting) return;
   p._reMounting = true;
+  if (typeof holdPlaybackAcrossRestart === 'function') holdPlaybackAcrossRestart();
+  if (attempt === 0 && !p._restartToast) {
+    p._restartToast = true;
+    toast('Server restarted — picking up where you left off');
+  }
   const at = currentTime();
   const kind = currentPlayerKind(p);
-  const MAX_ATTEMPTS = 4; // ~13s total backoff — comfortably covers a fast server restart
+  const MAX_ATTEMPTS = 8;
+  if (attempt === 0 && typeof waitForTriboonServer === 'function') {
+    const up = await waitForTriboonServer(90000);
+    if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; }
+    if (!up) { p._reMounting = false; showPlaybackInterrupted('server did not come back'); return; }
+  }
   try {
     const r = await api('/api/play', { method: 'POST', body: playbackRequestBody(p.item, p.name ? { name: p.name } : null) });
     if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; } // user moved on / replaced playback
@@ -13669,8 +13771,8 @@ async function reMountAndResume(reason = '', attempt = 0) {
     p.size = r.size || (r.candidate && r.candidate.sizeBytes) || p.size; p.bufferGoalSec = r.bufferGoalSec || 0;
     p.triedRemux = false; p.triedTranscode = false; p.nativeTried = {};
     markPlaybackSourceSwap(p);
-    p.started = false; p.startedAt = 0; p.nativePos = at; p.nativeDuration = 0;
-    p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0; p._reMounting = false; // fresh mount → reset guards
+    p.nativePos = at;
+    p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0; p._reMounting = false; p._restartToast = false;
     if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return;
     p.usingNative = false;
     if (!startSource(kind, at, { quietSeek: true })) showPlaybackInterrupted(reason);
@@ -13948,7 +14050,7 @@ function renderPlayerEpisodes() {
     b.className = 'playerEpCard focusable' + (ep.item.key === st.currentKey ? ' current' : '') + (ep.watched ? ' watched' : '') + (ep.upcoming ? ' upcoming' : '');
     b.dataset.playerEpIdx = String(idx);
     b.style.setProperty('--still', artBackground(ep.still, ep.backdrop, ep.poster, artFallback(ep.item && ep.item.key, 42)));
-    b.innerHTML = `<div class="peStill">${ep.upcoming ? '<span class="peUpcoming">Upcoming</span>' : ''}</div><div class="peMeta"><span class="peTag">${esc(ep.tag)}</span><span class="peName">${esc(ep.name || 'Episode ' + (idx + 1))}</span></div>`;
+    b.innerHTML = `<div class="peStill">${ep.watched ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}${ep.upcoming ? '<span class="peUpcoming">Upcoming</span>' : ''}</div><div class="peMeta"><span class="peTag">${esc(ep.tag)}</span><span class="peName">${esc(ep.name || 'Episode ' + (idx + 1))}</span></div>`;
     b.addEventListener('click', () => {
       if (ep.item.key === st.currentKey) return;
       if (ep.upcoming) { toast(`This episode hasn’t aired yet — airs ${fmtDate(ep.item.airDate)}`); return; }
@@ -14039,7 +14141,7 @@ async function prepPlayerSeasonEpisodes(it) {
           still: img(ep.still_path, STILL_W),
           backdrop: ctx.show.backdrop,
           poster: ctx.show.poster,
-          watched: !!(w && w.watched),
+          watched: isWatched(item) || !!(w && w.watched),
           upcoming: !!(ep.air_date && ep.air_date > todayStr()),
         });
       }
@@ -14368,10 +14470,10 @@ function maybePrepareNextEpisode(t, d) {
   if (!fileLooksComplete) return;
   const item = S.nextEp.item; if (!item) return;
   S.nextEpPrepared = true; // one shot; play()/autoplay reuses the live mount via the server's mountByUrl
-  if (localTitleHasPlayback(item)) return; // local libraries are already instant — no mount to warm
   const qRank = qualityRankForItem(item);
   item._preparedAt = Date.now();
   if (typeof markPlaybackPrepared === 'function') markPlaybackPrepared(item, qRank);
+  if (localTitleHasPlayback(item)) return; // library file is already on the server — no usenet mount to warm
   api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).then(maybeNativePrefetch).catch(() => {});
 }
 const UP_NEXT_COUNTDOWN_SECONDS = 10;
@@ -23442,8 +23544,8 @@ async function renderTraktBox() {
         <button class="btn primary focusable" id="traktSync" style="flex:1;justify-content:center">⇅ Sync Trakt now</button>
         <button class="btn ghost focusable" id="traktImport">⇣ Watchlist</button>
         <button class="btn ghost focusable" id="traktUnlink">Unlink</button>
-      </div><div class="hint" id="traktMsg">Everything is two-way while linked: playback + ✓ marks push to Trakt;
-      your Trakt watchlist, history, and in-progress titles pull back automatically every few hours.</div>`;
+      </div>      <div class="hint" id="traktMsg">Everything is two-way while linked: playback + ✓ marks push as you watch;
+      Sync now also sends leftover local watched/in-progress, then pulls Trakt history and in-progress back.</div>`;
     box.querySelector('#traktSync').addEventListener('click', async () => {
       const b = box.querySelector('#traktSync');
       b.disabled = true; b.textContent = 'Syncing…';

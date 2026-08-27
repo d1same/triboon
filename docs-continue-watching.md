@@ -45,7 +45,10 @@ flowchart LR
     Trakt fallback rows.
   - `watchSet` saves or removes one canonical watch key.
   - `nextWatchEpisodes()` creates server-side next-up suggestions and carries
-    the saved `qualityRank`.
+    the saved `qualityRank`. Weekly episodes refetch a stale TMDB season
+    (`maxAge: 0`) and treat air dates as the local calendar day.
+  - Home caches `/api/watch/next` for 30 minutes and by local day so a show
+    left open all week still picks up tonight's episode.
 - `test/phase4.test.js`
   - Client contract checks for quality, dedupe, focus, details routing, and
     Up Next behavior.
@@ -78,6 +81,9 @@ flowchart LR
 - A 4K preference should request 4K sources first and must not silently fall
   back to a local 1080p file unless the user changes the quality choice or no
   quality preference exists.
+- Next Episode / Up Next inherit that same rank. Near-end `/api/prepare`
+  warms the matching 1080p or 4K usenet mount. Local-library next episodes
+  skip that warmup — the file is already on the server.
 
 ## Trakt Resume Rules
 

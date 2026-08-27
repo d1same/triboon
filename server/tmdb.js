@@ -16,7 +16,11 @@ class TmdbProxy {
   }
 
   _ttlFor(path) {
-    return /trending|search|popular|now_playing|on_the_air/.test(path) ? SHORT_TTL_MS : DEFAULT_TTL_MS;
+    if (/trending|search|popular|now_playing|on_the_air/.test(path)) return SHORT_TTL_MS;
+    // Weekly episodes land on /tv/{id} and /tv/{id}/season/{n}. A 24h cache hid tonight's
+    // episode until the next day. Two hours is enough for Home next-up without hammering TMDB.
+    if (/^\/tv\/\d+(\?|$)/.test(path) || /^\/tv\/\d+\/season\/\d+(\?|$)/.test(path)) return 2 * 3600 * 1000;
+    return DEFAULT_TTL_MS;
   }
 
   // TMDB serves a 200 external_ids body even for an episode/title whose imdb_id isn't populated yet
@@ -31,7 +35,8 @@ class TmdbProxy {
   }
 
   // path: "/trending/all/week?page=1" (no api_key — we add it server-side)
-  async get(path) {
+  // opts.maxAge: override TTL for this call. 0 bypasses cache (weekly next-up refetch).
+  async get(path, opts = {}) {
     const key = this.getKey();
     if (!key) { const e = new Error('TMDB not configured'); e.status = 503; throw e; }
     if (!/^\/[a-z0-9_/-]+(\?[a-zA-Z0-9_=&%.,-]*)?$/i.test(path)) {
@@ -40,9 +45,12 @@ class TmdbProxy {
     const cacheKey = path;
     const cache = this.store.read('tmdb-cache', {});
     const hit = cache[cacheKey];
+    const ttl = opts && Object.prototype.hasOwnProperty.call(opts, 'maxAge')
+      ? Math.max(0, Number(opts.maxAge) || 0)
+      : this._ttlFor(path);
     // A stale empty external_ids must never be served (it would keep a no-show-imdb title dead-ended
     // for the full TTL even after TMDB populates the id) — fall through to a live re-fetch instead.
-    if (hit && Date.now() - hit.at < this._ttlFor(path) && !this._externalIdsEmpty(path, hit.data)) return hit.data;
+    if (hit && ttl > 0 && Date.now() - hit.at < ttl && !this._externalIdsEmpty(path, hit.data)) return hit.data;
 
     const sep = path.includes('?') ? '&' : '?';
     // ONE retry on transient upstream failure (timeout / 5xx / reset). A single TMDB hiccup used to

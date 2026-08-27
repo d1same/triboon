@@ -3,7 +3,8 @@
 // short code at trakt.tv/activate — the TV-friendly way), then the server:
 //   - scrobbles playback (/scrobble/stop with progress) as they watch,
 //   - pushes watchlist adds/removes,
-//   - imports their Trakt watchlist on demand.
+//   - on Sync now / 6h tick: exports leftover local watched + in-progress, then pulls
+//     Trakt history, playback, and watchlist back down.
 // The admin provides the app's client id/secret (a free "API app" on trakt.tv) in Settings.
 // Tokens are per-user, kept in the encrypted-at-rest store, refreshed automatically.
 
@@ -401,16 +402,99 @@ class Trakt {
     }, 'history');
   }
 
+  async _getList(uid, path, label) {
+    const r = await this.api(uid, path, 'GET');
+    if (!r) {
+      const e = new Error('Trakt is not linked');
+      e.status = 400;
+      throw e;
+    }
+    if (r.status !== 200) {
+      const e = new Error(`Trakt ${label} failed (HTTP ${r.status})`);
+      e.status = 502;
+      throw e;
+    }
+    return Array.isArray(r.json) ? r.json : [];
+  }
+
+  // Batch local watched keys up to Trakt history. Movies + per-episode shows only —
+  // never a bare-show payload (that would mark/unmark every season).
+  static historyBodyForItems(items) {
+    const movies = [];
+    const shows = new Map();
+    for (const it of items || []) {
+      const item = Trakt.itemFor(it && it.key);
+      if (!item || (item.show && !item.episode)) continue;
+      const watchedAt = Number.isFinite(+it.watchedAt) && +it.watchedAt > 0
+        ? new Date(+it.watchedAt).toISOString() : undefined;
+      if (item.movie) {
+        movies.push(watchedAt ? { ...item.movie, watched_at: watchedAt } : item.movie);
+        continue;
+      }
+      const id = item.show.ids.tmdb;
+      if (!shows.has(id)) shows.set(id, { show: item.show, seasons: new Map() });
+      const rec = shows.get(id);
+      if (!rec.seasons.has(item.episode.season)) rec.seasons.set(item.episode.season, []);
+      rec.seasons.get(item.episode.season).push(watchedAt
+        ? { number: item.episode.number, watched_at: watchedAt }
+        : { number: item.episode.number });
+    }
+    const showPayload = [...shows.values()].map((s) => ({
+      ...s.show,
+      seasons: [...s.seasons.entries()].map(([n, eps]) => ({ number: n, episodes: eps })),
+    }));
+    if (!movies.length && !showPayload.length) return null;
+    return {
+      ...(movies.length ? { movies } : {}),
+      ...(showPayload.length ? { shows: showPayload } : {}),
+    };
+  }
+
+  async pushHistoryItems(uid, items, chunk = 200) {
+    const list = Array.isArray(items) ? items : [];
+    let sent = 0, failed = 0;
+    const ok = [];
+    for (let i = 0; i < list.length; i += chunk) {
+      const slice = list.slice(i, i + chunk);
+      const body = Trakt.historyBodyForItems(slice);
+      if (!body) continue;
+      const r = await this.api(uid, '/sync/history', 'POST', body);
+      if (r && ((r.status >= 200 && r.status < 300) || r.status === 409)) {
+        sent += slice.length;
+        ok.push(...slice.map((it) => it.key));
+      } else {
+        failed += slice.length;
+        for (const it of slice) this._queueOp(uid, { kind: 'history', key: it.key, on: true }, (r && (r.status || r.error)) || 'failed');
+      }
+    }
+    return { sent, failed, keys: ok };
+  }
+
+  async pushPlaybackItems(uid, items, max = 40) {
+    const list = (Array.isArray(items) ? items : []).slice(0, max);
+    let sent = 0, failed = 0;
+    const ok = [];
+    for (const it of list) {
+      let pct = Number.isFinite(+it.progress) ? +it.progress : 0;
+      if (pct < 1) continue;
+      pct = Math.min(79, Math.max(1, Math.round(pct)));
+      const r = await this._sendOp(uid, { kind: 'scrobble', key: it.key, progress: pct });
+      if (r.ok) { sent++; ok.push(it.key); }
+      else { failed++; this._queueOp(uid, { kind: 'scrobble', key: it.key, progress: pct }, r.status || r.error); }
+    }
+    return { sent, failed, keys: ok };
+  }
+
   // Everything the user has WATCHED on Trakt → our watch keys. Movies + per-episode shows.
   async pullWatched(uid) {
     const keys = [];
-    const mv = await this.api(uid, '/sync/watched/movies', 'GET');
-    for (const e of (mv && mv.status === 200 && Array.isArray(mv.json) ? mv.json : [])) {
+    const mv = await this._getList(uid, '/sync/watched/movies', 'watched movies');
+    for (const e of mv) {
       const id = e.movie && e.movie.ids && e.movie.ids.tmdb;
       if (id) keys.push({ key: `tmdb:movie:${id}`, title: e.movie.title || '', year: e.movie.year || null, type: 'movie', tmdbId: id });
     }
-    const sh = await this.api(uid, '/sync/watched/shows', 'GET');
-    for (const e of (sh && sh.status === 200 && Array.isArray(sh.json) ? sh.json : [])) {
+    const sh = await this._getList(uid, '/sync/watched/shows', 'watched shows');
+    for (const e of sh) {
       const id = e.show && e.show.ids && e.show.ids.tmdb;
       if (!id) continue;
       for (const s of e.seasons || []) {
@@ -424,10 +508,9 @@ class Trakt {
 
   // In-progress playback (Trakt stores a PERCENT, not seconds) → continue-watching imports.
   async pullPlayback(uid) {
-    const r = await this.api(uid, '/sync/playback', 'GET');
-    if (!r || r.status !== 200 || !Array.isArray(r.json)) return [];
+    const rows = await this._getList(uid, '/sync/playback', 'in-progress playback');
     const out = [];
-    for (const e of r.json.slice(0, 100)) {
+    for (const e of rows.slice(0, 100)) {
       const pct = +e.progress || 0;
       if (pct < 2 || pct > 96) continue; // ends are noise — finished or barely started
       if (e.movie && e.movie.ids && e.movie.ids.tmdb) {
@@ -443,10 +526,9 @@ class Trakt {
 
   // Pull the user's Trakt watchlist → [{key, title, type, year}] for merging into ours.
   async pullWatchlist(uid) {
-    const r = await this.api(uid, '/sync/watchlist', 'GET');
-    if (!r || r.status !== 200 || !Array.isArray(r.json)) return [];
+    const rows = await this._getList(uid, '/sync/watchlist', 'watchlist');
     const out = [];
-    for (const e of r.json.slice(0, 500)) {
+    for (const e of rows.slice(0, 500)) {
       const media = e.movie || e.show;
       const type = e.movie ? 'movie' : 'tv';
       if (!media || !media.ids || !media.ids.tmdb) continue;

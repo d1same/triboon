@@ -4566,8 +4566,11 @@ function parseEpisodeKey(key) {
   const m = /^tmdb:tv:(\d+):s(\d+)e(\d+)$/i.exec(String(key || ''));
   return m ? { showId: m[1], season: +m[2], episode: +m[3] } : null;
 }
+function localCalendarYmd(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 function aired(date) {
-  return !!date && String(date).slice(0, 10) <= new Date().toISOString().slice(0, 10);
+  return !!date && String(date).slice(0, 10) <= localCalendarYmd();
 }
 function watchRowsForProfileFromAll(all, uid, profile = 'default') {
   const active = profile || 'default';
@@ -4621,13 +4624,23 @@ async function nextWatchEpisodes(uid, profile = 'default') {
   for (const [showId, top] of [...byShow].slice(0, 20)) {
     if (inProgress.has(showId)) continue;
     try {
-      const d = await tmdb.get(`/tv/${showId}`);
-      const seasons = (d.seasons || []).filter((s) => s.season_number > 0 && s.episode_count > 0)
+      let d = await tmdb.get(`/tv/${showId}`);
+      let seasons = (d.seasons || []).filter((s) => s.season_number > 0 && s.episode_count > 0)
         .sort((a, b) => a.season_number - b.season_number);
+      const lastSeason = seasons[seasons.length - 1];
+      if (lastSeason && lastSeason.season_number === top.season && lastSeason.episode_count <= top.episode) {
+        d = await tmdb.get(`/tv/${showId}`, { maxAge: 0 });
+        seasons = (d.seasons || []).filter((s) => s.season_number > 0 && s.episode_count > 0)
+          .sort((a, b) => a.season_number - b.season_number);
+      }
       for (const s of seasons.filter((x) => x.season_number >= top.season)) {
-        const sd = await tmdb.get(`/tv/${showId}/season/${s.season_number}`);
-        const eps = (sd.episodes || []).filter((ep) => ep && ep.episode_number > 0 &&
-          (s.season_number > top.season || ep.episode_number > top.episode) && aired(ep.air_date))
+        let sd = await tmdb.get(`/tv/${showId}/season/${s.season_number}`);
+        const laterEps = (episodes) => (episodes || []).filter((ep) => ep && ep.episode_number > 0 &&
+          (s.season_number > top.season || ep.episode_number > top.episode));
+        if (!laterEps(sd.episodes).length && s.season_number === top.season) {
+          sd = await tmdb.get(`/tv/${showId}/season/${s.season_number}`, { maxAge: 0 });
+        }
+        const eps = laterEps(sd.episodes).filter((ep) => aired(ep.air_date))
           .sort((a, b) => a.episode_number - b.episode_number);
         const next = eps.find((ep) => {
           const rec = watchRowForKeyFromAll(all, uid, profile, `tmdb:tv:${showId}:s${s.season_number}e${ep.episode_number}`);
@@ -6913,9 +6926,84 @@ function importTraktWatchlist(uid, items) {
   return added;
 }
 
-// ---- Trakt sync-DOWN: watchlist + watched history + in-progress playback → local state ----
-// Writes imported rows into the DEFAULT bucket as account-level Trakt fallback data. Profile
-// reads merge only these fromTrakt rows; local non-Trakt default-profile playback stays isolated.
+// Local TMDB-keyed rows this account still owes Trakt: watched ✓ and in-progress (not
+// fromTrakt imports, not already stamped, not a bare-show key). Watched wins when two
+// profiles disagree. Newest row wins when both are in-progress.
+function collectLocalTraktExport(uid) {
+  const all = store.read('watch', {});
+  const byKey = new Map();
+  const prefix = `${uid}:`;
+  for (const [fullKey, v] of Object.entries(all)) {
+    if (!fullKey.startsWith(prefix) || !v || v.hidden || v.fromTrakt) continue;
+    const rest = fullKey.slice(prefix.length);
+    const sep = rest.indexOf(':');
+    if (sep <= 0) continue;
+    const key = rest.slice(sep + 1);
+    const item = Trakt.itemFor(key);
+    if (!item || (item.show && !item.episode)) continue;
+    if (v.traktExportedAt && (v.updatedAt || 0) <= v.traktExportedAt) continue;
+    const progress = v.duration > 0 ? ((v.position || 0) / v.duration) * 100 : 0;
+    const row = {
+      key,
+      watched: !!v.watched,
+      progress,
+      position: v.position || 0,
+      updatedAt: v.updatedAt || 0,
+    };
+    const prev = byKey.get(key);
+    if (!prev) { byKey.set(key, row); continue; }
+    if (row.watched && !prev.watched) byKey.set(key, row);
+    else if (row.watched === prev.watched && row.updatedAt > prev.updatedAt) byKey.set(key, row);
+  }
+  const rows = [...byKey.values()];
+  return {
+    watched: rows.filter((r) => r.watched).sort((a, b) => b.updatedAt - a.updatedAt),
+    playback: rows.filter((r) => !r.watched && (r.position > 30 || r.progress >= 2))
+      .sort((a, b) => b.updatedAt - a.updatedAt),
+  };
+}
+
+function markTraktExported(uid, keys, at = Date.now()) {
+  const want = new Set((keys || []).filter(Boolean));
+  if (!want.size) return;
+  store.update('watch', {}, (all) => {
+    for (const [fullKey, v] of Object.entries(all)) {
+      if (!v || !fullKey.startsWith(`${uid}:`)) continue;
+      const rest = fullKey.slice(uid.length + 1);
+      const sep = rest.indexOf(':');
+      if (sep <= 0) continue;
+      const key = rest.slice(sep + 1);
+      if (!want.has(key) || v.fromTrakt) continue;
+      all[fullKey] = { ...v, traktExportedAt: at };
+    }
+    return all;
+  });
+}
+
+// Sync-UP leftover local rows Trakt does not already have. Live scrobbles/✓ already stamp
+// traktExportedAt; this catches watches made before linking (or any row that never went up).
+async function pushLocalWatchToTrakt(uid, watched, playback) {
+  const local = collectLocalTraktExport(uid);
+  const onTraktWatched = new Set((watched || []).map((w) => w.key));
+  const onTraktPlayback = new Map((playback || []).map((p) => [p.key, +p.pct || 0]));
+  const historyItems = local.watched.filter((r) => !onTraktWatched.has(r.key))
+    .slice(0, 600)
+    .map((r) => ({ key: r.key, watchedAt: r.updatedAt }));
+  const playbackItems = local.playback.filter((r) => {
+    if (onTraktWatched.has(r.key)) return false;
+    const pct = onTraktPlayback.get(r.key);
+    return pct == null || Math.abs(pct - r.progress) >= 2;
+  }).slice(0, 40);
+  const hist = historyItems.length ? await trakt.pushHistoryItems(uid, historyItems) : { sent: 0, failed: 0, keys: [] };
+  const play = playbackItems.length ? await trakt.pushPlaybackItems(uid, playbackItems) : { sent: 0, failed: 0, keys: [] };
+  markTraktExported(uid, [...(hist.keys || []), ...(play.keys || [])]);
+  return { watched: hist.sent || 0, playback: play.sent || 0, failed: (hist.failed || 0) + (play.failed || 0) };
+}
+
+// ---- Trakt two-way sync: leftover local watched/in-progress UP, then Trakt history +
+// playback + watchlist DOWN into local state. Imported rows land in the DEFAULT bucket as
+// account-level Trakt fallback data. Profile reads merge only these fromTrakt rows; local
+// non-Trakt default-profile playback stays isolated.
 // Never downgrades: locally-watched stays watched, a real local position beats an imported %.
 // Trakt stores playback progress as a PERCENT — kept as traktPct; the player seeks to it
 // once the real duration is known.
@@ -6926,6 +7014,7 @@ async function traktSyncDown(uid) {
   if (st.broken) { const e = new Error('Trakt needs re-linking — your authorization was revoked or expired'); e.status = 400; throw e; }
   const pushed = await trakt.flushOutbox(uid).catch((e) => ({ sent: 0, failed: 1, pending: 0, error: e.message }));
   const [watched, playback, watchlist] = await Promise.all([trakt.pullWatched(uid), trakt.pullPlayback(uid), trakt.pullWatchlist(uid)]);
+  const exported = await pushLocalWatchToTrakt(uid, watched, playback).catch((e) => ({ watched: 0, playback: 0, failed: 1, error: e.message }));
   // Artwork for the continue-watching imports (they become visible cards) — best effort.
   const art = {};
   for (let i = 0; i < Math.min(playback.length, 30); i += 6) {
@@ -6981,7 +7070,9 @@ async function traktSyncDown(uid) {
   const nWatchlist = importTraktWatchlist(uid, watchlist);
   trakt.markSynced(uid);
   return { ok: true, watched: nWatched, playback: nPlayback, watchlist: nWatchlist,
-    pushed: pushed.sent || 0, pendingPush: pushed.pending || 0,
+    pushed: (pushed.sent || 0) + (exported.watched || 0) + (exported.playback || 0),
+    pushedWatched: exported.watched || 0, pushedPlayback: exported.playback || 0,
+    pendingPush: pushed.pending || 0,
     totalWatched: watched.length, totalWatchlist: watchlist.length };
 }
 // Auto-resync every 6h per linked user — one user per tick keeps the calls gentle.
@@ -7320,11 +7411,13 @@ Object.assign(H, {
     // Trakt sync-up (fire-and-forget; only for linked users + tmdb-keyed items):
     // real playback scrobbles; the explicit ✓ button (no playback context) and explicit
     // unwatch (client sends unwatch:true — progress beacons must never erase history) go
-    // through /sync/history instead.
-    if (trakt.status(ctx.user.id).linked) {
+    // through /sync/history instead. Stamp traktExportedAt so the next Sync now does not
+    // history-add a second play for something the live path already sent.
+    if (trakt.status(ctx.user.id).linked && Trakt.itemFor(b.key)) {
       if (b.duration > 0) trakt.scrobble(ctx.user.id, b.key, ((b.position || 0) / b.duration) * 100, !!b.watched);
       else if (b.watched) trakt.history(ctx.user.id, b.key, true);
       if (b.watched === false && b.unwatch) trakt.history(ctx.user.id, b.key, false);
+      if (b.duration > 0 || b.watched || b.unwatch) markTraktExported(ctx.user.id, [b.key]);
     }
     send(ctx.res, 200, { ok: true });
   },
@@ -7430,8 +7523,8 @@ Object.assign(H, {
     } catch (e) { send(ctx.res, 502, { error: 'trakt unreachable' }); }
   },
 
-  // Pull watched history + in-progress playback FROM Trakt into local watch state.
-  // Manual "Sync now"; also runs automatically right after linking and every 6h (tick below).
+  // Two-way sync: leftover local watched/in-progress UP, then Trakt history + playback +
+  // watchlist DOWN. Manual "Sync now"; also runs automatically right after linking and every 6h.
   traktSync: async (ctx) => {
     // Full history+playback+watchlist sync against api.trakt.tv (up to 20K rows) — same reasoning.
     if (throttleUserRoute(ctx, 'trakt-sync', { max: 6, windowMs: 60000, lockMs: 60000 })) return;

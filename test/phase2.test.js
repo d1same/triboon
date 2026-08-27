@@ -1391,6 +1391,75 @@ function traktFixture(tokens, outbox = {}) {
   return t;
 }
 
+test('trakt: historyBodyForItems batches movies + per-episode shows and never a bare show', () => {
+  const { Trakt } = require('../server/trakt');
+  const body = Trakt.historyBodyForItems([
+    { key: 'tmdb:movie:111', watchedAt: Date.parse('2026-01-02T00:00:00.000Z') },
+    { key: 'tmdb:tv:1399:s1e1', watchedAt: Date.parse('2026-01-03T00:00:00.000Z') },
+    { key: 'tmdb:tv:1399:s1e2' },
+    { key: 'tmdb:tv:1399' }, // bare show — must not expand to every season
+    { key: 'local:lib:1' },
+  ]);
+  assert.deepStrictEqual(body.movies, [{ ids: { tmdb: 111 }, watched_at: '2026-01-02T00:00:00.000Z' }]);
+  assert.strictEqual(body.shows.length, 1);
+  assert.strictEqual(body.shows[0].ids.tmdb, 1399);
+  assert.deepStrictEqual(body.shows[0].seasons, [{
+    number: 1,
+    episodes: [
+      { number: 1, watched_at: '2026-01-03T00:00:00.000Z' },
+      { number: 2 },
+    ],
+  }]);
+  assert.strictEqual(Trakt.historyBodyForItems([{ key: 'tmdb:tv:1399' }]), null, 'bare show alone yields no request');
+});
+
+test('trakt leftover export: leftover local watched/in-progress go up, imports and local-only stay out', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const start = src.indexOf('function collectLocalTraktExport(uid)');
+  const end = src.indexOf('// ---- Trakt two-way sync', start);
+  assert.ok(start >= 0 && end > start, 'leftover Trakt export helpers should be extractable');
+  const { Trakt } = require('../server/trakt');
+  const watch = {
+    'u1:default:tmdb:movie:111': { watched: true, updatedAt: 1000, position: 0, duration: 100 },
+    'u1:kids:tmdb:movie:111': { watched: false, position: 10, duration: 100, updatedAt: 50 },
+    'u1:default:tmdb:tv:9:s1e1': { watched: false, position: 400, duration: 1200, updatedAt: 2000 },
+    'u1:default:tmdb:tv:9': { watched: true, updatedAt: 3000 },
+    'u1:default:local:abc:1': { watched: true, updatedAt: 4000 },
+    'u1:default:tmdb:movie:222': { watched: true, fromTrakt: true, updatedAt: 5000 },
+    'u1:default:tmdb:movie:333': { watched: true, traktExportedAt: 9000, updatedAt: 8000 },
+    'u1:default:tmdb:movie:444': { watched: true, updatedAt: 6000 },
+    'u2:default:tmdb:movie:555': { watched: true, updatedAt: 7000 },
+    'u1:default:tmdb:tv:9:s1e2': { hidden: true, watched: true, updatedAt: 8000 },
+  };
+  let written = null;
+  const store = {
+    read: (table, def) => (table === 'watch' ? watch : def),
+    update: (table, def, fn) => { written = fn({ ...watch }); return written; },
+  };
+  const sent = { history: [], playback: [] };
+  const trakt = {
+    pushHistoryItems: async (_uid, items) => {
+      sent.history = items;
+      return { sent: items.length, failed: 0, keys: items.map((it) => it.key) };
+    },
+    pushPlaybackItems: async (_uid, items) => {
+      sent.playback = items;
+      return { sent: items.length, failed: 0, keys: items.map((it) => it.key) };
+    },
+  };
+  const fns = new Function('store', 'Trakt', 'trakt', `${src.slice(start, end)}\nreturn { collectLocalTraktExport, pushLocalWatchToTrakt };`)(store, Trakt, trakt);
+  const local = fns.collectLocalTraktExport('u1');
+  assert.deepStrictEqual(local.watched.map((r) => r.key).sort(), ['tmdb:movie:111', 'tmdb:movie:444']);
+  assert.deepStrictEqual(local.playback.map((r) => r.key), ['tmdb:tv:9:s1e1']);
+
+  const exported = await fns.pushLocalWatchToTrakt('u1', [{ key: 'tmdb:movie:444' }], []);
+  assert.strictEqual(exported.watched, 1, 'rows already on Trakt are not sent again');
+  assert.strictEqual(exported.playback, 1);
+  assert.strictEqual(sent.history[0].key, 'tmdb:movie:111');
+  assert.strictEqual(sent.playback[0].key, 'tmdb:tv:9:s1e1');
+  assert.ok(written['u1:default:tmdb:movie:111'].traktExportedAt, 'successful leftover export stamps the local row');
+});
+
 test('trakt: season bulk history ops stay season-scoped (a bare-show remove would wipe the whole show)', () => {
   const t = traktFixture({});
   // The op a season-unwatch queues: explicit show+season+episodes, NEVER a bare show — Trakt

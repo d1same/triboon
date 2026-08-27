@@ -3763,6 +3763,10 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   process.env.TRAKT_BASE = `http://127.0.0.1:${mock.address().port}`;
 
   await httpJson(srv.port, 'POST', '/api/settings', { traktClientId: 'cid', traktClientSecret: 'sec' }, admin);
+  // Local watches made BEFORE linking must go UP on the first sync (live scrobble is
+  // a no-op while unlinked). One finished movie + one in-progress movie.
+  await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:111', watched: true, position: 0, duration: 0, meta: { title: 'Pre-link Watched' } }, admin);
+  await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:222', position: 200, duration: 400, meta: { title: 'Pre-link Progress' } }, admin);
   // Device-code link flow.
   const link = await httpJson(srv.port, 'POST', '/api/trakt/link', {}, admin);
   assert.strictEqual(link.json.userCode, 'ABCD1234');
@@ -3800,10 +3804,17 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   const wlPush = calls.find((c) => c.path === '/sync/watchlist' && c.method === 'POST');
   assert.ok(wlPush && wlPush.body.shows && wlPush.body.shows[0].ids.tmdb === 1399, 'watchlist add pushed as a show');
 
-  // SYNC-DOWN ran automatically right after linking: Trakt watchlist landed locally,
-  // watched history became local watch records (check-marks), in-progress playback became
-  // a Continue-Watching entry carrying Trakt's PERCENT (Trakt never stores seconds).
-  await new Promise((r) => setTimeout(r, 300));
+  // SYNC-DOWN ran automatically right after linking: leftover local watches went UP,
+  // Trakt watchlist landed locally, watched history became local watch records
+  // (check-marks), in-progress playback became a Continue-Watching entry carrying
+  // Trakt's PERCENT (Trakt never stores seconds).
+  await new Promise((r) => setTimeout(r, 400));
+  const histPush = calls.find((c) => c.path === '/sync/history' && c.method === 'POST'
+    && c.body && Array.isArray(c.body.movies) && c.body.movies.some((m) => m.ids && m.ids.tmdb === 111));
+  assert.ok(histPush, 'pre-link watched movie was pushed to Trakt history on first sync');
+  const progressPush = calls.find((c) => c.path === '/scrobble/stop' && c.body && c.body.movie && c.body.movie.ids.tmdb === 222);
+  assert.ok(progressPush, 'pre-link in-progress movie was pushed to Trakt playback on first sync');
+  assert.strictEqual(progressPush.body.progress, 50);
   let mine = await httpJson(srv.port, 'GET', '/api/watchlist', null, admin);
   assert.ok(mine.json.some((w) => w.key === 'tmdb:movie:4242'), 'pulled movie landed in the local watchlist');
   const watch = (await httpJson(srv.port, 'GET', '/api/watch', null, admin)).json;
@@ -3846,8 +3857,9 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   // Explicit ✓ (no playback context) → /sync/history; explicit unwatch → history/remove.
   await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:603', watched: true, position: 0, duration: 0, meta: {} }, admin);
   await new Promise((r) => setTimeout(r, 200));
-  const histAdd = calls.find((c) => c.path === '/sync/history' && c.method === 'POST');
-  assert.ok(histAdd && histAdd.body.movies && histAdd.body.movies[0].ids.tmdb === 603, 'mark-watched exported to Trakt history');
+  const histAdd = calls.find((c) => c.path === '/sync/history' && c.method === 'POST'
+    && c.body && Array.isArray(c.body.movies) && c.body.movies.some((m) => m.ids && m.ids.tmdb === 603));
+  assert.ok(histAdd, 'mark-watched exported to Trakt history');
   await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:603', watched: false, unwatch: true, position: 0, duration: 0, meta: {} }, admin);
   await new Promise((r) => setTimeout(r, 200));
   const histRm = calls.find((c) => c.path === '/sync/history/remove');
@@ -3859,7 +3871,7 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   await httpJson(srv.port, 'POST', `/api/me/profiles/${traktProfile.id}/delete`, { password: 'hunter22' }, admin);
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:tv:1399', on: false }, admin);
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:movie:4242', on: false }, admin);
-  for (const k of ['tmdb:movie:777', 'tmdb:tv:888:s1e1', 'tmdb:tv:888:s1e2', 'tmdb:movie:999', 'tmdb:tv:1234:s2e3', 'tmdb:movie:603', 'tmdb:movie:604']) {
+  for (const k of ['tmdb:movie:777', 'tmdb:tv:888:s1e1', 'tmdb:tv:888:s1e2', 'tmdb:movie:999', 'tmdb:tv:1234:s2e3', 'tmdb:movie:603', 'tmdb:movie:604', 'tmdb:movie:111', 'tmdb:movie:222']) {
     await httpJson(srv.port, 'POST', '/api/watch', { key: k, remove: true }, admin);
   }
   delete process.env.TRAKT_BASE;

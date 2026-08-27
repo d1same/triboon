@@ -126,6 +126,46 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-26, v3.1.15 ship — Next Episode 1080p/4K/local, Trakt leftover push:
+
+- Version contract: `package.json` 3.1.15; Android `versionName` 3.1.15 /
+  `versionCode` 360; Windows client package/Tauri/Cargo 3.1.15.
+- Next Episode inherits 1080p/4K. Usenet next-episodes warm `/api/prepare`
+  two minutes before the end. Local-library next-episodes skip that warmup
+  (the file is already on the server) and stay hot so Play Next does not
+  flash Finding source.
+- Restart remount holds the last frame and resumes the same source. Weekly
+  next-up uses a 2h TMDB season TTL, local calendar day, and a 30-minute
+  Home cache.
+- Trakt Sync now exports leftover local watched (`/sync/history`) and
+  in-progress (`/scrobble/stop`) before the pull. Local-only and already
+  imported rows stay out.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7801`
+  (house install stayed on 7777) and emulator `emulator-5554` (not the
+  Shield). Node suite **664/664**. Isolated `/api/server` 3.1.15.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 4760ms SLOW, then first-byte/seek/resume OK; FROM ready 8079ms
+  SLOW, seek 2720ms SLOW, resume 19ms). IPTV web+native retune PASS
+  (8185 channels). Overlapping Play PASS (both ready in 41ms). Android
+  lint/unit/debug build PASS. Android ExoPlayer stress on `emulator-5554`
+  PASS. Windows GPU not instrumented.
+
+2026-08-26, Trakt two-way sync (watched + in-progress, no version bump):
+
+- Gap: Sync now / 6h tick only pulled Trakt down and retried the failed
+  scrobble outbox. Leftover local watched/in-progress (watched before
+  linking) never went up.
+- Fix: `traktSyncDown` now exports leftover local watched via `/sync/history`
+  and in-progress via `/scrobble/stop`, then pulls history + playback +
+  watchlist. Failed pulls throw instead of looking like "0 imported".
+- Live scrobbles/✓ still push immediately. Local wins on pull. Caps: 600
+  watched + 40 in-progress per sync.
+- Tests: phase2 Trakt unit 4/4; phase4 Trakt audit contract; security
+  suite **125/125** including pre-link push + pull of watched and
+  in-progress. `verify:full` not run (not a ship).
+- Example: you finished a movie in Triboon last week, then linked Trakt.
+  Sync now sends that movie up, then brings Trakt's other history back.
+
 2026-08-26, v3.1.14 ship — phone/tablet catalog, opt-in server debug logging:
 
 - Version contract: `package.json` 3.1.14; Android `versionName` 3.1.14 /

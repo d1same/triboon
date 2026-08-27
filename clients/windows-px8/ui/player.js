@@ -535,11 +535,20 @@
     if (options && options.disabled) button.disabled = true;
     const menuArtwork = options && options.art ? safeArtwork(options.art) : '';
     if (menuArtwork) {
+      const wrap = document.createElement('span');
+      wrap.className = 'episode-art-wrap';
       const image = document.createElement('img');
       image.className = 'episode-art';
       image.alt = '';
       image.src = menuArtwork;
-      button.appendChild(image);
+      wrap.appendChild(image);
+      if (options && options.watched) {
+        const mark = document.createElement('span');
+        mark.className = 'episode-watched';
+        mark.textContent = '✓';
+        wrap.appendChild(mark);
+      }
+      button.appendChild(wrap);
     }
     const box = document.createElement('span');
     const strong = document.createElement('strong');
@@ -627,7 +636,8 @@
         selected: !!episode.current || index === state.episodeFocusIndex,
         disabled: !!episode.upcoming,
         art: episode.still,
-        sub: episode.watched ? 'Watched' : (episode.upcoming ? 'Upcoming' : ''),
+        watched: !!episode.watched,
+        sub: episode.watched ? '✓ Watched' : (episode.upcoming ? 'Upcoming' : ''),
       },
       () => { closePanels(); send('episode', { index: finite(episode.index, index) }); },
     ));

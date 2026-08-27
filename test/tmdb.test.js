@@ -177,3 +177,28 @@ test('tmdb: a single transient 5xx is retried and served; 4xx fails fast without
     await up.close();
   }
 });
+
+test('tmdb: maxAge 0 bypasses cache so weekly next-up can see a new episode', async () => {
+  const up = mockTmdb();
+  const port = await up.listen();
+  try {
+    const store = memStore();
+    const tmdb = new TmdbProxy(store, () => 'test-key', `http://127.0.0.1:${port}/3`);
+    const path = '/tv/1396/season/1';
+    let n = 0;
+    up.setBody(`/3${path}`, () => {
+      n += 1;
+      return { id: 1, episodes: n === 1 ? [{ episode_number: 4, air_date: '2026-08-19' }] : [{ episode_number: 4, air_date: '2026-08-19' }, { episode_number: 5, air_date: '2026-08-26' }] };
+    });
+    const first = await tmdb.get(path);
+    assert.strictEqual(first.episodes.length, 1);
+    const cached = await tmdb.get(path);
+    assert.strictEqual(cached.episodes.length, 1, 'normal TTL still serves the cached season');
+    assert.strictEqual(up.hits(`/3${path}`), 1);
+    const fresh = await tmdb.get(path, { maxAge: 0 });
+    assert.strictEqual(fresh.episodes.length, 2, 'maxAge 0 must re-fetch tonight\'s episode');
+    assert.strictEqual(up.hits(`/3${path}`), 2);
+  } finally {
+    await up.close();
+  }
+});

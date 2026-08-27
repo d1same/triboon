@@ -180,7 +180,9 @@ body.controls-hidden .controls { opacity: 0; transform: translateY(18px); pointe
 .menu-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-item small { display: block; color: var(--muted); }
 .menu-item[disabled] { opacity: .48; cursor: default; }
-.episode-art { width: 72px; aspect-ratio: 16/9; flex: 0 0 auto; border-radius: 7px; object-fit: cover; background: #21182e; }
+.episode-art-wrap { position: relative; flex: 0 0 auto; }
+.episode-art { width: 72px; aspect-ratio: 16/9; display: block; border-radius: 7px; object-fit: cover; background: #21182e; }
+.episode-watched { position: absolute; top: 4px; right: 4px; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; background: #2bbb6a; color: #fff; font: 800 10px/1 sans-serif; }
 .stats dl, .stats dl div { margin: 0; }
 .stats dl { overflow: auto; display: grid; gap: 0; }
 .stats dl div { display: grid; grid-template-columns: minmax(115px,.8fr) minmax(0,1.4fr); gap: 14px; padding: 10px 2px; border-bottom: 1px solid var(--line); }

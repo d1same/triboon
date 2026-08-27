@@ -32,7 +32,7 @@ Example: you pause The Rookie for a minute, press Play, and sit on Preparing. Th
 - Quality / audio change that needs a new server stream.
 - Mid-title remux `ENDED` while **playing**.
 - Remux jumped backward (stream replayed from the head) — seek back to the last good time.
-- Session/mount `404` (`reMountAndResume`) — same title, new mount, same file if it is still the pick.
+- Session/mount `404` / server restart (`reMountAndResume`) — wait for `/api/server`, hold the last frame, same title, new mount, resume. Do not replay the dead URL (that flickers Preparing).
 
 Reuse the existing ExoPlayer (`reuseQuietVideo` / same playback token + same URL). Do not `new ExoPlayer.Builder`.
 
