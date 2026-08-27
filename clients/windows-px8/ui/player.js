@@ -744,7 +744,10 @@
       nativeInvoke('windows_player_open_guide', {}).catch(() => showToast('The TV guide could not be opened.'));
     });
     $('favorite').addEventListener('click', () => send('favorite', { on: !state.favorite }));
-    $('cast').addEventListener('click', () => send('cast'));
+    $('cast').addEventListener('click', () => {
+      showToast('Looking for TVs…');
+      send('cast');
+    });
     $('fullscreen').addEventListener('click', toggleFullscreen);
     $('upNextPlay').addEventListener('click', () => send('next'));
     $('upNextDismiss').addEventListener('click', () => send('up_next_dismiss'));
@@ -922,6 +925,13 @@
     }
     await send('request_state');
   }
+
+  Object.defineProperty(window, '__triboonShowToast', {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: showToast,
+  });
 
   Object.defineProperty(window, '__triboonWindowsPlayerEvent', {
     configurable: false,

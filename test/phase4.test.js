@@ -1140,7 +1140,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Cast + AirPlay buttons are in the D-pad control order');
   assert.match(ui, /function castEligible\(\) \{[\s\S]+__triboonWindowsBridge === true[\s\S]+return !canUseNativeVideoPlayer\(\)/,
     'web Cast stays off on Android ExoPlayer; the Windows catalog can still send to a TV');
-  assert.match(ui, /window\.__tvNativeCastStart = \(\) => \{[\s\S]+startCast\(\)/,
+  assert.match(ui, /window\.__tvNativeCastStart = \(\) => \{\s*startCast\(\);\s*\};/,
     'the Windows native Cast button starts the same Google Cast picker as the web player');
   // Phase 2: the receiver app-id is CONFIGURABLE but still DEFAULTS to the Default Media Receiver so
   // Phase 1 behavior is unchanged until the owner registers a custom receiver.
@@ -1152,10 +1152,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'while casting, currentTime() reads the receiver clock so watch + Trakt heartbeats keep counting (one reporter)');
   assert.match(ui, /function castVodEligible\(\) \{ const p = S\.playing; return !!\(p && p\.item && p\.item\.type !== 'live'\); \}/,
     'casting is VOD-only in Phase 1 (Live TV excluded — it uses MSE, not a plain URL)');
-  assert.match(ui, /function currentCastStreamUrl\(\) \{[\s\S]+p\.usingTranscode[\s\S]+p\.usingRemux[\s\S]+new URL\(path, location\.origin\)\.href/,
+  assert.match(ui, /function currentCastStreamUrl\(\) \{[\s\S]+p\.usingTranscode[\s\S]+p\.usingRemux[\s\S]+new URL\(path, castPublicOrigin\(\)\)\.href/,
     'the cast URL is the current variant made absolute (LAN-reachable), token already in the query');
-  assert.match(ui, /if \(!castHostReachable\(\)\) \{ toast\('Open Triboon by its LAN IP/,
-    'casting from localhost is blocked with guidance (the TV cannot reach localhost)');
+  assert.match(ui, /function castCanReachTv\(\) \{ return castHostReachable\(\) \|\| !!castLanOrigin\(\); \}/,
+    'localhost can still cast when the server advertises a house LAN origin');
+  assert.match(ui, /async function ensureCastLanOrigin\(\) \{[\s\S]+api\('\/api\/server'\)[\s\S]+S\.serverInfo = \{ \.\.\.\(S\.serverInfo \|\| \{\}\), \.\.\.srv \}/,
+    'Cast refreshes /api/server so a localhost session picks up the house LAN origin');
+  assert.match(ui, /if \(!await ensureCastLanOrigin\(\)\) \{[\s\S]+playerCastToast\('Open Triboon by its house address/,
+    'casting from localhost is blocked with guidance when no house LAN origin is known');
   assert.match(ui, /if \(S\.playing && S\.playing\.castingActive && !opts\._fromCast\) \{[\s\S]+endSession\(true\)/,
     'backing out of the player while casting stops the TV too');
   assert.match(ui, /btn\.addEventListener\('click', \(\) => \{ try \{ v\.webkitShowPlaybackTargetPicker\(\); \}/,
@@ -2148,8 +2152,8 @@ test('casting Phase 3: native Android Cast sender is wired (cast from the app)',
   assert.match(main, /closeNativePlayback\(false\);[\s\S]+new com\.google\.android\.gms\.cast\.MediaInfo\.Builder/,
     'loading the receiver stops the local ExoPlayer first (no double-play)');
   assert.match(main, /window\.__tvCast && window\.__tvCast\(/, 'native pushes cast state to the web via __tvCast');
-  assert.match(main, /boolean show = castHasDevices && !castActive\(\) && "video"\.equals\(nativeMode\)/,
-    'the native Cast button shows only for VOD when a device is available and not already casting');
+  assert.match(main, /boolean show = !castActive\(\) && "video"\.equals\(nativeMode\) && nativePlayerOpen\(\)/,
+    'the native Cast button stays on VOD so the phone shows Cast even before a Chromecast appears');
   // castHasDevices is only accurate while a MediaRouter discovery scan runs — CAF does not keep one
   // alive on its own and there is no MediaRouteButton, so without this the button never appears.
   assert.match(main, /mediaRouter\.addCallback\(castRouteSelector\(\), castRouteCallback,\s*\n?\s*androidx\.mediarouter\.media\.MediaRouter\.CALLBACK_FLAG_REQUEST_DISCOVERY\)/,

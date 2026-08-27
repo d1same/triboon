@@ -3398,7 +3398,7 @@ public class MainActivity extends Activity {
         rightControls.addView(nativeAudioBtn);
 
         nativeCastBtn = nativeButton(R.drawable.ic_player_cast, "Cast to TV", false);
-        nativeCastBtn.setVisibility(View.GONE); // shown by updateNativeCastButton when a Cast device is available
+        nativeCastBtn.setVisibility(View.GONE); // shown for VOD by updateNativeCastButton; tap opens the picker
         nativeCastBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) castCurrentNativeVideo(); });
         rightControls.addView(nativeCastBtn);
 
@@ -5616,13 +5616,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    // Show the native Cast button only for VOD when a Cast route is discoverable and we're not
-    // already casting (while casting, local playback is stopped and the web OSD is the remote).
+    // Always show Cast on VOD. Hiding it until a Chromecast appears made the phone look like
+    // it had no Cast at all — YouTube keeps the icon up and the picker says when nothing is found.
     private void updateNativeCastButton() {
         if (nativeCastBtn == null) return;
         runOnUiThread(() -> {
             if (nativeCastBtn == null) return;
-            boolean show = castHasDevices && !castActive() && "video".equals(nativeMode) && nativePlayerOpen();
+            boolean show = !castActive() && "video".equals(nativeMode) && nativePlayerOpen();
             nativeCastBtn.setVisibility(show ? View.VISIBLE : View.GONE);
         });
     }

@@ -198,6 +198,9 @@
       });
     },
 
+    playerToast(message) {
+      return playerControl('toast', { message: String(message || '').slice(0, 180) });
+    },
     closeVideo() { return playerControl('close'); },
     play() { return playerControl('play'); },
     pause() { return playerControl('pause'); },

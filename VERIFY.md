@@ -126,6 +126,30 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-27, v3.1.16 ship — Windows player chrome, Cast toast, Android phone Cast button:
+
+- Version contract: `package.json` 3.1.16; Android `versionName` 3.1.16 /
+  `versionCode` 361; Windows client package/Tauri/Cargo 3.1.16.
+- Windows windowed play keeps the OS title bar. Player OSD matches web
+  (no GPU/verified badges, no center pause circle). Taskbar icon is the
+  punched T mark. Continue Watching opens immediately instead of waiting
+  on a cold local-library lookup.
+- Cast: Android native Cast button stays visible on VOD so the phone
+  shows it before a Chromecast appears. Windows Cast click toasts on the
+  player (catalog is hidden). Localhost senders refresh `/api/server`
+  `lanOrigin` so the TV gets a house address.
+- Owner local Windows smoke: title bar during play; Cast click shows a
+  player toast. Google Cast still only finds Chromecast / Android TV.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7777`
+  and emulator `emulator-5554` (not the Shield). Node suite **667/667**.
+  Isolated `/api/server` 3.1.16.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 5322ms SLOW, then first-byte/seek/resume OK; FROM ready 8014ms
+  SLOW, first-byte/seek/resume OK). IPTV web+native retune PASS
+  (8185 channels). Overlapping Play PASS (both ready in 27ms). Android
+  lint/unit/debug build PASS. Android ExoPlayer stress on `emulator-5554`
+  PASS. Windows GPU not instrumented.
+
 2026-08-26, v3.1.15 ship — Next Episode 1080p/4K/local, Trakt leftover push:
 
 - Version contract: `package.json` 3.1.15; Android `versionName` 3.1.15 /

@@ -323,11 +323,15 @@ test('Windows client: Cast button uses the shared Google Cast picker', () => {
     'native chrome has the same Cast control as the web player');
   assert.match(js, /\$\('cast'\)\.hidden = state\.mode === 'live'/,
     'Cast stays off Live TV, same as web');
-  assert.match(js, /\$\('cast'\)\.addEventListener\('click', \(\) => send\('cast'\)\)/,
-    'the Cast button asks the catalog to open the device picker');
+  assert.match(read('clients/windows-px8/ui/bridge.js'), /playerToast\(message\) \{\s*return playerControl\('toast'/,
+    'the catalog can put Cast errors on the visible player toast');
+  assert.match(js, /\$\('cast'\)\.addEventListener\('click', \(\) => \{\s*showToast\('Looking for TVs…'\);\s*send\('cast'\);\s*\}\)/,
+    'the Cast button tells the player it heard the tap, then asks the catalog to open the picker');
+  assert.match(js, /window, '__triboonShowToast'/,
+    'the catalog can put Cast errors on the visible player toast');
   assert.match(rust, /"cast" \| "start_cast" => Ok\(ControlAction::Cast\)/,
     'cast is a typed native control');
-  assert.match(rust, /ControlAction::Cast => \{\s*eval_callback\(&app, "__tvNativeCastStart"/,
+  assert.match(rust, /ControlAction::Cast => \{\s*eval_player_toast\(&app, "Looking for TVs…"\);\s*eval_callback\(&app, "__tvNativeCastStart"/,
     'Windows Cast reaches the same catalog picker as the web player');
 });
 

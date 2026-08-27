@@ -4060,6 +4060,8 @@ test('cast: server config exposes the receiver app-id, defaulting to the Default
   // keep working unchanged. The owner overrides this once they register a custom app-id.
   assert.strictEqual(r.json.castReceiverAppId, 'CC1AD845',
     'default cast receiver app-id must be the Default Media Receiver (CC1AD845)');
+  assert.strictEqual(typeof r.json.lanOrigin, 'string',
+    'server advertises a house LAN origin so localhost senders can hand the TV a reachable URL');
 });
 
 test('cast: a valid custom receiver app-id round-trips; junk is rejected back to the default', async () => {

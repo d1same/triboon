@@ -112,6 +112,22 @@ function effectiveCastReceiverAppId(s = settings.get()) {
   return /^[0-9A-F]{8}$/.test(configured) ? configured : DEFAULT_CAST_RECEIVER_APP_ID;
 }
 
+function advertisedLanOrigin() {
+  const os = require('os');
+  const found = [];
+  for (const list of Object.values(os.networkInterfaces() || {})) {
+    for (const n of list || []) {
+      const ipv4 = n.family === 'IPv4' || n.family === 4;
+      if (!ipv4 || n.internal || !n.address) continue;
+      if (n.address.startsWith('172.17.') || n.address.startsWith('172.18.')) continue;
+      found.push(n.address);
+    }
+  }
+  const ip = found.find((addr) => addr.startsWith('10.') || addr.startsWith('192.168.')
+    || /^172\.(1[6-9]|2\d|3[0-1])\./.test(addr)) || found[0];
+  return ip ? `http://${ip}:${PORT}` : '';
+}
+
 // HLS output variant (Cast Phase 2). Feature-flagged OFF by default so the locked
 // direct→remux→transcode ladder is unchanged unless the owner opts in (custom Cast receiver or
 // AirPlay-to-m3u8 use cases). Enable with TRIBOON_HLS=1 or settings.hlsEnabled.
@@ -4905,6 +4921,8 @@ const H = {
     // Cast receiver app-id (Default Media Receiver unless the owner registered a custom one). The
     // web + Android senders read this to launch the right receiver; the default keeps Phase 1/3 as-is.
     castReceiverAppId: effectiveCastReceiverAppId(),
+    // First private IPv4 the TV can fetch when the sender is on localhost/127.0.0.1.
+    lanOrigin: advertisedLanOrigin(),
   }),
 
   // Custom Web Receiver page (Cast Phase 2). PUBLIC by design: the Cast DEVICE (not a signed-in

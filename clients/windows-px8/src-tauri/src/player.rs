@@ -727,6 +727,7 @@ enum ControlAction {
     OpenGuide,
     CloseGuide,
     Cast,
+    Toast(String),
 }
 
 fn number_from_payload(payload: &Value, names: &[&str]) -> Option<f64> {
@@ -894,6 +895,13 @@ fn parse_control(
         "open_guide" => Ok(ControlAction::OpenGuide),
         "close_guide" => Ok(ControlAction::CloseGuide),
         "cast" | "start_cast" => Ok(ControlAction::Cast),
+        "toast" => Ok(ControlAction::Toast(
+            string_from_payload(&payload, &["message", "text", "value"])
+                .unwrap_or_default()
+                .chars()
+                .take(180)
+                .collect(),
+        )),
         _ => Err("unknown player action".into()),
     }
 }
@@ -1412,6 +1420,19 @@ fn close_without_engine(app: &tauri::AppHandle, shared: &Arc<Mutex<PlayerUiState
     );
 }
 
+fn eval_player_toast(app: &tauri::AppHandle, message: &str) {
+    let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) else {
+        return;
+    };
+    let Ok(message_json) = serde_json::to_string(message) else {
+        return;
+    };
+    let script = format!(
+        "(()=>{{const f=window.__triboonShowToast;if(typeof f==='function')f({message_json});}})()"
+    );
+    let _ = player.eval(script);
+}
+
 fn eval_callback(app: &tauri::AppHandle, name: &str, args: Vec<Value>) {
     let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) else {
         return;
@@ -1507,7 +1528,12 @@ pub fn windows_player_control(
             return Ok(());
         }
         ControlAction::Cast => {
+            eval_player_toast(&app, "Looking for TVs…");
             eval_callback(&app, "__tvNativeCastStart", vec![]);
+            return Ok(());
+        }
+        ControlAction::Toast(message) => {
+            eval_player_toast(&app, &message);
             return Ok(());
         }
         _ => {}
@@ -2901,7 +2927,7 @@ fn handle_control(
         }
         ControlAction::OpenGuide => active.ui.guide = true,
         ControlAction::CloseGuide => active.ui.guide = false,
-        ControlAction::Close | ControlAction::RequestState | ControlAction::Cast => {}
+        ControlAction::Close | ControlAction::RequestState | ControlAction::Cast | ControlAction::Toast(_) => {}
     }
     publish_ui(app, shared, active.ui.clone());
     false

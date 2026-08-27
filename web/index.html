@@ -16946,7 +16946,30 @@ function castEligible() {
 }
 function castSdkReady() { return !!(window.cast && window.cast.framework && window.chrome && window.chrome.cast); }
 function castHostReachable() { const h = location.hostname; return !(h === 'localhost' || h === '127.0.0.1' || h === '::1'); }
+function castLanOrigin() {
+  const lan = String((S.serverInfo && S.serverInfo.lanOrigin) || '').trim().replace(/\/$/, '');
+  return /^https?:\/\/(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?$/i.test(lan) ? lan : '';
+}
+function castPublicOrigin() { return castHostReachable() ? location.origin : (castLanOrigin() || location.origin); }
+function castCanReachTv() { return castHostReachable() || !!castLanOrigin(); }
+async function ensureCastLanOrigin() {
+  if (castCanReachTv()) return true;
+  try {
+    const srv = await api('/api/server');
+    S.serverInfo = { ...(S.serverInfo || {}), ...srv };
+  } catch {}
+  return castCanReachTv();
+}
 function castVodEligible() { const p = S.playing; return !!(p && p.item && p.item.type !== 'live'); }
+function playerCastToast(msg) {
+  try {
+    if (window.TriboonTV && typeof TriboonTV.playerToast === 'function') {
+      TriboonTV.playerToast(String(msg || ''));
+      return;
+    }
+  } catch {}
+  toast(msg);
+}
 function initCastSender() {
   if (!castEligible() || _castSdkAsked) return;
   _castSdkAsked = true;
@@ -17015,12 +17038,28 @@ function updateCastButtons() {
   btn.classList.toggle('on', castConnected());
 }
 async function startCast() {
-  if (!castSdkReady() || !S.playing) return;
-  if (!castHostReachable()) { toast('Open Triboon by its LAN IP (not localhost) to cast'); return; }
+  if (!S.playing) { playerCastToast('Nothing is playing'); return; }
+  if (!castVodEligible()) { playerCastToast('Cast is for movies and TV shows'); return; }
+  if (!await ensureCastLanOrigin()) {
+    playerCastToast('Open Triboon by its house address (not localhost) so the TV can reach it');
+    return;
+  }
+  if (!castSdkReady()) {
+    initCastSender();
+    playerCastToast('Looking for a Chromecast or Android TV…');
+    setTimeout(() => {
+      if (!castSdkReady()) {
+        playerCastToast('No Cast devices found. Use the phone app, or a Chromecast / Android TV.');
+        return;
+      }
+      startCast();
+    }, 1500);
+    return;
+  }
   try {
     if (!_castCtx.getCurrentSession()) await _castCtx.requestSession(); // shows the device picker
     if (_castCtx.getCurrentSession()) castLoadCurrent();
-  } catch { /* user dismissed the picker, or the connect failed */ }
+  } catch { playerCastToast('Cast cancelled'); }
 }
 function currentCastStreamUrl() {
   const p = S.playing; if (!p) return null;
@@ -17031,7 +17070,7 @@ function currentCastStreamUrl() {
   if (p.usingTranscode) path = `${p.transcodeUrl}&start=${pos}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
   else if (p.usingRemux) path = remuxPlaybackUrl(p, pos);
   else path = p.streamUrl;
-  try { return new URL(path, location.origin).href; } catch { return null; }
+  try { return new URL(path, castPublicOrigin()).href; } catch { return null; }
 }
 function castLoadCurrent() {
   const p = S.playing, sess = _castCtx && _castCtx.getCurrentSession();
@@ -17044,7 +17083,7 @@ function castLoadCurrent() {
   md.title = p.item.title || '';
   if (p.item.type === 'episode' && p.item.epLabel) md.subtitle = p.item.epLabel;
   const art = p.item.backdrop || p.item.poster;
-  if (art) { try { md.images = [new chrome.cast.media.Image(new URL(art, location.origin).href)]; } catch {} }
+  if (art) { try { md.images = [new chrome.cast.media.Image(new URL(art, castPublicOrigin()).href)]; } catch {} }
   info.metadata = md;
   const req = new chrome.cast.media.LoadRequest(info);
   req.autoplay = true;
@@ -17113,19 +17152,6 @@ $('castBtn').addEventListener('click', startCast);
 initCastSender();
 initAirPlay();
 window.__tvNativeCastStart = () => {
-  if (!S.playing || !castVodEligible()) {
-    toast('Cast is for movies and TV shows');
-    return;
-  }
-  if (!castHostReachable()) {
-    toast('Open Triboon by its LAN IP (not localhost) to cast');
-    return;
-  }
-  if (!castSdkReady()) {
-    initCastSender();
-    toast('Cast needs a Chromecast or Android TV on this network');
-    return;
-  }
   startCast();
 };
 // Native app cast (Phase 3): the Android shell casts via its own Cast SDK and pushes receiver state
