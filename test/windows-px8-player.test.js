@@ -223,6 +223,10 @@ test('Windows client: live player chrome matches the Live TV page, not an empty 
   const rust = read('clients/windows-px8/src-tauri/src/player.rs');
   assert.match(rust, /windows_player_play_live[\s\S]+if request\.guide \{[\s\S]+request\.guide = false;[\s\S]+__tvNativeGuideClosed/,
     'a guide channel pick must not start a chrome-less live session');
+  assert.match(rust, /const LIVE_READAHEAD_SECS: i64 = 2;[\s\S]+fn apply_session_buffer[\s\S]+SessionMode::Live \{[\s\S]+LIVE_CACHE_MAX_BYTES[\s\S]+LIVE_READAHEAD_SECS[\s\S]+else \{[\s\S]+cache_bytes/,
+    'Live TV must start on first frames, not the VOD 8–300s prefetch');
+  assert.doesNotMatch(rust, /if session\.mode == SessionMode::Live \{[\s\S]*?set_property\("cache-secs"/,
+    'Live must not leave a tiny cache on the shared mpv that a later movie would inherit');
 });
 
 test('Windows client: VOD fullscreen does not reopen leftover guide PiP', () => {
@@ -239,6 +243,10 @@ test('Windows client: VOD fullscreen does not reopen leftover guide PiP', () => 
     'the loader stays black so Play does not flash the wallpaper');
   assert.match(rust, /fn toggle_player_fullscreen\([\s\S]+if stored_guide_pip\(app\)\.is_some\(\) \{[\s\S]+set_fullscreen\(true\)/,
     'the fullscreen button leaves guide PiP into exclusive fullscreen, it does not restore the leftover slot');
+  assert.match(rust, /remember_windowed_bounds\(app, &player\);\s*let _ = player\.set_always_on_top\(false\);\s*player\.set_fullscreen\(true\)/,
+    'going fullscreen remembers the windowed corner first');
+  assert.match(rust, /player\.set_fullscreen\(false\)[\s\S]+if !apply_windowed_bounds\(app, &player\)/,
+    'leaving fullscreen puts the player back where it was, not the hidden catalog');
   assert.match(rust, /fn leave_guide_mode\([\s\S]+restore_windowed_player/,
     'closing the guide returns to a windowed player, not automatic exclusive fullscreen');
   assert.match(js, /if \(document\.body\.classList\.contains\('guide-pip'\)\) \{\s*expandGuidePip\(\);/,
@@ -315,10 +323,11 @@ test('Windows client: Guide opens Live TV, not leftover episodes', () => {
     'opening the shared guide closes the episode strip on every client');
 });
 
-test('Windows client: Cast button uses the shared Google Cast picker', () => {
+test('Windows client: Cast button finds TVs on the PC, not through WebView2', () => {
   const html = read('clients/windows-px8/ui/player.html');
   const js = read('clients/windows-px8/ui/player.js');
   const rust = read('clients/windows-px8/src-tauri/src/player.rs');
+  const caster = read('clients/windows-px8/src-tauri/src/cast.rs');
   assert.match(html, /id="cast"[\s\S]+Cast to TV/,
     'native chrome has the same Cast control as the web player');
   assert.match(js, /\$\('cast'\)\.hidden = state\.mode === 'live'/,
@@ -326,13 +335,41 @@ test('Windows client: Cast button uses the shared Google Cast picker', () => {
   assert.match(read('clients/windows-px8/ui/bridge.js'), /playerToast\(message\) \{\s*return playerControl\('toast'/,
     'the catalog can put Cast errors on the visible player toast');
   assert.match(js, /\$\('cast'\)\.addEventListener\('click', \(\) => \{\s*showToast\('Looking for TVs…'\);\s*send\('cast'\);\s*\}\)/,
-    'the Cast button tells the player it heard the tap, then asks the catalog to open the picker');
-  assert.match(js, /window, '__triboonShowToast'/,
-    'the catalog can put Cast errors on the visible player toast');
+    'the Cast button tells the player it heard the tap');
+  assert.match(js, /function openCastMenu\(devices\)/,
+    'Windows shows a native TV list, because WebView2 cannot load Google Cast');
+  assert.match(js, /window, '__triboonCastDevices'/,
+    'Rust discovery lands on the visible player overlay');
+  assert.match(js, /send\('cast_to', \{ host, port, name \}\)/,
+    'picking a TV stays on the native sender');
   assert.match(rust, /"cast" \| "start_cast" => Ok\(ControlAction::Cast\)/,
     'cast is a typed native control');
-  assert.match(rust, /ControlAction::Cast => \{\s*eval_player_toast\(&app, "Looking for TVs…"\);\s*eval_callback\(&app, "__tvNativeCastStart"/,
-    'Windows Cast reaches the same catalog picker as the web player');
+  assert.match(rust, /"cast_to" \| "cast_device" =>/,
+    'picking a TV is a typed native control');
+  assert.match(rust, /start_cast_discovery\(app\.clone\(\)\)/,
+    'Windows Cast discovers Chromecasts from the PC, not the hidden catalog WebView');
+  assert.match(caster, /_googlecast\._tcp\.local/,
+    'discovery asks the LAN for Chromecast / Android TV');
+  assert.match(caster, /0x8001u16/,
+    'mDNS QU answers come back to the ephemeral port, not only :5353');
+  assert.match(caster, /fn local_private_ipv4s\(\)/,
+    'discovery sends from each house NIC, not a random WSL/VPN interface');
+  assert.match(caster, /fn scan_cast_port_8009/,
+    'if mDNS is quiet, the same /24 is probed on Cast port 8009');
+  assert.match(caster, /fn devices_from_mdns[\s\S]+_googlecast\._tcp/,
+    'an SRV packet without a PTR still counts as a TV');
+  assert.match(caster, /DEFAULT_RECEIVER_APP_ID/,
+    'the TV still uses Google\'s Default Media Receiver');
+  assert.match(caster, /fn preferred_cast_source/,
+    'Cast sends remux/transcode, not the raw file libmpv can play');
+  assert.match(webSource, /remuxUrl: p\.remuxUrl \? new URL\(p\.remuxUrl, location\.origin\)\.href : ''/,
+    'Windows playVideo carries the remux URL so Cast can use it');
+  assert.match(rust, /preferred_cast_source\(\s*&candidate\.url,\s*&session\.remux_url/,
+    'picking a TV uses the remux URL, not only the current libmpv file');
+  assert.match(rust, /cast::discover\(Duration::from_millis\(4000\)\)/,
+    'Cast search waits long enough for QU answers and a short 8009 sweep');
+  assert.match(read('clients/windows-px8/src-tauri/src/player.rs'), /\.transparent\(true\)/,
+    'Cast work must not paint an opaque window over the movie');
 });
 
 test('Windows client: windowed play keeps the OS title bar and matches web OSD', () => {

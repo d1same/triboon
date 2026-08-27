@@ -11,10 +11,14 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::net::{IpAddr, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[path = "cast.rs"]
+mod cast;
 use tauri::{Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 const MAX_TEXT: usize = 512;
@@ -25,6 +29,10 @@ const VOD_STARTUP_TIMEOUT: Duration = Duration::from_secs(28);
 const VOD_REBUFFER_TIMEOUT: Duration = Duration::from_secs(32);
 const LIVE_STARTUP_TIMEOUT: Duration = Duration::from_secs(9);
 const LIVE_REBUFFER_TIMEOUT: Duration = Duration::from_secs(14);
+// Live must start on first frames. The VOD clamp (8–300s) made mpv prefetch a
+// movie-sized buffer before showing a channel.
+const LIVE_READAHEAD_SECS: i64 = 2;
+const LIVE_CACHE_MAX_BYTES: i64 = 8 * 1024 * 1024;
 
 pub(crate) fn native_chrome_version() -> u32 {
     if cfg!(all(feature = "player", target_os = "windows")) {
@@ -133,6 +141,10 @@ pub struct VodPayload {
     percent_resume: bool,
     #[serde(default)]
     preferred_audio_language: String,
+    #[serde(default)]
+    remux_url: String,
+    #[serde(default)]
+    transcode_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -305,7 +317,7 @@ fn url_path(url: &HttpUrl) -> &str {
         .unwrap_or(url.path_and_query.as_str())
 }
 
-fn vod_path_allowed(path: &str) -> bool {
+pub(crate) fn vod_path_allowed(path: &str) -> bool {
     [
         "/api/stream/",
         "/api/remux/",
@@ -559,6 +571,8 @@ struct VodRequest {
     quiet_seek: bool,
     percent_resume: bool,
     preferred_audio_language: String,
+    remux_url: String,
+    transcode_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -641,7 +655,16 @@ fn validate_vod(payload: VodPayload, server: &str) -> Result<VodRequest, String>
         quiet_seek: payload.quiet_seek,
         percent_resume: payload.percent_resume,
         preferred_audio_language: payload.preferred_audio_language.chars().take(16).collect(),
+        remux_url: optional_vod_url(&payload.remux_url, server, "remux")?,
+        transcode_url: optional_vod_url(&payload.transcode_url, server, "transcode")?,
     })
+}
+
+fn optional_vod_url(raw: &str, server: &str, field: &str) -> Result<String, String> {
+    if raw.trim().is_empty() {
+        return Ok(String::new());
+    }
+    validated_same_origin_url(raw, server, vod_path_allowed, field)
 }
 
 fn validate_live(payload: LivePayload, server: &str) -> Result<LiveRequest, String> {
@@ -727,6 +750,12 @@ enum ControlAction {
     OpenGuide,
     CloseGuide,
     Cast,
+    CastTo {
+        host: String,
+        port: u16,
+        name: String,
+        server: String,
+    },
     Toast(String),
 }
 
@@ -895,6 +924,33 @@ fn parse_control(
         "open_guide" => Ok(ControlAction::OpenGuide),
         "close_guide" => Ok(ControlAction::CloseGuide),
         "cast" | "start_cast" => Ok(ControlAction::Cast),
+        "cast_to" | "cast_device" => {
+            let host = string_from_payload(&payload, &["host", "ip"])
+                .unwrap_or_default()
+                .chars()
+                .take(64)
+                .collect::<String>();
+            if !cast::is_private_cast_host(&host) {
+                return Err("that TV address is not allowed".into());
+            }
+            let port = number_from_payload(&payload, &["port"])
+                .unwrap_or(8009.0)
+                .round() as i64;
+            if !(1024..=65535).contains(&port) {
+                return Err("that TV port is not allowed".into());
+            }
+            let name = string_from_payload(&payload, &["name", "device"])
+                .unwrap_or_else(|| "TV".into())
+                .chars()
+                .take(80)
+                .collect();
+            Ok(ControlAction::CastTo {
+                host,
+                port: port as u16,
+                name,
+                server: server.unwrap_or("").to_string(),
+            })
+        }
         "toast" => Ok(ControlAction::Toast(
             string_from_payload(&payload, &["message", "text", "value"])
                 .unwrap_or_default()
@@ -1123,10 +1179,20 @@ struct ActorHandle {
     tx: Sender<PlayerCommand>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WindowedBounds {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
 pub(crate) struct PlayerController {
     actor: Mutex<Option<ActorHandle>>,
     last_ui: Arc<Mutex<PlayerUiState>>,
     guide_pip: Arc<Mutex<Option<GuideRect>>>,
+    cast_stop: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    windowed_bounds: Arc<Mutex<Option<WindowedBounds>>>,
 }
 
 impl Default for PlayerController {
@@ -1135,6 +1201,8 @@ impl Default for PlayerController {
             actor: Mutex::new(None),
             last_ui: Arc::new(Mutex::new(PlayerUiState::default())),
             guide_pip: Arc::new(Mutex::new(None)),
+            cast_stop: Arc::new(Mutex::new(None)),
+            windowed_bounds: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -1195,9 +1263,11 @@ impl PlayerController {
             let thread_tx = tx.clone();
             let app_handle = app.clone();
             let last_ui = Arc::clone(&self.last_ui);
+            let cast_stop = Arc::clone(&self.cast_stop);
+            let cmd_tx = tx.clone();
             thread::Builder::new()
                 .name("triboon-libmpv".into())
-                .spawn(move || actor_loop(app_handle, surface, rx, last_ui))
+                .spawn(move || actor_loop(app_handle, surface, rx, last_ui, cast_stop, cmd_tx))
                 .map_err(|e| format!("could not start native player: {e}"))?;
             *actor = Some(ActorHandle { tx: thread_tx });
         }
@@ -1306,6 +1376,50 @@ fn restore_windowed_player(app: &tauri::AppHandle, player: &WebviewWindow) {
     let _ = player.set_size(tauri::PhysicalSize::new(1280, 800));
 }
 
+fn remember_windowed_bounds(app: &tauri::AppHandle, player: &WebviewWindow) {
+    let Ok(pos) = player.outer_position() else {
+        return;
+    };
+    let Ok(size) = player.outer_size() else {
+        return;
+    };
+    if size.width < 880 || size.height < 560 {
+        return;
+    }
+    let Some(bounds) = app
+        .try_state::<PlayerController>()
+        .map(|controller| Arc::clone(&controller.windowed_bounds))
+    else {
+        return;
+    };
+    if let Ok(mut slot) = bounds.lock() {
+        *slot = Some(WindowedBounds {
+            x: pos.x,
+            y: pos.y,
+            width: size.width,
+            height: size.height,
+        });
+    };
+}
+
+fn apply_windowed_bounds(app: &tauri::AppHandle, player: &WebviewWindow) -> bool {
+    let Some(slot) = app
+        .try_state::<PlayerController>()
+        .map(|controller| Arc::clone(&controller.windowed_bounds))
+    else {
+        return false;
+    };
+    let Some(bounds) = slot.lock().ok().and_then(|guard| *guard) else {
+        return false;
+    };
+    let _ = player.set_position(tauri::PhysicalPosition::new(bounds.x, bounds.y));
+    let _ = player.set_size(tauri::PhysicalSize::new(
+        bounds.width.max(880),
+        bounds.height.max(560),
+    ));
+    true
+}
+
 fn toggle_player_fullscreen(app: &tauri::AppHandle) -> Result<(), String> {
     if stored_guide_pip(app).is_some() {
         clear_guide_pip(app);
@@ -1327,8 +1441,12 @@ fn toggle_player_fullscreen(app: &tauri::AppHandle) -> Result<(), String> {
     if fullscreen {
         let _ = player.set_always_on_top(false);
         player.set_fullscreen(false).map_err(|e| e.to_string())?;
-        restore_windowed_player(app, &player);
+        let _ = player.set_decorations(true);
+        if !apply_windowed_bounds(app, &player) {
+            restore_windowed_player(app, &player);
+        }
     } else {
+        remember_windowed_bounds(app, &player);
         let _ = player.set_always_on_top(false);
         player.set_fullscreen(true).map_err(|e| e.to_string())?;
     }
@@ -1433,6 +1551,54 @@ fn eval_player_toast(app: &tauri::AppHandle, message: &str) {
     let _ = player.eval(script);
 }
 
+fn eval_cast_devices(app: &tauri::AppHandle, devices: &[cast::CastDevice]) {
+    let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) else {
+        return;
+    };
+    let payload = Value::Array(devices.iter().map(cast::CastDevice::to_json).collect());
+    let Ok(payload_json) = serde_json::to_string(&payload) else {
+        return;
+    };
+    let script = format!(
+        "(()=>{{const f=window.__triboonCastDevices;if(typeof f==='function')f({payload_json});}})()"
+    );
+    let _ = player.eval(script);
+}
+
+fn start_cast_discovery(app: tauri::AppHandle) {
+    thread::Builder::new()
+        .name("triboon-cast-discover".into())
+        .spawn(move || {
+            let devices = cast::discover(Duration::from_millis(4000));
+            if devices.is_empty() {
+                eval_player_toast(
+                    &app,
+                    "No Cast devices found. Use the phone app, or a Chromecast / Android TV.",
+                );
+            }
+            eval_cast_devices(&app, &devices);
+        })
+        .ok();
+}
+
+fn replace_cast_stop(slot: &Arc<Mutex<Option<Arc<AtomicBool>>>>) -> Arc<AtomicBool> {
+    let stop = Arc::new(AtomicBool::new(false));
+    if let Ok(mut current) = slot.lock() {
+        if let Some(previous) = current.replace(Arc::clone(&stop)) {
+            previous.store(true, Ordering::SeqCst);
+        }
+    }
+    stop
+}
+
+fn clear_cast_stop(slot: &Arc<Mutex<Option<Arc<AtomicBool>>>>) {
+    if let Ok(mut current) = slot.lock() {
+        if let Some(previous) = current.take() {
+            previous.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 fn eval_callback(app: &tauri::AppHandle, name: &str, args: Vec<Value>) {
     let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) else {
         return;
@@ -1529,7 +1695,7 @@ pub fn windows_player_control(
         }
         ControlAction::Cast => {
             eval_player_toast(&app, "Looking for TVs…");
-            eval_callback(&app, "__tvNativeCastStart", vec![]);
+            start_cast_discovery(app.clone());
             return Ok(());
         }
         ControlAction::Toast(message) => {
@@ -1748,6 +1914,8 @@ struct NativeSession {
     buffer_goal_sec: u32,
     subtitle: SubtitleRequest,
     preferred_audio_language: String,
+    remux_url: String,
+    transcode_url: String,
     ready: bool,
     start_seen: bool,
     file_loaded: bool,
@@ -1820,6 +1988,8 @@ impl NativeSession {
             buffer_goal_sec: request.buffer_goal_sec,
             subtitle: request.subtitle,
             preferred_audio_language: request.preferred_audio_language,
+            remux_url: request.remux_url,
+            transcode_url: request.transcode_url,
             ready: false,
             start_seen: false,
             file_loaded: false,
@@ -1852,7 +2022,7 @@ impl NativeSession {
             start_offset: 0.0,
             start_fraction: 0.0,
             duration_hint: 0.0,
-            buffer_goal_sec: 24,
+            buffer_goal_sec: LIVE_READAHEAD_SECS as u32,
             subtitle: SubtitleRequest {
                 rel: String::new(),
                 url: String::new(),
@@ -1863,6 +2033,8 @@ impl NativeSession {
                 startup: false,
             },
             preferred_audio_language: String::new(),
+            remux_url: String::new(),
+            transcode_url: String::new(),
             ready: false,
             start_seen: false,
             file_loaded: false,
@@ -1922,6 +2094,8 @@ fn actor_loop(
     surface: i64,
     rx: Receiver<PlayerCommand>,
     shared: Arc<Mutex<PlayerUiState>>,
+    cast_stop: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    cmd_tx: Sender<PlayerCommand>,
 ) {
     let mpv = match create_mpv(surface) {
         Ok(mpv) => mpv,
@@ -1934,12 +2108,14 @@ fn actor_loop(
     loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(PlayerCommand::ShowLoading(state)) => {
+                clear_cast_stop(&cast_stop);
                 flush_progress(&app, session.as_mut());
                 let _ = mpv.command("stop", &[]);
                 session = None;
                 publish_ui(&app, &shared, state);
             }
             Ok(PlayerCommand::PlayVod(request)) => {
+                clear_cast_stop(&cast_stop);
                 flush_progress(&app, session.as_mut());
                 let mut next = NativeSession::from_vod(request);
                 if let Err(error) = load_session(&mpv, &mut next) {
@@ -1949,6 +2125,7 @@ fn actor_loop(
                 session = Some(next);
             }
             Ok(PlayerCommand::PlayLive(request)) => {
+                clear_cast_stop(&cast_stop);
                 flush_progress(&app, session.as_mut());
                 let mut next = NativeSession::from_live(request);
                 if let Err(error) = load_session(&mpv, &mut next) {
@@ -1960,7 +2137,15 @@ fn actor_loop(
                 session = Some(next);
             }
             Ok(PlayerCommand::Control(action)) => {
-                if handle_control(&app, &mpv, &mut session, action, &shared) {
+                if handle_control(
+                    &app,
+                    &mpv,
+                    &mut session,
+                    action,
+                    &shared,
+                    &cast_stop,
+                    &cmd_tx,
+                ) {
                     break;
                 }
             }
@@ -1968,9 +2153,11 @@ fn actor_loop(
                 handle_update(&app, &mpv, session.as_mut(), update, &shared);
             }
             Ok(PlayerCommand::Close { notify }) => {
+                clear_cast_stop(&cast_stop);
                 close_session(&app, &mpv, &mut session, notify, &shared);
             }
             Ok(PlayerCommand::Shutdown) => {
+                clear_cast_stop(&cast_stop);
                 flush_progress(&app, session.as_mut());
                 let _ = mpv.command("stop", &[]);
                 break;
@@ -1994,6 +2181,8 @@ fn actor_loop(
     _surface: i64,
     rx: Receiver<PlayerCommand>,
     shared: Arc<Mutex<PlayerUiState>>,
+    _cast_stop: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    _cmd_tx: Sender<PlayerCommand>,
 ) {
     while let Ok(command) = rx.recv() {
         match command {
@@ -2132,6 +2321,35 @@ fn cache_bytes(
     target.ceil().clamp(MIN_BYTES, MAX_BYTES) as i64
 }
 
+#[cfg(all(feature = "player", target_os = "windows"))]
+fn apply_session_buffer(mpv: &libmpv2::Mpv, session: &NativeSession) -> Result<(), String> {
+    if session.mode == SessionMode::Live {
+        // Only the two demuxer caps. Other cache knobs stay on the shared mpv
+        // and would follow a later movie (black or stutter).
+        mpv.set_property("demuxer-max-bytes", LIVE_CACHE_MAX_BYTES)
+            .map_err(|e| e.to_string())?;
+        mpv.set_property("demuxer-readahead-secs", LIVE_READAHEAD_SECS)
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    mpv.set_property(
+        "demuxer-max-bytes",
+        cache_bytes(
+            session.buffer_goal_sec,
+            session.ui.source_size,
+            session.duration_hint,
+            &session.ui.quality_label,
+        ),
+    )
+    .map_err(|e| e.to_string())?;
+    mpv.set_property(
+        "demuxer-readahead-secs",
+        session.buffer_goal_sec.clamp(8, 300) as i64,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn loadfile_options(start: f64, host_header: &str) -> Option<String> {
     let mut options = Vec::new();
     if start > 0.0 {
@@ -2167,21 +2385,7 @@ fn load_session(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> Result<(), S
     session.playback_restarted = false;
     session.video_reconfigured = false;
     session.subtitle_attached = session.subtitle.url.is_empty();
-    mpv.set_property(
-        "demuxer-max-bytes",
-        cache_bytes(
-            session.buffer_goal_sec,
-            session.ui.source_size,
-            session.duration_hint,
-            &session.ui.quality_label,
-        ),
-    )
-    .map_err(|e| e.to_string())?;
-    mpv.set_property(
-        "demuxer-readahead-secs",
-        session.buffer_goal_sec.clamp(8, 300) as i64,
-    )
-    .map_err(|e| e.to_string())?;
+    apply_session_buffer(mpv, session)?;
     mpv.set_property("force-media-title", session.ui.title.as_str())
         .map_err(|e| e.to_string())?;
     mpv.set_property("alang", mpv_alang(&session.preferred_audio_language).as_str())
@@ -2727,12 +2931,98 @@ fn try_live_fallback(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> bool {
 }
 
 #[cfg(all(feature = "player", target_os = "windows"))]
+fn start_cast_to_device(
+    app: &tauri::AppHandle,
+    mpv: &libmpv2::Mpv,
+    session: &mut NativeSession,
+    host: String,
+    port: u16,
+    name: String,
+    server: String,
+    cast_stop: &Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    cmd_tx: &Sender<PlayerCommand>,
+) {
+    if session.mode == SessionMode::Live {
+        eval_player_toast(app, "Cast is for movies and TV shows");
+        return;
+    }
+    let Some(candidate) = session.candidates.get(session.candidate_index) else {
+        eval_player_toast(app, "Nothing is playing");
+        return;
+    };
+    if server.is_empty() {
+        eval_player_toast(app, "No Triboon server is configured");
+        return;
+    }
+    let hints = cast::cast_server_hints(&server);
+    let (source_url, current_time) = cast::preferred_cast_source(
+        &candidate.url,
+        &session.remux_url,
+        &session.transcode_url,
+        session.last_position,
+    );
+    let url = match cast::media_url_for_receiver(&source_url, &server, &hints.lan_origin) {
+        Ok(url) => url,
+        Err(error) => {
+            eval_player_toast(app, &error);
+            return;
+        }
+    };
+    let media = cast::CastMedia {
+        url,
+        title: session.ui.title.clone(),
+        subtitle: session.ui.episode_label.clone(),
+        current_time,
+        duration: session.last_duration.max(0.0),
+    };
+    session.requested_playing = false;
+    let _ = mpv.set_property("pause", true);
+    flush_progress(app, Some(session));
+    eval_player_toast(app, &format!("Connecting to {name}…"));
+    let stop = replace_cast_stop(cast_stop);
+    let app = app.clone();
+    let cmd_tx = cmd_tx.clone();
+    thread::Builder::new()
+        .name("triboon-cast-session".into())
+        .spawn(move || {
+            let result = cast::run_session(
+                &host,
+                port,
+                &name,
+                &media,
+                &hints.app_id,
+                Arc::clone(&stop),
+                {
+                    let app = app.clone();
+                    move |status| {
+                        eval_callback(&app, "__tvCast", vec![status.to_json()]);
+                    }
+                },
+            );
+            match result {
+                Ok(()) => {
+                    if !stop.load(Ordering::SeqCst) {
+                        eval_callback(&app, "__tvCast", vec![json!({ "connected": false })]);
+                    }
+                }
+                Err(error) => {
+                    eval_player_toast(&app, &error);
+                    let _ = cmd_tx.send(PlayerCommand::Control(ControlAction::Play));
+                }
+            }
+        })
+        .ok();
+}
+
+#[cfg(all(feature = "player", target_os = "windows"))]
 fn handle_control(
     app: &tauri::AppHandle,
     mpv: &libmpv2::Mpv,
     session: &mut Option<NativeSession>,
     action: ControlAction,
     shared: &Arc<Mutex<PlayerUiState>>,
+    cast_stop: &Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    cmd_tx: &Sender<PlayerCommand>,
 ) -> bool {
     if matches!(action, ControlAction::RequestState) {
         publish_current_ui(app, shared);
@@ -2927,7 +3217,28 @@ fn handle_control(
         }
         ControlAction::OpenGuide => active.ui.guide = true,
         ControlAction::CloseGuide => active.ui.guide = false,
-        ControlAction::Close | ControlAction::RequestState | ControlAction::Cast | ControlAction::Toast(_) => {}
+        ControlAction::CastTo {
+            host,
+            port,
+            name,
+            server,
+        } => {
+            start_cast_to_device(
+                app,
+                mpv,
+                active,
+                host,
+                port,
+                name,
+                server,
+                cast_stop,
+                cmd_tx,
+            );
+        }
+        ControlAction::Close
+        | ControlAction::RequestState
+        | ControlAction::Cast
+        | ControlAction::Toast(_) => {}
     }
     publish_ui(app, shared, active.ui.clone());
     false
@@ -3063,6 +3374,37 @@ mod tests {
     }
 
     #[test]
+    fn cast_to_only_accepts_private_tv_addresses() {
+        let ok = parse_control(
+            "cast_to",
+            json!({"host":"10.1.20.11","port":8009,"name":"Living Room"}),
+            Some("http://10.1.20.120:7777"),
+        )
+        .unwrap();
+        match ok {
+            ControlAction::CastTo { host, port, name, server } => {
+                assert_eq!(host, "10.1.20.11");
+                assert_eq!(port, 8009);
+                assert_eq!(name, "Living Room");
+                assert_eq!(server, "http://10.1.20.120:7777");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(parse_control(
+            "cast_to",
+            json!({"host":"8.8.8.8","port":8009,"name":"Nope"}),
+            Some("http://10.1.20.120:7777"),
+        )
+        .is_err());
+        assert!(parse_control(
+            "cast_to",
+            json!({"host":"evil.example","port":8009,"name":"Nope"}),
+            Some("http://10.1.20.120:7777"),
+        )
+        .is_err());
+    }
+
+    #[test]
     fn vod_urls_are_same_origin_and_route_limited() {
         assert!(validated_same_origin_url(
             "https://media.example:8443/api/stream/a?t=secret",
@@ -3136,6 +3478,12 @@ mod tests {
             "subtitle"
         )
         .is_err());
+    }
+
+    #[test]
+    fn live_starts_without_vod_prefetch() {
+        assert_eq!(LIVE_READAHEAD_SECS, 2);
+        assert!(LIVE_CACHE_MAX_BYTES < 96 * 1024 * 1024);
     }
 
     #[test]
@@ -3326,6 +3674,8 @@ mod tests {
             quiet_seek: false,
             percent_resume: false,
             preferred_audio_language: String::new(),
+            remux_url: String::new(),
+            transcode_url: String::new(),
         };
         let session = NativeSession::from_vod(request);
         assert_eq!(session.display_position(4.25), 124.75);

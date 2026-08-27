@@ -1073,6 +1073,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'runBrowse must trigger the fill-the-window check after every page load');
   assert.match(ui, /function maybeFillBrowseWindow\(\)[\s\S]+document\.body\.classList\.contains\('tv'\)\) return;[\s\S]+g\.scrollHeight > g\.clientHeight \+ 8\) return;[\s\S]+S\.browsePage \|\| 0\) >= 8\) return;[\s\S]+runBrowse\(false\)[\s\S]+loadMoreLocalLibraryPage\(false\)[\s\S]+runLibrary\(false\)/,
     'Movies, TV, and personal libraries keep loading until the grid fills the window, then lazy-load on scroll; TV is excluded');
+  assert.match(ui, /function browseGridNearLoadedEnd\(g\) \{[\s\S]+v\.lastRow < v\.totalRows\) return false;[\s\S]+function requestBrowseGridPage\(\)/,
+    'catalog scroll must not fetch the next page while already-loaded virtual rows remain below');
+  assert.match(ui, /if \(S\.gridIdx >= els\.length - cols \* 2\) requestBrowseGridPage\(\)/,
+    'D-pad catalog paging uses the same cooldown and virtual-end gate as wheel scroll');
+  assert.ok(ui.includes("rootMargin: '280px 400px'") && ui.includes('/\\/api\\/local\\/') && ui.includes('\\/thumb\\/'),
+    'ffmpeg library thumbs lazy-load near the viewport instead of a 1600px stampede');
   assert.match(ui, /function isPosterBrowseView\(\) \{[\s\S]+watchlist', 'library'\]\.includes\(S\.view\)/,
     'personal libraries use the same poster-browse chrome as Movies and TV');
   assert.match(ui, /function localLibraryBatchSize\(\) \{[\s\S]+contains\('tv'\)\) return LOCAL_GRID_BATCH;[\s\S]+cols \* rows/,
@@ -1140,8 +1146,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Cast + AirPlay buttons are in the D-pad control order');
   assert.match(ui, /function castEligible\(\) \{[\s\S]+__triboonWindowsBridge === true[\s\S]+return !canUseNativeVideoPlayer\(\)/,
     'web Cast stays off on Android ExoPlayer; the Windows catalog can still send to a TV');
+  assert.match(ui, /show = !document\.body\.classList\.contains\('tv'\) && castEligible\(\)/,
+    'web Cast button stays hidden on Android TV / body.tv');
   assert.match(ui, /window\.__tvNativeCastStart = \(\) => \{\s*startCast\(\);\s*\};/,
-    'the Windows native Cast button starts the same Google Cast picker as the web player');
+    'the catalog still has a Google Cast fallback for browser-style Cast');
   // Phase 2: the receiver app-id is CONFIGURABLE but still DEFAULTS to the Default Media Receiver so
   // Phase 1 behavior is unchanged until the owner registers a custom receiver.
   assert.match(ui, /receiverApplicationId: castReceiverAppId\(\)/,
@@ -2152,8 +2160,8 @@ test('casting Phase 3: native Android Cast sender is wired (cast from the app)',
   assert.match(main, /closeNativePlayback\(false\);[\s\S]+new com\.google\.android\.gms\.cast\.MediaInfo\.Builder/,
     'loading the receiver stops the local ExoPlayer first (no double-play)');
   assert.match(main, /window\.__tvCast && window\.__tvCast\(/, 'native pushes cast state to the web via __tvCast');
-  assert.match(main, /boolean show = !castActive\(\) && "video"\.equals\(nativeMode\) && nativePlayerOpen\(\)/,
-    'the native Cast button stays on VOD so the phone shows Cast even before a Chromecast appears');
+  assert.match(main, /boolean show = !isTvDevice\(\) && !castActive\(\) && "video"\.equals\(nativeMode\) && nativePlayerOpen\(\)/,
+    'Cast stays on phone and tablet VOD, and stays off Android TV');
   // castHasDevices is only accurate while a MediaRouter discovery scan runs — CAF does not keep one
   // alive on its own and there is no MediaRouteButton, so without this the button never appears.
   assert.match(main, /mediaRouter\.addCallback\(castRouteSelector\(\), castRouteCallback,\s*\n?\s*androidx\.mediarouter\.media\.MediaRouter\.CALLBACK_FLAG_REQUEST_DISCOVERY\)/,
@@ -2570,6 +2578,10 @@ test('local library title match modal keeps manual, folder-info, and automatic a
     'Use library info starts the video-frame thumb immediately so the cover is not a color block');
   assert.match(server, /localArt: async \(ctx\) => \{[\s\S]+queueLibraryThumb\(ctx\.m\[1\], ctx\.m\[2\], libraryThumbSourceFile/,
     'a missing poster.jpg on the art URL still serves the video frame');
+  assert.match(server, /libraryDb\.firstEpisodeFile\(libId, item\.idx\)/,
+    'show thumbs must not load the whole catalog through libraryRecord()');
+  assert.match(server, /const THUMB_CONCURRENCY = 2;[\s\S]+function runThumbSlot\(/,
+    'ffmpeg library thumbs stay capped so a new custom library cannot wedge the server');
 });
 
 test('Live TV startup warm is delayed so app login and first playback stay responsive', () => {
@@ -3220,7 +3232,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes('#dBtns{flex-wrap:wrap;justify-content:flex-start;align-items:center;gap:6px;overflow:visible')
     && ui.includes('#dBtns #dPlay{flex:1 1 132px;min-width:118px;max-width:176px}')
     && ui.includes('#dBtns #dStartOver{flex:1 1 132px;min-width:126px;max-width:176px}')
-    && ui.includes('body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;max-width:100%;padding:4px 8px 6px 0;margin-left:-48px}')
+    && ui.includes('body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;box-sizing:border-box;width:calc(100% + 48px);max-width:calc(100% + 48px);padding:4px 0 6px;margin-left:-48px}')
     && ui.includes('body.mobileShell #dBtns #dPlay{flex:0 0 auto;min-width:118px;max-width:none;margin-left:0}')
     && ui.includes('body.mobileShell #dBtns #dStartOver{flex:0 0 auto;min-width:126px;max-width:none}')
     && ui.includes('body.mobileShell .qToggle button{height:42px;padding:0 16px;font-size:12px}'),
@@ -3311,10 +3323,12 @@ test('Android native player: direct source and native chrome stay out of the web
     && ui.includes('>Recently watched<') && !ui.includes('id="activityPager"'),
     'admin Settings should expose Activity with now-watching covers and per-user recent titles, no pager');
   assert.ok(ui.includes('function playerStreamKind(') && ui.includes('streamKind: playerStreamKind(p)')
-    && ui.includes('streamLabel: playerStreamLabel(p)') && ui.includes('clientVersion: clientVersionLabel()')
-    && ui.includes('function activityStreamLabel(') && ui.includes('function activityNowHtml(')
+    && ui.includes('streamLabel: playerStreamLabel(p)') && ui.includes('quality: p.item.type === \'live\' ? \'\' : playerQualityLabel(p)')
+    && ui.includes('clientVersion: clientVersionLabel()')
+    && ui.includes('function activityStreamLabel(') && ui.includes('function activityQualityLabel(')
+    && ui.includes('function activityNowHtml(')
     && ui.includes('activityStream') && ui.includes('poster: durableArtUrl(p.item.poster)'),
-    'Activity should show stream treatment, cover art, app version, and active sessions');
+    'Activity should show stream treatment, 4K/1080p, cover art, app version, and active sessions');
   assert.ok(ui.includes('function activityRecentByUser(') && ui.includes('function paintUserRecentCovers(')
     && ui.includes('data-user-recent=') && ui.includes('activityNowItem')
     && ui.includes('const isSelf = mine && String(u.id) === mine')
@@ -4848,6 +4862,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'leaving Live TV parks the channel DOM so returning does not rebuild hundreds of cards');
   assert.match(ui, /if \(S\.liveChannels && S\.liveChannels\.length && Date\.now\(\) - \(S\._liveAt \|\| 0\) < LIVE_TTL\) \{[\s\S]+if \(restoreLiveTvDom\(\)\) return;/,
     'cached Live TV restores the parked channel page before scaffolding again');
+  assert.match(ui, /function refreshLiveTvInBackground\(reqId\) \{[\s\S]+loadLiveChannelsCombined\(\)[\s\S]+fillLiveState\(r\)[\s\S]+if \(S\.liveChannels && S\.liveChannels\.length\) \{[\s\S]+refreshLiveTvInBackground\(reqId\);/,
+    'an expired Live TV cache must keep the last channel list on screen while it refreshes');
   assert.match(ui, /const cachedDetail = S\.detailPageCache && S\.detailPageCache\[detailCacheKey\];/,
     'reopening the same title reuses the last TMDB detail payload');
   assert.match(ui, /S\.seasonPageCache\[sk\] = \{ at: Date\.now\(\), data \}/,
@@ -6685,6 +6701,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'TV Live TV guide fills the pane instead of the old 820px cap that parked it at the top');
   assert.match(ui, /grid\.classList\.add\('liveTvPage'\);[\s\S]+\$\('browse'\)\.classList\.add\('liveTvBrowse'\)/,
     'opening Live TV marks the page so the full-bleed guide CSS can apply');
+  assert.ok(ui.includes('id="personWash"') && ui.includes('body.personOpen #backdrop .layer') && ui.includes('.personWash.hasPhoto::after'),
+    'cast/person pages use a colorful blurred header wash instead of a hard leftover still');
   assert.match(ui, /body\.tv #person\.open\{display:flex;flex-direction:column;overflow:hidden\}/,
     'TV Cast is a flex column so Known For can sit on the bezel like Movies');
   assert.match(ui, /body\.tv #person h2\{margin-top:auto;margin-bottom:8px;flex:none\}/,
@@ -6693,7 +6711,7 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'TV Cast clips one poster row and pages by whole rows, so Down cannot shove art under the bio');
   assert.match(ui, /const paged = !phoneCatalog && \(\$\('browse'\)\.classList\.contains\('rowsWin'\) && root === \$\('grid'\)\)\s*\n\s*\|\| \(document\.body\.classList\.contains\('tv'\) && S\.view === 'person' && root === \$\('personGrid'\)\);/,
     'TV Cast Known For uses the same whole-row pager as Movies; phone Movies is a page grid');
-  assert.match(ui, /async function openPerson\(id, push = true\) \{[\s\S]+\$\('detail'\)\.style\.visibility = 'hidden';[\s\S]+\$\('bdInfo'\)\.classList\.remove\('show'\);[\s\S]+S\.zone = 'grid'/,
+  assert.match(ui, /async function openPerson\(id, push = true\) \{[\s\S]+document\.body\.classList\.add\('personOpen'\)[\s\S]+\$\('detail'\)\.style\.visibility = 'hidden';[\s\S]+\$\('bdInfo'\)\.classList\.remove\('show'\);[\s\S]+S\.zone = 'grid'/,
     'opening Cast hides the Home/Movies title band but keeps the origin art');
   assert.match(ui, /if \(S\.view !== 'search' && S\.view !== 'livetv' && !liveGuideRow\) \{ setBackdrop\(it\.backdrop \|\| it\.poster\); if \(S\.view !== 'person'\) setBdInfo\(it\); \}/,
     'Cast paints the focused Known For backdrop the same way Movies does, without the Home title band; Live TV stays ink');

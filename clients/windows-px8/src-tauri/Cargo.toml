@@ -1,6 +1,6 @@
 [package]
 name = "triboon-px8"
-version = "3.1.16"
+version = "3.1.17"
 description = "Triboon native Windows GPU client"
 edition = "2021"
 rust-version = "1.85"
@@ -16,10 +16,12 @@ url = "2.5"
 # libmpv2 wraps the packaged libmpv-2.dll. GPU decode, HDR handling, and audio output live here.
 # The feature remains explicit so Rust-only security tests can still run on non-Windows hosts.
 libmpv2 = { version = "=6.0.0", default-features = false, optional = true }
+# Schannel TLS for Chromecast V2. WebView2 cannot load Google's cast_sender.js.
+native-tls = { version = "0.2", optional = true }
 
 [features]
 default = ["player"]
-player = ["dep:libmpv2"]
+player = ["dep:libmpv2", "dep:native-tls"]
 
 [profile.release]
 strip = true

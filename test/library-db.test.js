@@ -55,6 +55,10 @@ test('library sqlite catalog pages and looks up local media without genre false 
     assert.strictEqual(db.lookup(['tmdb:movie:603'], ['libA'])['tmdb:movie:603'], undefined);
     assert.strictEqual(db.lookup(['tmdb:movie:604'], ['libA'])['tmdb:movie:604'].item.title, 'The Matrix Reloaded');
 
+    assert.strictEqual(db.firstEpisodeFile('libA', 3), '/media/show/s01e02.mkv',
+      'show covers look up one episode file, not the whole catalog');
+    assert.strictEqual(db.firstEpisodeFile('libA', 99), null);
+
     assert.strictEqual(db.deleteLibrary('libA'), true);
     assert.strictEqual(db.readLibrary('libA'), null);
   } finally {
@@ -86,6 +90,39 @@ test('library genre list is cached per scan and invalidated on rescan/update', (
     db.updateItem('libG', 1, it);
     assert.deepStrictEqual(db.genresCached('libG', 200), [16, 35], 'updateItem invalidates the genre cache');
     assert.deepStrictEqual(db.page('libG', { offset: 0, limit: 10 }).genres, [16, 35], 'page() surfaces cached genres');
+  } finally {
+    db.close();
+  }
+});
+
+test('mapped drive letters resolve to the UNC share when the letter is missing', () => {
+  const { resolveLibraryPath, windowsMappedUnc } = require('../server/library-path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-libpath-'));
+  assert.strictEqual(resolveLibraryPath(dir), dir, 'existing folders stay as-is');
+  assert.strictEqual(resolveLibraryPath(''), '', 'empty path stays empty');
+  if (process.platform !== 'win32') return;
+  const unc = windowsMappedUnc('M');
+  if (!unc) return;
+  const missing = 'M:\\__triboon_no_such_library_folder__';
+  assert.ok(!fs.existsSync(missing), 'probe folder must be absent so the UNC rewrite runs');
+  const resolved = resolveLibraryPath(missing);
+  assert.ok(resolved.toLowerCase().startsWith(unc.toLowerCase()),
+    'missing M: becomes the UNC share so an elevated scan can still walk files');
+  assert.ok(/__triboon_no_such_library_folder__$/i.test(resolved), 'folder under the share is kept');
+});
+
+test('library firstEpisodeFile picks the earliest season/episode file', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-library-epfile-'));
+  const db = new LibraryDb(dir);
+  if (!db.available) return;
+  try {
+    db.replaceLibrary('libE', 1, [
+      { idx: 1, kind: 'show', title: 'Show', year: 2026, dir: '/tv/show' },
+      { idx: 2, kind: 'episode', showIdx: 1, title: 'S2', s: 2, e: 1, file: '/tv/show/s02e01.mkv' },
+      { idx: 3, kind: 'episode', showIdx: 1, title: 'S1E2', s: 1, e: 2, file: '/tv/show/s01e02.mkv' },
+      { idx: 4, kind: 'episode', showIdx: 1, title: 'S1E1', s: 1, e: 1, file: '/tv/show/s01e01.mkv' },
+    ]);
+    assert.strictEqual(db.firstEpisodeFile('libE', 1), '/tv/show/s01e01.mkv');
   } finally {
     db.close();
   }

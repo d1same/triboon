@@ -157,6 +157,20 @@ class LibraryDb {
     return this._parsePayload(row);
   }
 
+  // One episode file for a show cover. Never readLibrary() — a 20K catalog on every
+  // poster used to stall the server while the grid kept asking for more pages.
+  firstEpisodeFile(libId, showIdx) {
+    if (!this.available || !this.db || !Number.isFinite(Number(showIdx))) return null;
+    const row = this.db.prepare(`
+      SELECT file FROM library_items
+      WHERE lib_id = ? AND kind = 'episode' AND show_idx = ?
+        AND file IS NOT NULL AND file != ''
+      ORDER BY season ASC, episode ASC
+      LIMIT 1
+    `).get(libId, parseInt(showIdx, 10));
+    return row && row.file ? row.file : null;
+  }
+
   updateItem(libId, idx, item) {
     if (!this.available || !this.db || !item) return false;
     try {

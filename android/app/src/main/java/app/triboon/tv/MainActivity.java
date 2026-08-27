@@ -3398,7 +3398,7 @@ public class MainActivity extends Activity {
         rightControls.addView(nativeAudioBtn);
 
         nativeCastBtn = nativeButton(R.drawable.ic_player_cast, "Cast to TV", false);
-        nativeCastBtn.setVisibility(View.GONE); // shown for VOD by updateNativeCastButton; tap opens the picker
+        nativeCastBtn.setVisibility(View.GONE); // phone/tablet VOD only — Android TV hides this in updateNativeCastButton
         nativeCastBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) castCurrentNativeVideo(); });
         rightControls.addView(nativeCastBtn);
 
@@ -5616,13 +5616,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    // Always show Cast on VOD. Hiding it until a Chromecast appears made the phone look like
-    // it had no Cast at all — YouTube keeps the icon up and the picker says when nothing is found.
+    // Phone and tablet VOD keep Cast up even before a Chromecast appears — YouTube does the same.
+    // Android TV is already the TV, so the icon stays gone there.
     private void updateNativeCastButton() {
         if (nativeCastBtn == null) return;
         runOnUiThread(() -> {
             if (nativeCastBtn == null) return;
-            boolean show = !castActive() && "video".equals(nativeMode) && nativePlayerOpen();
+            boolean show = !isTvDevice() && !castActive() && "video".equals(nativeMode) && nativePlayerOpen();
             nativeCastBtn.setVisibility(show ? View.VISIBLE : View.GONE);
         });
     }

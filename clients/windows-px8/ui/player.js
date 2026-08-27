@@ -657,6 +657,23 @@
     if (items.length) openMenu('Episodes', 'KEEP WATCHING', items);
   }
 
+  function openCastMenu(devices) {
+    const list = Array.isArray(devices) ? devices : [];
+    const items = list.map((device) => {
+      const name = text(device && device.name, 80) || 'TV';
+      const host = text(device && device.host, 64);
+      const port = finite(device && device.port, 8009);
+      const model = text(device && device.model, 40);
+      return menuItem(name, { sub: model || host }, () => {
+        closePanels();
+        showToast(`Connecting to ${name}…`);
+        send('cast_to', { host, port, name });
+      });
+    });
+    if (!items.length) return;
+    openMenu('Cast to', 'TVS ON THIS NETWORK', items);
+  }
+
   function renderStats() {
     const stats = state.stats || {};
     const decoder = text(stats.hwdec || stats.hwdecCurrent || stats.hardwareDecoder || '', 100);
@@ -931,6 +948,13 @@
     enumerable: false,
     writable: false,
     value: showToast,
+  });
+
+  Object.defineProperty(window, '__triboonCastDevices', {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: openCastMenu,
   });
 
   Object.defineProperty(window, '__triboonWindowsPlayerEvent', {

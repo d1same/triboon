@@ -289,6 +289,7 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
     mode: 'ExoPlayer',
     streamKind: 'transcode',
     streamLabel: 'Transcoding',
+    quality: '4K',
     clientVersion: 'Android TV 1.7.26 (126)',
     deviceName: 'NVIDIA SHIELD',
     poster: 'https://image.tmdb.org/t/p/w342/mock-poster.jpg',
@@ -309,6 +310,7 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   assert.strictEqual(row.title, 'The Test Movie');
   assert.strictEqual(row.streamKind, 'transcode');
   assert.strictEqual(row.streamLabel, 'Transcoding');
+  assert.strictEqual(row.quality, '4K');
   assert.strictEqual(row.clientVersion, 'Android TV 1.7.26 (126)');
   assert.strictEqual(row.deviceName, 'NVIDIA SHIELD', 'the reported hardware device name round-trips to admins');
   assert.strictEqual(row.poster, 'https://image.tmdb.org/t/p/w342/mock-poster.jpg');
@@ -339,6 +341,7 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   assert.ok(liveRow, 'admin sees that Live TV is active');
   assert.strictEqual(liveRow.title, 'Live TV');
   assert.strictEqual(liveRow.subline, 'Live stream');
+  assert.strictEqual(liveRow.quality, '', 'Live TV does not carry a 4K/1080p badge');
   assert.ok(!liveVisible.json.history.some((s) => s.type === 'live' || s.streamKind === 'live'),
     'Live TV is current-activity only and is not retained in history');
   assert.ok(!JSON.stringify(liveVisible.json.history).includes('Secret Channel Name'),

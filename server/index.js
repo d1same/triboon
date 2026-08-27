@@ -12,6 +12,7 @@ const { mountNzb } = require('./archive');
 const { Store, VerdictCache } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
+const { resolveLibraryPath, existingMediaPath } = require('./library-path');
 const { parseLibraryName, pickLibraryTmdbHit, libraryItemMatchesTmdb, unboundLibraryItem } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline, mountHasActivePlayback } = require('./pipeline');
@@ -81,6 +82,23 @@ const verdicts = new VerdictCache(store);
 const mounts = new Map(); // id -> virtual file
 const scanStates = new Map(); // library id -> { running, startedAt, progress, ...summary }
 const thumbJobs = new Map(); // thumb path -> in-flight generation promise (no double-spawn)
+const THUMB_CONCURRENCY = 2;
+let thumbActive = 0;
+const thumbWait = [];
+function runThumbSlot(work) {
+  return new Promise((resolve, reject) => {
+    const start = () => {
+      thumbActive += 1;
+      Promise.resolve().then(work).then(resolve, reject).finally(() => {
+        thumbActive -= 1;
+        const next = thumbWait.shift();
+        if (next) next();
+      });
+    };
+    if (thumbActive < THUMB_CONCURRENCY) start();
+    else thumbWait.push(start);
+  });
+}
 const activitySessions = new Map(); // heartbeat-only "now watching"; short TTL, not the retained history
 const presenceSessions = new Map(); // online presence (browsing OR watching), keyed `${uid}:${deviceId}`, short TTL
 const DATA_DIR = process.env.TRIBOON_DATA || path.join(__dirname, '..', 'data');
@@ -4188,6 +4206,12 @@ function activityUserName(uid) {
 function scrubActivityText(v, max = 160) {
   return String(v || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
 }
+function scrubActivityQuality(v) {
+  const s = String(v || '').trim().toLowerCase();
+  if (s === '4k' || s === '2160p' || s === 'uhd') return '4K';
+  if (s === '1080p' || s === '720p' || s === '576p' || s === '480p') return s;
+  return '';
+}
 function scrubActivityPoster(v) {
   const s = String(v || '').trim().slice(0, 400);
   if (!s || /^data:/i.test(s) || /^javascript:/i.test(s)) return '';
@@ -4363,6 +4387,7 @@ function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
     mode: scrubActivityText(b.mode || '', 30),
     streamKind: live ? 'live' : scrubActivityText(b.streamKind || '', 30),
     streamLabel: live ? 'Live' : scrubActivityText(b.streamLabel || '', 60),
+    quality: live ? '' : scrubActivityQuality(b.quality),
     clientVersion: activityClientVersion(b, ctx.req),
     device: scrubActivityText(b.device || ctx.req.headers['user-agent'] || '', 90),
     deviceName: activityDeviceName(b, ctx.req),
@@ -4409,6 +4434,7 @@ function recordActivityHistory(row) {
       mode: row.mode,
       streamKind: row.streamKind,
       streamLabel: row.streamLabel,
+      quality: row.quality || '',
       clientVersion: row.clientVersion,
       device: row.device,
       deviceName: row.deviceName,
@@ -4482,7 +4508,11 @@ function localLibraryItemFor(ctx, libId, idx) {
   }
   const item = libraryItemByIndex(libId, idx);
   if (!item) return { status: 404, error: 'item not found' };
-  return { lib, item };
+  const resolved = { ...item };
+  if (resolved.file) resolved.file = existingMediaPath(resolved.file);
+  if (resolved.artFile) resolved.artFile = existingMediaPath(resolved.artFile);
+  if (resolved.dir) resolved.dir = existingMediaPath(resolved.dir);
+  return { lib, item: resolved };
 }
 function localItemFor(ctx, libId, idx) {
   const found = localLibraryItemFor(ctx, libId, idx);
@@ -4505,11 +4535,15 @@ function localItemPayload(ctx, libId, item) {
   };
 }
 function libraryThumbSourceFile(libId, item) {
-  if (item && item.file) return item.file;
+  if (item && item.file) return existingMediaPath(item.file);
   if (!item || item.kind !== 'show') return null;
-  const rec = libraryRecord(libId);
+  if (libraryDb.available) {
+    const file = libraryDb.firstEpisodeFile(libId, item.idx);
+    if (file) return existingMediaPath(file);
+  }
+  const rec = store.read('libitems', {})[libId];
   const ep = ((rec && rec.items) || []).find((x) => x.kind === 'episode' && x.showIdx === item.idx && x.file);
-  return ep ? ep.file : null;
+  return ep ? existingMediaPath(ep.file) : null;
 }
 function queueLibraryThumb(libId, idx, sourceFile) {
   if (!sourceFile || !detectFfmpeg()) return Promise.resolve(null);
@@ -4518,7 +4552,7 @@ function queueLibraryThumb(libId, idx, sourceFile) {
   const file = path.join(dir, `${libId}-${idx}.jpg`);
   if (fs.existsSync(file) && fs.statSync(file).size > 0) return Promise.resolve(file);
   if (!thumbJobs.has(file)) {
-    thumbJobs.set(file, makeThumb(sourceFile, file, 120).then((ok) => ok || makeThumb(sourceFile, file, 5))
+    thumbJobs.set(file, runThumbSlot(() => makeThumb(sourceFile, file, 120).then((ok) => ok || makeThumb(sourceFile, file, 5)))
       .then((ok) => (ok && fs.existsSync(file) && fs.statSync(file).size > 0) ? file : null)
       .finally(() => thumbJobs.delete(file)));
   }
@@ -4547,18 +4581,19 @@ function localMountFor(ctx, libId, idx, caps = {}, playCtx = {}) {
   const found = localItemFor(ctx, libId, idx);
   if (found.error) return found;
   let stat;
-  try { stat = fs.statSync(found.item.file); } catch { return { status: 404, error: 'file missing on disk' }; }
-  const id = 'l' + idHash(`${libId}:${idx}:${found.item.file}:${stat.size}:${stat.mtimeMs}`);
-  const name = path.basename(found.item.file);
+  const mediaFile = existingMediaPath(found.item.file);
+  try { stat = fs.statSync(mediaFile); } catch { return { status: 404, error: 'file missing on disk' }; }
+  const id = 'l' + idHash(`${libId}:${idx}:${mediaFile}:${stat.size}:${stat.mtimeMs}`);
+  const name = path.basename(mediaFile);
   let vf = mounts.get(id);
   if (!vf) {
     vf = {
       id, name, size: stat.size, segmentCount: 1,
       container: 'local', method: null, streamable: true, tags: [], health: { verdict: 'verified' },
-      mountedAt: Date.now(), _local: { libId, idx: parseInt(idx, 10), file: found.item.file },
+      mountedAt: Date.now(), _local: { libId, idx: parseInt(idx, 10), file: mediaFile },
       triage: async () => ({ verdict: 'verified', checked: 1, missing: 0, local: true }),
       read: async function* (start, end) {
-        const rs = fs.createReadStream(found.item.file, { start, end: Math.max(start, end - 1) });
+        const rs = fs.createReadStream(mediaFile, { start, end: Math.max(start, end - 1) });
         try {
           for await (const chunk of rs) yield chunk;
         } finally {
@@ -6817,10 +6852,19 @@ async function performScan(lib, state, mode = 'scan') {
     };
 
     try {
-      const top = lsDir(lib.path);
+      const scanRoot = resolveLibraryPath(lib.path);
+      if (!fs.existsSync(scanRoot)) {
+        throw new Error(`library path not found: ${lib.path}`);
+      }
+      let top;
+      try {
+        top = fs.readdirSync(scanRoot, { withFileTypes: true });
+      } catch {
+        throw new Error(`library path not readable: ${lib.path}`);
+      }
       for (const e of top.slice(0, MAX_TOP)) {
         if (items.length >= MAX_ITEMS) break;
-        const full = path.join(lib.path, e.name);
+        const full = path.join(scanRoot, e.name);
         if (e.isFile() && MEDIA.test(e.name)) {
           const parsed = parseName(e.name);
           const item = pushItem({ kind: 'movie', file: full, artFile: null, title: parsed.title, year: parsed.year,

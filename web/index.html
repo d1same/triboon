@@ -877,6 +877,18 @@ body.tv .trailerCtl{min-height:46px;padding:10px 20px;font-size:14.5px}
 /* ---------- person page ---------- */
 #person{position:fixed;inset:0;z-index:8;display:none;overflow-y:auto;padding:30px 50px 40px 116px}
 #person.open{display:block}
+.personWash{position:absolute;left:0;right:0;top:0;height:min(62vh,540px);pointer-events:none;z-index:0;
+  background:
+    radial-gradient(ellipse 72% 80% at 18% 8%, rgba(193,59,214,.46), transparent 64%),
+    radial-gradient(ellipse 58% 62% at 78% 0%, rgba(251,139,60,.28), transparent 60%),
+    radial-gradient(ellipse 42% 48% at 8% 78%, rgba(255,198,92,.16), transparent 58%),
+    linear-gradient(180deg, rgba(11,8,18,.08) 0%, var(--ink) 88%);
+  filter:blur(2px)}
+.personWash.hasPhoto::after{content:'';position:absolute;inset:-48px 0 auto;height:120%;
+  background:var(--personPhoto) center 18%/cover no-repeat;filter:blur(56px) saturate(1.45);opacity:.42}
+#person > :not(.personWash){position:relative;z-index:1}
+body.personOpen #backdrop .layer{filter:blur(42px) saturate(1.25);transform:scale(1.14)}
+body.personOpen #bdInfo{display:none!important}
 .personHead{display:flex;gap:26px;align-items:flex-start;margin:18px 0 26px}
 .personHead .pPhoto{flex:0 0 var(--poster);aspect-ratio:2/3;border-radius:18px;background-size:108% auto;background-position:center 12%;background-color:var(--raise);border:0} /* same zoom-crop as .castCard .ph */
 .personHead .pInfo{flex:1}
@@ -1563,6 +1575,7 @@ body[data-spotlight] .userNameBtn.focusable.focus,body[data-spotlight] .userName
 .activityStream.remux{color:#c5ffe0;background:rgba(94,233,160,.11);border-color:rgba(94,233,160,.24)}
 .activityStream.transcode{color:#ffb4b4;background:rgba(255,120,120,.11);border-color:rgba(255,120,120,.25)}
 .activityStream.live{color:#b9ddff;background:rgba(110,178,255,.12);border-color:rgba(110,178,255,.25)}
+.activityStream.quality{color:#ffd0e8;background:rgba(255,80,140,.12);border-color:rgba(255,80,140,.28)}
 .activityBar{height:4px;border-radius:999px;background:rgba(var(--fg),.14);overflow:hidden;margin-top:7px}
 .activityBar span{display:block;height:100%;background:var(--grad);width:var(--pct,0%)}
 .arMeta{text-align:right;min-width:0}
@@ -2193,7 +2206,10 @@ body.mobileShell #detail .back{top:14px;left:66px!important}
 body.mobileShell #detail .detailHero{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:14px;min-height:0;padding-top:calc(12px + var(--safeT))}
 body.mobileShell #detail .dInfo{width:100%;max-width:none;padding-left:48px;text-align:left;--infoCap:calc(100vw - 80px)}
 body.mobileShell #dTitle,body.mobileShell #dOverview,body.mobileShell #dCrew,body.mobileShell #dMeta{max-width:100%;margin-left:0;margin-right:0;text-align:left}
-body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;max-width:100%;padding:4px 8px 6px 0;margin-left:-48px}
+/* .dInfo keeps padding-left:48px so the title clears the back button. Pull the Play row
+   back by that same 48px, then grow it 48px so the leftover hollow cannot sit to the
+   right of Play the way it used to sit on the left. */
+body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;box-sizing:border-box;width:calc(100% + 48px);max-width:calc(100% + 48px);padding:4px 0 6px;margin-left:-48px}
 body.mobileShell #dBtns::-webkit-scrollbar{display:none}
 @media (orientation:landscape){
   body.mobileShell #dBtns{overflow:visible}
@@ -3974,6 +3990,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 </section>
 
 <section id="person">
+  <div class="personWash" id="personWash" aria-hidden="true"></div>
   <button class="back focusable" id="pBack">
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg><span class="backLbl">Back</span></button>
   <div class="personHead">
@@ -4662,7 +4679,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
             <span id="dPlayLabel">Play</span></button>
           <button class="btn ghost focusable" id="dStartOver" style="display:none">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg> Start over</button>
-          <div class="qToggle" id="qToggle" title="Playback quality preference">
+          <div class="qToggle" id="qToggle" title="Playback quality preference" style="display:none">
             <button data-q="3" class="focusable qon">1080p</button><button data-q="4" class="focusable">4K</button></div>
           <button class="iconBtn focusable" id="dSources" title="Sources">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
@@ -5455,6 +5472,7 @@ function absoluteArtworkUrl(...urls) {
 }
 const bgLazy = (() => {
   let io = null;
+  let localIo = null;
   const load = (el) => {
     const u = el && el.dataset ? el.dataset.bg : '';
     if (!u) return;
@@ -5466,6 +5484,16 @@ const bgLazy = (() => {
     if (!el || !safe) return;
     el.dataset.bg = safe;
     if (!('IntersectionObserver' in window)) return load(el);
+    // Local ffmpeg thumbs: stay near the viewport. A 1600px preload on a new custom
+    // library used to spawn dozens of ffmpeg jobs and stall the whole catalog.
+    const localThumb = /\/api\/local\/[^"' )]+\/thumb\//.test(safe);
+    if (localThumb) {
+      if (!localIo) localIo = new IntersectionObserver((entries) => {
+        entries.forEach((e) => { if (e.isIntersecting) { localIo.unobserve(e.target); load(e.target); } });
+      }, { rootMargin: '280px 400px' });
+      localIo.observe(el);
+      return;
+    }
     if (!io) io = new IntersectionObserver((entries) => {
       entries.forEach((e) => { if (e.isIntersecting) { io.unobserve(e.target); load(e.target); } });
       // 300px of horizontal headroom was tuned for w300 stills; at the sharper w780/w500 art a
@@ -5477,8 +5505,11 @@ const bgLazy = (() => {
     io.observe(el);
   };
   api.unobserveRoot = (root) => {
-    if (!io || !root || !root.querySelectorAll) return;
-    root.querySelectorAll('[data-bg]').forEach((el) => io.unobserve(el));
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll('[data-bg]').forEach((el) => {
+      if (io) io.unobserve(el);
+      if (localIo) localIo.unobserve(el);
+    });
   };
   return api;
 })();
@@ -10364,7 +10395,9 @@ async function openPerson(id, push = true) {
   const reqId = (S.personReq = (S.personReq || 0) + 1);
   if (push) setRoute(`#/person/${id}`); // a real history entry, so Back returns HERE (not the detail under it)
   S.personId = id; // so a detail opened from this cast page can return here on hardware Back / Escape
-  S.view = 'person'; $('person').classList.add('open');
+  S.view = 'person'; $('person').classList.add('open'); document.body.classList.add('personOpen');
+  const wash = $('personWash');
+  if (wash) { wash.classList.remove('hasPhoto'); wash.style.removeProperty('--personPhoto'); }
   const current = () => reqId === S.personReq && S.view === 'person'
     && String(S.personId) === String(id);
   $('person').scrollTop = 0;
@@ -10383,7 +10416,12 @@ async function openPerson(id, push = true) {
     $('pName').textContent = p.name;
     $('pKnown').textContent = p.known_for_department || '';
     $('pBio').textContent = p.biography || '';
-    $('pPhoto').style.backgroundImage = artBackground(img(p.profile_path, 'w342'), artFallback('person:' + id, 40));
+    const photo = img(p.profile_path, 'w342');
+    $('pPhoto').style.backgroundImage = artBackground(photo, artFallback('person:' + id, 40));
+    if (wash && photo) {
+      wash.style.setProperty('--personPhoto', `url("${String(photo).replace(/["'\\)]/g, '')}")`);
+      wash.classList.add('hasPhoto');
+    }
     // Their works: dedupe, keep movie/tv with art, sort by popularity.
     const seen = new Set();
     const credits = ((p.combined_credits && p.combined_credits.cast) || [])
@@ -10478,6 +10516,7 @@ function maybeLoadMorePersonWorks() {
 }
 function closePerson() {
   $('person').classList.remove('open');
+  document.body.classList.remove('personOpen');
   S.personWorksAll = null; S.personWorksShown = 0;
   const origin = S.personOriginDetail;
   S.personOriginDetail = null;
@@ -12302,7 +12341,7 @@ async function openPlayer(it, mount, opts = {}) {
   const sourceName = mount.candidate ? mount.candidate.name : mount.name;
   const playerMeta = episodePlayerMeta(it);
   $('pSrc').textContent = it.type === 'live' ? '' : (playerMeta.subline || '');
-  $('pHealth').innerHTML = `<span class="chip">${mount.container}${mount.method ? '/' + mount.method : ''}</span>`;
+  $('pHealth').innerHTML = ''; // verified/container chips stay off the clock; warnings paint later
   const watchRow = it && it.key && S.watchMap ? S.watchMap[it.key] : null;
   const knownDuration = Math.max(0, Number(it.duration || (watchRow && watchRow.duration) || 0) || 0);
   S.playing = {
@@ -13124,6 +13163,8 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     episodeChoices: nativeEpisodeChoices(),
     quietSeek: !!opts.quietSeek,
     percentResume: !!opts.percentResume,
+    remuxUrl: p.remuxUrl ? new URL(p.remuxUrl, location.origin).href : '',
+    transcodeUrl: p.transcodeUrl ? new URL(p.transcodeUrl, location.origin).href : '',
   };
   if (sub.rel) {
     p.subTrack = sub.rel;
@@ -14838,6 +14879,7 @@ function activityPayload(state = 'watching') {
     mode: playerModeLabel(p),
     streamKind: playerStreamKind(p),
     streamLabel: playerStreamLabel(p),
+    quality: p.item.type === 'live' ? '' : playerQualityLabel(p),
     clientVersion: clientVersionLabel(),
     poster: durableArtUrl(p.item.poster) || durableArtUrl(p.item.backdrop) || '',
     source: p.name || '',
@@ -15218,8 +15260,12 @@ function startHealthPoll(id) {
     try {
       const h = await api('/api/health/' + id);
       if (S.playing !== p || p.mountId !== id || S.view !== 'player') return;
-      const cls = h.verdict === 'verified' ? 'ok' : 'warn';
-      $('pHealth').innerHTML = `<span class="chip ${cls}">${h.verdict === 'verified' ? '✅' : '⚠️'} ${h.verdict}</span>`;
+      if (h.verdict === 'verified') {
+        const el = $('pHealth');
+        if (el && !/casting/i.test(el.textContent)) el.innerHTML = '';
+      } else {
+        $('pHealth').innerHTML = `<span class="chip warn">⚠️ ${h.verdict}</span>`;
+      }
       if (h.verdict === 'blocked' && !p._sourceAdvancePending) {
         // Confirmed source rot is not a normal rebuffer. Save the live timestamp and move straight
         // to the next ranked release on web AND native instead of waiting for media timeouts.
@@ -17030,7 +17076,7 @@ function updateCastButtons() {
   const btn = $('castBtn'); if (!btn) return;
   let show = false;
   try {
-    show = castEligible() && castSdkReady() && _castCtx
+    show = !document.body.classList.contains('tv') && castEligible() && castSdkReady() && _castCtx
       && _castCtx.getCastState() !== cast.framework.CastState.NO_DEVICES_AVAILABLE
       && castVodEligible();
   } catch { show = false; }
@@ -17903,7 +17949,7 @@ async function runKidsBrowse(reset, requestId) {
   if (reset && !Number.isFinite(reqId)) reqId = (S.kidsReq = (S.kidsReq || 0) + 1);
   if (!Number.isFinite(reqId)) reqId = S.kidsReq || (S.kidsReq = 1);
   if (reqId !== S.kidsReq) return;
-  if (reset) { S.kidsPage = 0; S.kidsDone = false; renderGrid([]); $('grid').innerHTML = '<div class="gridMore">loading…</div>'; }
+  if (reset) { S.browsePageCooldown = 0; S.kidsPage = 0; S.kidsDone = false; renderGrid([]); $('grid').innerHTML = '<div class="gridMore">loading…</div>'; }
   if (S.kidsLoadingReq === reqId || S.kidsDone) return;
   S.kidsLoadingReq = reqId; S.kidsLoading = true;
   const page = (S.kidsPage || 0) + 1;
@@ -17930,6 +17976,7 @@ async function runKidsBrowse(reset, requestId) {
     if (page >= Math.min(25, Math.max(moviePages, tvPages, freshMoviePages, freshTvPages)) || !items.length) S.kidsDone = true;
     loaded = true;
   } catch (e) {
+    if (current()) S.browsePageCooldown = Date.now() + 8000;
     if (current() && page === 1) {
       $('grid').innerHTML = `<div class="gridMore focusable">Failed: ${esc(e.message)}</div>`;
       focusAsyncGridState('kids', current);
@@ -17957,7 +18004,7 @@ async function runBrowse(reset, requestId) {
   if (reset && !Number.isFinite(reqId)) reqId = (S.browseReq = (S.browseReq || 0) + 1);
   if (!Number.isFinite(reqId)) reqId = S.browseReq || (S.browseReq = 1);
   if (reqId !== S.browseReq) return;
-  if (reset) { S.browsePage = 0; S.browseDone = false; renderGrid([]); $('grid').innerHTML = '<div class="gridMore">loading…</div>'; }
+  if (reset) { S.browsePageCooldown = 0; S.browsePage = 0; S.browseDone = false; renderGrid([]); $('grid').innerHTML = '<div class="gridMore">loading…</div>'; }
   if (S.browseLoadingReq === reqId || S.browseDone) return;
   S.browseLoadingReq = reqId; S.browseLoading = true;
   const page = (S.browsePage || 0) + 1;
@@ -17981,6 +18028,7 @@ async function runBrowse(reset, requestId) {
     if (page >= (r.total_pages || 1) || page >= 25) S.browseDone = true;
     loaded = true;
   } catch (e) {
+    if (current()) S.browsePageCooldown = Date.now() + 8000;
     if (current() && page === 1) {
       $('grid').innerHTML = `<div class="gridMore focusable">Failed: ${esc(e.message)}</div>`;
       focusAsyncGridState(view, current);
@@ -18006,6 +18054,7 @@ async function runBrowse(reset, requestId) {
 function maybeFillBrowseWindow() {
   // TV is excluded: its 1-row window already overflows on page 1.
   if (document.body.classList.contains('tv')) return;
+  if (S.browsePageCooldown && Date.now() < S.browsePageCooldown) return;
   const view = S.view;
   if (!['movies', 'tv', 'kids', 'library'].includes(view)) return;
   const localLib = view === 'library' && S.currentLib && S.currentLib.path;
@@ -18051,15 +18100,37 @@ $('sortSel').addEventListener('change', () => {
 $('filterMenu').addEventListener('click', (e) => {
   if (e.target.id === 'filterMenu') closeFilterMenu();
 });
-// Infinite scroll: append the next page as the grid nears its bottom.
-$('grid').addEventListener('scroll', () => {
-  const g = $('grid');
-  scheduleVirtualGridFromScroll(g);
-  if (g.scrollTop + g.clientHeight < g.scrollHeight - 700) return;
+function browseGridCanPage() {
+  if (S.browsePageCooldown && Date.now() < S.browsePageCooldown) return false;
+  if (['movies', 'tv'].includes(S.view)) return !S.browseLoading && !S.browseDone;
+  if (S.view === 'kids') return !S.kidsLoading && !S.kidsDone;
+  if (S.view === 'library' && S.currentLib && S.currentLib.path) {
+    if (S.localPageState && S.localPageState.showIdx !== undefined) return false;
+    return !S.localPageLoading && !!S.localPageHasMore;
+  }
+  if (S.view === 'library') return !S.libLoading && !S.libDone;
+  return false;
+}
+function browseGridNearLoadedEnd(g) {
+  const v = S.gridVirt;
+  if (v && v.root === g && v.totalRows > 0 && v.lastRow < v.totalRows) return false;
+  if (!g) return false;
+  return (g.scrollHeight - (g.scrollTop + g.clientHeight)) <= 900;
+}
+function requestBrowseGridPage() {
+  if (!browseGridCanPage()) return;
   if (['movies', 'tv'].includes(S.view)) runBrowse(false);
   else if (S.view === 'kids') runKidsBrowse(false);
   else if (S.view === 'library' && S.currentLib && S.currentLib.path) loadMoreLocalLibraryPage(false);
   else if (S.view === 'library') runLibrary(false);
+}
+// Infinite scroll: append the next page only when the virtual window is at the
+// last loaded row. Scrolling already-loaded posters used to stampede the server.
+$('grid').addEventListener('scroll', () => {
+  const g = $('grid');
+  scheduleVirtualGridFromScroll(g);
+  if (!browseGridCanPage() || !browseGridNearLoadedEnd(g)) return;
+  requestBrowseGridPage();
 });
 
 const VIRTUAL_GRID_VIEWS = new Set(['movies', 'tv', 'kids', 'watchlist', 'library']);
@@ -18421,6 +18492,7 @@ async function loadMoreLocalLibraryPage(focusNew = false) {
     maybeFillBrowseWindow();
     return true;
   } catch (e) {
+    S.browsePageCooldown = Date.now() + 8000;
     toast(e.message || 'Could not load more library items');
     renderLocalGridFooter();
     return false;
@@ -18930,7 +19002,7 @@ async function runLibrary(reset) {
   const current = () => reqId === S.libReq && S.view === 'library' && S.currentLib
     && S.currentLib.id === libId && !S.currentLib.path;
   if (!current()) return;
-  if (reset) { S.libPage = 0; S.libDone = false; renderGrid([]); $('grid').innerHTML = '<div class="gridMore">loading…</div>'; }
+  if (reset) { S.browsePageCooldown = 0; S.libPage = 0; S.libDone = false; renderGrid([]); $('grid').innerHTML = '<div class="gridMore">loading…</div>'; }
   if (S.libLoadingReq === reqId || S.libDone) return;
   S.libLoadingReq = reqId; S.libLoading = true;
   const page = (S.libPage || 0) + 1;
@@ -18949,6 +19021,7 @@ async function runLibrary(reset) {
     if (page >= (r.total_pages || 1) || page >= 25) S.libDone = true;
     loaded = true;
   } catch (e) {
+    if (current()) S.browsePageCooldown = Date.now() + 8000;
     if (current() && page === 1) {
       $('grid').innerHTML = `<div class="gridMore focusable">Failed: ${esc(e.message)}</div>`;
       focusAsyncGridState('library', current);
@@ -19974,6 +20047,17 @@ function restoreLiveTvDom() {
   if (S.zone === 'rail') paintRailPreviewHero();
   return true;
 }
+function refreshLiveTvInBackground(reqId) {
+  loadLiveChannelsCombined().then((r) => {
+    if (reqId !== S.liveViewReq || S.view !== 'livetv') return;
+    if (!r.configured || !r.channels.length) return;
+    fillLiveState(r);
+    const input = $('chSearch');
+    if (input) input.placeholder = `Filter ${S.liveChannels.length} channels, groups, or sources…`;
+    if ($('chBar')) renderLiveTvBody();
+    else scaffoldLiveTv($('grid'));
+  }).catch(() => {});
+}
 async function loadLiveTv() {
   const reqId = (S.liveViewReq = (S.liveViewReq || 0) + 1);
   const current = () => reqId === S.liveViewReq && S.view === 'livetv';
@@ -19993,6 +20077,26 @@ async function loadLiveTv() {
       return;
     }
     scaffoldLiveTv(grid);
+    return;
+  }
+  // TTL expired, but we still have the last list. Show it now and refresh
+  // quietly — otherwise every return to Live TV sits on “loading channels…”.
+  if (S.liveChannels && S.liveChannels.length) {
+    if (restoreLiveTvDom()) {
+      refreshLiveTvInBackground(reqId);
+      return;
+    }
+    if (grid.querySelector('#chBar')) {
+      grid.classList.add('liveTvPage');
+      $('browse').classList.add('liveTvBrowse');
+      S.gridRoot = grid;
+      bootReady();
+      if (S.zone === 'rail') paintRailPreviewHero();
+      refreshLiveTvInBackground(reqId);
+      return;
+    }
+    scaffoldLiveTv(grid);
+    refreshLiveTvInBackground(reqId);
     return;
   }
   grid.innerHTML = '<div class="gridMore focusable">loading channels… (big playlists can take ~10s the first time, then they’re cached)</div>';
@@ -25058,6 +25162,9 @@ function activityStreamLabel(s = {}) {
   if (kind === 'live') return 'Live';
   return s.mode || '';
 }
+function activityQualityLabel(s = {}) {
+  return resolutionLabel(s.quality || '');
+}
 function activityTypeLabel(s = {}) {
   if (activityStreamKind(s) === 'live' || s.type === 'live') return 'Live TV';
   if (s.type === 'episode') return 'Episode';
@@ -25153,6 +25260,8 @@ function activityNowHtml(s = {}) {
   const pos = s.duration ? `${fmt(s.position || 0)} / ${fmt(s.duration || 0)}` : (s.position ? fmt(s.position) : 'Live');
   const streamKind = activityStreamKind(s);
   const streamLabel = activityStreamLabel(s);
+  const qualityLabel = activityQualityLabel(s);
+  const qualityBadge = qualityLabel ? `<span class="activityStream quality">${esc(qualityLabel)}</span>` : '';
   const streamBadge = streamLabel ? `<span class="activityStream ${esc(streamKind)}">${esc(streamLabel)}</span>` : '';
   const who = [s.userName, activityDeviceLabel(s)].filter(Boolean).join(' · ');
   const loc = s.location ? ` · ${esc(s.location)}` : '';
@@ -25160,7 +25269,7 @@ function activityNowHtml(s = {}) {
   return `<button type="button" class="activityNowItem focusable" data-dash-key="${esc(activityGroupKey(s))}">
     <div class="activityNowArt" style="background-image:${art}"></div>
     <div class="activityNowBody">
-      <div class="activityTitleLine"><b>${esc(activityTitle(s))}</b>${streamBadge}</div>
+      <div class="activityTitleLine"><b>${esc(activityTitle(s))}</b>${qualityBadge}${streamBadge}</div>
       <small>${esc(who)}${loc}</small>
       <div class="activityBar" style="--pct:${pct}%"><span></span></div>
       <small>${esc(pos)} · ${esc(activityTimeLabel(s, true))}</small>
@@ -27027,12 +27136,7 @@ function focusGrid(i) {
     // D-pad pagination: the infinite-scroll listener fires on SCROLL, but focus-driven
     // row paging barely scrolls — fetch the next page once focus nears the loaded edge,
     // or the walk dead-ends at the bottom of page one.
-    if (S.gridIdx >= els.length - cols * 2) {
-      if (['movies', 'tv'].includes(S.view)) runBrowse(false);
-      else if (S.view === 'kids') runKidsBrowse(false);
-      else if (S.view === 'library' && S.currentLib && S.currentLib.path) loadMoreLocalLibraryPage(false);
-      else if (S.view === 'library' && !(S.currentLib && S.currentLib.path)) runLibrary(false);
-    }
+    if (S.gridIdx >= els.length - cols * 2) requestBrowseGridPage();
   }
   const itemIdx = parseInt(el.dataset.grid, 10);
   const it = Number.isFinite(itemIdx) ? (S.gridItems || [])[itemIdx] : null;

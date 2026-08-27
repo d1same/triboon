@@ -126,6 +126,61 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-27, v3.1.17 ship — library UNC scan, scroll thumbs, hide TV Cast:
+
+- Version contract: `package.json` 3.1.17; Android `versionName` 3.1.17 /
+  `versionCode` 362; Windows client package/Tauri/Cargo 3.1.17.
+- Mapped-drive library scan rewrites missing `M:` to the UNC share and
+  refuses to save an empty catalog when the folder is unreadable.
+- Custom-library thumbs and browse paging no longer stampede the server.
+- Native Cast stays on phone/tablet VOD and stays off Android TV. Web
+  Cast button also stays hidden on `body.tv`.
+- Web player no longer shows the verified chip next to the clock.
+- Phone/tablet details Play row has no leftover 48px hollow on either
+  side of Play. Title still clears the back button.
+- Admin Now Watching shows 4K/1080p. Person pages use a blurred wash.
+- Music YouTube stream skip is not in this ship.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7777`
+  (household live still v3.1.16) and emulator `emulator-5554` (not the
+  Shield). Node suite **669/669**. Isolated `/api/server` 3.1.17.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 1260ms; FROM ready 3186ms SLOW, then first-byte/seek/resume OK).
+  IPTV web+native retune PASS (24481 channels). Overlapping Play PASS
+  (both ready in 26ms). Android lint/unit/debug build PASS. Android
+  ExoPlayer stress on `emulator-5554` PASS. Windows GPU not instrumented.
+
+2026-08-27, local library scan misses mapped drives (no version bump):
+
+- `M:\IR\PERSIAN MOVIES` has ~1040 folders with `.mkv`/`.mp4` files. An
+  elevated house Node process cannot see `M:`, so the old walk returned `[]`
+  and saved 0 items.
+- Scan now rewrites a missing drive letter to the UNC share from
+  `HKCU\Network\<letter>`, refuses to save an empty catalog when the folder
+  is missing/unreadable, and play/thumbs resolve the same way.
+- Focused Node: `test/library-db.test.js` **4/4**. Not shipped. Rescan the
+  library after the house server reloads this repo.
+
+2026-08-27, catalog scroll crash + Now Watching quality + person header (no version bump):
+
+- Custom-library show thumbs no longer `readLibrary()` the whole catalog.
+  ffmpeg thumbs are capped at 2 at a time. Scroll/D-pad only fetch the next
+  page at the last loaded virtual row, with an 8s backoff after a failed page.
+- Local ffmpeg thumbs lazy-load near the viewport; TMDB posters still preload
+  1600px ahead. Home, Search, Watchlist, Discover, Music, Live TV, person
+  Known For, and detail cast already page from in-memory/TMDB batches.
+- Admin Now Watching shows a 4K/1080p badge next to Original/Remux/Transcode.
+- Person/cast pages (`#/person/...`) use a magenta-coral blurred header wash.
+- Focused Node: library-db + phase4 + security **203/203**. Not shipped.
+
+2026-08-27, hide Cast on Android TV (no version bump):
+
+- Native Cast button stays on phone and tablet VOD (`!isTvDevice()`).
+  Android TV hides it because that device is already the TV.
+- Phase 4 Cast sender test pass. Debug APK on `emulator-5554` (not
+  Shield): playing Heartstopper Forever, chrome showed Guide / About /
+  skip / pause / CC / audio / quality / stats. No `Cast to TV` node.
+- Not shipped. Phone/tablet path unchanged; no phone emulator attached.
+
 2026-08-27, v3.1.16 ship — Windows player chrome, Cast toast, Android phone Cast button:
 
 - Version contract: `package.json` 3.1.16; Android `versionName` 3.1.16 /
