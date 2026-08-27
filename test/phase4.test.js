@@ -1138,8 +1138,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the player has Cast and AirPlay buttons');
   assert.match(ui, /'qualBtn', 'castBtn', 'airplayBtn', 'muteBtn'/,
     'Cast + AirPlay buttons are in the D-pad control order');
-  assert.match(ui, /function castEligible\(\) \{ try \{ return !canUseNativeVideoPlayer\(\); \}/,
-    'web casting is suppressed on the Android native-ExoPlayer path (no double-play)');
+  assert.match(ui, /function castEligible\(\) \{[\s\S]+__triboonWindowsBridge === true[\s\S]+return !canUseNativeVideoPlayer\(\)/,
+    'web Cast stays off on Android ExoPlayer; the Windows catalog can still send to a TV');
+  assert.match(ui, /window\.__tvNativeCastStart = \(\) => \{[\s\S]+startCast\(\)/,
+    'the Windows native Cast button starts the same Google Cast picker as the web player');
   // Phase 2: the receiver app-id is CONFIGURABLE but still DEFAULTS to the Default Media Receiver so
   // Phase 1 behavior is unchanged until the owner registers a custom receiver.
   assert.match(ui, /receiverApplicationId: castReceiverAppId\(\)/,
@@ -1364,8 +1366,11 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'a watch save marks Home dirty so a later Home visit rebuilds Continue Watching');
   assert.match(ui, /if \(v === 'home' && !opts\.preservePage\) \{[\s\S]+if \(cachedWatchRowsForHome\(\)\.length \|\| S\._homeWatchDirty\) paintHomeWatchNow\(\);/,
     'Home from IR Movies / IR TV rebuilds Continue Watching from the upserted watch cache');
-  assert.match(ui, /async function resumeContinueWatching\(it\) \{[\s\S]+ensureLocalPlaybackForItem\(it\)[\s\S]+playLocal\(\{ \.\.\.it, _local: loc \}\)[\s\S]+isPersonalLibraryWatchItem\(it\)[\s\S]+That library file is not available[\s\S]+return play\(it\);/,
-    'Continue Watching looks up the personal-library file before falling through to usenet');
+  assert.match(ui, /async function resumeContinueWatching\(it\) \{[\s\S]+localPlaybackForItem\(it\)[\s\S]+return playLocal\(\{ \.\.\.it, _local: loc \}\)[\s\S]+return play\(it\);/,
+    'Continue Watching plays a known local file immediately, otherwise hands off to play()');
+  const resumeCw = ui.match(/async function resumeContinueWatching\(it\) \{[\s\S]*?\n\}/)[0];
+  assert.doesNotMatch(resumeCw, /await ensureLocalPlaybackForItem/,
+    'Home Continue Watching must not wait on local-lookup before the loader covers the page');
   assert.match(ui, /function isPersonalLibraryWatchItem\(it\) \{[\s\S]+if \(\/\^local:\/i\.test\(String\(it\.key \|\| ''\)\)\) return true;[\s\S]+if \(it\.tmdbId\) return false;/,
     'matched TMDB titles still use usenet when no local file is attached');
   assert.match(ui, /function localLookupKeysForItem\(it\) \{[\s\S]+it\.key/,
@@ -3208,14 +3213,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android phones should rotate only full-screen native playback, not guide PiP handoffs');
   assert.match(android, /private void closeNativePlayback\(boolean notifyClosed\) \{[\s\S]+releaseNativePlayer\(notifyClosed\);[\s\S]+setPhonePlaybackOrientation\(false\);/,
     'Android phone playback rotation should be released when the native player closes');
-  assert.ok(ui.includes('#dBtns{flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;overflow:visible')
+  assert.ok(ui.includes('#dBtns{flex-wrap:wrap;justify-content:flex-start;align-items:center;gap:6px;overflow:visible')
     && ui.includes('#dBtns #dPlay{flex:1 1 132px;min-width:118px;max-width:176px}')
     && ui.includes('#dBtns #dStartOver{flex:1 1 132px;min-width:126px;max-width:176px}')
-    && ui.includes('body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;max-width:100%;padding:4px 8px 6px 4px')
-    && ui.includes('body.mobileShell #dBtns #dPlay{flex:0 0 auto;min-width:118px;max-width:none;margin-left:4px}')
+    && ui.includes('body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;max-width:100%;padding:4px 8px 6px 0;margin-left:-48px}')
+    && ui.includes('body.mobileShell #dBtns #dPlay{flex:0 0 auto;min-width:118px;max-width:none;margin-left:0}')
     && ui.includes('body.mobileShell #dBtns #dStartOver{flex:0 0 auto;min-width:126px;max-width:none}')
     && ui.includes('body.mobileShell .qToggle button{height:42px;padding:0 16px;font-size:12px}'),
-    'phone detail actions stay on one left-aligned row at full Play and quality size');
+    'phone and tablet detail Play starts at the left edge with no leftover gutter');
   assert.ok(ui.includes("if (document.querySelector('#detail.open,#person.open,#settings.open,#prefs.open,#music.open')) return false;")
     && ui.includes('#osd .ctl{display:flex;grid-template-columns:none;gap:8px;overflow-x:auto;overflow-y:visible')
     && ui.includes('#player:not(.live) #chGuide{display:none}')

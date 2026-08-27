@@ -726,6 +726,7 @@ enum ControlAction {
     RequestState,
     OpenGuide,
     CloseGuide,
+    Cast,
 }
 
 fn number_from_payload(payload: &Value, names: &[&str]) -> Option<f64> {
@@ -892,6 +893,7 @@ fn parse_control(
         "request_state" => Ok(ControlAction::RequestState),
         "open_guide" => Ok(ControlAction::OpenGuide),
         "close_guide" => Ok(ControlAction::CloseGuide),
+        "cast" | "start_cast" => Ok(ControlAction::Cast),
         _ => Err("unknown player action".into()),
     }
 }
@@ -1227,8 +1229,8 @@ fn ensure_player_window(app: &tauri::AppHandle) -> Result<WebviewWindow, String>
         PLAYER_WINDOW_LABEL,
         WebviewUrl::App("player.html".into()),
     )
-    .title("Triboon Player")
-    .decorations(false)
+    .title("Triboon")
+    .decorations(true)
     .inner_size(1280.0, 800.0)
     .min_inner_size(880.0, 560.0)
     .fullscreen(false)
@@ -1280,6 +1282,9 @@ fn player_surface_id(_window: &WebviewWindow) -> Result<i64, String> {
 fn restore_windowed_player(app: &tauri::AppHandle, player: &WebviewWindow) {
     let _ = player.set_always_on_top(false);
     let _ = player.set_fullscreen(false);
+    // Play stays windowed. The OS title bar must stay so the owner can drag,
+    // minimize, and maximize. Exclusive fullscreen (F) hides decorations.
+    let _ = player.set_decorations(true);
     if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
         if let (Ok(pos), Ok(size)) = (main.outer_position(), main.outer_size()) {
             let _ = player.set_position(pos);
@@ -1501,6 +1506,10 @@ pub fn windows_player_control(
             }
             return Ok(());
         }
+        ControlAction::Cast => {
+            eval_callback(&app, "__tvNativeCastStart", vec![]);
+            return Ok(());
+        }
         _ => {}
     }
     if matches!(parsed, ControlAction::OpenGuide) {
@@ -1573,6 +1582,7 @@ fn apply_stored_guide_pip(app: &tauri::AppHandle) -> Result<(), String> {
     };
     let player = ensure_player_window(app)?;
     let _ = player.set_fullscreen(false);
+    let _ = player.set_decorations(false);
     let _ = player.set_position(tauri::PhysicalPosition::new(
         (x * scale).round() as i32,
         (y * scale).round() as i32,
@@ -2891,7 +2901,7 @@ fn handle_control(
         }
         ControlAction::OpenGuide => active.ui.guide = true,
         ControlAction::CloseGuide => active.ui.guide = false,
-        ControlAction::Close | ControlAction::RequestState => {}
+        ControlAction::Close | ControlAction::RequestState | ControlAction::Cast => {}
     }
     publish_ui(app, shared, active.ui.clone());
     false

@@ -202,7 +202,6 @@
     const paused = value === 'paused';
     const icon = paused || value === 'ready' ? '#i-play' : '#i-pause';
     $('playPauseIcon').setAttribute('href', icon);
-    $('centerPlayIcon').setAttribute('href', '#i-play');
     $('playPause').setAttribute('aria-label', paused || value === 'ready' ? 'Play' : 'Pause');
     if (!state.playing && value !== 'ready') showControls(true);
     else scheduleHide();
@@ -225,20 +224,32 @@
     $('timeline').setAttribute('aria-valuetext', `${formatTime(position)} of ${formatTime(duration)}`);
   }
 
-  function updateGpu(stats) {
-    const badge = $('gpuBadge');
-    const decoder = text(stats.hwdec || stats.hwdecCurrent || stats.hardwareDecoder || '', 80);
-    const explicit = stats.hwdecActive ?? stats.hardwareDecoding ?? stats.gpuActive;
-    const active = explicit === true || (!!decoder && !/^(no|none|false|software)$/i.test(decoder));
-    const known = explicit !== undefined || !!decoder;
-    badge.classList.toggle('active', active);
-    badge.classList.toggle('fallback', known && !active);
-    badge.classList.toggle('checking', !known);
-    const label = active ? `GPU ${decoder || 'active'}` : (known ? 'CPU fallback' : 'GPU checking');
-    badge.querySelector('span').textContent = label;
-    badge.title = active
-      ? `Hardware video decoding is active${decoder ? ` (${decoder})` : ''}`
-      : (known ? 'Hardware decoding is unavailable for this stream; software fallback is active' : 'Hardware decoding has not been measured yet');
+  function clockStr(date) {
+    let hours = date.getHours();
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const ap = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12;
+    return `${hours}:${minutes} ${ap}`;
+  }
+
+  function updateClock() {
+    const now = new Date();
+    $('clockNow').textContent = clockStr(now);
+    if (state.mode !== 'live' && state.duration > 0) {
+      const remain = Math.max(0, state.duration - (timelinePreview == null ? state.position : timelinePreview));
+      const ends = new Date(now.getTime() + remain * 1000);
+      $('endsAt').textContent = `Ends at ${clockStr(ends)}`;
+    } else {
+      $('endsAt').textContent = '';
+    }
+  }
+
+  function updateQualityPill() {
+    const pill = $('qualityPill');
+    const label = text(state.qualityLabel, 24);
+    const hide = !label || /verified|gpu|video\s*card|d3d|nvdec|dxva/i.test(label);
+    pill.hidden = hide;
+    pill.textContent = hide ? '' : label;
   }
 
   function updateOptionalControls() {
@@ -249,6 +260,7 @@
     $('audio').hidden = state.mode === 'live' || state.audioTracks.length < 2;
     $('captions').hidden = state.mode === 'live';
     $('guide').hidden = false;
+    $('cast').hidden = state.mode === 'live';
     $('favorite').hidden = state.mode !== 'live';
     $('favorite').classList.toggle('favorite-on', state.favorite);
     $('favorite').setAttribute('aria-label', state.favorite ? 'Remove channel from favorites' : 'Add channel to favorites');
@@ -263,7 +275,8 @@
     setArtwork(state.backdropUrl);
     $('volume').value = state.muted ? 0 : Math.max(0, Math.min(100, state.volume));
     updateTimeline();
-    updateGpu(state.stats);
+    updateClock();
+    updateQualityPill();
     updateOptionalControls();
     renderUpNext();
     renderLiveEpg();
@@ -716,7 +729,7 @@
       event.stopPropagation();
       expandGuidePip();
     });
-    $('centerPlay').addEventListener('click', togglePlayback);
+    $('playerBack').addEventListener('click', requestClose);
     $('playPause').addEventListener('click', togglePlayback);
     $('back').addEventListener('click', () => seekRelative(-10));
     $('forward').addEventListener('click', () => seekRelative(30));
@@ -731,6 +744,7 @@
       nativeInvoke('windows_player_open_guide', {}).catch(() => showToast('The TV guide could not be opened.'));
     });
     $('favorite').addEventListener('click', () => send('favorite', { on: !state.favorite }));
+    $('cast').addEventListener('click', () => send('cast'));
     $('fullscreen').addEventListener('click', toggleFullscreen);
     $('upNextPlay').addEventListener('click', () => send('next'));
     $('upNextDismiss').addEventListener('click', () => send('up_next_dismiss'));
@@ -743,12 +757,8 @@
       send('retry');
     });
     $('errorClose').addEventListener('click', requestClose);
-    $('windowClose').addEventListener('click', requestClose);
     $('menuClose').addEventListener('click', closePanels);
     $('statsClose').addEventListener('click', closePanels);
-    $('minimize').addEventListener('click', async () => {
-      try { if (currentWindow) await currentWindow.minimize(); else await send('minimize'); } catch { showToast('Could not minimize the player.'); }
-    });
 
     $('timeline').addEventListener('input', (event) => {
       timelinePreview = state.duration * (finite(event.target.value) / 1000);
@@ -922,6 +932,10 @@
 
   bindControls();
   document.addEventListener('keydown', handleKey);
+  setInterval(updateClock, 15000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') updateClock();
+  });
   let lastMouseX = -1;
   let lastMouseY = -1;
   document.addEventListener('mousemove', (event) => {

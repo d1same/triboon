@@ -2043,7 +2043,7 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
   #dTitle{font-size:clamp(24px,7.8vw,34px);max-width:100%}
   #dOverview{max-width:100%;font-size:14px;margin-left:auto;margin-right:auto}
   #dCrew{max-width:100%;line-height:1.4}
-  #dBtns{flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;overflow:visible;max-width:100%;padding:0 0 6px}
+  #dBtns{flex-wrap:wrap;justify-content:flex-start;align-items:center;gap:6px;overflow:visible;max-width:100%;padding:0 0 6px}
   #dBtns::-webkit-scrollbar{display:none}
   #dBtns .btn{min-width:0;white-space:nowrap;justify-content:center;padding:11px 13px;font-size:12.8px}
   #dBtns .btn.primary{padding:11px 16px}
@@ -2193,15 +2193,14 @@ body.mobileShell #detail .back{top:14px;left:66px!important}
 body.mobileShell #detail .detailHero{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:14px;min-height:0;padding-top:calc(12px + var(--safeT))}
 body.mobileShell #detail .dInfo{width:100%;max-width:none;padding-left:48px;text-align:left;--infoCap:calc(100vw - 80px)}
 body.mobileShell #dTitle,body.mobileShell #dOverview,body.mobileShell #dCrew,body.mobileShell #dMeta{max-width:100%;margin-left:0;margin-right:0;text-align:left}
-body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;max-width:100%;padding:4px 8px 6px 4px;margin-left:48px}
+body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;max-width:100%;padding:4px 8px 6px 0;margin-left:-48px}
 body.mobileShell #dBtns::-webkit-scrollbar{display:none}
-body.mobileShell #dBtns::before{content:"";flex:0 0 2px}
 @media (orientation:landscape){
   body.mobileShell #dBtns{overflow:visible}
 }
 body.mobileShell #dBtns .btn{min-width:0;white-space:nowrap;justify-content:center;padding:14px 22px;font-size:14px;min-height:52px}
 body.mobileShell #dBtns .btn.primary{padding:14px 28px}
-body.mobileShell #dBtns #dPlay{flex:0 0 auto;min-width:118px;max-width:none;margin-left:4px}
+body.mobileShell #dBtns #dPlay{flex:0 0 auto;min-width:118px;max-width:none;margin-left:0}
 body.mobileShell #dBtns #dStartOver{flex:0 0 auto;min-width:126px;max-width:none}
 body.mobileShell #dBtns .iconBtn{flex:0 0 52px;width:52px;height:52px}
 body.mobileShell .qToggle{margin-left:0;flex:0 0 auto;min-height:52px;padding:4px}
@@ -8664,15 +8663,11 @@ function localPlaybackForItem(it) {
 }
 async function resumeContinueWatching(it) {
   if (!it) return;
-  let loc = localPlaybackForItem(it);
-  if (!loc || !loc.streamUrl) {
-    try { loc = await ensureLocalPlaybackForItem(it); } catch { loc = null; }
-  }
+  const loc = localPlaybackForItem(it);
   if (loc && loc.streamUrl) return playLocal({ ...it, _local: loc });
-  if (isPersonalLibraryWatchItem(it)) {
-    toast('That library file is not available');
-    return;
-  }
+  // Do not await local-lookup here. play() already covers Home with the branded
+  // loader, then looks up the disk file. A cold /api/libraries/local-lookup used
+  // to freeze Home for several seconds before Preparing appeared.
   return play(it);
 }
 function localPlaybackRankForItem(it) {
@@ -16943,7 +16938,12 @@ $('video').addEventListener('webkitendfullscreen', syncFullscreenButton);
 // on the Android native-ExoPlayer path (canUseNativeVideoPlayer); that shell will cast via its own
 // SDK in a later phase. Live TV is out of scope for Phase 1 (it uses MSE, not a plain URL).
 let _castCtx = null, _castRp = null, _castRpc = null, _castSdkAsked = false;
-function castEligible() { try { return !canUseNativeVideoPlayer(); } catch { return false; } }
+function castEligible() {
+  try {
+    if (window.__triboonWindowsBridge === true) return true;
+    return !canUseNativeVideoPlayer();
+  } catch { return false; }
+}
 function castSdkReady() { return !!(window.cast && window.cast.framework && window.chrome && window.chrome.cast); }
 function castHostReachable() { const h = location.hostname; return !(h === 'localhost' || h === '127.0.0.1' || h === '::1'); }
 function castVodEligible() { const p = S.playing; return !!(p && p.item && p.item.type !== 'live'); }
@@ -17112,6 +17112,22 @@ function initAirPlay() {
 $('castBtn').addEventListener('click', startCast);
 initCastSender();
 initAirPlay();
+window.__tvNativeCastStart = () => {
+  if (!S.playing || !castVodEligible()) {
+    toast('Cast is for movies and TV shows');
+    return;
+  }
+  if (!castHostReachable()) {
+    toast('Open Triboon by its LAN IP (not localhost) to cast');
+    return;
+  }
+  if (!castSdkReady()) {
+    initCastSender();
+    toast('Cast needs a Chromecast or Android TV on this network');
+    return;
+  }
+  startCast();
+};
 // Native app cast (Phase 3): the Android shell casts via its own Cast SDK and pushes receiver state
 // here, feeding the SAME p.cast* fields the browser path uses — so the OSD, seek bar, and the
 // watch/Trakt heartbeat all keep working. The native player is stopped shell-side (no double-play).
