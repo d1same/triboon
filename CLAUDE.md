@@ -85,7 +85,7 @@ Always follow the owner's method:
     kept outside git: `TRIBOON_RELEASE_STORE_FILE`, `TRIBOON_RELEASE_STORE_PASSWORD`,
     `TRIBOON_RELEASE_KEY_ALIAS`, `TRIBOON_RELEASE_KEY_PASSWORD` (in the owner's password manager +
     GitHub Actions secrets, incl. `TRIBOON_RELEASE_KEYSTORE_B64` for CI). See the signing Hard Rule.
-  - Do not use `C:\Users\opencode\tools\gradle-8.10.2`.
+  - Do not use an old leftover Gradle 8.10.2 install.
 - Windows client build:
   - Use Rust stable `x86_64-pc-windows-msvc` from a VS 2022 C++ developer shell.
   - Use only the immutable LGPL libmpv URL/SHA in the GitHub workflow; do not

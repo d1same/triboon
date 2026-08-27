@@ -54,11 +54,14 @@ android/app/build/
 # Test/debug scratch output (server logs can echo release names and channel lists).
 dist/
 tmp/
+tmp-*
 *.log
 alltests.txt
 p2fail*.txt
 graphify-out/
 .codex-remote-attachments/
+.hindsight/
+.cursor/mcp.json
 
 # Windows native-client build products. The checksum-verified DLL is injected by CI/local builds;
 # generated capability schemas and compiled binaries must never be committed.

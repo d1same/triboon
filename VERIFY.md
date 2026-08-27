@@ -283,7 +283,7 @@ fails to produce a playable stream. Budgets default to feels-local targets
   cached. A finished small file still drips to 4 after the startup window.
 - Play Next / Up Next / autoplay still share `playNextEpisode()` and the
   last-two-minute prepare. Episode handoff was not re-clicked on the TV.
-- `npm.cmd run verify:full` on Shield `10.1.20.11`: focused IPTV/P9 47,
+- `npm.cmd run verify:full` on the owner Shield: focused IPTV/P9 47,
   engine 51, pipeline 8, player 25, security 7; full Node suite **645/645**;
   isolated `/api/server` 3.1.10; household VOD/IPTV pass. Overlapping Play
   404'd on leftover mounts still served by the installed v3.1.9 service.
@@ -305,7 +305,7 @@ fails to produce a playable stream. Budgets default to feels-local targets
   the DASH remux / extra YouTube clients. A second resolve is cache-hit.
 - Local `http://127.0.0.1:7799/api/trailer/AAAAAAAAAAA` returns 401
   (route exists). Served HTML has `<video>` and no `youtube.com/embed`.
-- Shield `10.1.20.11` still hits the installed Windows service on
+- The owner Shield still hits the installed Windows service on
   `:7777` (this box cannot stop/replace that service). Owner must
   restart that service from this repo, or open a trailer on `:7799`.
 - Web Player VOD / IPTV / ExoPlayer live smokes: **not run** (trailer
@@ -552,7 +552,7 @@ fails to produce a playable stream. Budgets default to feels-local targets
   fill — the row you are on grows bright, no left tick (the scroller was
   clipping it).
 - `npm.cmd test` 604/604. Isolated `/api/server` smoke reported 3.1.1.
-  `npm.cmd run verify:full -- -AndroidDevice 10.1.20.11:5555
+  `npm.cmd run verify:full -- -AndroidDevice <owner-shield>
   -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
   focused P9/P14/P11, full Node suite, household VOD/CC, IPTV ABC+ESPN
   web+native (24484 channels, 2 video picks), overlapping Play 15ms /
