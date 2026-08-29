@@ -2623,8 +2623,12 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'a dropped HTTP range during pause must not rebuild ExoPlayer');
   assert.match(android, /retryNativeDirectInPlace\(resumeAt\)/,
     'direct-play IO after a real start retries the same player in place');
-  assert.match(android, /private void resumeNativeVideoInPlace\(\) \{[\s\S]+hideNativeLoading\(\);[\s\S]+STATE_IDLE \|\| state == Player\.STATE_ENDED/,
-    'Play after a crash must hide the circles and restart the same player, not a new hunt');
+  assert.match(android, /private void resumeNativeVideoInPlace\(\) \{[\s\S]+hideNativeLoading\(\);[\s\S]+__tvNativeVideoResuming[\s\S]+STATE_IDLE \|\| state == Player\.STATE_ENDED[\s\S]+requestNativeVideoSeek\(at, true\)[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
+    'Play after a crash must hide the circles; remux/transcode Play remounts the same file instead of reading a leftover dead pipe');
+  assert.match(ui, /window\.__tvNativeVideoResuming = \(pos, dur, token\) => \{[\s\S]+p\.nativePaused = false;/,
+    'user Play must clear nativePaused so a dead remux pipe can recover');
+  assert.match(ui, /function togglePlay\(\) \{[\s\S]+p\.usingRemux \|\| p\.usingTranscode[\s\S]+startSource\(currentPlayerKind\(p\), currentTime\(\), \{ quietSeek: true \}\)/,
+    'web remux Play after pause remounts the same file instead of reading a dead pipe');
   assert.match(android, /updateNativeVideoWatchdog\(\) \{[\s\S]+!nativePlayer\.getPlayWhenReady\(\)[\s\S]+nativeVideoUnhealthySinceMs = 0L;[\s\S]+return;/,
     'the stall watchdog must ignore a user pause');
   assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+p\.usingNative && p\.nativePaused && !sourceDead && !decoderFailure\) return false;/,
@@ -2640,6 +2644,8 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
   assert.match(playbook, /emulator-5554/);
   assert.match(android, /private void retryNativeDirectInPlace\(long displayMs\) \{[\s\S]+nativePlayer\.seekTo[\s\S]+nativePlayer\.prepare\(\);/,
     'direct retry must stay on the live ExoPlayer');
+  assert.match(android, /NATIVE_VIDEO_REMUX_RESUME_GRACE_MS = 4000L[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
+    'remux Play after a dead pipe remounts the same file with a short grace, not a 25s stall');
   assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)/,
     'a real stall still remounts the same file quietly, never a new search');
   assert.match(ui, /playbackServerGone\(reason\)[\s\S]+reMountAndResume\(reason \|\| 'playback session expired'\)/,
@@ -6084,8 +6090,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'a resume play replays the pinned source as a pick (explicit Sources picks still win)');
   assert.match(ui, /function sourceFitsQualityPref\(src, qRank\) \{[\s\S]+if \(qRank >= 4\) return rank >= 4;[\s\S]+return rank < 4 && rank <= qRank;/,
     'a 4K pin must not ride along after the user taps 1080 — Play should pick a 1080 source');
-  assert.match(ui, /if \(resumeSec > 0 && pinnedResume\) \{[\s\S]+body\.resumeFrac = Math\.max\(0, Math\.min\(0\.98, resumeSec \/ dur\)\);/,
-    'resumeFrac is only for the same pinned file — a 1080 hop must not treat 4K duration as a percent of the 1080');
+  assert.match(ui, /const userPicked = !!\(picked && \(picked\.name \|\| picked\.pickKey\)\);[\s\S]+if \(resumeSec > 0 && !userPicked\) \{[\s\S]+body\.resumeFrac = Math\.max\(0, Math\.min\(0\.98, resumeSec \/ dur\)\);/,
+    'resumeFrac warms any same-title resume; an explicit Sources pick must not treat the old file duration as a percent of the new one');
   assert.match(ui, /if \(pos >= resumeAt - 5\) p\._resumeLanded = true;[\s\S]+if \(!watched && !\(p\.item && p\.item\._startOver\) && resumeAt > 30 && !p\._resumeLanded && pos < resumeAt - 20\) \{[\s\S]+pos = resumeAt;/,
     'a quality hop that still reports 0:00 must keep the shared title clock, not write a second resume point');
   assert.match(ui, /pinnedResume = true;[\s\S]{0,400}if \(pinnedResume\) body\.pinnedResume = true;/,

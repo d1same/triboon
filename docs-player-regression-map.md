@@ -223,7 +223,9 @@ them when the table is reorganized:
   `ENDED` while `playWhenReady` is false keeps that player. `notifyNativeVideoError`
   must not `releaseNativePlayer` (a later quiet remount would become a 30s 4K
   rebuild) and must not show the circling loader after playback has started.
-  Resume uses `resumeNativeVideoInPlace`. Same playback token + same URL reuses ExoPlayer. The first OK that
+  Resume uses `resumeNativeVideoInPlace`. Remux/transcode Play remounts the same file
+  instead of playing leftover dead-pipe buffer until it freezes.
+  Same playback token + same URL reuses ExoPlayer. The first OK that
   opens chrome must not click Play. `recoverSamePlaybackSource` no-ops while
   native is paused unless the source is actually dead. A new NZB is only after
   a blocked health verdict or a user Sources pick. Playbook:

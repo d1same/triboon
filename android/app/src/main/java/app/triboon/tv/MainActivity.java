@@ -342,6 +342,7 @@ public class MainActivity extends Activity {
     private long nativeLiveLastRecoveryMs;
     private long nativeVideoUnhealthySinceMs;
     private long nativeResumeGraceUntilMs;
+    private long nativeUserPausedAtMs;
     private boolean nativeVideoStarted;
     private boolean nativeVideoMemoryTrimmedDuringBuffer;
     private boolean nativeVideoErrorNotified;
@@ -360,6 +361,7 @@ public class MainActivity extends Activity {
     private static final long NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 30000L;
     private static final long NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS = 90000L;
     private static final long NATIVE_VIDEO_RESUME_GRACE_MS = 25000L;
+    private static final long NATIVE_VIDEO_REMUX_RESUME_GRACE_MS = 4000L;
     private static final long NATIVE_LIVE_STALL_RECOVERY_MS = 45000L;
     private static final long NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS = 12000L;
     private static final long NATIVE_LIVE_RECOVERY_COOLDOWN_MS = 15000L;
@@ -1479,8 +1481,14 @@ public class MainActivity extends Activity {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> {
                     if (nativePlayer == null || !nativePlayerOpen()) return;
-                    if (nativePlayer.isPlaying()) nativePlayer.pause();
-                    else resumeNativeVideoInPlace();
+                    // playWhenReady, not isPlaying(): a remux/transcode remount is not "playing"
+                    // yet, and using isPlaying() here turns the next Pause into another Play.
+                    if (nativePlayer.getPlayWhenReady()
+                            && nativePlayer.getPlaybackState() != Player.STATE_IDLE
+                            && nativePlayer.getPlaybackState() != Player.STATE_ENDED) {
+                        nativePlayer.pause();
+                        markNativeUserPaused();
+                    } else resumeNativeVideoInPlace();
                     updateNativeChrome();
                 });
             }
@@ -4403,6 +4411,7 @@ public class MainActivity extends Activity {
             nativeLiveStarted = false;
             nativeVideoUnhealthySinceMs = 0L;
             nativeResumeGraceUntilMs = 0L;
+            nativeUserPausedAtMs = 0L;
             nativeVideoMemoryTrimmedDuringBuffer = false;
             nativeVideoErrorNotified = false;
             // Reset the reconnect budget only for a genuinely NEW mount. A quiet-seek reuse re-mount IS
@@ -4626,6 +4635,7 @@ public class MainActivity extends Activity {
                             && nativePlayer != null
                             && nativePlayer.getPlaybackState() == Player.STATE_READY
                             && !nativePlayer.getPlayWhenReady() && !nativePercentResumePending) {
+                        markNativeUserPaused();
                         rememberNativeVideoPosition();
                         web.evaluateJavascript("window.__tvNativeVideoPaused && __tvNativeVideoPaused("
                                 + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
@@ -4954,15 +4964,29 @@ public class MainActivity extends Activity {
         return live > 0L ? Math.max(live, nativeLastVideoDisplayMs) : nativeLastVideoDisplayMs;
     }
 
+    private void markNativeUserPaused() {
+        nativeUserPausedAtMs = SystemClock.elapsedRealtime();
+    }
+
     private void resumeNativeVideoInPlace() {
         if (nativePlayer == null) return;
         hideNativeLoading();
         nativeVideoErrorNotified = false;
         nativeVideoUnhealthySinceMs = 0L;
-        nativeResumeGraceUntilMs = SystemClock.elapsedRealtime() + NATIVE_VIDEO_RESUME_GRACE_MS;
+        long now = SystemClock.elapsedRealtime();
+        boolean remux = nativeServerSeekMode();
+        // Remux pipes die when ExoPlayer stops reading. A 25s grace on a dead pipe is the
+        // freeze/breakup after Pause → Play. Direct play keeps the longer refill window.
+        nativeResumeGraceUntilMs = now + (remux ? NATIVE_VIDEO_REMUX_RESUME_GRACE_MS : NATIVE_VIDEO_RESUME_GRACE_MS);
+        // User hit Play — recovery must be allowed even if PLAYING never fires on a dead pipe.
+        if (web != null) {
+            web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
+                    + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+        }
         int state = nativePlayer.getPlaybackState();
         if ("video".equals(nativeMode) && (state == Player.STATE_IDLE || state == Player.STATE_ENDED)) {
             long at = nativeResumePositionMs();
+            nativeUserPausedAtMs = 0L;
             if (nativeServerSeekMode()) {
                 nativePlayer.setPlayWhenReady(true);
                 requestNativeVideoSeek(at, true);
@@ -4972,6 +4996,15 @@ public class MainActivity extends Activity {
             nativePlayer.play();
             return;
         }
+                if ("video".equals(nativeMode) && remux) {
+                    // Leftover remux/transcode buffer is a dead ffmpeg pipe that still reports
+                    // seconds of "buffered." play() on that reads frozen/broken frames.
+                    nativeUserPausedAtMs = 0L;
+                    nativePlayer.setPlayWhenReady(true);
+                    requestNativeVideoSeek(nativeResumePositionMs(), true);
+                    return;
+                }
+        nativeUserPausedAtMs = 0L;
         nativePlayer.play();
     }
 

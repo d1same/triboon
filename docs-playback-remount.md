@@ -8,8 +8,8 @@ Example: you pause The Rookie for a minute, press Play, and sit on Preparing. Th
 
 | What they see | What actually happened | Allowed? |
 | --- | --- | --- |
-| Instant Play after pause | `nativePlayer.play()` | Yes. Required. |
-| Short buffer, same file | In-place retry or quiet same-URL remount | Yes, after a real drop while playing |
+| Instant Play after pause | `nativePlayer.play()` | Yes. Required for a live buffer. |
+| Short buffer, same file | In-place retry or quiet same-URL remount | Yes, after a real drop while playing, or remux/transcode pause whose pipe is already dead |
 | ~30s Preparing, same file | `releaseNativePlayer` + new `ExoPlayer.Builder` | No, except first Play or a new episode |
 | "Finding source" / new filename | `autoAdvance` / new NZB | Only if health says the current release is dead, or the user picks Sources |
 | Sources empty / "too many attempts" | 60s route throttle | Different bug. Wait one minute. |
@@ -23,11 +23,12 @@ Example: you pause The Rookie for a minute, press Play, and sit on Preparing. Th
 5. Stall watchdog while paused.
 6. `recoverSamePlaybackSource` while `nativePaused` and the source is not dead.
 7. `notifyNativeVideoError` must not `releaseNativePlayer`. A quiet remount needs the live player.
-8. After playback has started, an error must not show the circling Preparing loader. Resume uses `resumeNativeVideoInPlace` (play, or prepare+seek if IDLE/ENDED). Multiple Play presses must not rebuild.
+8. After playback has started, an error must not show the circling Preparing loader. Resume uses `resumeNativeVideoInPlace` (play, or prepare+seek if IDLE/ENDED). Remux/transcode Play after pause remounts the same file quietly (`requestNativeVideoSeek`) — leftover buffer still looks healthy and must not be played. Multiple Play presses must not rebuild.
 
 ## Triggers that MAY remount the same file (quiet)
 
 - Recoverable IO while **playing** (direct: `retryNativeDirectInPlace`; remux/transcode: `__tvNativeVideoSeek` + `quietSeek`).
+- User Play on remux/transcode after pause. Same file, last frame held, no Preparing. Leftover remux/transcode buffer is a dead ffmpeg pipe.
 - User seek on remux/transcode (`start=` URL).
 - Quality / audio change that needs a new server stream.
 - Mid-title remux `ENDED` while **playing**.

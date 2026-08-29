@@ -8012,6 +8012,7 @@ function traktResumeFractionForItem(it) {
   return pct > 2 ? Math.max(0, Math.min(0.96, pct / 100)) : 0;
 }
 function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) {
+  const userPicked = !!(picked && (picked.name || picked.pickKey));
   const ids = sourceIdentityFor(it);
   // Resume replays the source that was actually playing (pinned in watch meta after ~30s of real
   // playback) instead of re-running auto-pick — a manual Sources choice survives, and a source the
@@ -8060,8 +8061,10 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   // prime that deep byte window on the read-ahead lane BEFORE the seek — otherwise the resume offset
   // is cold and the first frame waits on it (the 20-30s native resume lag). The server can't compute
   // this itself (no duration probe at prepare/play); only the client knows the duration (watch state).
+  // Send this for any same-title resume (pinned or not). An explicit Sources pick is a different
+  // file — do not map the old duration onto it (a 4K→1080 hop used to warm the wrong percent).
   const resumeSec = +it.resume || 0;
-  if (resumeSec > 0 && pinnedResume) {
+  if (resumeSec > 0 && !userPicked) {
     const w = S.watchMap && it.key && S.watchMap[it.key];
     const dur = +(w && w.duration) || +it.duration || 0;
     if (dur > 0) body.resumeFrac = Math.max(0, Math.min(0.98, resumeSec / dur));
@@ -8119,6 +8122,7 @@ function preparePlaybackSource(it, delay = 900) {
   if (S._booting) return;
   if (S.view === 'player') return;
   if (!it || it.type === 'live') return;
+  it = resolvePlaybackResume(it);
   if (it.type === 'tv' && !episodeKeyParts(it)) return;
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
@@ -12410,7 +12414,7 @@ async function openPlayer(it, mount, opts = {}) {
   };
   v.onplaying = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
-    clearWebRebufferRecovery(); clearPauseIdleExit(); cancelPauseWarmAhead(); markVodPlaybackStarted(playingRef);
+    clearWebRebufferRecovery(); clearPauseIdleExit(); cancelPauseWarmAhead(); playingRef._pausedAt = 0; markVodPlaybackStarted(playingRef);
     bumpPlayClock(playingRef);
     clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame();
   };
@@ -12421,6 +12425,7 @@ async function openPlayer(it, mount, opts = {}) {
     // when the app is backgrounded or killed right after pausing.
     bumpPlayClock(playingRef);
     saveWatch(true);
+    playingRef._pausedAt = Date.now();
     armPauseIdleExit(playingRef);
     schedulePauseWarmAhead(playingRef); updPP();
   };
@@ -13316,6 +13321,7 @@ window.__tvNativeVideoPlaying = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
   p.nativePaused = false;
+  p._nativeResuming = false;
   clearPauseIdleExit();
   bumpPlayClock(p);
   // READY means ExoPlayer parsed enough media to be ready; it does not prove a frame advanced.
@@ -13323,10 +13329,19 @@ window.__tvNativeVideoPlaying = (pos, dur, token) => {
   markVodPlaybackStarted(p);
   cancelPauseWarmAhead();
 };
+window.__tvNativeVideoResuming = (pos, dur, token) => {
+  const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  applyNativeVideoProgress(pos, dur);
+  p.nativePaused = false;
+  p._nativeResuming = true;
+  p._pausedAt = 0;
+  clearPauseIdleExit();
+};
 window.__tvNativeVideoPaused = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
   p.nativePaused = true;
+  p._pausedAt = Date.now();
   bumpPlayClock(p);
   armPauseIdleExit(p);
   // ExoPlayer reports the exact stop point here. Flush it before Android can suspend the hidden
@@ -15344,6 +15359,16 @@ function togglePlay() {
   if (!v.src) return;
   const live = !!(S.playing && S.playing.item && S.playing.item.type === 'live');
   if (v.paused) {
+    const p = S.playing;
+    const remux = !!(!live && p && (p.usingRemux || p.usingTranscode));
+    // Remux/transcode leftover buffer is a dead ffmpeg pipe that still looks "ready."
+    // play() on it freezes or breaks up; remount the same file at the pause point.
+    if (remux) {
+      p._pausedAt = 0;
+      startSource(currentPlayerKind(p), currentTime(), { quietSeek: true });
+      updPP();
+      return;
+    }
     (live && v === $('liveSplitVideo')
       ? requestLiveMsePlay(v, { split: true })
       : requestVideoPlay(v, { livePrompt: live })).catch(() => {});
