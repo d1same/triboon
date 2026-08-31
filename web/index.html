@@ -478,7 +478,8 @@ body[data-spotlight] .pgBackTop.focusable.focus,
    base look: ring/fill cue, no zoom. */
 body[data-spotlight] .mCard.focusable.focus,
 body[data-spotlight] .musicRow.focusable.focus,
-body[data-spotlight] .mArtistHit.focusable.focus{transform:none}
+body[data-spotlight] .mArtistHit.focusable.focus,
+body[data-spotlight] .searchSuggestItem.focusable.focus{transform:none}
 body[data-spotlight] #dBtns .btn.focusable.focus,
 body[data-spotlight] #dBtns .btn.focusable:focus-visible,
 body[data-spotlight] #dBtns .iconBtn.focusable.focus,
@@ -714,11 +715,11 @@ body[data-light="1"] .btn.primary svg{color:#F2F4F7}
    photo/poster RING (--artFocusLine/Glow) like .card/.pcard — they must NOT get the solid
    button fill, or the whole tile (photo + name) flashes a coloured block on focus. */
 .btn.focus::before, .btn:focus-visible::before,
-button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn).focus::before, button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus-visible::before { opacity:0 !important; }
+button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):not(.searchSuggestItem).focus::before, button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):not(.searchSuggestItem):focus-visible::before { opacity:0 !important; }
 .btn:hover, .btn.focus, .btn:focus-visible,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):hover,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn).focus,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus-visible {
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):not(.searchSuggestItem):hover,
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):not(.searchSuggestItem).focus,
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):not(.searchSuggestItem):focus-visible {
   background: var(--btnHover) !important;
   color: var(--btnFocusText) !important;
   filter: none;
@@ -788,8 +789,8 @@ body.tv #filterMenu{backdrop-filter:none}
 .gChip.sel{background:var(--btnSelected);color:var(--text);border-color:transparent}
 #grid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,var(--poster));gap:20px 16px;align-content:start;justify-content:start;padding:6px 4px 30px}
 #grid .pcard{flex:none}
-#browse.searchMode{padding-top:110px!important} /* clears the floating search bar incl. section headers; !important beats the unconditional #browse padding shorthand below, else results tuck under the bar */
-#browse.searchMode.hasSuggest{padding-top:164px!important}
+#browse.searchMode{padding-top:var(--searchPad, 110px)!important} /* clears the floating search bar */
+#browse.searchMode.hasSuggest{padding-top:168px!important} /* TV WebView drops CSS max(); tight gap — JS then measures the real chip */
 #browse.searchMode .browseHead{display:none}
 #browse.noFilter .filterBar{display:none}
 
@@ -945,6 +946,7 @@ body.personOpen #bdInfo{display:none!important}
 /* ---------- search ---------- */
 #searchBar{display:none;position:fixed;z-index:9;top:26px;left:116px;right:60px}
 #searchBar.show{display:block}
+#searchBar.hasSuggest{min-height:0}
 #searchBar input{width:min(680px,100%);background:var(--field);border:1px solid var(--line);border-radius:14px;padding:16px 20px;color:var(--text);font:500 17px "Albert Sans";outline:none}
 #searchBar input:focus{border-color:var(--magenta)}
 
@@ -1400,14 +1402,14 @@ body.tv #vlcCopy{display:none}
 #settings,#prefs{position:fixed;inset:0;z-index:8;display:none;padding:50px 60px 60px 140px;overflow-y:auto}
 #settings.open,#prefs.open{display:grid;grid-template-columns:minmax(196px,216px) minmax(0,1fr);gap:18px 24px;align-content:start}
 #settings h1,#prefs h1{font:800 34px "Sora";margin-bottom:6px}
-#settings .sub,#prefs .sub{color:var(--muted);margin-bottom:22px}
+#settings .sub,#prefs .sub{color:rgba(var(--fg),.78);margin-bottom:22px}
 #settings h1,#settings>.sub,#prefs h1,#prefs>.sub{grid-column:1/-1}
 #setTabs,#prefTabs{grid-column:1;position:sticky;top:18px;display:flex;flex-direction:column;gap:2px;margin:0;align-self:start}
 /* Settings tab list: text + icon, no capsules. Selected = brighter type + a thin accent bar. */
 #setTabs button,#prefTabs button{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:10px;width:100%;
   min-height:40px;text-align:left;background:transparent;border:0;
   -webkit-backdrop-filter:none;backdrop-filter:none;
-  border-radius:8px;color:var(--muted);font:600 13.5px "Albert Sans";padding:7px 10px 7px 12px;cursor:pointer;transition:background .15s,color .15s,box-shadow .15s}
+  border-radius:8px;color:rgba(var(--fg),.82);font:600 13.5px "Albert Sans";padding:7px 10px 7px 12px;cursor:pointer;transition:background .15s,color .15s,box-shadow .15s}
 #setTabs button svg,#prefTabs button svg{width:18px;height:18px;color:currentColor}
 #setTabs button:hover,#prefTabs button:hover{color:var(--text);background:rgba(255,255,255,.06)}
 #setTabs button.on,#prefTabs button.on{color:var(--text);background:transparent;font-weight:700;
@@ -1415,7 +1417,7 @@ body.tv #vlcCopy{display:none}
 /* Section label between Preferences and Server settings — label only, no hairline
    (owner, Shield: Dashboard/Profile have no line above or below; Server settings must match). */
 .prefTabDivider{margin:8px 0 2px;padding:4px 12px 2px;border:0;pointer-events:none}
-.prefTabDivider span{font:800 8.5px "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase;color:var(--muted);padding:0}
+.prefTabDivider span{font:800 8.5px "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase;color:rgba(var(--fg),.62);padding:0}
 #setTabs button.focus,#prefTabs button.focus,#setTabs button:focus,#prefTabs button:focus{outline:none;background:rgba(255,255,255,.08);box-shadow:none}
 .setGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(480px,100%),1fr));gap:18px;align-items:start;max-width:2200px} /* up to 4 columns on big screens, wraps down to 1 on phones */
 .testBtn{font:700 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase;padding:4px 11px;margin-left:10px;cursor:pointer;
@@ -1463,7 +1465,7 @@ body.tv #settings>.setGrid,body.tv #prefs>.setGrid{
 .settingsRow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end}
 .settingsRow.two{grid-template-columns:repeat(2,minmax(0,1fr))}
 .settingsControl{display:grid;gap:6px;min-width:0}
-.settingsControl>span{color:var(--muted);font:700 11px "JetBrains Mono";letter-spacing:.02em;text-transform:none}
+.settingsControl>span{color:rgba(var(--fg),.78);font:700 11px "JetBrains Mono";letter-spacing:.02em;text-transform:none}
 .settingsControl input,.settingsControl select{width:100%;max-width:none!important;min-width:0;box-sizing:border-box}
 .settingsControl input{
   min-height:40px;background:var(--field);border:1px solid var(--line);border-radius:12px;
@@ -1472,9 +1474,9 @@ body.tv #settings>.setGrid,body.tv #prefs>.setGrid{
 .settingsControl input:focus{border-color:var(--magenta)}
 .perfSummary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0 2px}
 .perfCard{min-height:74px;border:1px solid rgba(var(--fg),.08);border-radius:12px;padding:12px;background:var(--field)}
-.perfCard .k{font:700 11px "JetBrains Mono";letter-spacing:.02em;text-transform:none;color:var(--muted);margin-bottom:6px}
+.perfCard .k{font:700 11px "JetBrains Mono";letter-spacing:.02em;text-transform:none;color:rgba(var(--fg),.76);margin-bottom:6px}
 .perfCard .v{font:800 17px "Sora";color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.perfCard small{display:block;margin-top:3px;color:var(--muted);font:700 10px "JetBrains Mono";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.perfCard small{display:block;margin-top:3px;color:rgba(var(--fg),.70);font:700 10px "JetBrains Mono";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .perfStatusLine{font:700 12px "Albert Sans";color:var(--text)}
 .perfWarnings{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .perfWarnings span{border:1px solid rgba(255,198,92,.26);background:rgba(255,198,92,.08);color:var(--amber);border-radius:999px;padding:5px 8px;font:700 10px "JetBrains Mono";letter-spacing:.02em}
@@ -1484,17 +1486,17 @@ body.tv #settings>.setGrid,body.tv #prefs>.setGrid{
 .settingsActions .btn.ghost{min-width:128px}
 .settingsStatus{margin-top:14px;line-height:1.55;word-break:normal;overflow-wrap:anywhere}
 .kv{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
-.kv span:last-child{font-family:"JetBrains Mono";color:var(--muted);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hint{font:500 11px "JetBrains Mono";color:var(--muted);margin-top:10px;word-break:break-all}
+.kv span:last-child{font-family:"JetBrains Mono";color:rgba(var(--fg),.76);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hint{font:500 11px "JetBrains Mono";color:rgba(var(--fg),.76);margin-top:10px;word-break:break-all}
 .syncGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:2px 0 14px}
 .syncCard{min-height:70px;border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--field)}
-.syncCard .k{font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.syncCard .k{font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:rgba(var(--fg),.76);margin-bottom:8px}
 .syncCard .v{font:800 17px "Sora";color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .syncSources{display:grid;gap:8px;margin:10px 0 14px}
 .syncSource{display:grid;grid-template-columns:minmax(130px,1.2fr) minmax(0,2fr);gap:10px;align-items:center;
   border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--soft)}
 .syncSource b{font:800 13px "Sora";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.syncSource small{display:block;color:var(--muted);font:600 10px "JetBrains Mono";margin-top:3px}
+.syncSource small{display:block;color:rgba(var(--fg),.72);font:600 10px "JetBrains Mono";margin-top:3px}
 .syncSource .syncMeta{font:600 11px "JetBrains Mono";color:var(--muted);overflow-wrap:anywhere}
 .syncDot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);margin-right:8px;box-shadow:0 0 16px rgba(110,231,160,.45)}
 .syncSource.warn .syncDot{background:var(--amber);box-shadow:0 0 16px rgba(255,198,92,.4)}
@@ -2112,8 +2114,8 @@ body.mobileShell #chBar{padding-left:48px}
 /* Search RESULTS must clear the (now-lowered) fixed search bar, not scroll under it. Desktop uses
    110px for the bar at top:26px; on the phone the bar drops 36px to top:62px, so results drop the
    same 36px (146px). Higher-specificity !important beats the generic mobileShell #browse 62px. */
-body.mobileShell #browse.searchMode{padding-top:146px!important}
-body.mobileShell #browse.searchMode.hasSuggest{padding-top:200px!important}
+body.mobileShell #browse.searchMode{padding-top:var(--searchPad, 146px)!important}
+body.mobileShell #browse.searchMode.hasSuggest{padding-top:204px!important}
 body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
 body.mobileShell #hero,body.mobileShell #bdInfo,body.mobileShell #colorGlow{display:none!important;opacity:0!important}
 /* Phone: no leftover still. The TV backdrop is a fixed vh band; on a phone that
@@ -3158,7 +3160,9 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 .qToggle button.focus::before{opacity:0!important}
 /* The mic is vertically centered with translateY(-50%); the shared focus rule above swapped
    in translateZ(0) and the button JUMPED 19px up whenever it took focus. Keep centering. */
-#micBtn:focus,#musicMicBtn:focus{transform:translateY(-50%)}
+#micBtn:focus,#micBtn.focusable.focus,#musicMicBtn:focus,#musicMicBtn.focusable.focus,
+#searchClearBtn:focus,#searchClearBtn.focusable.focus{
+  transform:translateY(-50%)!important}
 .cbtn:disabled,.cbtn.disabled,.cbtn:disabled:hover,.cbtn.disabled:hover,.cbtn.focusable.disabled.focus{
   background:rgba(5,3,9,.22)!important;color:rgba(var(--fg),.42)!important;box-shadow:none!important;
   cursor:default;opacity:.58;pointer-events:none;transform:translateZ(0)}
@@ -3197,6 +3201,7 @@ body.tv #home,body.tv #discover,body.tv #browse,body.tv #person,
 body.tv #music{padding-bottom:var(--tvCoverBot)!important}
 body.tv #settings,body.tv #prefs{padding-bottom:0!important}
 body.tv #browse.liveTvBrowse{padding-bottom:0!important}
+body.tv #browse.searchMode.hasSuggest{padding-top:168px!important}
 body.tv #grid,body.tv #personGrid,body.tv #rows,body.tv #discoverRows,
 body.tv #calList,body.tv #calList .calItems{padding-bottom:0}
 body.tv:not(.abMiniOpen) #audiobooks{padding-bottom:var(--tvCoverBot)!important} /* mini-player still reserves .abGrid space */
@@ -3210,7 +3215,7 @@ body.tv:not(.abMiniOpen) #audiobooks{padding-bottom:var(--tvCoverBot)!important}
   border-bottom:1px solid rgba(255,255,255,.08)}
 #settings .setGrid>.panel:last-child,#prefs .setGrid>.panel:last-child{border-bottom:0;padding-bottom:8px}
 #settings .panel h2,#prefs .panel h2{font:800 17px "Sora";letter-spacing:0;color:var(--text);margin-bottom:6px}
-#settings .panel p,#prefs .panel p{font-size:13px;max-width:680px;line-height:1.5}
+#settings .panel p,#prefs .panel p{font-size:13px;max-width:680px;line-height:1.5;color:rgba(var(--fg),.80)}
 #settings .kv,#prefs .kv{border-bottom:1px solid rgba(var(--fg),.06);padding:9px 0}
 #settings .setGrid,#prefs .setGrid{grid-template-columns:minmax(0,920px);gap:0 56px;max-width:980px;
   border-left:1px solid rgba(255,255,255,.10);padding-left:34px}
@@ -3269,11 +3274,11 @@ body:not(.tv) #setTabs button:hover,body:not(.tv) #prefTabs button:hover,
 #setTabs button.on:focus-visible,#prefTabs button.on:focus-visible{
   background:rgba(255,255,255,.08)!important;color:var(--text)!important;border-color:transparent!important;
   box-shadow:inset 2px 0 0 var(--focus)!important;outline:none!important}
-/* Unfocused Settings tabs recede. The focused row (D-pad up/down) is the bright one.
+/* Unfocused Settings tabs stay readable. The focused row is full-strength --text.
    On TV, :hover can stay latched after Right into the panel — do not use hover to light
    the tab, or Profile stays "on" while you are editing the password. */
-#setTabs button,#prefTabs button{opacity:.26}
-#setTabs button.on,#prefTabs button.on{opacity:.28;color:var(--muted)!important}
+#setTabs button,#prefTabs button{opacity:.72;color:rgba(var(--fg),.82)!important}
+#setTabs button.on,#prefTabs button.on{opacity:.80;color:rgba(var(--fg),.88)!important}
 #setTabs button.focus,#prefTabs button.focus,
 #setTabs button:focus,#prefTabs button:focus,
 #setTabs button:focus-visible,#prefTabs button:focus-visible,
@@ -3283,20 +3288,19 @@ body:not(.tv) #setTabs button:hover,body:not(.tv) #prefTabs button:hover,
 body:not(.tv) #setTabs button:hover,body:not(.tv) #prefTabs button:hover{opacity:1;color:var(--text)!important}
 body.tv #setTabs button:hover:not(:focus):not(.focus),
 body.tv #prefTabs button:hover:not(:focus):not(.focus){
-  background:transparent!important;opacity:.26;color:var(--muted)!important}
+  background:transparent!important;opacity:.72;color:rgba(var(--fg),.82)!important}
 body.tv #setTabs button.on:hover:not(:focus):not(.focus),
-body.tv #prefTabs button.on:hover:not(:focus):not(.focus){opacity:.28}
-/* Browser, phone, and Android phone share one recede. TV keeps the hard 0.26
-   D-pad dim. Focus/hover is only a bit brighter — not full white. */
-body:not(.tv) #setTabs button,body:not(.tv) #prefTabs button{opacity:.46}
-body:not(.tv) #setTabs button.on,body:not(.tv) #prefTabs button.on{opacity:.58}
+body.tv #prefTabs button.on:hover:not(:focus):not(.focus){opacity:.80;color:rgba(var(--fg),.88)!important}
+/* Browser, phone, and Android phone share one recede. Focus is full-strength. */
+body:not(.tv) #setTabs button,body:not(.tv) #prefTabs button{opacity:.78}
+body:not(.tv) #setTabs button.on,body:not(.tv) #prefTabs button.on{opacity:.86}
 body:not(.tv) #setTabs button:hover,body:not(.tv) #prefTabs button:hover,
 body:not(.tv) #setTabs button.focus,body:not(.tv) #prefTabs button.focus,
 body:not(.tv) #setTabs button:focus,body:not(.tv) #prefTabs button:focus,
 body:not(.tv) #setTabs button:focus-visible,body:not(.tv) #prefTabs button:focus-visible,
 body:not(.tv) #setTabs button.on.focus,body:not(.tv) #prefTabs button.on.focus,
 body:not(.tv) #setTabs button.on:focus,body:not(.tv) #prefTabs button.on:focus,
-body:not(.tv) #setTabs button.on:focus-visible,body:not(.tv) #prefTabs button.on:focus-visible{opacity:.82}
+body:not(.tv) #setTabs button.on:focus-visible,body:not(.tv) #prefTabs button.on:focus-visible{opacity:1}
 /* Open phone drawer: icons/labels use normal text, not the muted rail gray.
    #railUser color is an ID rule, so it needs its own override. */
 body.mobileNav .railBtn,body.mobileShell.mobileNav .railBtn,
@@ -3325,7 +3329,7 @@ body.mobileNav .railBtn.active,body.mobileShell.mobileNav .railBtn.active{color:
   color:currentColor}
 /* Joined range/size strip in Settings only — Home chips stay capsules. */
 #prefs .sizePick,#settings .sizePick{display:inline-flex;gap:0;padding:3px;background:rgba(255,255,255,.05);border-radius:10px}
-#prefs .sizePick button,#settings .sizePick button{border-radius:7px!important;background:transparent!important;box-shadow:none!important;border:0!important;color:var(--muted);font:600 13px "Albert Sans"}
+#prefs .sizePick button,#settings .sizePick button{border-radius:7px!important;background:transparent!important;box-shadow:none!important;border:0!important;color:rgba(var(--fg),.76);font:600 13px "Albert Sans"}
 #prefs .sizePick button:hover,#settings .sizePick button:hover,
 #prefs .sizePick button.focus,#settings .sizePick button.focus,
 #prefs .sizePick button:focus,#settings .sizePick button:focus,
@@ -3369,7 +3373,7 @@ body.mobileNav .railBtn.active,body.mobileShell.mobileNav .railBtn.active{color:
 .dashRank{font:800 13px "JetBrains Mono";color:var(--amber)}
 .dashTitle{font:600 15px "Albert Sans";color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dashCount{font:700 11px "JetBrains Mono";letter-spacing:.04em;color:var(--muted)}
-.dashEmpty{color:var(--muted);margin:0}
+.dashEmpty{color:rgba(var(--fg),.76);margin:0}
 /* Trial extras (streak, weekday/weekend, recent posters). Hide with DASH_TRIAL = false. */
 .dashTrial{margin-top:22px;padding-top:22px;border-top:1px solid rgba(255,255,255,.06)}
 .dashTrialStats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 18px;margin-bottom:22px}
@@ -3459,12 +3463,30 @@ body[data-spotlight] .dashRecentItem.focusable.focus,body[data-spotlight] .dashR
 #musicClearBtn:focus,#searchClearBtn:focus,#chClearBtn:focus{transform:translateY(-50%)}
 /* Global search: reserve room for the clear (X), same as Music. */
 #searchBar .wrap.hasClear input{padding-right:58px}
-#searchSuggest{display:none;margin-top:10px}
+#searchSuggest{display:none;position:relative;left:0;width:min(680px,100%);margin-top:4px;z-index:12;
+  background:var(--field);border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  box-shadow:0 18px 40px rgba(0,0,0,.48)}
 #searchSuggest.show{display:block}
-#searchSuggestBtn{border:0;background:var(--soft);color:var(--text);border-radius:12px;padding:10px 16px;
-  font:600 14px "Albert Sans";max-width:100%;text-align:left}
-#searchSuggestBtn b{color:var(--amber);font:700 14px "Sora"}
-#searchSuggestBtn:focus{outline:none;box-shadow:0 0 0 2px var(--magenta)}
+.searchSuggestItem{display:block;width:100%;margin:0;border:0;background:transparent;color:var(--text);
+  padding:10px 20px;font:600 15px "Albert Sans";text-align:left;border-radius:0;
+  appearance:none;-webkit-appearance:none;transform:none!important}
+#searchBar.hasMic .searchSuggestItem,#searchBar:has(.wrap.hasMic) .searchSuggestItem{padding-left:58px}
+.searchSuggestItem:first-child{border-radius:13px 13px 0 0}
+.searchSuggestItem:last-child{border-radius:0 0 13px 13px}
+.searchSuggestItem:only-child{border-radius:13px}
+.searchSuggestItem + .searchSuggestItem{border-top:1px solid rgba(255,255,255,.06)}
+.searchSuggestItem b{color:var(--amber);font:700 15px "Sora"}
+.searchSuggestItem .hint{display:block;font:600 11px "JetBrains Mono";letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+.searchSuggestItem.focusable::before,.searchSuggestItem.focusable.focus::before,
+.searchSuggestItem:focus::before,.searchSuggestItem:focus-visible::before,
+.searchSuggestItem:hover::before{display:none!important;opacity:0!important}
+.searchSuggestItem:hover,.searchSuggestItem.focusable.focus,
+.searchSuggestItem:focus,.searchSuggestItem:focus-visible{
+  background:rgba(255,255,255,.10)!important;color:var(--text)!important;
+  outline:none!important;box-shadow:none!important;transform:none!important;filter:none!important}
+.searchSuggestItem:hover b,.searchSuggestItem.focusable.focus b,
+.searchSuggestItem:focus b,.searchSuggestItem:focus-visible b{color:var(--amber)!important}
 /* Live TV filter: a relative wrap so it can host a clear (X) while keeping its toolbar-row width. */
 #chBar .chWrap{position:relative;width:min(440px,100%)}
 #chBar .chWrap #chSearch{width:100%}
@@ -3972,10 +3994,9 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <input id="searchInput" placeholder="Search movies & shows…" autocomplete="off" maxlength="100">
   <button id="searchClearBtn" class="focusable" title="Clear search" aria-label="Clear search" hidden>
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
-  <div id="searchSuggest" hidden>
-    <button type="button" id="searchSuggestBtn" class="focusable"></button>
-  </div>
-</div></div>
+</div>
+  <div id="searchSuggest" hidden role="listbox" aria-label="Search suggestions"></div>
+</div>
 
 <main id="home">
   <section id="hero">
@@ -6205,15 +6226,14 @@ $('qcStart').addEventListener('click', async () => {
   }, 2000);
 });
 $('qcCancel').addEventListener('click', () => { if (S.qcTimer) clearInterval(S.qcTimer); showGate('login'); });
-// Profile / account button → "who's watching" switcher (with Sign out inside).
-// The avatar is the single entry to Preferences (replacing the old Preferences/Settings rail
-// buttons): it opens on the Profile & Pins tab, where Switch profile / Sign out (and, for admins,
-// Server settings) live. The tab strip carries the rest of the user preferences.
+// Profile / account button → Settings. Dashboard is the first tab. Profile & Pins
+// (Switch profile / Sign out) is one Down if they want it.
 $('railUser').addEventListener('click', () => {
   collapseRailAfterClick();
   switchView('prefs');
-  const t = document.querySelector('#prefTabs button[data-tab="profiles"]');
-  if (t) t.click(); // always land on Profile & Pins first
+  S.settingsZone = 'tabs';
+  const t = document.querySelector('#prefTabs button[data-tab="dash"]');
+  if (t) t.click();
 });
 $('prefSwitchProfile').addEventListener('click', showProfilePicker);
 $('prefSignOut').addEventListener('click', signOutAccount);
@@ -9210,10 +9230,89 @@ function certTargetForMeta(meta, key = '') {
   return isEp && tmdbId ? { type: 'tv', tmdbId } : { type, tmdbId };
 }
 
+function detailRelatedCards() {
+  return [...document.querySelectorAll('#relatedRow .pcard, #relatedRow .focusable')];
+}
+function captureLeavingDetail() {
+  if (S.view !== 'detail' || !$('detail').classList.contains('open') || !S.detailItem) return;
+  const scroller = $('detail').querySelector('.detailScroll');
+  const relatedCards = detailRelatedCards();
+  const relatedFocus = $('relatedRow') && ($('relatedRow').querySelector('.focusable.focus')
+    || (document.activeElement && document.activeElement.closest && document.activeElement.closest('#relatedRow .focusable')));
+  const castCards = [...document.querySelectorAll('#castRow .castCard')];
+  const castFocus = $('castRow') && ($('castRow').querySelector('.castCard.focus')
+    || (document.activeElement && document.activeElement.closest && document.activeElement.closest('#castRow .castCard')));
+  const epFocus = document.querySelector('#epGrid .epCard.focus');
+  const seasonFocus = document.querySelector('#seasonGrid .seasonCard.focus, #seasonTabs .seasonTab.focus');
+  let focusKind = 'play';
+  if (relatedFocus) focusKind = 'related';
+  else if (castFocus) focusKind = 'cast';
+  else if (epFocus) focusKind = 'episode';
+  else if (seasonFocus) focusKind = 'season';
+  const snap = {
+    item: S.detailItem,
+    detailScrollTop: scroller ? scroller.scrollTop || 0 : 0,
+    relatedIdx: Math.max(0, relatedCards.indexOf(relatedFocus)),
+    relatedScrollLeft: $('relatedRow') ? $('relatedRow').scrollLeft || 0 : 0,
+    castIdx: Math.max(0, castCards.indexOf(castFocus)),
+    castScrollLeft: $('castRow') ? $('castRow').scrollLeft || 0 : 0,
+    epSeason: epFocus ? +epFocus.dataset.season : null,
+    epEpisode: epFocus ? +epFocus.dataset.episode : null,
+    season: S.detailSeason,
+    zone: S.zone,
+    colMem: { ...(S.detailColMem || {}) },
+    focusKind,
+  };
+  S.detailStack = (S.detailStack || []).filter((s) => !sameDetailIdentity(s.item, snap.item));
+  S.detailStack.push(snap);
+}
+function findDetailSnap(it) {
+  const stack = S.detailStack || [];
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (sameDetailIdentity(stack[i].item, it)) return stack[i];
+  }
+  return null;
+}
+function dropDetailSnap(it) {
+  S.detailStack = (S.detailStack || []).filter((s) => !sameDetailIdentity(s.item, it));
+}
+function restoreLeavingDetailFocus(snap) {
+  if (!snap || S.view !== 'detail' || !$('detail').classList.contains('open')
+      || !sameDetailIdentity(S.detailItem, snap.item)) return false;
+  S.detailColMem = { ...(snap.colMem || {}) };
+  S.zone = snap.zone || '';
+  const scroller = $('detail').querySelector('.detailScroll');
+  if (scroller) {
+    const prev = scroller.style.scrollBehavior;
+    scroller.style.scrollBehavior = 'auto';
+    scroller.scrollTop = snap.detailScrollTop || 0;
+    scroller.style.scrollBehavior = prev;
+  }
+  if (snap.focusKind === 'related') {
+    const cards = detailRelatedCards();
+    const target = cards[Math.max(0, Math.min(cards.length - 1, snap.relatedIdx || 0))];
+    if ($('relatedRow')) $('relatedRow').scrollLeft = snap.relatedScrollLeft || 0;
+    if (target) { applyFocus(target, false); return true; }
+  }
+  if (snap.focusKind === 'cast') {
+    const cards = [...document.querySelectorAll('#castRow .castCard')];
+    const target = cards[Math.max(0, Math.min(cards.length - 1, snap.castIdx || 0))];
+    if ($('castRow')) $('castRow').scrollLeft = snap.castScrollLeft || 0;
+    if (target) { applyFocus(target, false); return true; }
+  }
+  if (snap.focusKind === 'episode' && snap.epSeason != null) {
+    if (focusRenderedDetailEpisode({ season: snap.epSeason, episode: snap.epEpisode })) return true;
+  }
+  if (snap.focusKind === 'season' && snap.season != null) {
+    const card = document.querySelector(`#seasonGrid .seasonCard[data-season="${snap.season}"], #seasonTabs .seasonTab[data-season="${snap.season}"]`);
+    if (card) { applyFocus(card, false); return true; }
+  }
+  return false;
+}
 function captureDetailReturn() {
   if (S.view === 'detail' || S.view === 'person' || S.view === 'player') return;
-  const gridRoot = S.gridRoot || $('grid');
-  const rowRoot = S.rowsView && S.rowsView.root;
+  const gridRoot = S.view === 'calendar' ? $('calList') : (S.gridRoot || $('grid'));
+  const rowRoot = S.view === 'discover' ? $('discoverRows') : (S.rowsView && S.rowsView.root);
   S.detailReturn = {
     view: S.view || 'home',
     homeFocus: S.view === 'home' ? homeFocusSnapshot() : null,
@@ -9227,6 +9326,12 @@ function captureDetailReturn() {
     rowScrollTop: rowRoot ? rowRoot.scrollTop || 0 : 0,
     searchQuery: $('searchInput').value,
   };
+  if (S.view === 'calendar') {
+    const items = [...document.querySelectorAll('#calList .calItem')];
+    const focused = document.querySelector('#calList .calItem.focus')
+      || (document.activeElement && document.activeElement.closest && document.activeElement.closest('#calList .calItem'));
+    S.detailReturn.gridIdx = Math.max(0, items.indexOf(focused));
+  }
 }
 function detailReturnRoute(ret) {
   const view = (ret && ret.view) || 'home';
@@ -9265,6 +9370,7 @@ function restoreDetailReturn() {
 function restoreDetailFocusRoots(ret) {
   if (!ret) return;
   if (ret.view === 'home') setRowsView($('rows'), S.rows || [], true);
+  else if (ret.view === 'discover') setRowsView($('discoverRows'), S.discoverData || S.rows || [], true);
   else if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv'].includes(ret.view)) S.gridRoot = $('grid');
 }
 function restoreDetailFocus(ret) {
@@ -9273,14 +9379,21 @@ function restoreDetailFocus(ret) {
   const gridRoot = S.gridRoot || $('grid');
   const rowRoot = S.rowsView && S.rowsView.root;
   if (ret.searchQuery !== undefined && S.view === 'search') $('searchInput').value = ret.searchQuery;
-  if (rowRoot && Number.isFinite(ret.rowScrollTop)) rowRoot.scrollTop = ret.rowScrollTop;
-  if (gridRoot && Number.isFinite(ret.gridScrollTop)) gridRoot.scrollTop = ret.gridScrollTop;
+  if (ret.view !== 'calendar' && rowRoot && Number.isFinite(ret.rowScrollTop)) rowRoot.scrollTop = ret.rowScrollTop;
+  if (ret.view !== 'calendar' && gridRoot && Number.isFinite(ret.gridScrollTop)) gridRoot.scrollTop = ret.gridScrollTop;
   S.gridTopRow = ret.gridTopRow || 0;
   S.colIdx = { ...(ret.colIdx || S.colIdx || {}) };
   clearFocus();
-  if (ret.view === 'home' || (S.rowsView && ret.zone === 'rows')) {
-    if (ret.zone === 'hero') return focusHero(ret.heroIdx || 0);
+  if (ret.view === 'home' || ret.view === 'discover' || (S.rowsView && ret.zone === 'rows')) {
+    if (ret.view === 'home' && ret.zone === 'hero') return focusHero(ret.heroIdx || 0);
     return focusCard(ret.rowIdx || 0, (ret.colIdx && ret.colIdx[ret.rowIdx]) || 0);
+  }
+  if (ret.view === 'calendar') {
+    const items = [...document.querySelectorAll('#calList .calItem')];
+    const target = items[Math.max(0, Math.min(items.length - 1, ret.gridIdx || 0))];
+    if ($('calList') && Number.isFinite(ret.gridScrollTop)) $('calList').scrollTop = ret.gridScrollTop;
+    if (target) return applyFocus(target, false);
+    return focusContent();
   }
   if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv'].includes(ret.view)) {
     return focusGrid(Number.isFinite(ret.gridIdx) ? ret.gridIdx : 0);
@@ -9288,10 +9401,17 @@ function restoreDetailFocus(ret) {
   focusContent();
 }
 
-async function openDetail(it, push = true) {
+async function openDetail(it, push = true, opts = {}) {
   if (!it) return;
   bindLibrarySource(it);
   if (!it.tmdbId || !['movie', 'tv'].includes(it.type)) return play(it); // non-TMDB cards play directly
+  if (!push && S.view === 'detail' && $('detail').classList.contains('open') && sameDetailIdentity(S.detailItem, it)) {
+    return; // Back from Person/Related already restored this title — do not rebuild at Play/top
+  }
+  if (push && S.view === 'detail' && S.detailItem && !sameDetailIdentity(S.detailItem, it)) {
+    captureLeavingDetail();
+  }
+  S._detailRestore = (!push && !opts.fromPerson && findDetailSnap(it)) || null;
   if (push) setRoute(`#/title/${it.type}/${it.tmdbId}`);
   $('bdInfo').classList.remove('show'); // detail page is translucent — drop the browse info text
   captureDetailReturn(); // remember the exact card/list/search result that opened Details
@@ -9364,7 +9484,9 @@ async function openDetail(it, push = true) {
   // Focus lands on Play immediately — without this the first D-pad press starts from stale
   // page state and can jump straight to Cast/Related instead of the action row.
   S.zone = '';
-  requestAnimationFrame(() => { if (S.view === 'detail') applyFocus($('dPlay')); });
+  if (!S._detailRestore) {
+    requestAnimationFrame(() => { if (S.view === 'detail' && !S._detailRestore) applyFocus($('dPlay')); });
+  }
 
   try {
     // The WHOLE detail body (meta, crew, cast, seasons, related) renders from this one fetch, so a
@@ -9506,6 +9628,15 @@ async function openDetail(it, push = true) {
         row.appendChild(card);
       });
       bindEdgeScroll(row);
+    }
+    if (S._detailRestore && sameDetailIdentity(S.detailItem, S._detailRestore.item) && reqId === S.detailReq) {
+      const snap = S._detailRestore;
+      S._detailRestore = null;
+      dropDetailSnap(snap.item);
+      requestAnimationFrame(() => {
+        if (S.view !== 'detail' || reqId !== S.detailReq) return;
+        if (!restoreLeavingDetailFocus(snap)) applyFocus($('dPlay'));
+      });
     }
   } catch (e) {
     if (reqId !== S.detailReq || S.view !== 'detail') return;
@@ -10559,7 +10690,7 @@ function closePerson() {
     if (origin && origin.item) {
       $('detail').style.visibility = ''; S.view = 'detail'; S.detailFromPerson = null;
       replaceRoute(`#/title/${origin.item.type}/${origin.item.tmdbId}`);
-      const detailJob = openDetail(origin.item, false);
+      const detailJob = openDetail(origin.item, false, { fromPerson: true });
       const restoreReq = S.detailReq;
       void Promise.resolve(detailJob).then(() => {
         requestAnimationFrame(() => restorePersonOriginDetailFocus(origin, restoreReq));
@@ -22263,7 +22394,7 @@ function openMusicConnect() {
     const tab = document.querySelector('#prefTabs button[data-tab="connect"]');
     if (tab) tab.click();
     const btn = $('ytmStartLink') || $('ytmRelink');
-    if (btn) return applyFocus(btn, !S.pointer);
+    if (btn) { S.settingsZone = 'panel'; return applyFocus(btn, !S.pointer); }
     if (++tries < 30) requestAnimationFrame(focusConnect);
   };
   requestAnimationFrame(focusConnect);
@@ -24777,6 +24908,13 @@ function focusSearchBarFromResults() {
   const n = input.value.length;
   try { input.setSelectionRange(n, n); } catch {}
 }
+// Spatial Up from the first poster row: last chip (closest to the covers), then the field.
+// Back/Escape still uses focusSearchBarFromResults so it skips the chips and lands on the box.
+function moveSearchUpFromResults() {
+  const els = searchSuggestEls();
+  if (searchSuggestVisible() && els.length) return focusSearchSuggest(els.length - 1);
+  return focusSearchBarFromResults();
+}
 // Land on the MIC when Search opens (owner: voice first on TV — it used to take two D-pad
 // presses to get there). Native .focus() inside the Android WebView often does not stick:
 // the menu Search button steals native focus back a beat later, so OK-on-Search flashes
@@ -24789,6 +24927,7 @@ function searchMicLandBusy() {
   if (S.view !== 'search' || S.zone === 'rail') return false;
   const ae = document.activeElement;
   if (ae === $('searchInput') || ae === $('searchClearBtn')) return false;
+  if (ae && ae.closest && ae.closest('#searchSuggest')) return false;
   if (document.querySelector('#grid .focus')) return false;
   return true;
 }
@@ -24812,20 +24951,87 @@ function focusSearchMic() {
 // One clear action shared by the mouse click, the browser element-keydown, AND the on-device global
 // D-pad handler, so all three do exactly the same thing.
 function clearSearchQuery() { $('searchInput').value = ''; syncSearchClear(); showSearchSuggest(null); clearSearchResults({ invalidate: true }); $('searchInput').focus(); }
+function searchSuggestEls() {
+  return [...document.querySelectorAll('#searchSuggest .searchSuggestItem')];
+}
+function searchSuggestVisible() {
+  const box = $('searchSuggest');
+  return !!(box && box.classList.contains('show') && searchSuggestEls().length);
+}
+function syncSearchSuggestPad() {
+  const browse = $('browse');
+  const bar = $('searchBar');
+  const box = $('searchSuggest');
+  if (!browse || !bar) return;
+  const open = !!(box && !box.hidden && box.classList.contains('show'));
+  bar.style.minHeight = '';
+  if (!open) browse.style.removeProperty('padding-top');
+  const top = browse.getBoundingClientRect().top;
+  let edge = bar.getBoundingClientRect().bottom;
+  if (open) {
+    const boxBottom = box.getBoundingClientRect().bottom;
+    if (boxBottom > edge) edge = boxBottom;
+  }
+  const mobile = document.body.classList.contains('mobileShell');
+  const floor = open ? (mobile ? 204 : 168) : (mobile ? 146 : 110);
+  const pad = Math.max(floor, Math.ceil(edge - top + 10));
+  browse.style.setProperty('--searchPad', pad + 'px');
+  if (open) browse.style.setProperty('padding-top', pad + 'px', 'important');
+}
+function focusSearchSuggest(i = 0) {
+  const els = searchSuggestEls();
+  if (!els.length) return false;
+  const el = els[Math.max(0, Math.min(els.length - 1, i))];
+  cancelSearchMicLand();
+  clearFocus();
+  S.zone = '';
+  $('micBtn').blur();
+  $('searchInput').blur();
+  if ($('searchClearBtn')) $('searchClearBtn').blur();
+  try { el.focus({ preventScroll: true }); } catch { try { el.focus(); } catch {} }
+  applyFocus(el, false);
+  return true;
+}
+function moveSearchDownFromField() {
+  if (searchSuggestVisible()) return focusSearchSuggest(0);
+  return searchAndFocusResults();
+}
 $('searchInput').addEventListener('input', () => {
   syncSearchClear();
   clearTimeout(searchTimer);
   const q = $('searchInput').value.trim();
   if (!q) { showSearchSuggest(null); clearSearchResults({ invalidate: true }); return; }
-  showSearchSuggest(closestCatalogTitle(q), q);
-  searchTimer = setTimeout(doSearch, 350);
+  showSearchSuggest(catalogSearchSuggestions(q), q);
+  paintInstantSearch(q);
+  searchTimer = setTimeout(doSearch, 120);
 });
 $('searchClearBtn').addEventListener('click', () => clearSearchQuery());
-$('searchSuggestBtn').addEventListener('click', () => applySearchSuggest());
-$('searchSuggestBtn').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); applySearchSuggest(); }
-  else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); $('searchInput').focus(); }
-  else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); focusSearchResultsSoon(); }
+$('searchSuggest').addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest && e.target.closest('.searchSuggestItem');
+  if (btn) applySearchSuggest(btn.dataset.hint);
+});
+$('searchSuggest').addEventListener('keydown', (e) => {
+  const els = searchSuggestEls();
+  const i = els.indexOf(document.activeElement);
+  if (i < 0) return;
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault(); e.stopPropagation();
+    applySearchSuggest(els[i].dataset.hint);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault(); e.stopPropagation();
+    if (i > 0) focusSearchSuggest(i - 1);
+    else $('searchInput').focus();
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault(); e.stopPropagation();
+    if (i < els.length - 1) focusSearchSuggest(i + 1);
+    else focusSearchResultsSoon();
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault(); e.stopPropagation();
+    els[i].blur();
+    enterRail();
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault(); e.stopPropagation();
+  }
 });
 // D-pad on the clear (X) in a DESKTOP BROWSER (element-targeted keydown). On Android TV the shell
 // dispatches keys to `document`, so this listener never fires there — the on-device path is the
@@ -24833,7 +25039,7 @@ $('searchSuggestBtn').addEventListener('keydown', (e) => {
 // double-handling via that same global case.
 $('searchClearBtn').addEventListener('keydown', (e) => {
   if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); $('searchClearBtn').blur(); $('searchInput').focus(); }
-  else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); $('searchClearBtn').blur(); focusSearchResultsSoon(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); $('searchClearBtn').blur(); moveSearchDownFromField(); }
   else if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Backspace') {
     e.preventDefault(); e.stopPropagation();
     clearSearchQuery();
@@ -24844,13 +25050,11 @@ function searchAndFocusResults() {
   syncSearchClear();
   const q = $('searchInput').value.trim();
   if (!q) { clearSearchResults({ invalidate: true }); $('searchInput').focus(); return; }
-  if ($('searchSuggest') && $('searchSuggest').classList.contains('show') && !gridEls().length) {
-    try { $('searchSuggestBtn').focus(); } catch {}
-  }
   doSearch().then(() => focusSearchResultsSoon()).catch(() => focusSearchResultsSoon());
 }
 $('searchInput').addEventListener('keydown', (e) => {
-  if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); searchAndFocusResults(); }
+  if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); moveSearchDownFromField(); }
+  else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); searchAndFocusResults(); }
   // Caret at end + a query present: → steps to the clear (X), matching Music/Live TV.
   else if (e.key === 'ArrowRight' && $('searchInput').selectionStart >= $('searchInput').value.length && searchClearVisible()) {
     e.preventDefault(); e.stopPropagation(); focusSearchClear();
@@ -24863,17 +25067,31 @@ $('searchInput').addEventListener('keydown', (e) => {
 // Voice search (Web Speech API — Chrome/Android; the mic shows only when supported).
 // Voice search: browsers use the Web Speech API; the Android TV shell has no speech backend,
 // so there the mic button rides the NATIVE recognizer through the TriboonTV bridge instead.
+function focusSearchResultsNow() {
+  if (S.view !== 'search') return false;
+  const els = gridEls();
+  if (!els.length) return false;
+  cancelSearchMicLand();
+  $('micBtn').blur();
+  $('searchInput').blur();
+  if ($('searchClearBtn')) $('searchClearBtn').blur();
+  focusGrid(0);
+  return true;
+}
 function focusSearchResultsSoon(tries = 18) {
+  if (focusSearchResultsNow()) return;
+  if ($('grid') && $('grid').querySelector('.gridMore')) {
+    const chips = searchSuggestEls();
+    if (searchSuggestVisible() && chips.length) return focusSearchSuggest(chips.length - 1);
+    $('searchInput').focus();
+    return;
+  }
   setTimeout(() => {
     if (S.view !== 'search') return;
-    const els = gridEls();
-    if (els.length) {
-      $('micBtn').blur();
-      $('searchInput').blur();
-      focusGrid(0);
-      return;
-    }
+    if (focusSearchResultsNow()) return;
     if (tries > 0) return focusSearchResultsSoon(tries - 1);
+    const chips = searchSuggestEls();
+    if (searchSuggestVisible() && chips.length) return focusSearchSuggest(chips.length - 1);
     $('micBtn').blur();
     $('searchInput').focus();
   }, 120);
@@ -24903,6 +25121,7 @@ const SR = (window.TriboonTV && TriboonTV.startVoice) ? null
 if (window.TriboonTV && TriboonTV.startVoice) {
   $('micBtn').style.display = '';
   $('micBtn').closest('.wrap').classList.add('hasMic');
+  if ($('searchBar')) $('searchBar').classList.add('hasMic');
   $('micBtn').addEventListener('click', () => {
     setTvVoiceTarget('search');
     $('micBtn').classList.add('listening');
@@ -24912,6 +25131,7 @@ if (window.TriboonTV && TriboonTV.startVoice) {
 if (SR) {
   $('micBtn').style.display = '';
   $('micBtn').closest('.wrap').classList.add('hasMic');
+  if ($('searchBar')) $('searchBar').classList.add('hasMic');
   let rec = null;
   $('micBtn').addEventListener('click', () => {
     if (rec) { rec.stop(); return; }
@@ -24988,6 +25208,7 @@ function renderSearchSections(sections) {
     }
   }
   if (!S.gridItems.length) grid.innerHTML = '<div class="gridMore">No matches.</div>';
+  syncSearchSuggestPad();
 }
 function searchResultUsesPoster(it) {
   if (!it || it._channel !== undefined) return false;
@@ -25041,30 +25262,98 @@ function searchEditDist(a, b) {
   }
   return dp[n];
 }
-function searchCloseWord(a, b) {
+function searchFuzzLimit(len) {
+  if (len <= 2) return 0;
+  if (len <= 5) return 1;
+  return 2;
+}
+function searchCloseWord(a, b, singleToken) {
   if (searchWordEq(a, b)) return true;
-  const maxL = Math.max(a.length, b.length);
-  if (maxL < 4) return false;
   const d = searchEditDist(a, b);
-  return d <= 2 || (maxL >= 8 && d <= 4) || d / maxL <= 0.35;
+  if (d <= searchFuzzLimit(a.length) && d <= searchFuzzLimit(b.length)) return true;
+  if (singleToken && a.length >= 6 && d <= 3 && Math.abs(a.length - b.length) <= 2) return true;
+  return false;
+}
+function searchWordAffix(a, b) {
+  if (!a || !b) return false;
+  if (Math.min(a.length, b.length) < 4) return false;
+  return a.startsWith(b) || b.startsWith(a);
+}
+function searchTitleNoArt(title) {
+  const tw = searchWords(title);
+  return (tw[0] && ['the', 'a', 'an'].includes(tw[0]) ? tw.slice(1) : tw).join('');
+}
+function searchContentWords(words) {
+  const stop = new Set(['the', 'a', 'an', 'of']);
+  const content = (words || []).filter((w) => !stop.has(w));
+  return content.length ? content : (words || []);
 }
 function searchCloseTitle(query, title) {
   const qw = searchWords(query), tw = searchWords(title);
   if (!qw.length || !tw.length) return false;
-  if (searchCloseWord(qw.join(''), tw.join(''))) return true;
-  return qw.every((w) => tw.some((t) => searchCloseWord(w, t) || t.startsWith(w) || w.startsWith(t)));
+  const need = searchContentWords(qw);
+  const single = need.length === 1;
+  return need.every((w) => tw.some((t) => searchCloseWord(w, t, single) || searchWordAffix(w, t)));
+}
+function searchSuggestRank(q, title) {
+  if (!searchCloseTitle(q, title)) return 0;
+  const qw = searchWords(q), tw = searchWords(title);
+  const qn = searchContentWords(qw).join('');
+  const noArt = searchTitleNoArt(title);
+  if (searchContentWords(qw).every((w) => tw.some((t) => searchWordEq(w, t)))) return noArt === qn ? 100 : 80;
+  if (searchCloseWord(qn, noArt, true) || searchCloseWord(qn, tw.join(''), true)) return 60;
+  return 40;
+}
+function searchSpellCorpus() {
+  const words = new Set();
+  const addTitle = (title) => {
+    for (const w of searchWords(title)) {
+      if (w.length >= 4 && !['the', 'a', 'an', 'of'].includes(w)) words.add(w);
+    }
+  };
+  for (const title of SEARCH_CLOSE_SEEDS) addTitle(title);
+  for (const it of catalogSearchItems()) addTitle(it.title || it.name || '');
+  return words;
+}
+function spellcheckQuery(q) {
+  const raw = searchWords(q);
+  if (!raw.length) return null;
+  const corpus = searchSpellCorpus();
+  const single = searchContentWords(raw).length === 1;
+  let changed = false;
+  const out = raw.map((w) => {
+    if (w.length < 4 || ['the', 'a', 'an', 'of'].includes(w) || corpus.has(w)) return w;
+    let best = null, bestD = 99;
+    for (const c of corpus) {
+      if (Math.abs(c.length - w.length) > 2) continue;
+      if (!searchCloseWord(w, c, single)) continue;
+      const d = searchEditDist(w, c);
+      if (d > 0 && d < bestD) { bestD = d; best = c; }
+    }
+    if (best) { changed = true; return best; }
+    return w;
+  });
+  if (!changed) return null;
+  const next = out.join(' ');
+  return searchWords(next).join('') === searchWords(q).join('') ? null : next;
 }
 function searchWholeTitleClose(query, title) {
-  const qk = searchWords(query).join('');
+  const qw = searchWords(query);
+  const qk = qw.join('');
   if (qk.length < 4) return false;
-  if (searchCloseWord(qk, searchWords(title).join(''))) return true;
+  const single = searchContentWords(qw).length === 1;
+  if (searchCloseWord(qk, searchWords(title).join(''), single)) return true;
   const tw = searchWords(title);
   const noArt = tw[0] && ['the', 'a', 'an'].includes(tw[0]) ? tw.slice(1) : tw;
-  if (noArt.length && searchCloseWord(qk, noArt.join(''))) return true;
-  if (noArt.length >= 2 && noArt[0].length === 1 && searchCloseWord(qk, noArt.slice(1).join(''))) return true;
+  if (noArt.length && searchCloseWord(qk, noArt.join(''), single)) return true;
+  if (noArt.length >= 2 && noArt[0].length === 1 && searchCloseWord(qk, noArt.slice(1).join(''), single)) return true;
   return false;
 }
+let _catalogSearchMemo = { at: 0, items: null };
+let _scoreMemo = { q: '', at: 0, scored: [] };
 function catalogSearchItems() {
+  const now = Date.now();
+  if (_catalogSearchMemo.items && now - _catalogSearchMemo.at < 2500) return _catalogSearchMemo.items;
   const out = [];
   const seen = new Set();
   const add = (it) => {
@@ -25080,55 +25369,137 @@ function catalogSearchItems() {
     add(row && row.meta ? { ...row.meta, key: row.key } : row);
   }
   for (const it of (S.watchlist || [])) add(it && it.meta ? { ...it.meta, key: it.key } : it);
+  _catalogSearchMemo = { at: now, items: out };
   return out;
+}
+function searchTitleMightMatch(qw, title) {
+  const tw = searchWords(title);
+  if (!tw.length) return false;
+  return searchContentWords(qw).every((w) => {
+    const pre = w.slice(0, Math.min(3, w.length));
+    return tw.some((t) => t.startsWith(pre) || w.startsWith(t.slice(0, Math.min(3, t.length))) || Math.abs(t.length - w.length) <= 2);
+  });
+}
+function scoreSearchTitles(q) {
+  const now = Date.now();
+  if (_scoreMemo.q === q && now - _scoreMemo.at < 400) return _scoreMemo.scored;
+  const qw = searchWords(q);
+  const qn = qw.join('');
+  const seen = new Set();
+  const scored = [];
+  const add = (title) => {
+    title = String(title || '').trim();
+    if (!title) return;
+    const key = searchWords(title).join('');
+    if (!key || seen.has(key) || key === qn) return;
+    if (!searchTitleMightMatch(qw, title)) return;
+    const rank = searchSuggestRank(q, title);
+    if (!rank) return;
+    seen.add(key);
+    scored.push({ title, rank, d: searchEditDist(qn, searchTitleNoArt(title) || key) });
+  };
+  for (const title of SEARCH_CLOSE_SEEDS) add(title);
+  for (const it of catalogSearchItems()) add(it.title || it.name);
+  scored.sort((a, b) => b.rank - a.rank || a.d - b.d);
+  _scoreMemo = { q, at: now, scored };
+  return scored;
+}
+function catalogSearchSuggestions(q) {
+  const qn = searchWords(q).join('');
+  if (qn.length < 2) return [];
+  return scoreSearchTitles(q).slice(0, 2).map((x) => x.title);
+}
+function paintInstantSearch(q) {
+  if (searchWords(q).join('').length < 3) return;
+  const ranked = scoreSearchTitles(q);
+  if (!ranked.length) return;
+  const want = new Set(ranked.slice(0, 16).map((x) => x.title));
+  const movies = [];
+  const shows = [];
+  for (const it of catalogSearchItems()) {
+    const title = it.title || it.name || '';
+    if (!want.has(title)) continue;
+    const type = it.type || (it._kind === 'show' ? 'tv' : 'movie');
+    (type === 'tv' ? shows : movies).push(it);
+    if (movies.length + shows.length >= 16) break;
+  }
+  if (!movies.length && !shows.length) return;
+  renderSearchSections([
+    { name: 'Movies', items: movies },
+    { name: 'TV Shows', items: shows },
+  ]);
 }
 function showSearchSuggest(hint, original) {
   const box = $('searchSuggest');
-  const btn = $('searchSuggestBtn');
-  if (!box || !btn) return;
-  const title = hint && (hint.title || hint.name || hint);
+  if (!box) return;
+  const titles = (Array.isArray(hint) ? hint : [hint]).map((x) => {
+    if (!x) return '';
+    return String(x.title || x.name || x).trim();
+  }).filter(Boolean);
   const q = String(original || $('searchInput').value || '').trim();
-  if (!title || !q || searchWords(title).join('') === searchWords(q).join('')) {
+  const qn = searchWords(q).join('');
+  const unique = [];
+  const seen = new Set();
+  for (const title of titles) {
+    const key = searchWords(title).join('');
+    if (!key || key === qn || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(title);
+  }
+  if (!unique.length || !q) {
     box.hidden = true;
     box.classList.remove('show');
-    btn.textContent = '';
+    box.replaceChildren();
+    if ($('searchBar')) $('searchBar').classList.remove('hasSuggest');
     if ($('browse')) $('browse').classList.remove('hasSuggest');
+    syncSearchSuggestPad();
     return;
   }
-  btn.innerHTML = `Did you mean <b>${esc(String(title))}</b>?`;
-  btn.dataset.hint = String(title);
+  box.replaceChildren(...unique.map((title, i) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'searchSuggestItem focusable';
+    if (i === 0) btn.id = 'searchSuggestBtn';
+    btn.dataset.hint = title;
+    btn.setAttribute('role', 'option');
+    const label = document.createElement('span');
+    label.className = 'hint';
+    label.textContent = i === 0 ? 'Showing results for' : 'Also try';
+    const name = document.createElement('b');
+    name.textContent = title;
+    btn.append(label, name);
+    return btn;
+  }));
   box.hidden = false;
   box.classList.add('show');
+  if ($('searchBar')) $('searchBar').classList.add('hasSuggest');
   if ($('browse')) $('browse').classList.add('hasSuggest');
+  syncSearchSuggestPad();
+  requestAnimationFrame(() => requestAnimationFrame(syncSearchSuggestPad));
+  setTimeout(syncSearchSuggestPad, 50);
 }
-function applySearchSuggest() {
-  const btn = $('searchSuggestBtn');
-  const hint = btn && btn.dataset.hint;
-  if (!hint) return;
-  $('searchInput').value = hint;
+function applySearchSuggest(hint) {
+  const title = String(hint || ($('searchSuggestBtn') && $('searchSuggestBtn').dataset.hint) || '').trim();
+  if (!title) return;
+  $('searchInput').value = title;
   syncSearchClear();
   showSearchSuggest(null);
   doSearch().then(() => focusSearchResultsSoon()).catch(() => focusSearchResultsSoon());
 }
+window.addEventListener('resize', () => { if (S.view === 'search') syncSearchSuggestPad(); });
 const SEARCH_CLOSE_SEEDS = [
   'Frankenstein', 'The Godfather', 'The Matrix', 'The Avengers', 'Avengers: Endgame',
   'Batman', 'The Dark Knight', 'Harry Potter', 'Stranger Things',
   'The Lord of the Rings', 'Star Wars', 'Inception', 'Titanic', 'Jurassic Park',
   'Spider-Man', 'Superman', 'Game of Thrones', 'Breaking Bad', 'The Office',
   'Friends', 'Dune', 'Interstellar', 'The Mandalorian', 'Wednesday',
+  'The Odyssey', '2001: A Space Odyssey', 'Odyssey', 'The Longest Yard',
 ];
 function closestCatalogTitle(q) {
   const qn = searchWords(q).join('');
   if (qn.length < 4) return null;
-  let best = null, bestD = 99;
-  const consider = (it, title) => {
-    if (!title || !searchCloseTitle(q, title)) return;
-    const d = searchEditDist(qn, searchWords(title).join(''));
-    if (d > 0 && d < bestD) { bestD = d; best = it; }
-  };
-  for (const it of catalogSearchItems()) consider(it, it.title || it.name || '');
-  if (!best) for (const title of SEARCH_CLOSE_SEEDS) consider({ title }, title);
-  return best;
+  const best = scoreSearchTitles(q)[0];
+  return best ? { title: best.title } : null;
 }
 function searchSeqIndex(words, query) {
   if (!words.length || !query.length) return -1;
@@ -25201,29 +25572,15 @@ async function doSearch() {
       let shows = ok.filter((x) => x.media_type === 'tv').sort(bySearchRank).map(mapTmdb);
       const closeHit = ok.some((x) => searchWholeTitleClose(q, x.title || x.name || ''));
       const serverHint = r.didYouMean || '';
-      if (serverHint) showSearchSuggest(serverHint, r.originalQuery || q);
+      if (serverHint) showSearchSuggest([serverHint, ...catalogSearchSuggestions(q)], r.originalQuery || q);
+      else showSearchSuggest(catalogSearchSuggestions(q), q);
       if (!closeHit) {
-        const hint = closestCatalogTitle(q);
-        const hintTitle = hint && (hint.title || hint.name);
-        if (hintTitle && searchWords(hintTitle).join('') !== searchWords(q).join('')) {
-          showSearchSuggest(hintTitle, q);
-          try {
-            const r2 = await api('/api/tmdb/search/multi?query=' + encodeURIComponent(hintTitle) + '&include_adult=false');
-            if (!current()) return;
-            const ok2 = (r2.results || []).filter((x) => x.media_type !== 'person' && (x.poster_path || x.backdrop_path) && passesMaturity(x));
-            movies = ok2.filter((x) => x.media_type === 'movie').sort(bySearchRank).map(mapTmdb);
-            shows = ok2.filter((x) => x.media_type === 'tv').sort(bySearchRank).map(mapTmdb);
-          } catch {}
-        }
         for (const it of catalogSearchItems()) {
           if (!searchCloseTitle(q, it.title || it.name || '')) continue;
           const type = it.type || (it._kind === 'show' ? 'tv' : 'movie');
           const bucket = type === 'tv' ? shows : movies;
           if (!bucket.some((x) => x.tmdbId && it.tmdbId && +x.tmdbId === +it.tmdbId)) bucket.unshift(it);
         }
-      } else if (!serverHint) {
-        const localHint = closestCatalogTitle(q);
-        if (localHint) showSearchSuggest(localHint.title || localHint.name, q);
       }
       hydrateSearchLibrary(movies, lib);
       hydrateSearchLibrary(shows, lib);
@@ -26292,6 +26649,7 @@ function focusActiveSettingsPanel(rootId, panelAttr) {
   const active = (key && root.querySelector(`.setGrid[data-stab="${key}"]:not([hidden]), [data-ptab="${key}"]:not([hidden])`))
     || (root && root.querySelector(`[${panelAttr}]:not([hidden]), .setGrid[data-stab]:not([hidden])`));
   const first = active && formCtls(active)[0];
+  S.settingsZone = 'panel';
   return focusSectionControl(first);
 }
 function wireSectionRailDpad(rootId, tabsId, panelAttr) {
@@ -26538,7 +26896,8 @@ function switchView(v, push = true, opts = {}) {
     if (!opts.preserveSearch && !opts.preservePage) resetSearchPage();
     // A rollover PREVIEW must not steal focus — the user is still on the menu. Landing on
     // the page proper starts at the MIC (owner: voice first on TV), keyboard input one → away.
-    if (!opts.keepRail && !opts.restoreFocus) setTimeout(() => focusContent(), 60); }
+    if (!opts.keepRail && !opts.restoreFocus) setTimeout(() => focusContent(), 60);
+    requestAnimationFrame(() => requestAnimationFrame(syncSearchSuggestPad)); }
   if (v === 'settings' && !opts.preservePage) refreshSettings();
   if (v === 'prefs' && !opts.preservePage) {
     if (!S._prefsPainted) {
@@ -26755,7 +27114,12 @@ function handleRouteTraversal() {
   if (parts[0] === 'person' && parts[1]) return openPerson(parts[1], false);
   // Leaving a person page backward to a non-person hash → close it, then route the target hash
   // (which re-opens the detail it was launched from).
-  if ($('person').classList.contains('open')) closePerson();
+  if ($('person').classList.contains('open')) {
+    closePerson();
+    // closePerson already restored the origin title (cast card / scroll). applyRoute would
+    // rebuild that same title at Play / top and wipe the restore.
+    if (routeIsTitle()) return;
+  }
   if ($('detail').classList.contains('open') && !routeIsTitle()) return closeDetail();
   applyRoute();
 }
@@ -26781,6 +27145,7 @@ function focusContent(retried) {
     return applyFocus(first || $('dPlay'));
   }
   if (S.view === 'settings' || S.view === 'prefs') {
+    S.settingsZone = 'tabs';
     const cfg = sectionFormConfig();
     if (focusActiveSectionTab(cfg)) return;
     const els = formCtls($('prefs') || $('settings'));
@@ -26939,7 +27304,7 @@ function applyFocus(el, scroll = true) {
   // TV Music/Audiobooks: pin native focus on the cover so the WebView cannot snap the caret
   // back into the search field (arrows then die on the input). Other pages stay class-only.
   if (document.body.classList.contains('tv') && el.tagName === 'BUTTON'
-      && (S.view === 'music' || S.view === 'audiobooks')
+      && (S.view === 'music' || S.view === 'audiobooks' || S.view === 'prefs' || S.view === 'settings')
       && !/musicSearch|abSearch/.test(el.id || '')) {
     try { el.focus({ preventScroll: true }); } catch {}
   }
@@ -27731,7 +28096,7 @@ function dpadForm(scope, k) {
   const els = formCtls(scope); if (!els.length) return false;
   const cur = document.activeElement;
   const opts = arguments[2] || {};
-  if (!els.includes(cur)) { els[0].focus({ preventScroll: false }); return true; }
+  if (!els.includes(cur)) { focusSectionControl(els[0]); return true; }
   if (k === 'Enter') { formActivate(cur); return true; }
   const r = cur.getBoundingClientRect();
   const SAME = 12; // controls within ±12px top count as the same visual row
@@ -27747,7 +28112,7 @@ function dpadForm(scope, k) {
     else if (k === 'ArrowUp') { ok = dy < -SAME; score = -dy * 3 + Math.abs(dx); }
     if (ok && score < bestScore) { bestScore = score; best = el; }
   }
-  if (best) { best.focus({ preventScroll: false }); return true; }
+  if (best) { focusSectionControl(best); return true; }
   if (k === 'ArrowLeft' && opts.leftEdge !== false) { cur.blur(); enterRail(); return true; } // nothing further left → the menu
   return false;
 }
@@ -27785,7 +28150,10 @@ function focusActiveSectionTab(cfg) {
 }
 function leaveSettingsPanelToTabs() {
   const cfg = sectionFormConfig();
-  if (!cfg || (cfg.tabs && cfg.tabs.contains(document.activeElement))) return false;
+  if (!cfg) return false;
+  const onTab = cfg.tabs && (cfg.tabs.contains(document.activeElement) || cfg.tabs.querySelector('button.focus'));
+  if (onTab && S.settingsZone !== 'panel') return false;
+  S.settingsZone = 'tabs';
   return focusActiveSectionTab(cfg);
 }
 function dpadSectionForm(k) {
@@ -27793,31 +28161,71 @@ function dpadSectionForm(k) {
   if (!cfg) return false;
   const tabs = sectionTabButtons(cfg);
   const active = document.activeElement;
+  const markedTab = cfg.tabs && cfg.tabs.querySelector('button.focus');
   const inTabs = cfg.tabs && cfg.tabs.contains(active);
-  if (inTabs) {
-    let i = tabs.indexOf(active);
+  const panel = activeSectionPanel(cfg);
+  const panelControls = panel ? formCtls(panel) : [];
+  const markedPanel = panel && panel.querySelector('.focus');
+  // Android TV injects arrows on document. Native focus often sits on <body>
+  // after Right, so "not in panel" used to bounce Down back to the left menu.
+  if (S.settingsZone === 'panel') {
+    if ((inTabs || markedTab) && (k === 'ArrowLeft' || k === 'ArrowUp')) {
+      S.settingsZone = 'tabs';
+      return focusActiveSectionTab(cfg);
+    }
+    const cur = panelControls.includes(active) ? active : (markedPanel || panelControls[0]);
+    if (cur && active !== cur) focusSectionControl(cur);
+    if (k === 'Enter') { formActivate(document.activeElement || cur); return true; }
+    const moved = dpadForm(panel, k, { leftEdge: false });
+    if (!moved && (k === 'ArrowLeft' || k === 'ArrowUp')) {
+      S.settingsZone = 'tabs';
+      return focusActiveSectionTab(cfg);
+    }
+    return true;
+  }
+  if (inTabs || markedTab) {
+    const tabNow = inTabs && active && active.tagName === 'BUTTON' ? active : markedTab;
+    let i = tabs.indexOf(tabNow);
     if (i < 0) i = Math.max(0, tabs.findIndex((b) => b.classList.contains('on')));
-    if (k === 'Enter') { formActivate(tabs[i] || active); return true; }
+    if (k === 'Enter') {
+      formActivate(tabs[i] || tabNow || active);
+      S.settingsZone = 'panel';
+      focusSectionControl(formCtls(activeSectionPanel(cfg))[0]);
+      return true;
+    }
     if (k === 'ArrowUp') { focusSectionControl(tabs[Math.max(0, i - 1)] || tabs[0]); return true; }
     if (k === 'ArrowDown') { focusSectionControl(tabs[Math.min(tabs.length - 1, i + 1)] || tabs[tabs.length - 1]); return true; }
     if (k === 'ArrowRight') {
-      const tab = i >= 0 ? tabs[i] : active;
+      const tab = i >= 0 ? tabs[i] : tabNow || active;
       if (tab && tab.tagName === 'BUTTON') activateAccountTab(tab);
+      S.settingsZone = 'panel';
       focusSectionControl(formCtls(activeSectionPanel(cfg))[0]);
       return true;
     }
     if (k === 'ArrowLeft') { active.blur(); enterRail(); return true; }
     return true;
   }
-  const panel = activeSectionPanel(cfg);
-  const panelControls = panel ? formCtls(panel) : [];
-  if (panelControls.includes(active)) {
+  if (panelControls.includes(active) || markedPanel) {
+    S.settingsZone = 'panel';
     const moved = dpadForm(panel, k, { leftEdge: false });
-    if (!moved && (k === 'ArrowLeft' || k === 'ArrowUp')) return focusActiveSectionTab(cfg);
+    if (!moved && (k === 'ArrowLeft' || k === 'ArrowUp')) {
+      S.settingsZone = 'tabs';
+      return focusActiveSectionTab(cfg);
+    }
     return true;
   }
   if (k === 'ArrowLeft') { enterRail(); return true; }
-  if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowRight' || k === 'Enter') return focusActiveSectionTab(cfg);
+  if (k === 'ArrowRight' || k === 'Enter') {
+    const tab = tabs.find((b) => b.classList.contains('on')) || tabs[0];
+    if (tab) activateAccountTab(tab);
+    S.settingsZone = 'panel';
+    focusSectionControl(formCtls(activeSectionPanel(cfg))[0]);
+    return true;
+  }
+  if (k === 'ArrowUp' || k === 'ArrowDown') {
+    S.settingsZone = 'tabs';
+    return focusActiveSectionTab(cfg);
+  }
   return false;
 }
 document.addEventListener('keydown', (e) => {
@@ -27874,7 +28282,12 @@ document.addEventListener('keydown', (e) => {
     if (S.zone === 'rail') { S.zone = ''; clearFocus(); }
   }
   if (inInput && S.view === 'search' && ae === $('searchInput')) {
-    if (k === 'ArrowDown' || k === 'Enter') {
+    if (k === 'ArrowDown') {
+      e.preventDefault();
+      moveSearchDownFromField();
+      return;
+    }
+    if (k === 'Enter') {
       e.preventDefault();
       searchAndFocusResults();
       return;
@@ -28616,7 +29029,10 @@ document.addEventListener('keydown', (e) => {
     // TV remotes: the mic (LEFT of the field) is the page's first stop — OK talks, → types.
     if (S.view === 'search' && document.activeElement === $('micBtn')) {
       if (k === 'Enter') return $('micBtn').click();
-      if (k === 'ArrowDown') return gridEls().length ? focusGrid(S.gridIdx || 0) : $('searchInput').focus();
+      if (k === 'ArrowDown') {
+        if (searchSuggestVisible()) return focusSearchSuggest(0);
+        return gridEls().length ? focusGrid(S.gridIdx || 0) : $('searchInput').focus();
+      }
       if (k === 'ArrowRight') { $('micBtn').blur(); return $('searchInput').focus(); }
       if (k === 'ArrowLeft') { $('micBtn').blur(); return enterRail(); }
       return;
@@ -28627,20 +29043,32 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowLeft' || k === 'ArrowUp') { $('searchClearBtn').blur(); return $('searchInput').focus(); }
       if (k === 'ArrowDown') {
         $('searchClearBtn').blur();
-        if ($('searchSuggest') && $('searchSuggest').classList.contains('show')) {
-          try { $('searchSuggestBtn').focus(); } catch {}
-          return;
-        }
-        return focusSearchResultsSoon();
+        return moveSearchDownFromField();
       }
       if (k === 'Enter' || k === 'Escape' || k === 'Backspace') { if (!e.repeat) clearSearchQuery(); return; }
       return;
     }
-    if (S.view === 'search' && document.activeElement === $('searchSuggestBtn')) {
-      if (k === 'Enter') { if (!e.repeat) applySearchSuggest(); return; }
-      if (k === 'ArrowUp') { $('searchSuggestBtn').blur(); return $('searchInput').focus(); }
-      if (k === 'ArrowDown') { $('searchSuggestBtn').blur(); return focusSearchResultsSoon(); }
-      if (k === 'ArrowLeft') { $('searchSuggestBtn').blur(); return enterRail(); }
+    if (S.view === 'search' && document.activeElement && document.activeElement.closest('#searchSuggest')) {
+      const sug = searchSuggestEls();
+      const si = sug.indexOf(document.activeElement);
+      if (k === 'Enter') { if (!e.repeat) applySearchSuggest(document.activeElement.dataset.hint); return; }
+      if (k === 'ArrowUp') {
+        if (si > 0) return focusSearchSuggest(si - 1);
+        document.activeElement.blur();
+        return $('searchInput').focus();
+      }
+      if (k === 'ArrowDown') {
+        if (si >= 0 && si < sug.length - 1) return focusSearchSuggest(si + 1);
+        document.activeElement.blur();
+        return focusSearchResultsSoon();
+      }
+      if (k === 'ArrowLeft') { document.activeElement.blur(); return enterRail(); }
+      if (k === 'ArrowRight') return;
+      if (k === 'Escape' || k === 'Backspace') {
+        document.activeElement.blur();
+        showSearchSuggest(null);
+        return $('searchInput').focus();
+      }
       return;
     }
     if (S.view === 'livetv' && document.activeElement === $('chClearBtn')) {
@@ -28724,6 +29152,7 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowRight') return focusGrid(saveCol(Math.min(count - 1, S.gridIdx + 1)));
       if (k === 'ArrowUp') {
         if (row === 0) {
+          if (S.view === 'search') return moveSearchUpFromResults();
           if (['movies', 'tv', 'library'].includes(S.view) && $('genreSel').offsetParent) return focusBrowseFilter(0);
           return enterRail();
         }
@@ -28783,7 +29212,7 @@ document.addEventListener('keydown', (e) => {
       const t = gridVert(-1);
       if (t >= 0) return focusGrid(t);
       if (S.view === 'livetv' && document.querySelector('#chBody.liveGuideShell') && cur && liveContentEls().includes(cur)) return focusLiveFilter();
-      if (S.view === 'search') { focusSearchBarFromResults(); return; }
+      if (S.view === 'search') { moveSearchUpFromResults(); return; }
       if (S.view === 'person') return focusPersonBack();
       // Movies/TV/local Library: the genre filter sits above the grid — give the D-pad a stop
       // there. (Native <select> handling takes over; Escape backs out, change re-runs the view.)
@@ -28881,7 +29310,8 @@ document.addEventListener('keyup', (e) => {
 // root it behaves exactly like Escape (close player/detail/menus, back out of views);
 // at the true root it answers 'exit' and the shell shows press-back-again-to-quit.
 function backToBrowseSectionMenu() {
-  const browseSection = S.view === 'movies' || S.view === 'tv' || S.view === 'kids' || S.view === 'library';
+  const browseSection = S.view === 'movies' || S.view === 'tv' || S.view === 'kids' || S.view === 'library'
+    || S.view === 'discover' || S.view === 'calendar' || S.view === 'watchlist';
   if (!browseSection || S.zone === 'rail' || document.body.classList.contains('railOpen')) return false;
   enterRail();
   return true;
@@ -28970,6 +29400,23 @@ window.__tvBack = () => {
         && ((S.rowIdx || 0) > 0 || (S.colIdx && (S.colIdx[S.rowIdx] || 0) > 0))) {
       focusCard(0, 0); return 'ok';
     }
+  }
+  // Search: posters → field (same as Escape), then rail. Hardware Back used to skip the
+  // box and jump Home from the first result.
+  if (S.view === 'search' && S.zone !== 'rail' && !document.body.classList.contains('railOpen')) {
+    const ae = document.activeElement;
+    if (searchSuggestVisible() && ae && ae.closest && ae.closest('#searchSuggest')) {
+      showSearchSuggest(null);
+      $('searchInput').focus();
+      return 'ok';
+    }
+    const onField = ae === $('searchInput') || ae === $('micBtn') || ae === $('searchClearBtn');
+    if (!onField && $('searchInput').value.trim()) {
+      focusSearchBarFromResults();
+      return 'ok';
+    }
+    enterRail();
+    return 'ok';
   }
   if (backToBrowseSectionMenu()) return 'ok';
   // Settings: Back from Change password (or any right-side control) returns to the left tab

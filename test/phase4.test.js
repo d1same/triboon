@@ -1126,8 +1126,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the GLOBAL keydown handler activates the search clear X on-device (OK clears the query)');
   assert.match(ui, /function focusSearchBarFromResults\(\) \{[\s\S]+cancelSearchMicLand\(\)[\s\S]+clearFocus\(\)[\s\S]+searchInput/,
     'leaving search results must drop card focus so the field can take the remote');
-  assert.match(ui, /if \(S\.view === 'search'\) \{ focusSearchBarFromResults\(\); return; \}/,
-    'ArrowUp from the first search result row returns to the search field, not a no-op mic land');
+  assert.match(ui, /if \(S\.view === 'search'\) \{ moveSearchUpFromResults\(\); return; \}/,
+    'ArrowUp from the first search result row climbs the chips, then the field — not a no-op mic land');
+  assert.match(ui, /function moveSearchUpFromResults\(\) \{[\s\S]+focusSearchSuggest\(els\.length - 1\)[\s\S]+focusSearchBarFromResults\(\)/,
+    'ArrowUp from posters lands on the last chip \(closest to the covers\), not the first chip');
   assert.match(ui, /if \(S\.view === 'search' && \$\('searchInput'\)\.value\.trim\(\)\) return focusSearchBarFromResults\(\);/,
     'Back from search results returns to the field so the query can be edited or cleared');
   assert.match(ui, /if \(inInput && S\.view === 'livetv' && ae === \$\('chSearch'\)\) \{[\s\S]+const clr = \$\('chClearBtn'\);\s*\n\s*if \(clr && !clr\.hidden\)[\s\S]+clr\.focus\(\)/,
@@ -1141,7 +1143,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'music search drops below the burger on the phone shell');
   assert.match(ui, /body\.mobileShell #chBar\{padding-left:48px\}/,
     'Live TV filter clears the burger horizontally on the phone shell');
-  assert.match(ui, /body\.mobileShell #browse\.searchMode\{padding-top:146px!important\}/,
+  assert.match(ui, /body\.mobileShell #browse\.searchMode\{padding-top:var\(--searchPad, 146px\)!important\}/,
     'search results clear the lowered fixed search bar on the phone shell (no results under the bar)');
   // Casting Phase 1 (web): Google Cast (Default Media Receiver) + AirPlay for VOD, receiver-pull.
   assert.ok(ui.includes('id="castBtn"') && ui.includes('id="airplayBtn"'),
@@ -1186,8 +1188,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Live TV filter is wrapped so it can host a clear (X) button');
   assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+searchCloseTitle\(q, title\)[\s\S]+score \+= 8000[\s\S]+score -= 1800[\s\S]+sort\(bySearchRank\)/,
     'TMDB search should rank exact franchise/title-prefix matches above incidental phrase matches');
-  assert.match(ui, /function searchCloseTitle\(query, title\) \{[\s\S]+closestCatalogTitle\(q\)[\s\S]+\/api\/tmdb\/search\/multi\?query=' \+ encodeURIComponent\(hintTitle\)/,
-    'a close misspelling like frekestein should still surface Frankenstein');
+  assert.match(ui, /function searchCloseTitle\(query, title\) \{[\s\S]+function spellcheckQuery\(q\) \{[\s\S]+function paintInstantSearch\(q\)/,
+    'a close misspelling like frekestein should still surface Frankenstein via Plex-style spellcheck');
   {
     const words = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
     const dist = (a, b) => {
@@ -1196,6 +1198,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
       if (a === b) return 0;
       if (!m) return n;
       if (!n) return m;
+      if (Math.abs(m - n) > 4) return 99;
       const dp = new Array(n + 1);
       for (let j = 0; j <= n; j++) dp[j] = j;
       for (let i = 1; i <= m; i++) {
@@ -1209,20 +1212,42 @@ test('quality toggle is a source-selection preference that survives Continue Wat
       }
       return dp[n];
     };
-    const close = (query, title) => {
-      const a = words(query).join(''), b = words(title).join('');
-      const maxL = Math.max(a.length, b.length);
+    const fuzzLimit = (len) => (len <= 2 ? 0 : len <= 5 ? 1 : 2);
+    const closeWord = (a, b, singleToken) => {
+      if (a === b || a + 's' === b || b + 's' === a) return true;
       const d = dist(a, b);
-      return d <= 2 || (maxL >= 8 && d <= 4) || d / maxL <= 0.35;
+      if (d <= fuzzLimit(a.length) && d <= fuzzLimit(b.length)) return true;
+      if (singleToken && a.length >= 6 && d <= 3 && Math.abs(a.length - b.length) <= 2) return true;
+      return false;
+    };
+    const wordAffix = (a, b) => {
+      if (Math.min(a.length, b.length) < 4) return false;
+      return a.startsWith(b) || b.startsWith(a);
+    };
+    const contentWords = (list) => {
+      const stop = new Set(['the', 'a', 'an', 'of']);
+      const content = list.filter((w) => !stop.has(w));
+      return content.length ? content : list;
+    };
+    const close = (query, title) => {
+      const qw = words(query), tw = words(title);
+      if (!qw.length || !tw.length) return false;
+      const need = contentWords(qw);
+      const single = need.length === 1;
+      return need.every((w) => tw.some((t) => closeWord(w, t, single) || wordAffix(w, t)));
     };
     assert.ok(close('frekestein', 'Frankenstein'), 'frekestein must still suggest Frankenstein');
     assert.ok(close('frankenstien', 'Frankenstein'), 'transposed ie still matches Frankenstein');
     assert.ok(close('avngers', 'Avengers'), 'dropped letter still matches');
     assert.ok(close('batman', 'Batman'), 'exact titles still match');
+    assert.ok(close('oddyse', 'The Odyssey'), 'oddyse must still suggest Odyssey');
+    assert.ok(close('office', 'The Office'), 'office must still suggest The Office');
+    assert.ok(close('longst yard', 'The Longest Yard'), 'longst yard must still suggest The Longest Yard');
+    assert.ok(!close('longst yard', 'The Lord of the Rings'), 'yard must not become lord');
     assert.ok(!close('zzz', 'Frankenstein'), 'unrelated junk must not match');
   }
-  assert.match(ui, /id="searchSuggest"[\s\S]+id="searchSuggestBtn"/,
-    'Search shows a Did you mean chip for close misspellings');
+  assert.match(ui, /id="searchSuggest"[\s\S]+btn\.id = 'searchSuggestBtn'/,
+    'Search shows a Did you mean list under the field for close misspellings');
   assert.match(ui, /const serverHint = r\.didYouMean \|\| ''/,
     'Search uses the server close-title retry so a cold typo still finds the real name');
   assert.match(ui, /if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+if \(S\.view === 'home'\) \{[\s\S]+setRowsView\(\$\('rows'\), S\.rows, true\);[\s\S]+\}[\s\S]+S\.view === 'home' && S\.zone !== 'rail' && !document\.querySelector\('#home \.focus'\)[\s\S]+focusContent\(\);[\s\S]+return false;/,
@@ -3178,7 +3203,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'the filter returns the original object untouched when nothing is dropped (fail-open, no needless allocation)');
   // The proxy resolves the active profile from _pf (stored level, unspoofable), strips it before the
   // upstream call (so the shared TMDB cache is not fragmented per profile), and filters when < Adult.
-  assert.match(idxSrc, /const pf = ctx\.url\.searchParams\.get\('_pf'\);[\s\S]+p\.delete\('_pf'\);[\s\S]+let data = await tmdb\.get\('\/' \+ ctx\.m\[1\] \+ search\);[\s\S]+data = await tmdbSearchCloseHint\(ctx\.m\[1\], search, data\);[\s\S]+const level = pf !== null \? profileLevelFor\(ctx\.user, pf\) : 4;[\s\S]+level < 4 \? await maturityFilterList\(level, data\) : data;/,
+  assert.match(idxSrc, /const pf = ctx\.url\.searchParams\.get\('_pf'\);[\s\S]+p\.delete\('_pf'\);[\s\S]+const data = await tmdbSearchWithCloseHint\(ctx\.m\[1\], search\);[\s\S]+const level = pf !== null \? profileLevelFor\(ctx\.user, pf\) : 4;[\s\S]+level < 4 \? await maturityFilterList\(level, data\) : data;/,
     'tmdbProxy strips _pf before upstream, retries close misspellings, and applies the maturity filter for restricted profiles only');
   // Client: only restricted profiles tag TMDB reads (the No-limit/owner path is byte-for-byte unchanged).
   assert.match(ui, /path\.startsWith\('\/api\/tmdb\/'\)\s*\n\s*&& \(S\.maxLevel \?\? 4\) < 4 && S\.profile && S\.profile\.id\) \{\s*\n\s*path \+= \(path\.includes\('\?'\) \? '&' : '\?'\) \+ '_pf=' \+ encodeURIComponent\(S\.profile\.id\);/,
@@ -3572,10 +3597,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'theme picker cards should react to native focus as well as D-pad focus classes');
   assert.match(ui, /#setTabs button,#prefTabs button\{\s*background:transparent!important;box-shadow:none!important[\s\S]+body:not\(\.tv\) #setTabs button:hover,body:not\(\.tv\) #prefTabs button:hover,[\s\S]+#setTabs button:focus-visible,#prefTabs button:focus-visible\{[\s\S]+background:rgba\(255,255,255,\.07\)!important;color:var\(--text\)!important[\s\S]+#setTabs button\.on\.focus,#prefTabs button\.on\.focus,[\s\S]+#setTabs button\.on:focus-visible,#prefTabs button\.on:focus-visible\{[\s\S]+background:rgba\(255,255,255,\.08\)!important;color:var\(--text\)!important/,
     'Settings and Preferences side tabs stay a text list on hover, keyboard focus, and D-pad focus');
-  assert.match(ui, /#setTabs button,#prefTabs button\{opacity:\.26\}[\s\S]+#setTabs button\.on,#prefTabs button\.on\{opacity:\.28;color:var\(--muted\)!important\}[\s\S]+opacity:1;color:var\(--text\)!important\}[\s\S]+body\.tv #setTabs button:hover:not\(:focus\):not\(\.focus\)/,
-    'unfocused Settings tabs gray out hard; the focused row is full strength; TV hover latch does not keep Profile lit after Right');
-  assert.match(ui, /body:not\(\.tv\) #setTabs button,body:not\(\.tv\) #prefTabs button\{opacity:\.46\}[\s\S]+button\.on\{opacity:\.58\}[\s\S]+button\.on:focus-visible\{opacity:\.82\}/,
-    'browser, phone, and Android phone Settings tabs recede a bit; focus stays short of full white; TV keeps 0.26');
+  assert.match(ui, /#setTabs button,#prefTabs button\{opacity:\.72;color:rgba\(var\(--fg\),\s*\.82\)!important\}[\s\S]+#setTabs button\.on,#prefTabs button\.on\{opacity:\.80;color:rgba\(var\(--fg\),\s*\.88\)!important\}[\s\S]+opacity:1;color:var\(--text\)!important\}[\s\S]+body\.tv #setTabs button:hover:not\(:focus\):not\(\.focus\)/,
+    'unfocused Settings tabs stay readable; the focused row is full strength; TV hover latch does not keep Profile lit after Right');
+  assert.match(ui, /body:not\(\.tv\) #setTabs button,body:not\(\.tv\) #prefTabs button\{opacity:\.78\}[\s\S]+button\.on\{opacity:\.86\}[\s\S]+button\.on:focus-visible\{opacity:1\}/,
+    'browser, phone, and Android phone Settings tabs stay readable; focus is full strength');
   assert.match(ui, /body\.mobileNav \.railBtn,body\.mobileShell\.mobileNav \.railBtn,\s*\nbody\.mobileNav #railUser,body\.mobileShell\.mobileNav #railUser\{color:var\(--text\)\}/,
     'open phone drawer menu rows and the profile name use normal text color, not the muted compact-rail gray');
   assert.match(ui, /#settings \.ghostMini,#prefs \.ghostMini,#prefs \.profileAction,#prefs \.profileAddBtn\{\s*\n\s*min-height:44px;border-radius:10px/,
@@ -3665,9 +3690,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'focusing a Settings tab scrolls only the tab list, not the whole page');
   assert.match(ui, /function focusSectionControl\(el\) \{[\s\S]+el\.focus\(\{ preventScroll: true \}\)/,
     'Settings tab focus must not let the browser jump the page');
-  assert.match(ui, /function dpadSectionForm\(k\) \{[\s\S]+const inTabs = cfg\.tabs && cfg\.tabs\.contains\(active\);[\s\S]+if \(inTabs\) \{[\s\S]+if \(k === 'ArrowDown'\)[\s\S]+if \(k === 'ArrowRight'\) \{[\s\S]+focusSectionControl\(formCtls\(activeSectionPanel\(cfg\)\)\[0\]\);[\s\S]+if \(k === 'ArrowLeft'\) \{ active\.blur\(\); enterRail\(\); return true; \}/,
+  assert.match(ui, /function dpadSectionForm\(k\) \{[\s\S]+const inTabs = cfg\.tabs && cfg\.tabs\.contains\(active\);[\s\S]+if \(S\.settingsZone === 'panel'\) \{[\s\S]+if \(inTabs \|\| markedTab\) \{[\s\S]+if \(k === 'ArrowDown'\)[\s\S]+if \(k === 'ArrowRight'\) \{[\s\S]+focusSectionControl\(formCtls\(activeSectionPanel\(cfg\)\)\[0\]\);[\s\S]+if \(k === 'ArrowLeft'\) \{ active\.blur\(\); enterRail\(\); return true; \}/,
     'section tabs should move vertically, Right should enter the active panel, and Left should return to the rail');
-  assert.match(ui, /if \(panelControls\.includes\(active\)\) \{[\s\S]+const moved = dpadForm\(panel, k, \{ leftEdge: false \}\);[\s\S]+if \(!moved && \(k === 'ArrowLeft' \|\| k === 'ArrowUp'\)\) return focusActiveSectionTab\(cfg\);[\s\S]+return true;[\s\S]+\}/,
+  assert.match(ui, /if \(S\.settingsZone === 'panel'\) \{[\s\S]+const moved = dpadForm\(panel, k, \{ leftEdge: false \}\);[\s\S]+if \(!moved && \(k === 'ArrowLeft' \|\| k === 'ArrowUp'\)\) \{[\s\S]+return focusActiveSectionTab\(cfg\);[\s\S]+return true;/,
+    'Right then Down stays in the Settings panel; only Left or Up from the first row returns to the tab list');
+  assert.match(ui, /if \(panelControls\.includes\(active\) \|\| markedPanel\) \{[\s\S]+const moved = dpadForm\(panel, k, \{ leftEdge: false \}\);[\s\S]+if \(!moved && \(k === 'ArrowLeft' \|\| k === 'ArrowUp'\)\) \{[\s\S]+return focusActiveSectionTab\(cfg\);/,
     'Settings/Preferences panel controls should move geometrically and fall back to the active tab instead of getting trapped');
   assert.match(ui, /if \(inInput && \(S\.view === 'settings' \|\| S\.view === 'prefs'\) && k\.startsWith\('Arrow'\)\) \{[\s\S]+e\.preventDefault\(\);[\s\S]+dpadSectionForm\(k\);[\s\S]+return;[\s\S]+\}/,
     'Settings/Preferences inputs and dropdowns should use arrows for D-pad navigation instead of trapping focus');
@@ -4887,7 +4914,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'refreshing Preferences restores the same Catalog/Dashboard section from the hash, then other routes still refocus content');
   assert.match(ui, /function setRoute\(hash\) \{[\s\S]+history\.pushState\(\{ triboonRoute: true, triboonIndex: routeIndex \}, '', hash\)[\s\S]+function backOneRoute\(fallback\) \{[\s\S]+Number\(state\.triboonIndex\) > 0[\s\S]+history\.back\(\)/,
     'every visited app page is an indexed history entry and shared Back moves exactly one entry');
-  assert.match(ui, /function handleRouteTraversal\(\) \{[\s\S]+const parts = routeParts\(\);[\s\S]+if \(parts\[0\] === 'person' && parts\[1\]\) return openPerson\(parts\[1\], false\);[\s\S]+if \(\$\(\'person\'\)\.classList\.contains\('open'\)\) closePerson\(\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\('open'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);[\s\S]+window\.addEventListener\('popstate', handleRouteTraversal\)/,
+  assert.match(ui, /function handleRouteTraversal\(\) \{[\s\S]+const parts = routeParts\(\);[\s\S]+if \(parts\[0\] === 'person' && parts\[1\]\) return openPerson\(parts\[1\], false\);[\s\S]+if \(\$\(\'person\'\)\.classList\.contains\('open'\)\) \{[\s\S]+closePerson\(\);[\s\S]+if \(routeIsTitle\(\)\) return;[\s\S]+\}[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\('open'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);[\s\S]+window\.addEventListener\('popstate', handleRouteTraversal\)/,
     'browser Back/Forward restores the immediately targeted cast, detail, or browse route');
   assert.match(ui, /\$\('dBack'\)\.addEventListener\('click', \(\) => backOneRoute\(closeDetail\)\)[\s\S]+\$\('pBack'\)\.addEventListener\('click', \(\) => backOneRoute\(closePerson\)\)/,
     'visible Detail and Person Back buttons share the one-step history contract');
@@ -4899,7 +4926,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'opening a detail from a cast page should remember the cast id for the no-history fallback');
   assert.match(ui, /function closeDetail\(\) \{[\s\S]+const fromPerson = S\.detailFromPerson;[\s\S]+S\.detailFromPerson = null;[\s\S]+if \(fromPerson\) \{ replaceRoute\(`#\/person\/\$\{fromPerson\}`\); restorePersonFromDetail\(fromPerson\); return; \}[\s\S]+restoreDetailReturn\(\);/,
     'the no-history fallback should restore the exact cast page position');
-  assert.match(ui, /function closePerson\(\) \{[\s\S]+const originDetailAlive = \$\('detail'\)\.classList\.contains\('open'\)[\s\S]+sameDetailIdentity\(S\.detailItem, origin\.item\)[\s\S]+if \(!originDetailAlive\) \{[\s\S]+if \(origin && origin\.item\)[\s\S]+openDetail\(origin\.item, false\)[\s\S]+return restoreDetailReturn\(\);/,
+  assert.match(ui, /function closePerson\(\) \{[\s\S]+const originDetailAlive = \$\('detail'\)\.classList\.contains\('open'\)[\s\S]+sameDetailIdentity\(S\.detailItem, origin\.item\)[\s\S]+if \(!originDetailAlive\) \{[\s\S]+if \(origin && origin\.item\)[\s\S]+openDetail\(origin\.item, false, \{ fromPerson: true \}\)[\s\S]+return restoreDetailReturn\(\);/,
     'closing a cast page should rebuild a missing or wrong underlying origin detail, then fall back to browse rather than strand blank');
   assert.match(ui, /function liveNoChannelsHtml\(errors = \[\]\) \{[\s\S]+gridMore liveEmpty focusable[\s\S]+function focusLiveGridMessage\(\) \{[\s\S]+S\.view === 'livetv' && S\.zone !== 'rail'[\s\S]+focusGrid\(0\);/,
     'Live TV empty channel states should be focusable and claim D-pad focus');
@@ -6538,10 +6565,34 @@ test('D-pad regression: Person and Detail restore exact work and cast positions'
     'a cast click should capture its originating detail position once, without corrupting history restores');
   assert.match(person, /function restorePersonOriginDetailFocus\(origin, expectedReq[\s\S]+sameDetailIdentity\(S\.detailItem, origin\.item\)[\s\S]+expectedReq !== S\.detailReq[\s\S]+querySelector\('\.detailScroll'\)[\s\S]+scroller\.scrollTop = origin\.detailScrollTop/,
     'Person return should restore only the exact title/request and should write the nested detail scroller');
-  assert.match(person, /function closePerson[\s\S]+const detailJob = openDetail\(origin\.item, false\);[\s\S]+const restoreReq = S\.detailReq;[\s\S]+restorePersonOriginDetailFocus\(origin, restoreReq\)[\s\S]+restorePersonOriginDetailFocus\(origin\)/,
+  assert.match(person, /function closePerson[\s\S]+const detailJob = openDetail\(origin\.item, false, \{ fromPerson: true \}\);[\s\S]+const restoreReq = S\.detailReq;[\s\S]+restorePersonOriginDetailFocus\(origin, restoreReq\)[\s\S]+restorePersonOriginDetailFocus\(origin\)/,
     'closing Person should restore the original cast card after a rebuild only while that rebuild still owns Detail');
   assert.match(person, /const originDetailAlive = \$\('detail'\)\.classList\.contains\('open'\)[\s\S]+sameDetailIdentity\(S\.detailItem, origin\.item\)[\s\S]+if \(!originDetailAlive\)/,
     'a still-open cast-member work must not be mistaken for the original detail underneath Person');
+  assert.match(openDetail, /if \(!push && S\.view === 'detail'[\s\S]+sameDetailIdentity\(S\.detailItem, it\)\) \{[\s\S]+return;/,
+    'Back onto an already-open title must not rebuild the page at Play / scroll 0');
+  assert.match(openDetail, /if \(push && S\.view === 'detail'[\s\S]+captureLeavingDetail\(\)/,
+    'opening Related from Details must snapshot the related/cast click before the new title paints');
+  assert.match(ui, /function restoreLeavingDetailFocus\(snap\) \{[\s\S]+focusKind === 'related'[\s\S]+focusKind === 'cast'/,
+    'Back from Related or Cast must restore that row and scroll, not the top of Details');
+  assert.match(person, /openDetail\(origin\.item, false, \{ fromPerson: true \}\)/,
+    'rebuilding Details after Person must not consume a Related snapshot');
+  assert.match(ui, /if \(\$\('person'\)\.classList\.contains\('open'\)\) \{[\s\S]+closePerson\(\);[\s\S]+if \(routeIsTitle\(\)\) return;/,
+    'Back from Person onto the origin title must not applyRoute and rebuild at Play');
+});
+
+test('D-pad regression: Back from Details restores Discover, Calendar, Search, and library covers', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /function captureDetailReturn\(\) \{[\s\S]+S\.view === 'calendar' \? \$\('calList'\)[\s\S]+S\.view === 'discover' \? \$\('discoverRows'\)[\s\S]+#calList \.calItem/,
+    'opening Details from Discover or Calendar must remember that page\'s scroller and the clicked event/cover');
+  assert.match(ui, /function restoreDetailFocusRoots\(ret\) \{[\s\S]+ret\.view === 'discover'[\s\S]+setRowsView\(\$\('discoverRows'\), S\.discoverData/,
+    'Back onto Discover must rebind discoverRows before focusing the saved cover');
+  assert.match(ui, /function restoreDetailFocus\(ret\) \{[\s\S]+ret\.view === 'home' \|\| ret\.view === 'discover'[\s\S]+ret\.view === 'calendar'[\s\S]+#calList \.calItem[\s\S]+focusGrid\(Number\.isFinite\(ret\.gridIdx\) \? ret\.gridIdx : 0\)/,
+    'Back from Details must land on the Discover cover, Calendar event, or grid poster that opened it');
+  assert.match(ui, /S\.view === 'search' && S\.zone !== 'rail'[\s\S]+searchSuggestVisible\(\)[\s\S]+focusSearchBarFromResults\(\)[\s\S]+enterRail\(\)/,
+    'Android hardware Back on Search goes suggestions → field → rail, not Home from the first poster');
+  assert.match(ui, /function backToBrowseSectionMenu\(\) \{[\s\S]+S\.view === 'discover' \|\| S\.view === 'calendar' \|\| S\.view === 'watchlist'/,
+    'Discover, Calendar, and Watchlist Back return to the rail like Movies, not straight Home');
 });
 
 test('D-pad regression: Calendar navigation follows its day-by-card geometry', () => {
@@ -6896,9 +6947,9 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'Search should not auto-populate movies or TV shows before the user types');
   assert.match(ui, /if \(!q\) \{ clearSearchResults\(\{ invalidate: true \}\); return; \}[\s\S]+const seq = \+\+searchSeq;[\s\S]+const current = \(\) => seq === searchSeq[\s\S]+if \(!current\(\)\) return;/,
     'Search should ignore late async responses after the query or page changes');
-  assert.match(ui, /function searchAndFocusResults\(\) \{[\s\S]+doSearch\(\)\.then\(\(\) => focusSearchResultsSoon\(\)\)[\s\S]+\$\(\'searchInput\'\)\.addEventListener\('keydown'[\s\S]+e\.key === 'ArrowDown' \|\| e\.key === 'Enter'/,
+  assert.match(ui, /function searchAndFocusResults\(\) \{[\s\S]+doSearch\(\)\.then\(\(\) => focusSearchResultsSoon\(\)\)[\s\S]+\$\('searchInput'\)\.addEventListener\('keydown'[\s\S]+e\.key === 'ArrowDown'[\s\S]+moveSearchDownFromField\(\)[\s\S]+e\.key === 'Enter'[\s\S]+searchAndFocusResults\(\)/,
     'Android TV Search typing should submit and then wait for result focus');
-  assert.match(ui, /if \(inInput && S\.view === 'search' && ae === \$\('searchInput'\)\) \{[\s\S]+k === 'ArrowDown' \|\| k === 'Enter'[\s\S]+searchAndFocusResults\(\);[\s\S]+return;/,
+  assert.match(ui, /if \(inInput && S\.view === 'search' && ae === \$\('searchInput'\)\) \{[\s\S]+k === 'ArrowDown'[\s\S]+moveSearchDownFromField\(\)[\s\S]+k === 'Enter'[\s\S]+searchAndFocusResults\(\);[\s\S]+return;/,
     'document-level D-pad handling should not strand focus in the Search text input');
   // TV shows now render as 2:3 posters in search like movies — wide 16:9 cards overflowed the
   // poster-width grid columns and visually overlapped each other.
@@ -6910,8 +6961,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'held OK on any eligible title cover — including Search results — opens the action menu');
   assert.doesNotMatch(ui, /S\.view !== 'search' && it && \(isContinueWatchingItem/,
     'the old "Search results are excluded from the hold-OK menu" guard is gone (owner added hold/⋯ options on search results)');
-  assert.match(ui, /#browse\.searchMode\{padding-top:110px!important\}/,
-    'search results clear the fixed search bar on desktop + TV (110px must beat the unconditional #browse padding shorthand, so !important is required)');
+  assert.match(ui, /#browse\.searchMode\{padding-top:var\(--searchPad, 110px\)!important\}[\s\S]+#browse\.searchMode\.hasSuggest\{padding-top:168px!important\}/,
+    'search results clear the bar; Did-you-mean uses a hard 168px pad so TV WebView cannot drop CSS max()');
   assert.match(ui, /renderGrid\(cards\);[\s\S]+if \(!cards\.length\) grid\.innerHTML = '<div class="gridMore">No matches\.<\/div>';/,
     'fallback source search should show an empty state instead of a silent blank page');
   assert.doesNotMatch(ui, /id="musicBar"|musicBarBtns|S\.zone === 'musicBar'|\$\('mb/,
@@ -6931,11 +6982,11 @@ test('web shell avoids known TV paint/focus regressions', () => {
   assert.doesNotMatch(ui, /id="railFooter"/,
     'the pinned rail footer is removed (Add library moved inline) so more nav icons fit on the Android TV rail');
   // Preferences + admin Settings are folded behind the profile avatar (the standalone nav buttons
-  // were removed to free rail space): the avatar opens Preferences on the Profile & Pins tab.
+  // were removed to free rail space): the avatar opens Settings on Dashboard.
   assert.ok(!ui.includes('id="navPrefs"') && !ui.includes('id="navSettings"'),
     'the standalone Preferences/Settings rail buttons should be gone (folded into the avatar)');
-  assert.match(ui, /\$\('railUser'\)\.addEventListener\('click', \(\) => \{[\s\S]+switchView\('prefs'\);[\s\S]+button\[data-tab="profiles"\][\s\S]+t\.click\(\)/,
-    'the profile avatar should open Preferences and land on the Profile & Pins tab');
+  assert.match(ui, /\$\('railUser'\)\.addEventListener\('click', \(\) => \{[\s\S]+switchView\('prefs'\);[\s\S]+button\[data-tab="dash"\][\s\S]+t\.click\(\)/,
+    'the profile avatar should open Settings and land on the Dashboard tab');
   assert.match(ui, /<div id="prefTabs">\s*<button data-tab="dash" class="on focusable">/,
     'Dashboard should be the first Preferences tab');
   assert.match(ui, /data-ptab="dash"[\s\S]+id="dashRange"[\s\S]+id="dashStrip"[\s\S]+id="dashHoursVal"[\s\S]+id="dashTrial"/,
@@ -7175,8 +7226,8 @@ test('Android phone: Settings Dashboard tap is not the burger, and tabs stay rea
     'the fat-finger zone no longer covers the Settings tab row');
   assert.equal(makeHit(['androidApp', 'mobileNav'])({ target: { closest: () => null }, clientX: 20, clientY: 20 }), false,
     'open drawer does not re-hit the corner');
-  assert.match(ui, /body:not\(\.tv\) #setTabs button,body:not\(\.tv\) #prefTabs button\{opacity:\.46\}/,
-    'Android phone Settings tabs share the browser recede, not the TV 0.26 dim and not full white');
+  assert.match(ui, /body:not\(\.tv\) #setTabs button,body:not\(\.tv\) #prefTabs button\{opacity:\.78\}/,
+    'Android phone Settings tabs share the browser readable recede, not the old TV 0.26 dim');
 });
 
 test('Windows / desktop login: trim password and show lockout instead of wrong password', () => {

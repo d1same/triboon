@@ -5564,8 +5564,7 @@ const H = {
         const s = p.toString();
         search = s ? '?' + s : '';
       }
-      let data = await tmdb.get('/' + ctx.m[1] + search);
-      data = await tmdbSearchCloseHint(ctx.m[1], search, data);
+      const data = await tmdbSearchWithCloseHint(ctx.m[1], search);
       const level = pf !== null ? profileLevelFor(ctx.user, pf) : 4;
       const out = level < 4 ? await maturityFilterList(level, data) : data;
       send(ctx.res, 200, out, { 'cache-control': 'private, max-age=600' });
@@ -7235,30 +7234,48 @@ function searchEditDist(a, b) {
   }
   return dp[n];
 }
-function searchCloseWord(a, b) {
+function searchFuzzLimit(len) {
+  if (len <= 2) return 0;
+  if (len <= 5) return 1;
+  return 2;
+}
+function searchCloseWord(a, b, singleToken) {
   if (a === b || a + 's' === b || b + 's' === a) return true;
-  const maxL = Math.max(a.length, b.length);
-  if (maxL < 4) return false;
   const d = searchEditDist(a, b);
-  return d <= 2 || (maxL >= 8 && d <= 4) || d / maxL <= 0.35;
+  if (d <= searchFuzzLimit(a.length) && d <= searchFuzzLimit(b.length)) return true;
+  if (singleToken && a.length >= 6 && d <= 3 && Math.abs(a.length - b.length) <= 2) return true;
+  return false;
+}
+function searchWordAffix(a, b) {
+  if (!a || !b) return false;
+  if (Math.min(a.length, b.length) < 4) return false;
+  return a.startsWith(b) || b.startsWith(a);
+}
+function searchContentWords(words) {
+  const stop = new Set(['the', 'a', 'an', 'of']);
+  const content = (words || []).filter((w) => !stop.has(w));
+  return content.length ? content : (words || []);
 }
 function searchCloseTitle(query, title) {
   const words = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
   const qw = words(query), tw = words(title);
   if (!qw.length || !tw.length) return false;
-  if (searchCloseWord(qw.join(''), tw.join(''))) return true;
-  return qw.every((w) => tw.some((t) => searchCloseWord(w, t) || t.startsWith(w) || w.startsWith(t)));
+  const need = searchContentWords(qw);
+  const single = need.length === 1;
+  return need.every((w) => tw.some((t) => searchCloseWord(w, t, single) || searchWordAffix(w, t)));
 }
 // Whole-title only. "frankestein" is close to Frankenstein, not to Young Frankenstein —
 // that longer hit used to cancel Did you mean and hide I, Frankenstein.
 function searchWholeTitleClose(query, title) {
+  const raw = String(query || '').toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
   const qk = searchTitleKey(query);
   if (qk.length < 4) return false;
-  if (searchCloseWord(qk, searchTitleKey(title))) return true;
+  const single = searchContentWords(raw).length === 1;
+  if (searchCloseWord(qk, searchTitleKey(title), single)) return true;
   const tw = String(title || '').toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
   const noArt = tw[0] && ['the', 'a', 'an'].includes(tw[0]) ? tw.slice(1) : tw;
-  if (noArt.length && searchCloseWord(qk, noArt.join(''))) return true;
-  if (noArt.length >= 2 && noArt[0].length === 1 && searchCloseWord(qk, noArt.slice(1).join(''))) return true;
+  if (noArt.length && searchCloseWord(qk, noArt.join(''), single)) return true;
+  if (noArt.length >= 2 && noArt[0].length === 1 && searchCloseWord(qk, noArt.slice(1).join(''), single)) return true;
   return false;
 }
 function searchTitleKey(s) {
@@ -7270,7 +7287,10 @@ function closestTitleInList(query, titles) {
   let best = null, bestD = 99;
   for (const title of titles || []) {
     if (!title || !searchCloseTitle(query, title)) continue;
-    const d = searchEditDist(qn, searchTitleKey(title));
+    const tw = String(title || '').toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+    const noArt = tw[0] && ['the', 'a', 'an'].includes(tw[0]) ? tw.slice(1) : tw;
+    const d = searchEditDist(qn, (noArt.join('') || searchTitleKey(title)));
+    if (d === 0) continue;
     if (d > 0 && d < bestD) { bestD = d; best = title; }
   }
   return best;
@@ -7278,7 +7298,10 @@ function closestTitleInList(query, titles) {
 function tmdbListHasCloseTitle(data, q) {
   return ((data && data.results) || []).some((x) => x && x.media_type !== 'person' && searchWholeTitleClose(q, x.title || x.name || ''));
 }
+let _tmdbTitleMemo = { at: 0, titles: null };
 function cachedTmdbTitles() {
+  const now = Date.now();
+  if (_tmdbTitleMemo.titles && now - _tmdbTitleMemo.at < 60000) return _tmdbTitleMemo.titles;
   const out = [];
   const seen = new Set();
   const add = (title) => {
@@ -7306,6 +7329,7 @@ function cachedTmdbTitles() {
       add(item.originalTitle);
     }
   }
+  _tmdbTitleMemo = { at: now, titles: out };
   return out;
 }
 const SEARCH_CLOSE_SEEDS = [
@@ -7314,24 +7338,64 @@ const SEARCH_CLOSE_SEEDS = [
   'The Lord of the Rings', 'Star Wars', 'Inception', 'Titanic', 'Jurassic Park',
   'Spider-Man', 'Superman', 'Game of Thrones', 'Breaking Bad', 'The Office',
   'Friends', 'Dune', 'Interstellar', 'The Mandalorian', 'Wednesday',
+  'The Odyssey', '2001: A Space Odyssey', 'Odyssey', 'The Longest Yard',
 ];
-async function tmdbSearchCloseHint(route, search, data) {
-  if (!/^search\/(multi|movie|tv)$/.test(route)) return data;
+let _spellCorpusMemo = { at: 0, words: null };
+function searchSpellCorpus() {
+  const now = Date.now();
+  if (_spellCorpusMemo.words && now - _spellCorpusMemo.at < 60000) return _spellCorpusMemo.words;
+  const words = new Set();
+  const addTitle = (title) => {
+    for (const w of String(title || '').toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean)) {
+      if (w.length >= 4 && !['the', 'a', 'an', 'of'].includes(w)) words.add(w);
+    }
+  };
+  for (const title of SEARCH_CLOSE_SEEDS) addTitle(title);
+  for (const title of cachedTmdbTitles()) addTitle(title);
+  _spellCorpusMemo = { at: now, words };
+  return words;
+}
+function spellcheckQuery(q) {
+  const raw = String(q || '').toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  if (!raw.length) return null;
+  const corpus = searchSpellCorpus();
+  const single = searchContentWords(raw).length === 1;
+  let changed = false;
+  const out = raw.map((w) => {
+    if (w.length < 4 || ['the', 'a', 'an', 'of'].includes(w) || corpus.has(w)) return w;
+    let best = null, bestD = 99;
+    for (const c of corpus) {
+      if (Math.abs(c.length - w.length) > 2) continue;
+      if (!searchCloseWord(w, c, single)) continue;
+      const d = searchEditDist(w, c);
+      if (d > 0 && d < bestD) { bestD = d; best = c; }
+    }
+    if (best) { changed = true; return best; }
+    return w;
+  });
+  if (!changed) return null;
+  const next = out.join(' ');
+  return searchTitleKey(next) === searchTitleKey(q) ? null : next;
+}
+async function tmdbSearchWithCloseHint(route, search) {
+  const firstP = tmdb.get('/' + route + (search || ''));
+  if (!/^search\/(multi|movie|tv)$/.test(route)) return firstP;
   const params = new URLSearchParams(String(search || '').replace(/^\?/, ''));
   const q = String(params.get('query') || '').trim();
-  if (q.length < 4 || tmdbListHasCloseTitle(data, q)) return data;
-  let hint = closestTitleInList(q, cachedTmdbTitles());
-  if (!hint) {
-    try {
-      const trend = await tmdb.get('/trending/all/week?page=1');
-      hint = closestTitleInList(q, ((trend && trend.results) || []).map((x) => x && (x.title || x.name)));
-    } catch {}
+  const fixed = q.length >= 4 ? spellcheckQuery(q) : null;
+  let hintP = null;
+  if (fixed) {
+    const hp = new URLSearchParams(params);
+    hp.set('query', fixed);
+    hintP = tmdb.get('/' + route + '?' + hp.toString()).catch(() => null);
   }
-  if (!hint) hint = closestTitleInList(q, SEARCH_CLOSE_SEEDS);
-  if (!hint || searchTitleKey(hint) === searchTitleKey(q)) return data;
-  params.set('query', hint);
-  const next = await tmdb.get('/' + route + '?' + params.toString());
-  return { ...next, didYouMean: hint, originalQuery: q };
+  const data = await firstP;
+  if (!hintP || tmdbListHasCloseTitle(data, q)) return data;
+  const next = await hintP;
+  if (!next) return data;
+  const titles = ((next.results || []).map((x) => x && (x.title || x.name)).filter(Boolean));
+  const hint = closestTitleInList(q, titles) || closestTitleInList(fixed, titles) || fixed;
+  return { ...next, didYouMean: hint, spellQuery: fixed, originalQuery: q };
 }
 function searchLibraryRecords(query, allowedLibIds = [], limit = 24) {
   const raw = String(query || '').trim().toLowerCase();
