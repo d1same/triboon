@@ -126,6 +126,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-30, v3.1.19 ship — remux pause/CC/seek, trakt spam, IPTV 503, search, settings:
+
+- Version contract: `package.json` 3.1.19; Android `versionName` 3.1.19 /
+  `versionCode` 364; Windows client package/Tauri/Cargo 3.1.19.
+- Remux Pause then Play remounts the same file. Paused mounts stay up
+  1 hour (was 15 minutes). Seek remounts hold Play until READY so the
+  leftover remux pipe cannot freeze the picture. Clock hold keeps +30
+  from flashing the wrong time. Trakt percent-resume ignores remux
+  duration-so-far.
+- Captions keep 5 visual lines. A seek/remount kills the old subtitle
+  HTTP. Web CC no longer aborts the variant list. Off clears the native
+  overlay. Hivecast guide 503 backs off the source for 90s. Prepare
+  "no playable" caches 15 minutes. Trakt same-percent scrobbles skip
+  45s.
+- Search close-misspellings ("frekestein" → Frankenstein). Settings
+  tabs commit immediately instead of waiting on a sluggish hover.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). Node suite **679/679**.
+  Isolated `/api/server` 3.1.19.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 4998ms SLOW; FROM ready 9803ms SLOW; resume 14ms/11ms). IPTV
+  web+native retune PASS (8185 channels). Overlapping Play PASS (both
+  ready in 40ms). Android lint/unit/debug build PASS. Android ExoPlayer
+  stress on `emulator-5554` PASS. Windows GPU not instrumented.
+
 2026-08-29, v3.1.18 ship — remux/transcode pause Play remount, Continue Watching warm:
 
 - Version contract: `package.json` 3.1.18; Android `versionName` 3.1.18 /

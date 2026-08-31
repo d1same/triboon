@@ -314,6 +314,8 @@ public class MainActivity extends Activity {
     private final java.util.ArrayList<NativeCue> nativeSubtitleCues = new java.util.ArrayList<>();
     private final Handler nativeSubtitleHandler = new Handler(Looper.getMainLooper());
     private int nativeSubtitleLoadToken;
+    private final Object nativeSubtitleFetchLock = new Object();
+    private HttpURLConnection nativeSubtitleConn;
     private float nativeSubtitleShift;
     private boolean nativeHasWyzieSubtitle;
     private boolean nativeLiveStarted;
@@ -336,6 +338,8 @@ public class MainActivity extends Activity {
     private long nativePendingStartMs;
     private double nativePendingStartFraction;
     private boolean nativePercentResumePending;
+    private boolean nativeQuietSeekHoldPlay;
+    private long nativeSeekHoldDisplayMs;
     private long nativeStartSeekIssuedAtMs;
     private long nativeStartOffsetMs;
     private long nativeLiveUnhealthySinceMs;
@@ -361,7 +365,7 @@ public class MainActivity extends Activity {
     private static final long NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 30000L;
     private static final long NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS = 90000L;
     private static final long NATIVE_VIDEO_RESUME_GRACE_MS = 25000L;
-    private static final long NATIVE_VIDEO_REMUX_RESUME_GRACE_MS = 4000L;
+    private static final long NATIVE_VIDEO_REMUX_RESUME_GRACE_MS = 20000L;
     private static final long NATIVE_LIVE_STALL_RECOVERY_MS = 45000L;
     private static final long NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS = 12000L;
     private static final long NATIVE_LIVE_RECOVERY_COOLDOWN_MS = 15000L;
@@ -3089,7 +3093,7 @@ public class MainActivity extends Activity {
         nativeSubtitleOverlay.setTextColor(Color.WHITE);
         nativeSubtitleOverlay.setTextSize(25);
         nativeSubtitleOverlay.setGravity(android.view.Gravity.CENTER);
-        nativeSubtitleOverlay.setMaxLines(3);
+        nativeSubtitleOverlay.setMaxLines(SubtitleText.MAX_OVERLAY_LINES);
         nativeSubtitleOverlay.setIncludeFontPadding(false);
         nativeSubtitleOverlay.setTypeface(Typeface.DEFAULT_BOLD);
         nativeSubtitleOverlay.setShadowLayer(dp(2), 0, dp(1), Color.BLACK);
@@ -4410,7 +4414,14 @@ public class MainActivity extends Activity {
             nativeLiveLastRecoveryMs = 0L;
             nativeLiveStarted = false;
             nativeVideoUnhealthySinceMs = 0L;
-            nativeResumeGraceUntilMs = 0L;
+            // Quiet remux +30 while playing used to zero grace. playWhenReady was already
+            // true, so the 30s rebuffer watchdog started immediately and remounted again.
+            if (reuseQuietVideo && "video".equals(mode)) {
+                nativeResumeGraceUntilMs = SystemClock.elapsedRealtime()
+                        + (nativeServerSeekMode() ? NATIVE_VIDEO_REMUX_RESUME_GRACE_MS : NATIVE_VIDEO_RESUME_GRACE_MS);
+            } else {
+                nativeResumeGraceUntilMs = 0L;
+            }
             nativeUserPausedAtMs = 0L;
             nativeVideoMemoryTrimmedDuringBuffer = false;
             nativeVideoErrorNotified = false;
@@ -4430,8 +4441,17 @@ public class MainActivity extends Activity {
             nativePercentResumePending = "video".equals(mode)
                     && ((nativePendingStartFraction > 0.0) || (percentResume && startOffsetMs > 0L));
             nativeStartSeekIssuedAtMs = 0L;
+            // Capture the old clock BEFORE swapping startOffset. Otherwise +30 from 10:00
+            // briefly reports 20:30 (newOffset + leftover raw) and can save that as resume.
+            if (reuseQuietVideo && "video".equals(mode) && nativePlayer != null) {
+                nativeSeekHoldDisplayMs = Math.max(nativeStartOffsetMs + nativeRawPositionMs(), startOffsetMs);
+            } else {
+                nativeSeekHoldDisplayMs = 0L;
+            }
             nativeStartOffsetMs = "video".equals(mode) ? startOffsetMs : 0L;
-            nativeVideoStarted = false;
+            // Quiet remount of an already-playing title is a rebuffer, not a cold start.
+            // Resetting this made 4K remux Play use the 12s startup watchdog and recover-loop.
+            if (!(reuseQuietVideo && nativeVideoStarted)) nativeVideoStarted = false;
             nativeLastVideoDisplayMs = "video".equals(mode) ? Math.max(startMs, startOffsetMs) : 0L;
             nativeLastAutoResumeSeekMs = 0L;
             nativeHasNext = hasNext;
@@ -4441,6 +4461,8 @@ public class MainActivity extends Activity {
             // playback keeps the manual in-player pick (it used to silently reset to English).
             if (!quietSeek) nativeManualAudioLang = "";
             applyNativeAudioChoices(audioChoices);
+            String previousSubtitleUrl = nativeSubtitleUrl == null ? "" : nativeSubtitleUrl;
+            boolean keepSubtitleCues = reuseQuietVideo && !nativeSubtitleCues.isEmpty();
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
             String cleanSubtitleUrl = stripNativeQueryParam(subtitleUrl, "shift");
             ValidatedNativeUrl subtitlePin = cleanSubtitleUrl.isEmpty() ? null : validateNativePlaybackUrl(cleanSubtitleUrl);
@@ -4535,6 +4557,10 @@ public class MainActivity extends Activity {
                             // the resumed byte window with no rendered/advancing frame. PLAYING below
                             // owns the established boundary used by stall recovery.
                             applyNativeStartSeekIfReady();
+                            if (nativeQuietSeekHoldPlay && nativePlayer != null) {
+                                nativeQuietSeekHoldPlay = false;
+                                if (!nativePlayer.getPlayWhenReady()) nativePlayer.play();
+                            }
                             if (!nativePercentResumePending) {
                                 rememberNativeVideoPosition();
                                 web.evaluateJavascript("window.__tvNativeVideoReady && __tvNativeVideoReady("
@@ -4617,6 +4643,7 @@ public class MainActivity extends Activity {
                     if ("live".equals(nativeMode) && isPlaying) nativeLiveUnhealthySinceMs = 0L;
                     if ("live".equals(nativeMode) && isPlaying) nativeLiveStarted = true;
                     if ("video".equals(nativeMode) && isPlaying) {
+                        nativeSeekHoldDisplayMs = 0L;
                         nativeVideoStarted = true;
                         widenNativeReadTimeoutAfterFirstFrame();
                         nativeVideoUnhealthySinceMs = 0L;
@@ -4673,7 +4700,7 @@ public class MainActivity extends Activity {
                 enterNativeFullscreenMode();
                 showNativeLoading(title, backdropUrl);
             }
-            if (reuseLivePlayer) {
+            if (reuseLivePlayer || reuseQuietVideo) {
                 nativePlayer.stop();
                 nativePlayer.clearMediaItems();
             }
@@ -4683,10 +4710,25 @@ public class MainActivity extends Activity {
             if (startMs > 0) nativePlayer.seekTo(startMs);
             // Percent-only Trakt resume must not audibly play from 0 while duration is being
             // resolved. Direct play begins after its seek; server-seek modes begin after remount.
-            if (nativePercentResumePending) nativePlayer.setPlayWhenReady(false);
+            nativeQuietSeekHoldPlay = reuseQuietVideo && "video".equals(mode)
+                    && nativeServerSeekMode() && !nativePercentResumePending;
+            if (nativePercentResumePending || nativeQuietSeekHoldPlay) nativePlayer.setPlayWhenReady(false);
             else nativePlayer.play();
+            if (reuseQuietVideo && "video".equals(mode) && web != null) {
+                web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
+                        + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+            }
             if ("video".equals(mode) && nativeHasWyzieSubtitle && !nativeSubtitleUrl.isEmpty()) {
-                loadNativeSubtitleOverlay(nativeSubtitleUrl);
+                disableNativeTextTracks();
+                // Pause/seek remounts the same file. Clearing + refetching CC here blanks the
+                // overlay and then paints the wrong cue against the new startOffset.
+                if (reuseQuietVideo && keepSubtitleCues && previousSubtitleUrl.equals(nativeSubtitleUrl)) {
+                    nativeSubtitleHandler.removeCallbacks(nativeSubtitleTick);
+                    updateNativeSubtitleOverlay();
+                    if (!nativeSubtitleCues.isEmpty()) nativeSubtitleHandler.postDelayed(nativeSubtitleTick, 250);
+                } else {
+                    loadNativeSubtitleOverlay(nativeSubtitleUrl);
+                }
             } else {
                 clearNativeSubtitleOverlay();
             }
@@ -4867,6 +4909,9 @@ public class MainActivity extends Activity {
 
     private long nativeDisplayPositionMs() {
         if (nativePlayer == null) return 0L;
+        if (nativeSeekHoldDisplayMs > 0L && (nativeQuietSeekHoldPlay || nativePlayer.getPlaybackState() != Player.STATE_READY)) {
+            return nativeSeekHoldDisplayMs;
+        }
         return Math.max(0L, nativeStartOffsetMs + nativeRawPositionMs());
     }
 
@@ -4988,7 +5033,7 @@ public class MainActivity extends Activity {
             long at = nativeResumePositionMs();
             nativeUserPausedAtMs = 0L;
             if (nativeServerSeekMode()) {
-                nativePlayer.setPlayWhenReady(true);
+                nativePlayer.setPlayWhenReady(false);
                 requestNativeVideoSeek(at, true);
                 return;
             }
@@ -5000,7 +5045,7 @@ public class MainActivity extends Activity {
                     // Leftover remux/transcode buffer is a dead ffmpeg pipe that still reports
                     // seconds of "buffered." play() on that reads frozen/broken frames.
                     nativeUserPausedAtMs = 0L;
-                    nativePlayer.setPlayWhenReady(true);
+                    nativePlayer.setPlayWhenReady(false);
                     requestNativeVideoSeek(nativeResumePositionMs(), true);
                     return;
                 }
@@ -5956,6 +6001,9 @@ public class MainActivity extends Activity {
             }
             maxMs = (int) Math.max(30000L, Math.min(conservative ? 120000L : 300000L, nativeBufferGoalSec * 1000L));
         }
+        // Time-priority ignores targetBytes until maxMs is filled. 4K at a 120–300s goal
+        // can grow past the RAM ceiling and reboot a Shield. Size wins on heavy VOD.
+        if (heavyVod && !conservative) maxMs = Math.min(maxMs, 90000);
         int targetBytes = (int) Math.min(Integer.MAX_VALUE, (long) targetMb * 1024 * 1024); // long math: no overflow if a future tier raises the ceiling past 2047MB
         int backBufferMs = video ? (conservative ? (heavyVod ? 6000 : 3000) : (heavyVod ? 12000 : 8000)) : 3000;
         if (video) {
@@ -5971,7 +6019,7 @@ public class MainActivity extends Activity {
                 .setBufferDurationsMs(minMs, maxMs, startMs, rebufferMs)
                 .setTargetBufferBytes(targetBytes)
                 .setBackBuffer(backBufferMs, false)
-                .setPrioritizeTimeOverSizeThresholds(true)
+                .setPrioritizeTimeOverSizeThresholds(!heavyVod)
                 .build();
     }
 
@@ -6127,9 +6175,26 @@ public class MainActivity extends Activity {
     // the FIRST fetch frequently 504s — that used to toast "Subtitles could not load" seconds
     // into every auto-CC playback and give up. Startup loads now retry quietly (4s/9s) and only
     // MANUAL picks toast, and only after the retries are exhausted.
+    private int bumpNativeSubtitleLoadToken() {
+        nativeSubtitleLoadToken++;
+        disconnectNativeSubtitleFetch();
+        return nativeSubtitleLoadToken;
+    }
+
+    private void disconnectNativeSubtitleFetch() {
+        HttpURLConnection c;
+        synchronized (nativeSubtitleFetchLock) {
+            c = nativeSubtitleConn;
+            nativeSubtitleConn = null;
+        }
+        if (c != null) {
+            try { c.disconnect(); } catch (Exception ignored) {}
+        }
+    }
+
     private void loadNativeSubtitleOverlay(String url, boolean silent) {
         final String cleanUrl = stripNativeQueryParam(url, "shift");
-        final int token = ++nativeSubtitleLoadToken;
+        final int token = bumpNativeSubtitleLoadToken();
         nativeSubtitleCues.clear();
         if (nativeSubtitleOverlay != null) {
             nativeSubtitleOverlay.setText("");
@@ -6153,26 +6218,32 @@ public class MainActivity extends Activity {
         final String fetchUrl = subtitleUrl.connectUrl;
         final String hostHeader = hostHeaderSafe(subtitleUrl.hostHeader) ? subtitleUrl.hostHeader : "";
         new Thread(() -> {
+            HttpURLConnection c = null;
             try {
-                HttpURLConnection c = (HttpURLConnection) new URL(fetchUrl).openConnection();
+                if (token != nativeSubtitleLoadToken) return;
+                c = (HttpURLConnection) new URL(fetchUrl).openConnection();
                 c.setConnectTimeout(7000);
                 c.setReadTimeout(nativeSubtitleReadTimeoutMs(cleanUrl));
                 c.setRequestProperty("Accept", "text/vtt,text/plain,*/*");
                 if (hostHeaderSafe(hostHeader)) {
                     c.setRequestProperty("Host", hostHeader);
                 }
-                int status = c.getResponseCode();
-                String body;
-                try {
-                    body = readNativeSubtitleResponse(c, status >= 400);
-                    if (status >= 400) {
-                        java.io.IOException fail = new java.io.IOException("subtitle HTTP " + status + ": " + subtitleErrorSnippet(body));
-                        // 404 = a definitive per-title miss — retrying can't help; 5xx/429 = warming.
-                        if (status == 404) throw new NativeSubtitleDefinitiveMiss(fail.getMessage());
-                        throw fail;
+                synchronized (nativeSubtitleFetchLock) {
+                    if (token != nativeSubtitleLoadToken) {
+                        try { c.disconnect(); } catch (Exception ignored) {}
+                        return;
                     }
-                } finally {
-                    try { c.disconnect(); } catch (Exception ignored) {}
+                    nativeSubtitleConn = c;
+                }
+                int status = c.getResponseCode();
+                if (token != nativeSubtitleLoadToken) return;
+                String body;
+                body = readNativeSubtitleResponse(c, status >= 400, token);
+                if (status >= 400) {
+                    java.io.IOException fail = new java.io.IOException("subtitle HTTP " + status + ": " + subtitleErrorSnippet(body));
+                    // 404 = a definitive per-title miss — retrying can't help; 5xx/429 = warming.
+                    if (status == 404) throw new NativeSubtitleDefinitiveMiss(fail.getMessage());
+                    throw fail;
                 }
                 java.util.ArrayList<NativeCue> cues = parseNativeVtt(body);
                 runOnUiThread(() -> {
@@ -6184,6 +6255,7 @@ public class MainActivity extends Activity {
                     if (!nativeSubtitleCues.isEmpty()) nativeSubtitleHandler.postDelayed(nativeSubtitleTick, 250);
                 });
             } catch (Exception e) {
+                if (token != nativeSubtitleLoadToken || nativeSubtitleFetchCancelled(e)) return;
                 Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
                 final boolean definitive = e instanceof NativeSubtitleDefinitiveMiss;
                 // Surface the server's ACTIONABLE reason on the TV instead of a generic toast —
@@ -6202,12 +6274,24 @@ public class MainActivity extends Activity {
                     clearNativeSubtitleOverlay();
                     if (!silent) Toast.makeText(this, reason, Toast.LENGTH_LONG).show();
                 });
+            } finally {
+                synchronized (nativeSubtitleFetchLock) {
+                    if (nativeSubtitleConn == c) nativeSubtitleConn = null;
+                }
+                if (c != null) {
+                    try { c.disconnect(); } catch (Exception ignored) {}
+                }
             }
         }, "triboon-subtitles").start();
     }
 
     private static final class NativeSubtitleDefinitiveMiss extends java.io.IOException {
         NativeSubtitleDefinitiveMiss(String m) { super(m); }
+    }
+
+    private boolean nativeSubtitleFetchCancelled(Exception e) {
+        String msg = e == null ? "" : String.valueOf(e.getMessage());
+        return msg.contains("subtitle fetch cancelled");
     }
 
     // Turn a subtitle-load exception into a user-worthy toast: the server route embeds the real
@@ -6234,6 +6318,10 @@ public class MainActivity extends Activity {
     }
 
     private String readNativeSubtitleResponse(HttpURLConnection c, boolean errorStream) throws java.io.IOException {
+        return readNativeSubtitleResponse(c, errorStream, nativeSubtitleLoadToken);
+    }
+
+    private String readNativeSubtitleResponse(HttpURLConnection c, boolean errorStream, int token) throws java.io.IOException {
         StringBuilder sb = new StringBuilder();
         java.io.InputStream in = errorStream ? c.getErrorStream() : c.getInputStream();
         if (in == null) return "";
@@ -6241,6 +6329,10 @@ public class MainActivity extends Activity {
                 new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8))) {
             String line;
             while ((line = br.readLine()) != null) {
+                if (token != nativeSubtitleLoadToken) {
+                    try { c.disconnect(); } catch (Exception ignored) {}
+                    throw new java.io.IOException("subtitle fetch cancelled");
+                }
                 if (sb.length() < 4 * 1024 * 1024) sb.append(line).append('\n');
             }
         }
@@ -6259,7 +6351,7 @@ public class MainActivity extends Activity {
     }
 
     private void clearNativeSubtitleOverlay() {
-        nativeSubtitleLoadToken++;
+        bumpNativeSubtitleLoadToken();
         nativeSubtitleHandler.removeCallbacks(nativeSubtitleTick);
         nativeSubtitleCues.clear();
         if (nativeSubtitleOverlay != null) {
@@ -6270,6 +6362,11 @@ public class MainActivity extends Activity {
 
     private void updateNativeSubtitleOverlay() {
         if (nativeSubtitleOverlay == null) return;
+        if (nativePercentResumePending) {
+            nativeSubtitleOverlay.setText("");
+            nativeSubtitleOverlay.setVisibility(View.GONE);
+            return;
+        }
         if (nativePlayer == null || nativeGuideMode || !"video".equals(nativeMode)
                 || !nativeHasWyzieSubtitle || nativeSubtitleCues.isEmpty()) {
             nativeSubtitleOverlay.setText("");
@@ -6287,7 +6384,7 @@ public class MainActivity extends Activity {
                 active.add(cue.text);
             }
         }
-        String text = SubtitleText.lastThree(active);
+        String text = SubtitleText.lastLines(active);
         nativeSubtitleOverlay.setText(text);
         nativeSubtitleOverlay.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
     }
@@ -6484,7 +6581,15 @@ public class MainActivity extends Activity {
             if (choices != null) applyNativeSubtitleChoices(choices);
             String rel = j.optString("subtitleRel", "");
             String subtitleUrl = j.optString("subtitleUrl", "");
-            if (rel.isEmpty() || subtitleUrl.isEmpty()) return;
+            if (rel.isEmpty() || subtitleUrl.isEmpty()) {
+                nativeHasWyzieSubtitle = false;
+                nativeSubtitleRel = "";
+                nativeSubtitleUrl = "";
+                nativeSubtitleLabel = "";
+                clearNativeSubtitleOverlay();
+                updateNativeChrome();
+                return;
+            }
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
             String cleanSubtitleUrl = stripNativeQueryParam(subtitleUrl, "shift");
             ValidatedNativeUrl subtitlePin = cleanSubtitleUrl.isEmpty() ? null : validateNativePlaybackUrl(cleanSubtitleUrl);
@@ -7194,6 +7299,9 @@ public class MainActivity extends Activity {
                 nativeSubtitleShift = 0f;
                 nativeHasWyzieSubtitle = false;
                 clearNativeSubtitleOverlay();
+                if (nativePlayerView != null && nativePlayerView.getSubtitleView() != null) {
+                    nativePlayerView.getSubtitleView().setVisibility(View.VISIBLE);
+                }
             }
             // A manual DIRECT-PLAY audio pick must survive the player rebuilds that server-seek
             // respawns cause — remember its language so the rebuilt selector re-prefers it.
@@ -7216,6 +7324,9 @@ public class MainActivity extends Activity {
                 nativePlayer.getTrackSelectionParameters().buildUpon();
         b.clearOverridesOfType(C.TRACK_TYPE_TEXT).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true);
         nativePlayer.setTrackSelectionParameters(b.build());
+        if (nativePlayerView != null && nativePlayerView.getSubtitleView() != null) {
+            nativePlayerView.getSubtitleView().setVisibility(View.GONE);
+        }
     }
 
     private String subtitleUrlForRel(String rel) {
@@ -7770,7 +7881,7 @@ public class MainActivity extends Activity {
     private void releaseNativePlayer(boolean notifyClosed, boolean preserveGuideMode, boolean keepLoading) {
         nativeProgress.removeCallbacksAndMessages(null);
         nativeSubtitleHandler.removeCallbacksAndMessages(null);
-        nativeSubtitleLoadToken++;
+        bumpNativeSubtitleLoadToken();
         nativeSeekAccel.reset(); // a new playback must start at the base seek step
         if (!keepLoading) hideNativeLoading();
         hideNativeGuidePipReveal();

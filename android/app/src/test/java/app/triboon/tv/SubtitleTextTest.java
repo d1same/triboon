@@ -11,8 +11,10 @@ public class SubtitleTextTest {
                 SubtitleText.cleanCueText("<i>First line</i><BR />Second &amp; final"));
     }
 
-    @Test public void onlyTheLastThreeOverlappingCueTextsAreRendered() {
-        assertEquals("two\nthree\nfour", SubtitleText.lastThree(Arrays.asList("one", "two", "three", "four")));
+    @Test public void lastFiveVisualLinesAreRenderedSoAFourLineCueIsNotClipped() {
+        assertEquals("two\nthree\nfour", SubtitleText.lastLines(Arrays.asList("one", "two", "three", "four"), 3));
+        assertEquals("B\nC\nD\nE\nF", SubtitleText.lastLines(Arrays.asList("A\nB\nC", "D\nE\nF")));
+        assertEquals("one\ntwo\nthree\nfour", SubtitleText.lastLines(Arrays.asList("one\ntwo\nthree\nfour")));
     }
 
     @Test public void captionSizePreferenceMapsToNativeSp() {

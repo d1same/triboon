@@ -19,18 +19,30 @@ final class SubtitleText {
                 .trim();
     }
 
-    static String lastThree(Iterable<String> texts) {
-        ArrayDeque<String> active = new ArrayDeque<>(3);
+    // TV captions are usually 2 lines. Overlapping SDH cues plus setMaxLines(3) used to
+    // clip the last sentence on 4K. Cap visual lines, not cue count, so a 4-line cue
+    // still paints and a stack of karaoke cues cannot fill the screen.
+    static final int MAX_OVERLAY_LINES = 5;
+
+    static String lastLines(Iterable<String> texts) {
+        return lastLines(texts, MAX_OVERLAY_LINES);
+    }
+
+    static String lastLines(Iterable<String> texts, int maxLines) {
+        int cap = maxLines < 1 ? 1 : maxLines;
+        ArrayDeque<String> lines = new ArrayDeque<>(cap);
         if (texts != null) for (String text : texts) {
-            String clean = String.valueOf(text == null ? "" : text).trim();
-            if (clean.isEmpty()) continue;
-            if (active.size() == 3) active.removeFirst();
-            active.addLast(clean);
+            for (String part : String.valueOf(text == null ? "" : text).split("\\n", -1)) {
+                String clean = part.trim();
+                if (clean.isEmpty()) continue;
+                if (lines.size() == cap) lines.removeFirst();
+                lines.addLast(clean);
+            }
         }
         StringBuilder out = new StringBuilder();
-        for (String text : active) {
+        for (String line : lines) {
             if (out.length() > 0) out.append('\n');
-            out.append(text);
+            out.append(line);
         }
         return out.toString();
     }

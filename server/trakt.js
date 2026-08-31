@@ -46,7 +46,10 @@ function request(path, { method = 'POST', body, token, clientId, deadlineMs = 15
     });
     const deadline = setTimeout(() => req.destroy(new Error(`trakt deadline after ${deadlineMs}ms`)), deadlineMs);
     req.on('timeout', () => req.destroy(new Error('trakt timeout')));
-    req.on('error', (e) => { clearTimeout(deadline); reject(e); });
+    req.on('error', (e) => {
+      clearTimeout(deadline);
+      reject(e && (e.message || e.code) ? e : Object.assign(new Error((e && e.code) || 'trakt socket error'), { cause: e }));
+    });
     req.end(payload);
   });
 }
@@ -58,6 +61,7 @@ class Trakt {
     this.updateSettings = updateSettings;
     this.tokenMigrationChecked = false;
     this.pendingCodes = new Map(); // uid -> { deviceCode, interval, expiresAt }
+    this._lastScrobble = new Map(); // uid -> { key, progress, at }
   }
 
   _creds() {
@@ -320,8 +324,10 @@ class Trakt {
     this._sendOp(uid, op)
       .then((r) => { if (!r.ok) this._queueOp(uid, op, r.status || r.error); })
       .catch((e) => {
-        this._queueOp(uid, op, e.message);
-        console.error(`[trakt ${label}]`, e.message);
+        const detail = [e && e.message, e && e.code, e && e.syscall, e && e.address]
+          .filter(Boolean).join(' ') || (e && e.stack && String(e.stack).split('\n')[0]) || String(e || 'unknown error');
+        this._queueOp(uid, op, detail);
+        console.error(`[trakt ${label}]`, detail);
       });
   }
 
@@ -376,7 +382,14 @@ class Trakt {
     if (finished) pct = 100;
     else if (pct < 1) return;
     else pct = Math.min(79, pct); // /scrobble/stop marks watched above 80%.
-    this._fire(uid, { kind: 'scrobble', key, progress: Math.max(1, Math.min(100, Math.round(pct))) }, 'scrobble');
+    const rounded = Math.max(1, Math.min(100, Math.round(pct)));
+    const now = Date.now();
+    const prev = this._lastScrobble.get(uid);
+    // Watch beacons fire every few seconds. Same title + same percent does not need another
+    // Trakt POST — that was the empty `[trakt scrobble]` spam on every heartbeat.
+    if (!finished && prev && prev.key === key && prev.progress === rounded && now - prev.at < 45000) return;
+    this._lastScrobble.set(uid, { key, progress: rounded, at: now });
+    this._fire(uid, { kind: 'scrobble', key, progress: rounded }, 'scrobble');
   }
 
   watchlist(uid, key, on) {

@@ -225,9 +225,12 @@ them when the table is reorganized:
   rebuild) and must not show the circling loader after playback has started.
   Resume uses `resumeNativeVideoInPlace`. Remux/transcode Play remounts the same file
   instead of playing leftover dead-pipe buffer until it freezes.
-  Same playback token + same URL reuses ExoPlayer. The first OK that
+  That remount must not reset `nativeVideoStarted` or stack a second recovery
+  while `_nativeResuming`. Heavy/4K VOD honors the RAM byte ceiling
+  (`setPrioritizeTimeOverSizeThresholds(false)`). Same subtitle URL keeps cues
+  across pause/seek. Same playback token + same URL reuses ExoPlayer. The first OK that
   opens chrome must not click Play. `recoverSamePlaybackSource` no-ops while
-  native is paused unless the source is actually dead. A new NZB is only after
+  native is paused or resuming unless the source is actually dead. A new NZB is only after
   a blocked health verdict or a user Sources pick. Playbook:
   `docs-playback-remount.md`. Verification: `test/phase4.test.js` `VOD pause
   resume` and `VOD remount playbook`.

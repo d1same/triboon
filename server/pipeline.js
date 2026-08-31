@@ -1082,6 +1082,7 @@ class Pipeline {
     this.nzbInflight = new Map(); // nzbUrl -> Promise(xml), so Play joins detail-page prefetch
     this.prepareInflight = new Map(); // mountIdentity -> shared cancellable mount record
     this.titlePrepareInflight = new Map(); // prepareJobKey -> shared title-level prepare job
+    this.prepareFailUntil = new Map(); // prepareJobKey -> Date.now() until we retry a no-playable miss
     this.titlePreparedReady = new Map(); // prepareJobKey -> { vf, candidate, at } after prepare wins
     this.titlePreparedStandby = new Map(); // next-ranked backup mount, warmed during Details
     this.mountByUrl = new Map();  // mountIdentity -> mount id (same selected payload reuses instantly)
@@ -2738,8 +2739,26 @@ class Pipeline {
       this.metrics.titlePrepareJoins++;
       return existing.promise;
     }
+    const failUntil = this.prepareFailUntil.get(key);
+    if (failUntil && Date.now() < failUntil) {
+      const e = new Error('no playable releases found');
+      e.cachedFail = true;
+      throw e;
+    }
     const rec = { promise: null };
-    rec.promise = this._runPrepare(params, policy, mountOpts).finally(() => {
+    rec.promise = this._runPrepare(params, policy, mountOpts).then((r) => {
+      this.prepareFailUntil.delete(key);
+      return r;
+    }, (e) => {
+      if (e && /no playable/.test(String(e.message || ''))) {
+        this.prepareFailUntil.set(key, Date.now() + 15 * 60 * 1000);
+        if (this.prepareFailUntil.size > 80) {
+          const oldest = this.prepareFailUntil.keys().next().value;
+          this.prepareFailUntil.delete(oldest);
+        }
+      }
+      throw e;
+    }).finally(() => {
       if (this.titlePrepareInflight.get(key) === rec) this.titlePrepareInflight.delete(key);
     });
     this.titlePrepareInflight.set(key, rec);

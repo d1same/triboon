@@ -789,6 +789,7 @@ body.tv #filterMenu{backdrop-filter:none}
 #grid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,var(--poster));gap:20px 16px;align-content:start;justify-content:start;padding:6px 4px 30px}
 #grid .pcard{flex:none}
 #browse.searchMode{padding-top:110px!important} /* clears the floating search bar incl. section headers; !important beats the unconditional #browse padding shorthand below, else results tuck under the bar */
+#browse.searchMode.hasSuggest{padding-top:164px!important}
 #browse.searchMode .browseHead{display:none}
 #browse.noFilter .filterBar{display:none}
 
@@ -2112,6 +2113,7 @@ body.mobileShell #chBar{padding-left:48px}
    110px for the bar at top:26px; on the phone the bar drops 36px to top:62px, so results drop the
    same 36px (146px). Higher-specificity !important beats the generic mobileShell #browse 62px. */
 body.mobileShell #browse.searchMode{padding-top:146px!important}
+body.mobileShell #browse.searchMode.hasSuggest{padding-top:200px!important}
 body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
 body.mobileShell #hero,body.mobileShell #bdInfo,body.mobileShell #colorGlow{display:none!important;opacity:0!important}
 /* Phone: no leftover still. The TV backdrop is a fixed vh band; on a phone that
@@ -3457,6 +3459,12 @@ body[data-spotlight] .dashRecentItem.focusable.focus,body[data-spotlight] .dashR
 #musicClearBtn:focus,#searchClearBtn:focus,#chClearBtn:focus{transform:translateY(-50%)}
 /* Global search: reserve room for the clear (X), same as Music. */
 #searchBar .wrap.hasClear input{padding-right:58px}
+#searchSuggest{display:none;margin-top:10px}
+#searchSuggest.show{display:block}
+#searchSuggestBtn{border:0;background:var(--soft);color:var(--text);border-radius:12px;padding:10px 16px;
+  font:600 14px "Albert Sans";max-width:100%;text-align:left}
+#searchSuggestBtn b{color:var(--amber);font:700 14px "Sora"}
+#searchSuggestBtn:focus{outline:none;box-shadow:0 0 0 2px var(--magenta)}
 /* Live TV filter: a relative wrap so it can host a clear (X) while keeping its toolbar-row width. */
 #chBar .chWrap{position:relative;width:min(440px,100%)}
 #chBar .chWrap #chSearch{width:100%}
@@ -3964,6 +3972,9 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <input id="searchInput" placeholder="Search movies & shows…" autocomplete="off" maxlength="100">
   <button id="searchClearBtn" class="focusable" title="Clear search" aria-label="Clear search" hidden>
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  <div id="searchSuggest" hidden>
+    <button type="button" id="searchSuggestBtn" class="focusable"></button>
+  </div>
 </div></div>
 
 <main id="home">
@@ -12154,7 +12165,7 @@ function clearPlaybackTimers() {
   if (S.watchTimer) { clearInterval(S.watchTimer); S.watchTimer = null; }
   if (S.activityTimer) { clearInterval(S.activityTimer); S.activityTimer = null; }
 }
-const PAUSE_IDLE_EXIT_MS = 15 * 60 * 1000;
+const PAUSE_IDLE_EXIT_MS = 60 * 60 * 1000;
 function clearPauseIdleExit() {
   if (S._pauseIdleT) { clearTimeout(S._pauseIdleT); S._pauseIdleT = null; }
 }
@@ -12502,8 +12513,11 @@ async function openPlayer(it, mount, opts = {}) {
     const pct = traktResumeFrac * 100;
     const seekPct = () => {
       const p2 = S.playing; if (!p2 || p2.item !== it || p2._pctDone) return;
-      const dur = (p2.duration && isFinite(p2.duration) && p2.duration) || (isFinite(v.duration) && v.duration) || 0;
-      if (!dur) return;
+      const catalogDur = (p2.duration && isFinite(p2.duration) && p2.duration) || 0;
+      const remux = !!(p2.usingRemux || p2.usingTranscode);
+      // Remux duration-so-far is often ~8s. 45% of that is 3.6s, not 45 minutes.
+      const dur = remux ? catalogDur : (catalogDur || ((isFinite(v.duration) && v.duration) || 0));
+      if (!dur || (remux && dur < 30)) return;
       p2._pctDone = true;
       seekTo((pct / 100) * dur);
       toast(`Resuming where you left off on Trakt (${Math.round(pct)}%)`);
@@ -13126,6 +13140,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   if (sub.blocked) return false;
   const subPayload = nativeSubtitlePayload(p, sub.rel || '', 'startup');
   p.usingNative = true;
+  if (opts.quietSeek) p._nativeResuming = true;
   p.usingRemux = kind === 'remux';
   p.usingTranscode = kind === 'transcode';
   updatePlayerMeta();
@@ -13359,7 +13374,9 @@ window.__tvNativeVideoStats = (raw, token) => {
 window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   const p = S.playing;
   if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
-  const current = () => S.playing === p && S.view === 'player' && p.usingNative;
+  p._nativeSeekGen = (p._nativeSeekGen || 0) + 1;
+  const seekGen = p._nativeSeekGen;
+  const current = () => S.playing === p && S.view === 'player' && p.usingNative && p._nativeSeekGen === seekGen;
   const at = Math.max(0, +pos || 0);
   applyReportedDuration(p, dur);
   // A percent-only startup has not resumed until the replacement stream is mounted. Do not publish
@@ -13743,6 +13760,8 @@ function recoverSamePlaybackSource(reason = '') {
   if (!sourceDead && S._handoffQuietUntil && now < S._handoffQuietUntil) return false;
   // A user pause is not a dead source. Remounting here rebuilds 4K from scratch (~30s).
   if (p.usingNative && p.nativePaused && !sourceDead && !decoderFailure) return false;
+  // Play already asked for a quiet remount. A second recovery on top freezes the picture.
+  if (p.usingNative && p._nativeResuming && !sourceDead && !decoderFailure) return false;
   // Server restart / swept mount: do not replay the dead URL (that flickers Preparing).
   // Wait, remount the same title, resume. Decoder failures stay on the codec path.
   const mountGone = playbackServerGone(reason) && !decoderFailure;
@@ -15167,6 +15186,7 @@ async function closePlayer(opts = {}) {
   // closed leaves the menus visible but unclickable.
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   stopWebVideoElement(); // stale media/cue state must not greet the next playback
+  abortSubtitleFetches(S.playing);
   clearPlaybackTimers();
   S.nativeGuideMode = false;
   $('player').classList.remove('open', 'live', 'guideMode', 'osdHide'); $('vlcPanel').classList.remove('show'); $('playerLoader').classList.remove('show');
@@ -16132,6 +16152,37 @@ function subtitleDisplayName(rel) {
   }
   return 'Subtitles';
 }
+function abortSubtitleFetches(p) {
+  if (!p) return;
+  p._subFetchGen = (p._subFetchGen || 0) + 1;
+  if (p._subFetchAbort) {
+    try { p._subFetchAbort.abort(); } catch {}
+    p._subFetchAbort = null;
+  }
+  if (p._osListAbort) {
+    try { p._osListAbort.abort(); } catch {}
+    p._osListAbort = null;
+  }
+}
+function beginSubtitleFetch(p) {
+  if (!p) return null;
+  // Do not abort the variant-list fetch. setSubtitle needs loadSubtitleVersions
+  // (resolveOnlineSubtitleRel) and a second Play/CC tap used to kill that list,
+  // leaving CC lit with no cues.
+  if (p._subFetchAbort) {
+    try { p._subFetchAbort.abort(); } catch {}
+    p._subFetchAbort = null;
+  }
+  p._subFetchGen = (p._subFetchGen || 0) + 1;
+  p._subFetchAbort = new AbortController();
+  return p._subFetchAbort.signal;
+}
+function subtitleAbortIsCurrent(p, gen) {
+  return !!(p && S.playing === p && p._subFetchGen === gen);
+}
+function subtitleFetchAborted(e) {
+  return !!(e && (e.name === 'AbortError' || /aborted|abort/i.test(String(e.message || ''))));
+}
 async function loadSubtitleVersions(lang) {
   const p = S.playing; if (!p || !p.mountId) return [];
   const l = osLang(lang);
@@ -16141,7 +16192,10 @@ async function loadSubtitleVersions(lang) {
   if (miss) throw subtitleNoResultsError(l, miss);
   if (p._osVariants[l]) return p._osVariants[l];
   if (!p._osVariantInflight[l]) {
-    p._osVariantInflight[l] = fetch(osSubUrl(p, osTrackRel(l), true)).then(async (r) => {
+    if (p._osListAbort) try { p._osListAbort.abort(); } catch {}
+    p._osListAbort = new AbortController();
+    const listSignal = p._osListAbort.signal;
+    p._osVariantInflight[l] = fetch(osSubUrl(p, osTrackRel(l), true), { signal: listSignal }).then(async (r) => {
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         const noResults = subtitleResponseNoResults(l, r.status, j);
@@ -16154,6 +16208,7 @@ async function loadSubtitleVersions(lang) {
       clearSubtitleMiss(l);
       return p._osVariants[l];
     }).catch((e) => {
+      if (subtitleFetchAborted(e)) throw e;
       if (e && e.noSubtitles) rememberSubtitleMiss(l, e.message);
       throw e;
     }).finally(() => { if (p._osVariantInflight) delete p._osVariantInflight[l]; });
@@ -16610,6 +16665,8 @@ async function runPendingNativeSync() {
 }
 async function setSubtitle(rel, opts = {}) {
   const p = S.playing; if (!p) return;
+  const subSignal = beginSubtitleFetch(p);
+  const subGen = p._subFetchGen;
   const manualChoice = !opts.startup && !opts.builtInRetry && !opts.autoFallback;
   if (rel === null) {
     p.subTrack = rel; p._subShift = 0;
@@ -16623,12 +16680,19 @@ async function setSubtitle(rel, opts = {}) {
       if ($('prefSLang')) $('prefSLang').value = 'off';
     }
     clearTimeout(_subPrepT);
+    if (p.usingNative && window.TriboonTV && window.TriboonTV.updateActiveSubtitle) {
+      try { window.TriboonTV.updateActiveSubtitle(JSON.stringify({ subtitleRel: '', subtitleUrl: '' })); } catch {}
+    }
     return applySubtitleTrack();
   }
   p._subtitleDisabledThisSession = false;
   try {
     rel = await resolveOnlineSubtitleRel(rel);
   } catch (e) {
+    if (subtitleFetchAborted(e)) {
+      if (subtitleAbortIsCurrent(p, subGen) && opts.startup) scheduleStartupSubtitleRetry(p);
+      return;
+    }
     const info = typeof rel === 'string' && rel.startsWith('os:') ? osTrackInfo(rel) : null;
     const definitiveMiss = !!(e && (e.noSubtitles || e.status === 404));
     if (info && e && e.noSubtitles) rememberSubtitleMiss(info.lang, e.message);
@@ -16652,7 +16716,7 @@ async function setSubtitle(rel, opts = {}) {
     try {
       const extractionMode = opts.startup ? 'startup' : 'manual';
       let url = subtitleUrlForRel(p, rel, { mode: extractionMode });
-      let r = await fetch(url);
+      let r = await fetch(url, subSignal ? { signal: subSignal } : {});
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         const info = rel.startsWith('os:') ? osTrackInfo(rel) : null;
@@ -16688,7 +16752,15 @@ async function setSubtitle(rel, opts = {}) {
       // immediately, then it snaps into sync a few seconds later. Release/hash matches return
       // 'synced' and are skipped (no audio pull).
       if (rel.startsWith('os:') && r.headers.get('x-triboon-subsync') === 'pending') autoSyncSubtitle(p, rel, url);
-    } catch {
+    } catch (e) {
+      if (subtitleFetchAborted(e)) {
+        if (!subtitleAbortIsCurrent(p, subGen)) return;
+        p.subTrack = null; $('ccBtn').classList.remove('on');
+        applySubtitleTrack();
+        refreshNativeSubtitleChoices();
+        if (opts.startup) scheduleStartupSubtitleRetry(p);
+        return;
+      }
       if (rel.startsWith('em:') && canAutoSubtitle(p)) {
         toast('Built-in subtitles failed - using online subtitles');
         p.subTrack = null; $('ccBtn').classList.remove('on');
@@ -16786,8 +16858,8 @@ function renderSubCues() {
   const active = activeSubtitleCues(tt);
   if (!active.length) { box.innerHTML = ''; return; }
   box.innerHTML = '';
-  // At most the LAST 3 active cues — whatever a broken track claims, never a wall of text.
-  for (const c of active.slice(-3)) {
+  // At most the LAST 5 active cues — matches the native overlay. 3 used to clip a 4-line SDH cue.
+  for (const c of active.slice(-5)) {
     const line = document.createElement('div');
     try { line.appendChild(c.getCueAsHTML()); }            // keeps <i>/<b> styling, XSS-safe
     catch { line.textContent = String(c.text || ''); }
@@ -16838,9 +16910,9 @@ function applySubtitleTrack() {
         for (const c of [...tt.cues]) {
           if (c._shifted) continue;
           if (c.endTime - off <= 0.2) { try { tt.removeCue(c); } catch {} continue; }
-          c._shifted = true;
           c.startTime = Math.max(0, c.startTime - off);
           c.endTime = Math.max(0.05, c.endTime - off);
+          c._shifted = true;
         }
       }
       applySubShiftToCues(tt, p._subShift || 0);
@@ -16851,7 +16923,10 @@ function applySubtitleTrack() {
     } catch {}
   };
   tr.addEventListener('load', arm);
-  tr.addEventListener('error', () => toast('Subtitles failed to load - try another version'));
+  tr.addEventListener('error', () => {
+    if (!S.playing || S.playing !== p || p._subSeq !== seq || !tr.isConnected) return;
+    toast('Subtitles failed to load - try another version');
+  });
   v.appendChild(tr);
   setTimeout(arm, 400); // some WebViews skip the load event for tracks — arm anyway
 }
@@ -20220,7 +20295,8 @@ function liveChannelSearchText(ch) {
 function liveChannelMatchesQuery(ch, q) {
   const needle = String(q || '').toLowerCase().trim();
   if (!needle) return true;
-  return liveChannelSearchText(ch).includes(needle);
+  if (liveChannelSearchText(ch).includes(needle)) return true;
+  return searchCloseTitle(q, (ch && ch.name) || '');
 }
 function liveChannelSubtitle(ch) {
   const group = String((ch && ch.group) || '').trim();
@@ -23832,10 +23908,22 @@ function accountTabButton(key) {
   if (!el || el.style.display === 'none') return null;
   return el;
 }
+let _accountTabFocusT = 0;
+function scheduleAccountTab(b) {
+  clearTimeout(_accountTabFocusT);
+  _accountTabFocusT = setTimeout(() => activateAccountTab(b), 90);
+}
 function activateAccountTab(b) {
   if (!b || !b.matches || !b.matches('button')) return;
   const isSrv = !!b.dataset.srv;
   const key = isSrv ? b.dataset.srv : b.dataset.tab;
+  const visible = key && document.querySelector(isSrv
+    ? `#prefs .setGrid[data-stab="${key}"]:not([hidden])`
+    : `#prefs [data-ptab="${key}"]:not([hidden])`);
+  if (b.classList.contains('on') && visible) {
+    if (S.view === 'prefs' && key) replaceRoute(accountTabRoute(key));
+    return;
+  }
   syncSectionTabs('prefTabs', b);
   document.querySelectorAll('#prefs [data-ptab]').forEach((g) => { g.hidden = isSrv || g.dataset.ptab !== key; });
   document.querySelectorAll('#prefs .setGrid[data-stab]').forEach((g) => { g.hidden = !isSrv || g.dataset.stab !== key; });
@@ -23850,12 +23938,11 @@ function activateAccountTab(b) {
   if (S.view === 'prefs' && key) replaceRoute(accountTabRoute(key));
 }
 document.querySelectorAll('#prefTabs button').forEach((b) => {
-  const run = () => activateAccountTab(b);
-  b.addEventListener('click', run); b.addEventListener('focus', run);
-  // TV navigates settings by D-pad (the focus handler switches sections, which feels native there),
-  // so hover-to-switch is only bound on TV. On web/desktop a pointer ROLLOVER must NOT change the
-  // section (the owner's accidental-jump complaint) — click only. Same rule as the left rail.
-  if (document.body.classList.contains('tv')) b.addEventListener('mouseenter', run);
+  b.addEventListener('click', () => { clearTimeout(_accountTabFocusT); activateAccountTab(b); });
+  // Down the list only highlights. Switching every panel on focus made Settings crawl
+  // and dropped the next Right key (freeze-flood). Commit on click, Right, or a short settle.
+  b.addEventListener('focus', () => scheduleAccountTab(b));
+  if (document.body.classList.contains('tv')) b.addEventListener('mouseenter', () => scheduleAccountTab(b));
 });
 syncSectionTabs('prefTabs');
 S.dashRange = S.dashRange || 'month';
@@ -24716,14 +24803,22 @@ function focusSearchMic() {
 }
 // One clear action shared by the mouse click, the browser element-keydown, AND the on-device global
 // D-pad handler, so all three do exactly the same thing.
-function clearSearchQuery() { $('searchInput').value = ''; syncSearchClear(); clearSearchResults({ invalidate: true }); $('searchInput').focus(); }
+function clearSearchQuery() { $('searchInput').value = ''; syncSearchClear(); showSearchSuggest(null); clearSearchResults({ invalidate: true }); $('searchInput').focus(); }
 $('searchInput').addEventListener('input', () => {
   syncSearchClear();
   clearTimeout(searchTimer);
-  if (!$('searchInput').value.trim()) { clearSearchResults({ invalidate: true }); return; }
+  const q = $('searchInput').value.trim();
+  if (!q) { showSearchSuggest(null); clearSearchResults({ invalidate: true }); return; }
+  showSearchSuggest(closestCatalogTitle(q), q);
   searchTimer = setTimeout(doSearch, 350);
 });
 $('searchClearBtn').addEventListener('click', () => clearSearchQuery());
+$('searchSuggestBtn').addEventListener('click', () => applySearchSuggest());
+$('searchSuggestBtn').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); applySearchSuggest(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); $('searchInput').focus(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); focusSearchResultsSoon(); }
+});
 // D-pad on the clear (X) in a DESKTOP BROWSER (element-targeted keydown). On Android TV the shell
 // dispatches keys to `document`, so this listener never fires there — the on-device path is the
 // `ae === searchClearBtn` case in the global keydown handler. stopPropagation keeps the browser from
@@ -24741,6 +24836,9 @@ function searchAndFocusResults() {
   syncSearchClear();
   const q = $('searchInput').value.trim();
   if (!q) { clearSearchResults({ invalidate: true }); $('searchInput').focus(); return; }
+  if ($('searchSuggest') && $('searchSuggest').classList.contains('show') && !gridEls().length) {
+    try { $('searchSuggestBtn').focus(); } catch {}
+  }
   doSearch().then(() => focusSearchResultsSoon()).catch(() => focusSearchResultsSoon());
 }
 $('searchInput').addEventListener('keydown', (e) => {
@@ -24915,6 +25013,105 @@ function searchWords(s) {
 function searchWordEq(a, b) {
   return a === b || a + 's' === b || b + 's' === a;
 }
+function searchEditDist(a, b) {
+  a = String(a || ''); b = String(b || '');
+  const m = a.length, n = b.length;
+  if (a === b) return 0;
+  if (!m) return n;
+  if (!n) return m;
+  if (Math.abs(m - n) > 4) return 99;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cur = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      prev = cur;
+    }
+  }
+  return dp[n];
+}
+function searchCloseWord(a, b) {
+  if (searchWordEq(a, b)) return true;
+  const maxL = Math.max(a.length, b.length);
+  if (maxL < 4) return false;
+  const d = searchEditDist(a, b);
+  return d <= 2 || (maxL >= 8 && d <= 4) || d / maxL <= 0.35;
+}
+function searchCloseTitle(query, title) {
+  const qw = searchWords(query), tw = searchWords(title);
+  if (!qw.length || !tw.length) return false;
+  if (searchCloseWord(qw.join(''), tw.join(''))) return true;
+  return qw.every((w) => tw.some((t) => searchCloseWord(w, t) || t.startsWith(w) || w.startsWith(t)));
+}
+function catalogSearchItems() {
+  const out = [];
+  const seen = new Set();
+  const add = (it) => {
+    if (!it || !(it.title || it.name)) return;
+    const key = String(it.key || it.tmdbId || it.title || it.name);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(it);
+  };
+  for (const row of (S.rows || [])) for (const it of (row.items || [])) add(it);
+  for (const it of (S.watch || [])) add(it);
+  for (const row of Object.values(S.watchlistMap || {})) {
+    add(row && row.meta ? { ...row.meta, key: row.key } : row);
+  }
+  for (const it of (S.watchlist || [])) add(it && it.meta ? { ...it.meta, key: it.key } : it);
+  return out;
+}
+function showSearchSuggest(hint, original) {
+  const box = $('searchSuggest');
+  const btn = $('searchSuggestBtn');
+  if (!box || !btn) return;
+  const title = hint && (hint.title || hint.name || hint);
+  const q = String(original || $('searchInput').value || '').trim();
+  if (!title || !q || searchWords(title).join('') === searchWords(q).join('')) {
+    box.hidden = true;
+    box.classList.remove('show');
+    btn.textContent = '';
+    if ($('browse')) $('browse').classList.remove('hasSuggest');
+    return;
+  }
+  btn.innerHTML = `Did you mean <b>${esc(String(title))}</b>?`;
+  btn.dataset.hint = String(title);
+  box.hidden = false;
+  box.classList.add('show');
+  if ($('browse')) $('browse').classList.add('hasSuggest');
+}
+function applySearchSuggest() {
+  const btn = $('searchSuggestBtn');
+  const hint = btn && btn.dataset.hint;
+  if (!hint) return;
+  $('searchInput').value = hint;
+  syncSearchClear();
+  showSearchSuggest(null);
+  doSearch().then(() => focusSearchResultsSoon()).catch(() => focusSearchResultsSoon());
+}
+const SEARCH_CLOSE_SEEDS = [
+  'Frankenstein', 'The Godfather', 'The Matrix', 'The Avengers', 'Avengers: Endgame',
+  'Batman', 'The Dark Knight', 'Harry Potter', 'Stranger Things',
+  'The Lord of the Rings', 'Star Wars', 'Inception', 'Titanic', 'Jurassic Park',
+  'Spider-Man', 'Superman', 'Game of Thrones', 'Breaking Bad', 'The Office',
+  'Friends', 'Dune', 'Interstellar', 'The Mandalorian', 'Wednesday',
+];
+function closestCatalogTitle(q) {
+  const qn = searchWords(q).join('');
+  if (qn.length < 4) return null;
+  let best = null, bestD = 99;
+  const consider = (it, title) => {
+    if (!title || !searchCloseTitle(q, title)) return;
+    const d = searchEditDist(qn, searchWords(title).join(''));
+    if (d > 0 && d < bestD) { bestD = d; best = it; }
+  };
+  for (const it of catalogSearchItems()) consider(it, it.title || it.name || '');
+  if (!best) for (const title of SEARCH_CLOSE_SEEDS) consider({ title }, title);
+  return best;
+}
 function searchSeqIndex(words, query) {
   if (!words.length || !query.length) return -1;
   for (let i = 0; i <= words.length - query.length; i++) {
@@ -24934,6 +25131,7 @@ function tmdbSearchRank(x, q) {
   let score = (Number(x.popularity) || 0) * 20 + (Number(x.vote_count) || 0) * 0.02 + (Number(x.vote_average) || 0) * 5;
   if (seq === 0) score += 10000;
   else if (seq > 0) score += Math.max(1000, 2600 - seq * 140);
+  if (searchCloseTitle(q, title)) score += 8000;
   if (content.length && content.every((w) => titleWords.some((t) => searchWordEq(t, w)))) score += 1200;
   if (content.length && titleWords.length && !searchWordEq(noLeadArticle[0] || titleWords[0], content[0])) score -= 1800;
   return score;
@@ -24981,8 +25179,34 @@ async function doSearch() {
       // Maturity applies to SEARCH too — a kids profile must not even see the cover art.
       const ok = (r.results || []).filter((x) => x.media_type !== 'person' && (x.poster_path || x.backdrop_path) && passesMaturity(x));
       const bySearchRank = (a, b) => tmdbSearchRank(b, q) - tmdbSearchRank(a, q);
-      const movies = ok.filter((x) => x.media_type === 'movie').sort(bySearchRank).map(mapTmdb);
-      const shows = ok.filter((x) => x.media_type === 'tv').sort(bySearchRank).map(mapTmdb);
+      let movies = ok.filter((x) => x.media_type === 'movie').sort(bySearchRank).map(mapTmdb);
+      let shows = ok.filter((x) => x.media_type === 'tv').sort(bySearchRank).map(mapTmdb);
+      const closeHit = ok.some((x) => searchCloseTitle(q, x.title || x.name || ''));
+      const serverHint = r.didYouMean || '';
+      if (serverHint) showSearchSuggest(serverHint, r.originalQuery || q);
+      if (!closeHit) {
+        const hint = closestCatalogTitle(q);
+        const hintTitle = hint && (hint.title || hint.name);
+        if (hintTitle && searchWords(hintTitle).join('') !== searchWords(q).join('')) {
+          showSearchSuggest(hintTitle, q);
+          try {
+            const r2 = await api('/api/tmdb/search/multi?query=' + encodeURIComponent(hintTitle) + '&include_adult=false');
+            if (!current()) return;
+            const ok2 = (r2.results || []).filter((x) => x.media_type !== 'person' && (x.poster_path || x.backdrop_path) && passesMaturity(x));
+            movies = ok2.filter((x) => x.media_type === 'movie').sort(bySearchRank).map(mapTmdb);
+            shows = ok2.filter((x) => x.media_type === 'tv').sort(bySearchRank).map(mapTmdb);
+          } catch {}
+        }
+        for (const it of catalogSearchItems()) {
+          if (!searchCloseTitle(q, it.title || it.name || '')) continue;
+          const type = it.type || (it._kind === 'show' ? 'tv' : 'movie');
+          const bucket = type === 'tv' ? shows : movies;
+          if (!bucket.some((x) => x.tmdbId && it.tmdbId && +x.tmdbId === +it.tmdbId)) bucket.unshift(it);
+        }
+      } else if (!serverHint) {
+        const localHint = closestCatalogTitle(q);
+        if (localHint) showSearchSuggest(localHint.title || localHint.name, q);
+      }
       hydrateSearchLibrary(movies, lib);
       hydrateSearchLibrary(shows, lib);
       if (lib.length || movies.length || shows.length || live.length) {
@@ -26039,9 +26263,17 @@ $('iptvRefresh').addEventListener('click', async () => {
 // (#setTabs is empty — its tabs + panels were folded into the Preferences page by
 // mergeServerSettingsIntoPrefs and are driven by activateAccountTab.)
 function focusActiveSettingsPanel(rootId, panelAttr) {
+  const focused = document.activeElement;
+  if (focused && focused.closest('#prefTabs') && focused.tagName === 'BUTTON') {
+    clearTimeout(_accountTabFocusT);
+    activateAccountTab(focused);
+  }
   const root = $(rootId);
   // #prefs hosts pref panels ([data-ptab]) AND the folded-in server panels (.setGrid[data-stab]).
-  const active = root && root.querySelector(`[${panelAttr}]:not([hidden]), .setGrid[data-stab]:not([hidden])`);
+  const on = root && root.querySelector('#prefTabs button.on');
+  const key = on && (on.dataset.srv || on.dataset.tab);
+  const active = (key && root.querySelector(`.setGrid[data-stab="${key}"]:not([hidden]), [data-ptab="${key}"]:not([hidden])`))
+    || (root && root.querySelector(`[${panelAttr}]:not([hidden]), .setGrid[data-stab]:not([hidden])`));
   const first = active && formCtls(active)[0];
   return focusSectionControl(first);
 }
@@ -26526,7 +26758,9 @@ function focusContent(retried) {
     return applyFocus(first || $('dPlay'));
   }
   if (S.view === 'settings' || S.view === 'prefs') {
-    const els = formCtls($(S.view === 'prefs' ? 'prefs' : 'settings'));
+    const cfg = sectionFormConfig();
+    if (focusActiveSectionTab(cfg)) return;
+    const els = formCtls($('prefs') || $('settings'));
     return els[0] && els[0].focus({ preventScroll: false });
   }
   if (S.view === 'calendar') {
@@ -27495,16 +27729,25 @@ function dpadForm(scope, k) {
   return false;
 }
 function sectionFormConfig() {
-  if (S.view === 'prefs') return { root: $('prefs'), tabs: $('prefTabs'), panelAttr: 'data-ptab' };
-  if (S.view === 'settings') return { root: $('settings'), tabs: $('setTabs'), panelAttr: 'data-stab' };
+  // Server settings tabs/panels live on Preferences after mergeServerSettingsIntoPrefs.
+  // Pointing Settings at the emptied #setTabs made Right from the 2nd item go nowhere.
+  if (S.view === 'prefs' || S.view === 'settings') {
+    return { root: $('prefs'), tabs: $('prefTabs'), panelAttr: 'data-ptab' };
+  }
   return null;
 }
 function sectionTabButtons(cfg) {
   return cfg && cfg.tabs ? formCtls(cfg.tabs).filter((el) => el.tagName === 'BUTTON') : [];
 }
 function activeSectionPanel(cfg) {
-  // Preferences hosts BOTH pref panels ([data-ptab]) and the folded-in server panels ([data-stab]).
-  return cfg && cfg.root ? cfg.root.querySelector(`[${cfg.panelAttr}]:not([hidden]), [data-stab]:not([hidden])`) : null;
+  if (!cfg || !cfg.root) return null;
+  const on = cfg.tabs && cfg.tabs.querySelector('button.on');
+  const key = on && (on.dataset.srv || on.dataset.tab);
+  if (key) {
+    const exact = cfg.root.querySelector(`.setGrid[data-stab="${key}"]:not([hidden]), [data-ptab="${key}"]:not([hidden])`);
+    if (exact) return exact;
+  }
+  return cfg.root.querySelector(`[${cfg.panelAttr}]:not([hidden]), .setGrid[data-stab]:not([hidden])`);
 }
 function focusSectionControl(el) {
   if (!el) return false;
@@ -27535,6 +27778,9 @@ function dpadSectionForm(k) {
     if (k === 'ArrowUp') { focusSectionControl(tabs[Math.max(0, i - 1)] || tabs[0]); return true; }
     if (k === 'ArrowDown') { focusSectionControl(tabs[Math.min(tabs.length - 1, i + 1)] || tabs[tabs.length - 1]); return true; }
     if (k === 'ArrowRight') {
+      const tab = i >= 0 ? tabs[i] : active;
+      clearTimeout(_accountTabFocusT);
+      if (tab && tab.tagName === 'BUTTON') activateAccountTab(tab);
       focusSectionControl(formCtls(activeSectionPanel(cfg))[0]);
       return true;
     }
@@ -28357,8 +28603,22 @@ document.addEventListener('keydown', (e) => {
     // own element listeners never fire — these cases are what make OK/arrows work on the remote.
     if (S.view === 'search' && document.activeElement === $('searchClearBtn')) {
       if (k === 'ArrowLeft' || k === 'ArrowUp') { $('searchClearBtn').blur(); return $('searchInput').focus(); }
-      if (k === 'ArrowDown') { $('searchClearBtn').blur(); return focusSearchResultsSoon(); }
+      if (k === 'ArrowDown') {
+        $('searchClearBtn').blur();
+        if ($('searchSuggest') && $('searchSuggest').classList.contains('show')) {
+          try { $('searchSuggestBtn').focus(); } catch {}
+          return;
+        }
+        return focusSearchResultsSoon();
+      }
       if (k === 'Enter' || k === 'Escape' || k === 'Backspace') { if (!e.repeat) clearSearchQuery(); return; }
+      return;
+    }
+    if (S.view === 'search' && document.activeElement === $('searchSuggestBtn')) {
+      if (k === 'Enter') { if (!e.repeat) applySearchSuggest(); return; }
+      if (k === 'ArrowUp') { $('searchSuggestBtn').blur(); return $('searchInput').focus(); }
+      if (k === 'ArrowDown') { $('searchSuggestBtn').blur(); return focusSearchResultsSoon(); }
+      if (k === 'ArrowLeft') { $('searchSuggestBtn').blur(); return enterRail(); }
       return;
     }
     if (S.view === 'livetv' && document.activeElement === $('chClearBtn')) {

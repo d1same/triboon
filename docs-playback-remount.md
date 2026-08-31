@@ -28,8 +28,8 @@ Example: you pause The Rookie for a minute, press Play, and sit on Preparing. Th
 ## Triggers that MAY remount the same file (quiet)
 
 - Recoverable IO while **playing** (direct: `retryNativeDirectInPlace`; remux/transcode: `__tvNativeVideoSeek` + `quietSeek`).
-- User Play on remux/transcode after pause. Same file, last frame held, no Preparing. Leftover remux/transcode buffer is a dead ffmpeg pipe.
-- User seek on remux/transcode (`start=` URL).
+- User Play on remux/transcode after pause. Same file, last frame held, no Preparing. Leftover remux/transcode buffer is a dead ffmpeg pipe. Quiet remount must `stop()` + `clearMediaItems()` first so 4K does not hold two buffers. Already-started playback keeps the rebuffer watchdog, not the 12s cold-start path. Same subtitle URL keeps its cues.
+- User seek on remux/transcode (`start=` URL). Quiet remount must re-arm remux grace and hold `playWhenReady` false until `STATE_READY`. Zeroing grace while already playing lets the 30s watchdog remount again.
 - Quality / audio change that needs a new server stream.
 - Mid-title remux `ENDED` while **playing**.
 - Remux jumped backward (stream replayed from the head) — seek back to the last good time.
@@ -67,7 +67,9 @@ Manual matrix (each row: same filename, no Finding-source):
 5. Leave it playing 2 minutes. Same file.
 6. Hop to another title. New file is OK; leftover toast must clear.
 
-Automated lock: `test/phase4.test.js` (`VOD pause resume` and `VOD remount playbook`).
+7. Pause for up to 1 hour. Player stays open. Play remounts the same file (fast). After 1 hour, return to details.
+
+Automated lock: `test/phase4.test.js` (`VOD pause resume` and `VOD remount playbook`) plus `test/playback-scenarios.test.js`.
 
 ## Do not reintroduce
 

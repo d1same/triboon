@@ -1861,7 +1861,9 @@ function createIptvLiveHub(shareKey, label) {
       iptvSharedHubs.delete(this.shareKey);
       try { if (this.upstreamReq) { this.upstreamReq.removeAllListeners('error'); this.upstreamReq.on('error', () => {}); this.upstreamReq.destroy(); } } catch {}
       for (const sub of [...this.subs]) this.unsubscribe(sub, reason);
-      if (reason !== 'idle (no viewers)') console.log(`[iptv share] ${this.label} hub closed (${reason})`);
+      if (reason !== 'idle (no viewers)' && reason !== 'playlist sent') {
+        console.log(`[iptv share] ${this.label} hub closed (${reason})`);
+      }
     },
   };
   return hub;
@@ -3016,14 +3018,17 @@ async function fetchXtreamEpgList(s, ch, limit) {
 }
 function xtreamGuideFailureTtlMs(err) {
   const text = String(err && err.message ? err.message : err || '').toLowerCase();
-  if (text.includes('bot-protection') || text.includes('rate limit') || /\b(401|403|429)\b/.test(text)) {
+  if (text.includes('bot-protection') || text.includes('rate limit') || /\b(401|403|429|503)\b/.test(text)) {
     return iptvProviderProtectionTtlMs();
   }
   return EPG_EMPTY_TTL_MS;
 }
 function isXtreamGuideProviderProtection(err) {
   const text = String(err && err.message ? err.message : err || '').toLowerCase();
-  return text.includes('bot-protection') || text.includes('rate limit') || /\b(401|403|429)\b/.test(text);
+  // 503 on get_short_epg is the whole hivecast panel dying, not one channel. Treat it
+  // like 429 so we pause the source instead of logging 8k "CHARGE! refresh failed" lines.
+  return text.includes('bot-protection') || text.includes('rate limit')
+    || /\b(401|403|429|503)\b/.test(text);
 }
 function xtreamGuideSourceBlocked(cache) {
   return !!(cache && Number(cache.guideBlockedUntil || 0) > Date.now());
@@ -4500,6 +4505,30 @@ function activityConnectionStats() {
 function capMap(map, max) {
   while (map && map.size > max) { const k = map.keys().next().value; if (k === undefined) break; map.delete(k); }
 }
+const episodeImdbCache = new Map(); // `${tmdb}:${s}:${e}` -> { imdb, at }
+const EPISODE_IMDB_TTL_MS = 24 * 3600 * 1000;
+async function resolveEpisodeImdb(tmdbId, seasonParam, episodeParam) {
+  const cacheKey = `${tmdbId}:${seasonParam}:${episodeParam}`;
+  const hit = episodeImdbCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < EPISODE_IMDB_TTL_MS) return hit.imdb;
+  let ext = null; let resolveErr = null;
+  for (let attempt = 0; attempt < 2 && !ext; attempt++) {
+    if (attempt) await new Promise((r) => { const t = setTimeout(r, 500); if (t.unref) t.unref(); });
+    try { ext = await tmdb.get(`/tv/${tmdbId}/season/${seasonParam}/episode/${episodeParam}/external_ids`); }
+    catch (e) { resolveErr = e; }
+  }
+  const epImdb = ext && /^tt\d{5,10}$/i.test(String(ext.imdb_id || '')) ? String(ext.imdb_id).toLowerCase() : '';
+  episodeImdbCache.set(cacheKey, { imdb: epImdb, at: Date.now() });
+  capMap(episodeImdbCache, 400);
+  if (epImdb) {
+    try { console.log(`[subs] episode-imdb resolved tmdb=${tmdbId} s${seasonParam}e${episodeParam} -> ${epImdb}`); } catch {}
+  } else if (resolveErr) {
+    try { console.log(`[subs] episode-imdb resolve FAILED tmdb=${tmdbId} s${seasonParam}e${episodeParam}: ${String((resolveErr && resolveErr.message) || resolveErr).slice(0, 160)} — a no-show-imdb title will dead-end on the tmdb-tv id`); } catch {}
+  } else {
+    try { console.log(`[subs] episode-imdb NOT resolved tmdb=${tmdbId} s${seasonParam}e${episodeParam}: TMDB returned no imdb_id for this episode — a no-show-imdb title will dead-end on the tmdb-tv id`); } catch {}
+  }
+  return epImdb;
+}
 function localLibraryItemFor(ctx, libId, idx) {
   const lib = store.read('libraries', { list: [] }).list.find((l) => l.id === libId);
   if (!lib || !lib.path) return { status: 404, error: 'library not found' };
@@ -5436,7 +5465,7 @@ const H = {
       });
       debug.log('prepare', `${prepared ? 'ready' : 'miss'} q=${body.q} ms=${Date.now() - t0} name=${(candidate && candidate.name) || '-'}`);
     } catch (e) {
-      debug.log('prepare', `fail q=${body.q} ${e.message || 'error'}`);
+      if (!e.cachedFail) debug.log('prepare', `fail q=${body.q} ${e.message || 'error'}`);
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
@@ -5509,7 +5538,8 @@ const H = {
         const s = p.toString();
         search = s ? '?' + s : '';
       }
-      const data = await tmdb.get('/' + ctx.m[1] + search);
+      let data = await tmdb.get('/' + ctx.m[1] + search);
+      data = await tmdbSearchCloseHint(ctx.m[1], search, data);
       const level = pf !== null ? profileLevelFor(ctx.user, pf) : 4;
       const out = level < 4 ? await maturityFilterList(level, data) : data;
       send(ctx.res, 200, out, { 'cache-control': 'private, max-age=600' });
@@ -7153,18 +7183,142 @@ function traktSyncTick() {
 setInterval(traktSyncTick, 60000).unref();
 
 // ---------- handlers, continued ----------
+function searchEditDist(a, b) {
+  a = String(a || ''); b = String(b || '');
+  const m = a.length, n = b.length;
+  if (a === b) return 0;
+  if (!m) return n;
+  if (!n) return m;
+  if (Math.abs(m - n) > 4) return 99;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cur = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      prev = cur;
+    }
+  }
+  return dp[n];
+}
+function searchCloseWord(a, b) {
+  if (a === b || a + 's' === b || b + 's' === a) return true;
+  const maxL = Math.max(a.length, b.length);
+  if (maxL < 4) return false;
+  const d = searchEditDist(a, b);
+  return d <= 2 || (maxL >= 8 && d <= 4) || d / maxL <= 0.35;
+}
+function searchCloseTitle(query, title) {
+  const words = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  const qw = words(query), tw = words(title);
+  if (!qw.length || !tw.length) return false;
+  if (searchCloseWord(qw.join(''), tw.join(''))) return true;
+  return qw.every((w) => tw.some((t) => searchCloseWord(w, t) || t.startsWith(w) || w.startsWith(t)));
+}
+function searchTitleKey(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+function closestTitleInList(query, titles) {
+  const qn = searchTitleKey(query);
+  if (qn.length < 4) return null;
+  let best = null, bestD = 99;
+  for (const title of titles || []) {
+    if (!title || !searchCloseTitle(query, title)) continue;
+    const d = searchEditDist(qn, searchTitleKey(title));
+    if (d > 0 && d < bestD) { bestD = d; best = title; }
+  }
+  return best;
+}
+function tmdbListHasCloseTitle(data, q) {
+  return ((data && data.results) || []).some((x) => x && x.media_type !== 'person' && searchCloseTitle(q, x.title || x.name || ''));
+}
+function cachedTmdbTitles() {
+  const out = [];
+  const seen = new Set();
+  const add = (title) => {
+    const key = searchTitleKey(title);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(title);
+  };
+  const cache = store.read('tmdb-cache', {});
+  for (const entry of Object.values(cache || {})) {
+    const data = entry && entry.data;
+    if (!data) continue;
+    if (data.title || data.name) add(data.title || data.name);
+    for (const x of data.results || []) {
+      if (!x || x.media_type === 'person') continue;
+      add(x.title || x.name);
+    }
+  }
+  const libs = (store.read('libraries', { list: [] }).list || []);
+  for (const lib of libs) {
+    const rec = libraryRecord(lib && lib.id);
+    for (const item of (rec && rec.items) || []) {
+      if (!item || item.kind === 'episode') continue;
+      add(item.title);
+      add(item.originalTitle);
+    }
+  }
+  return out;
+}
+const SEARCH_CLOSE_SEEDS = [
+  'Frankenstein', 'The Godfather', 'The Matrix', 'The Avengers', 'Avengers: Endgame',
+  'Batman', 'The Dark Knight', 'Harry Potter', 'Stranger Things',
+  'The Lord of the Rings', 'Star Wars', 'Inception', 'Titanic', 'Jurassic Park',
+  'Spider-Man', 'Superman', 'Game of Thrones', 'Breaking Bad', 'The Office',
+  'Friends', 'Dune', 'Interstellar', 'The Mandalorian', 'Wednesday',
+];
+async function tmdbSearchCloseHint(route, search, data) {
+  if (!/^search\/(multi|movie|tv)$/.test(route)) return data;
+  const params = new URLSearchParams(String(search || '').replace(/^\?/, ''));
+  const q = String(params.get('query') || '').trim();
+  if (q.length < 4 || tmdbListHasCloseTitle(data, q)) return data;
+  let hint = closestTitleInList(q, cachedTmdbTitles());
+  if (!hint) {
+    try {
+      const trend = await tmdb.get('/trending/all/week?page=1');
+      hint = closestTitleInList(q, ((trend && trend.results) || []).map((x) => x && (x.title || x.name)));
+    } catch {}
+  }
+  if (!hint) hint = closestTitleInList(q, SEARCH_CLOSE_SEEDS);
+  if (!hint || searchTitleKey(hint) === searchTitleKey(q)) return data;
+  params.set('query', hint);
+  const next = await tmdb.get('/' + route + '?' + params.toString());
+  return { ...next, didYouMean: hint, originalQuery: q };
+}
 function searchLibraryRecords(query, allowedLibIds = [], limit = 24) {
   const raw = String(query || '').trim().toLowerCase();
   const key = String(query || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   if (raw.length < 2 && !key) return [];
   const out = [];
+  const seen = new Set();
+  const push = (libId, item) => {
+    const id = `${libId}:${item && (item.id || item.file || item.title)}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push({ libId, item });
+  };
   for (const libId of allowedLibIds) {
     const rec = libraryRecord(libId);
     for (const item of (rec && rec.items) || []) {
       if (!item || item.kind === 'episode') continue;
       const blob = `${item.title || ''} ${item.originalTitle || ''} ${item.file || ''} ${item.dir || ''}`.toLowerCase();
       const blobKey = blob.replace(/[^a-z0-9]+/g, ' ');
-      if ((key && blobKey.includes(key)) || (raw && blob.includes(raw))) out.push({ libId, item });
+      if ((key && blobKey.includes(key)) || (raw && blob.includes(raw))) push(libId, item);
+      if (out.length >= limit) return out;
+    }
+  }
+  if (out.length) return out;
+  for (const libId of allowedLibIds) {
+    const rec = libraryRecord(libId);
+    for (const item of (rec && rec.items) || []) {
+      if (!item || item.kind === 'episode') continue;
+      if (searchCloseTitle(key || raw, item.title) || searchCloseTitle(key || raw, item.originalTitle)) {
+        push(libId, item);
+      }
       if (out.length >= limit) return out;
     }
   }
@@ -7176,9 +7330,10 @@ Object.assign(H, {
     const q = String(ctx.url.searchParams.get('q') || '').trim();
     if (q.length < 2) return send(ctx.res, 200, { items: [] });
     const allowed = allowedLocalLibraryIds(ctx);
-    const found = libraryDb.available
+    let found = libraryDb.available
       ? libraryDb.search(q, allowed, 24)
       : searchLibraryRecords(q, allowed, 24);
+    if (!found.length) found = searchLibraryRecords(q, allowed, 24);
     const libs = new Map(store.read('libraries', { list: [] }).list.map((l) => [String(l.id), l]));
     send(ctx.res, 200, {
       items: found.map((row) => ({
@@ -8643,35 +8798,19 @@ Object.assign(H, {
     let searchSeason = hasEpisode ? seasonParam : null;
     let searchEpisode = hasEpisode ? episodeParam : null;
     let subQuery = vf._subQuery || vf._q || releaseName || vf.name;
+    let clientGone = false;
+    ctx.req.once('close', () => { if (!ctx.req.complete) clientGone = true; });
     if (hasEpisode && !imdbId && /^\d+$/.test(String(tmdbId || '')) && settings.get().tmdbKey) {
       // This resolution is the ONLY way a no-show-imdb TV show gets subtitles from Wyzie (which is
       // id-only — no title search — and dead-ends on the tmdb-tv id), so it is a single point of
-      // failure. LOG the outcome: the old silent catch here made a production "no subtitles" (the
-      // owner's Unraid, latest code, still 404ing Goosebumps) impossible to diagnose — it hid whether
-      // the resolve fired, resolved empty, or threw. Prefixed `[subs]` so `docker logs triboon | grep
-      // subs` surfaces it next to the provider search line.
-      // One bounded retry: this is a single external TMDB call sitting in a hard-failure path, and
-      // the leading explanation for the owner's Unraid miss (18/21 hypotheses refuted, the survivors
-      // all agree) is a transient tmdb.get egress blip that throws and used to be swallowed. A success
-      // is cached (tmdb.js) so the retry cost is paid at most once per episode; the second attempt is
-      // fast when the first fails on a socket/DNS blip rather than a full timeout.
-      let ext = null; let resolveErr = null;
-      for (let attempt = 0; attempt < 2 && !ext; attempt++) {
-        if (attempt) await new Promise((r) => { const t = setTimeout(r, 500); if (t.unref) t.unref(); });
-        try { ext = await tmdb.get(`/tv/${tmdbId}/season/${seasonParam}/episode/${episodeParam}/external_ids`); }
-        catch (e) { resolveErr = e; }
-      }
-      const epImdb = ext && /^tt\d{5,10}$/i.test(String(ext.imdb_id || '')) ? String(ext.imdb_id).toLowerCase() : '';
+      // failure. Cached per episode so pause/seek remounts do not re-log or re-hit TMDB.
+      const epImdb = await resolveEpisodeImdb(tmdbId, seasonParam, episodeParam);
+      if (clientGone) return;
       if (epImdb) {
         searchImdbId = epImdb;
         searchSeason = null;
         searchEpisode = null;
         subQuery = String(subQuery).replace(/\bs\d{1,2}\s?e\d{1,3}\b/i, '').replace(/\s+/g, ' ').trim();
-        try { console.log(`[subs] episode-imdb resolved tmdb=${tmdbId} s${seasonParam}e${episodeParam} -> ${epImdb}`); } catch {}
-      } else if (resolveErr) {
-        try { console.log(`[subs] episode-imdb resolve FAILED tmdb=${tmdbId} s${seasonParam}e${episodeParam}: ${String((resolveErr && resolveErr.message) || resolveErr).slice(0, 160)} — a no-show-imdb title will dead-end on the tmdb-tv id`); } catch {}
-      } else {
-        try { console.log(`[subs] episode-imdb NOT resolved tmdb=${tmdbId} s${seasonParam}e${episodeParam}: TMDB returned no imdb_id for this episode — a no-show-imdb title will dead-end on the tmdb-tv id`); } catch {}
       }
     }
     const hasSearchEpisode = Number.isInteger(searchSeason) && searchSeason >= 0 && Number.isInteger(searchEpisode) && searchEpisode > 0;
@@ -8739,7 +8878,9 @@ Object.assign(H, {
     };
     if (wantsList) {
       try {
+        if (clientGone) return;
         const variants = await getVariants();
+        if (clientGone) return;
         // Collapse interchangeable duplicates for DISPLAY (Wyzie mirrors return dozens of identical
         // English SRTs). The full `variants` set is still cached for download fallback below.
         const menu = distinctVariants(variants);
@@ -8756,6 +8897,7 @@ Object.assign(H, {
         return send(ctx.res, failure.status, failure.body);
       }
     }
+    if (clientGone) return;
     const cacheKey = variant ? `${lang}:${catalogId}:${variant}` : `${lang}:${catalogId}:auto`;
     if (!vf._osCache.has(cacheKey)) {
       if (!vf._osInflight.has(cacheKey)) {
@@ -8865,6 +9007,7 @@ Object.assign(H, {
         vf._osInflight.set(cacheKey, work);
       }
       try { await vf._osInflight.get(cacheKey); } catch (e) {
+        if (clientGone) return;
         const failure = subtitleFailure(e);
         return send(ctx.res, failure.status, failure.body);
       }

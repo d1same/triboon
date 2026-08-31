@@ -1180,8 +1180,47 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Trakt percent-only progress sends resumeFrac to warm the resume byte window');
   assert.match(ui, /id="chBar"><div class="chWrap"><input id="chSearch"[\s\S]+id="chClearBtn"/,
     'Live TV filter is wrapped so it can host a clear (X) button');
-  assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+score -= 1800[\s\S]+sort\(bySearchRank\)\.map\(mapTmdb\)/,
+  assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+searchCloseTitle\(q, title\)[\s\S]+score \+= 8000[\s\S]+score -= 1800[\s\S]+sort\(bySearchRank\)/,
     'TMDB search should rank exact franchise/title-prefix matches above incidental phrase matches');
+  assert.match(ui, /function searchCloseTitle\(query, title\) \{[\s\S]+closestCatalogTitle\(q\)[\s\S]+\/api\/tmdb\/search\/multi\?query=' \+ encodeURIComponent\(hintTitle\)/,
+    'a close misspelling like frekestein should still surface Frankenstein');
+  {
+    const words = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+    const dist = (a, b) => {
+      a = String(a || ''); b = String(b || '');
+      const m = a.length, n = b.length;
+      if (a === b) return 0;
+      if (!m) return n;
+      if (!n) return m;
+      const dp = new Array(n + 1);
+      for (let j = 0; j <= n; j++) dp[j] = j;
+      for (let i = 1; i <= m; i++) {
+        let prev = dp[0];
+        dp[0] = i;
+        for (let j = 1; j <= n; j++) {
+          const cur = dp[j];
+          dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+          prev = cur;
+        }
+      }
+      return dp[n];
+    };
+    const close = (query, title) => {
+      const a = words(query).join(''), b = words(title).join('');
+      const maxL = Math.max(a.length, b.length);
+      const d = dist(a, b);
+      return d <= 2 || (maxL >= 8 && d <= 4) || d / maxL <= 0.35;
+    };
+    assert.ok(close('frekestein', 'Frankenstein'), 'frekestein must still suggest Frankenstein');
+    assert.ok(close('frankenstien', 'Frankenstein'), 'transposed ie still matches Frankenstein');
+    assert.ok(close('avngers', 'Avengers'), 'dropped letter still matches');
+    assert.ok(close('batman', 'Batman'), 'exact titles still match');
+    assert.ok(!close('zzz', 'Frankenstein'), 'unrelated junk must not match');
+  }
+  assert.match(ui, /id="searchSuggest"[\s\S]+id="searchSuggestBtn"/,
+    'Search shows a Did you mean chip for close misspellings');
+  assert.match(ui, /const serverHint = r\.didYouMean \|\| ''/,
+    'Search uses the server close-title retry so a cold typo still finds the real name');
   assert.match(ui, /if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+if \(S\.view === 'home'\) \{[\s\S]+setRowsView\(\$\('rows'\), S\.rows, true\);[\s\S]+\}[\s\S]+S\.view === 'home' && S\.zone !== 'rail' && !document\.querySelector\('#home \.focus'\)[\s\S]+focusContent\(\);[\s\S]+return false;/,
     'returning Home with cached rows should repoint the row model and reclaim focus from hidden pages');
   assert.match(ui, /if \(\(S\.maxLevel \?\? 4\) < 4\) \{[\s\S]+renderRowsInto\(root, rows\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(current\(\) && S\.zone !== 'rail'\) focusCard\(0, 0\);/,
@@ -2194,8 +2233,8 @@ test('preferences profile manager has TV-friendly profile icons and add action',
     'profile UI should not reintroduce emoji maturity badges');
   // Settings section tabs switch on CLICK (+ D-pad focus); hover-to-switch is bound only on TV so a
   // web/desktop pointer ROLLOVER never changes the section (the owner's accidental-jump complaint).
-  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]*?b\.addEventListener\('click', run\); b\.addEventListener\('focus', run\);[\s\S]*?if \(document\.body\.classList\.contains\('tv'\)\) b\.addEventListener\('mouseenter', run\);/,
-    'settings tabs switch on click/focus; mouseenter (rollover) is TV-only');
+  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]*?b\.addEventListener\('click', \(\) => \{ clearTimeout\(_accountTabFocusT\); activateAccountTab\(b\); \}\);[\s\S]*?b\.addEventListener\('focus', \(\) => scheduleAccountTab\(b\)\);[\s\S]*?if \(document\.body\.classList\.contains\('tv'\)\) b\.addEventListener\('mouseenter', \(\) => scheduleAccountTab\(b\)\);/,
+    'settings tabs commit on click; focus/hover only schedule so Right from the 2nd item is not dropped');
 });
 
 test('admin security panel exposes own-password change separately from user resets', () => {
@@ -2600,7 +2639,7 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
   assert.match(ui, /function schedulePauseWarmAhead\(p = S\.playing\) \{[\s\S]+p\.item\.type === 'live'[\s\S]+p\.usingNative[\s\S]+p\.streamUrl[\s\S]+p\.size[\s\S]+const dur = totalDuration\(\);[\s\S]+if \(p\._pauseWarmAt && now - p\._pauseWarmAt < 12000\) return;[\s\S]+const targetSeconds = Math\.min\(dur - 1, Math\.max\(currentTime\(\) \+ 6, bufferedEnd \+ 2\)\);[\s\S]+url\.searchParams\.set\('priority', 'read-ahead'\);[\s\S]+headers: \{ Range: `bytes=\$\{start\}-\$\{start \+ bytes - 1\}` \}/,
     'pause warm-ahead should skip native ExoPlayer and issue one bounded low-priority range ahead of a paused web VOD');
   assert.match(ui, /v\.onplaying = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+clearWebRebufferRecovery\(\);[\s\S]+clearPauseIdleExit\(\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+v\.onpause = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+armPauseIdleExit\(playingRef\);[\s\S]+schedulePauseWarmAhead\(playingRef\); updPP\(\);/,
-    'web video should clear stale recovery state, warm on pause, arm the 15-minute idle exit, and cancel warm-ahead immediately when playing again');
+    'web video should clear stale recovery state, warm on pause, arm the 1-hour idle exit, and cancel warm-ahead immediately when playing again');
   assert.match(ui, /v\.onpause = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+saveWatch\(true\);[\s\S]+schedulePauseWarmAhead\(playingRef\);/,
     'web pause should immediately persist its exact Continue Watching checkpoint');
   assert.match(ui, /function requestVideoPlay\(v, opts = \{\}\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+const r = v\.play\(\);[\s\S]+return r\.then\(\(\) => \{[\s\S]+cancelPauseWarmAhead\(\)/,
@@ -2608,9 +2647,9 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
   assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+if \(!p\) return;/,
     'manual seeks should cancel old pause warm-ahead ranges before changing position');
   assert.match(ui, /window\.__tvNativeVideoPlaying = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+clearPauseIdleExit\(\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+\};[\s\S]+window\.__tvNativeVideoPaused = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+armPauseIdleExit\(p\);[\s\S]+saveWatch\(true\);/,
-    'native ExoPlayer should persist pause progress, arm the 15-minute idle exit, and skip competing read-ahead');
-  assert.match(ui, /const PAUSE_IDLE_EXIT_MS = 15 \* 60 \* 1000;[\s\S]+function armPauseIdleExit\([\s\S]+p\.item\.type === 'live'[\s\S]+closePlayer\(\);/,
-    'a VOD pause that sits 15 minutes must stop and return to details so morning-left playback cannot hold the pool');
+    'native ExoPlayer should persist pause progress, arm the 1-hour idle exit, and skip competing read-ahead');
+  assert.match(ui, /const PAUSE_IDLE_EXIT_MS = 60 \* 60 \* 1000;[\s\S]+function armPauseIdleExit\([\s\S]+p\.item\.type === 'live'[\s\S]+closePlayer\(\);/,
+    'a VOD pause that sits 1 hour must stop and return to details; Play before that remounts the same file');
   assert.match(ui, /function togglePlay\(\) \{[\s\S]+S\.playing\.usingNative[\s\S]+TriboonTV\.toggleVideo/,
     'OK / Space pause must talk to ExoPlayer, not a hidden web video with no src');
   assert.match(android, /public void toggleVideo\(\) \{[\s\S]+nativePlayer\.pause\(\)[\s\S]+resumeNativeVideoInPlace\(\)/,
@@ -2644,8 +2683,26 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
   assert.match(playbook, /emulator-5554/);
   assert.match(android, /private void retryNativeDirectInPlace\(long displayMs\) \{[\s\S]+nativePlayer\.seekTo[\s\S]+nativePlayer\.prepare\(\);/,
     'direct retry must stay on the live ExoPlayer');
-  assert.match(android, /NATIVE_VIDEO_REMUX_RESUME_GRACE_MS = 4000L[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
-    'remux Play after a dead pipe remounts the same file with a short grace, not a 25s stall');
+  assert.match(android, /NATIVE_VIDEO_REMUX_RESUME_GRACE_MS = 20000L[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
+    'remux Play remounts the same file with enough grace for 4K ffmpeg, not a 4s watchdog trip');
+  assert.match(android, /if \(!\(reuseQuietVideo && nativeVideoStarted\)\) nativeVideoStarted = false/,
+    'quiet remount of an already-playing title must keep the rebuffer watchdog, not the 12s cold start');
+  assert.match(android, /if \(reuseQuietVideo && "video"\.equals\(mode\)\) \{[\s\S]+nativeResumeGraceUntilMs = SystemClock\.elapsedRealtime\(\)[\s\S]+NATIVE_VIDEO_REMUX_RESUME_GRACE_MS/,
+    'quiet remux +30 while playing must re-arm remux grace, not zero it');
+  assert.match(android, /nativeQuietSeekHoldPlay = reuseQuietVideo && "video"\.equals\(mode\)[\s\S]+setPlayWhenReady\(false\)/,
+    'quiet remux remount holds play until READY so the 30s watchdog does not start mid-seek');
+  assert.match(ui, /if \(opts\.quietSeek\) p\._nativeResuming = true/,
+    'web marks a quiet remount as resuming so recoverSamePlaybackSource does not stack');
+  assert.match(android, /nativeSeekHoldDisplayMs = Math\.max\(nativeStartOffsetMs \+ nativeRawPositionMs\(\), startOffsetMs\)/,
+    'quiet remux +30 must freeze the clock before swapping startOffset so 10:00 does not become 20:30');
+  assert.match(ui, /c\.startTime = Math\.max\(0, c\.startTime - off\);[\s\S]+c\.endTime = Math\.max\(0\.05, c\.endTime - off\);[\s\S]+c\._shifted = true;/,
+    'web remux CC shift must mark _shifted only after both cue times write');
+  assert.match(ui, /p\._nativeSeekGen = \(p\._nativeSeekGen \|\| 0\) \+ 1/,
+    'rapid remux FF must ignore stale keyframe remounts');
+  assert.match(android, /setPlayWhenReady\(false\);[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
+    'remux Play must not read the leftover dead pipe while the new start= URL is mounting');
+  assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+p\._nativeResuming && !sourceDead && !decoderFailure\) return false;/,
+    'web recovery must not stack a second remount on top of user Play');
   assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)/,
     'a real stall still remounts the same file quietly, never a new search');
   assert.match(ui, /playbackServerGone\(reason\)[\s\S]+reMountAndResume\(reason \|\| 'playback session expired'\)/,
@@ -3113,8 +3170,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'the filter returns the original object untouched when nothing is dropped (fail-open, no needless allocation)');
   // The proxy resolves the active profile from _pf (stored level, unspoofable), strips it before the
   // upstream call (so the shared TMDB cache is not fragmented per profile), and filters when < Adult.
-  assert.match(idxSrc, /const pf = ctx\.url\.searchParams\.get\('_pf'\);[\s\S]+p\.delete\('_pf'\);[\s\S]+const data = await tmdb\.get\('\/' \+ ctx\.m\[1\] \+ search\);[\s\S]+const level = pf !== null \? profileLevelFor\(ctx\.user, pf\) : 4;[\s\S]+level < 4 \? await maturityFilterList\(level, data\) : data;/,
-    'tmdbProxy strips _pf before upstream and applies the maturity filter for restricted profiles only');
+  assert.match(idxSrc, /const pf = ctx\.url\.searchParams\.get\('_pf'\);[\s\S]+p\.delete\('_pf'\);[\s\S]+let data = await tmdb\.get\('\/' \+ ctx\.m\[1\] \+ search\);[\s\S]+data = await tmdbSearchCloseHint\(ctx\.m\[1\], search, data\);[\s\S]+const level = pf !== null \? profileLevelFor\(ctx\.user, pf\) : 4;[\s\S]+level < 4 \? await maturityFilterList\(level, data\) : data;/,
+    'tmdbProxy strips _pf before upstream, retries close misspellings, and applies the maturity filter for restricted profiles only');
   // Client: only restricted profiles tag TMDB reads (the No-limit/owner path is byte-for-byte unchanged).
   assert.match(ui, /path\.startsWith\('\/api\/tmdb\/'\)\s*\n\s*&& \(S\.maxLevel \?\? 4\) < 4 && S\.profile && S\.profile\.id\) \{\s*\n\s*path \+= \(path\.includes\('\?'\) \? '&' : '\?'\) \+ '_pf=' \+ encodeURIComponent\(S\.profile\.id\);/,
     'api() appends _pf to TMDB proxy GETs only for restricted profiles with an active profile id');
@@ -3532,7 +3589,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(ui, /function syncSectionTabs\(tabsId, activeButton = null\) \{[\s\S]+setAttribute\('role', 'tablist'\)[\s\S]+setAttribute\('role', 'tab'\)[\s\S]+setAttribute\('aria-selected', on \? 'true' : 'false'\)[\s\S]+\}/,
     'Settings and Preferences side tabs should initialize selected state for D-pad and accessibility');
   // Server settings are folded into the Preferences page as one menu (Preferences group · divider ·
-  // Server settings group; Appearance dropped). One handler drives both tab kinds, on click/focus/hover.
+  // Server settings group; Appearance dropped). Click commits immediately; focus/hover settle first.
   assert.match(ui, /function mergeServerSettingsIntoPrefs\(\) \{[\s\S]+data-tab="display"[\s\S]+data-stab="display"[\s\S]+prefTabDivider[\s\S]+b\.dataset\.srv = b\.dataset\.tab[\s\S]+prefs\.appendChild\(p\)/,
     'Server-settings tabs + panels should be folded into the Preferences page (Appearance removed, divider added)');
   assert.match(ui, /\.prefTabDivider\{margin:8px 0 2px;padding:4px 12px 2px;border:0/,
@@ -3546,16 +3603,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'Update app sits with Profile (this device), not Connections');
   assert.match(ui, /function activateAccountTab\(b\) \{[\s\S]+const isSrv = !!b\.dataset\.srv;[\s\S]+syncSectionTabs\('prefTabs', b\)[\s\S]+#prefs \[data-ptab\][\s\S]+#prefs \.setGrid\[data-stab\][\s\S]+refreshSettings\(\)[\s\S]+replaceRoute\(accountTabRoute\(key\)\)/,
     'the unified account-tab handler shows the right pref/server panel, lazy-loads server data, and keeps the section in the URL');
-  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]+activateAccountTab\(b\)[\s\S]+addEventListener\('click', run\)[\s\S]+addEventListener\('focus', run\)[\s\S]+addEventListener\('mouseenter', run\)/,
-    'account tabs activate on click, D-pad focus, and hover');
+  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]+addEventListener\('click', \(\) => \{[\s\S]+activateAccountTab\(b\)[\s\S]+addEventListener\('focus', \(\) => scheduleAccountTab\(b\)\)[\s\S]+addEventListener\('mouseenter', \(\) => scheduleAccountTab\(b\)\)/,
+    'account tabs commit on click; focus/hover settle so Settings does not crawl');
   assert.match(ui, /function openServerSettings\(\) \{[\s\S]+switchView\('prefs'\)[\s\S]+#prefTabs \.srvTab[\s\S]+activateAccountTab\(first\)/,
     'admin entry points open the account page on the first Server-settings tab');
   assert.match(ui, /if \(v === 'settings'\) return openServerSettings\(\)/,
     'switchView(settings) should redirect to the folded-in account page');
   // The #prefTabs ArrowRight handler (focusActiveSettingsPanel) must enter the folded-in SERVER
   // panels too, not just pref panels — else D-pad Right from a server tab does nothing on device.
-  assert.match(ui, /function focusActiveSettingsPanel\(rootId, panelAttr\) \{[\s\S]+querySelector\(`\[\$\{panelAttr\}\]:not\(\[hidden\]\), \.setGrid\[data-stab\]:not\(\[hidden\]\)`\)/,
-    'ArrowRight from an account tab should enter both pref and server panels');
+  assert.match(ui, /function focusActiveSettingsPanel\(rootId, panelAttr\) \{[\s\S]+activateAccountTab\(focused\)[\s\S]+data-stab="\$\{key\}"[\s\S]+data-ptab="\$\{key\}"[\s\S]+panelAttr\}\]:not\(\[hidden\]\), \.setGrid\[data-stab\]:not\(\[hidden\]\)/,
+    'ArrowRight from an account tab should commit that tab and enter its pref or server panel');
   assert.match(ui, /document\.querySelectorAll\('#prefTabs \.srvTab, #prefServerDivider'\)\.forEach\(\(el\) => \{ el\.style\.display = isAdmin/,
     'the Server-settings tab group + divider should be admin-only');
   assert.match(ui, /function syncChoiceButtons\(selector, isSelected\) \{[\s\S]+classList\.toggle\('sel', selected\)[\s\S]+setAttribute\('aria-pressed', selected \? 'true' : 'false'\)/,
@@ -3584,12 +3641,16 @@ test('Android native player: direct source and native chrome stay out of the web
     assert.match(server, /windowsServerUrl: 'https:\/\/github\.com\/d1same\/triboon\/releases\/latest\/download\/Triboon-Windows-Server\.exe'/,
       '/api/app/latest should expose the stable Windows server alias');
   }
-  assert.match(ui, /function sectionFormConfig\(\) \{[\s\S]+S\.view === 'prefs'[\s\S]+root: \$\('prefs'\)[\s\S]+tabs: \$\('prefTabs'\)[\s\S]+panelAttr: 'data-ptab'[\s\S]+S\.view === 'settings'[\s\S]+root: \$\('settings'\)[\s\S]+tabs: \$\('setTabs'\)[\s\S]+panelAttr: 'data-stab'/,
-    'Settings and Preferences should share the section-form D-pad model with separate tab/panel roots');
+  assert.match(ui, /function sectionFormConfig\(\) \{[\s\S]+S\.view === 'prefs' \|\| S\.view === 'settings'[\s\S]+root: \$\('prefs'\)[\s\S]+tabs: \$\('prefTabs'\)[\s\S]+panelAttr: 'data-ptab'/,
+    'Settings D-pad must use the folded Preferences tabs, not the emptied #setTabs');
+  assert.match(ui, /function scheduleAccountTab\(b\) \{[\s\S]+activateAccountTab\(b\), 90\)[\s\S]+addEventListener\('focus', \(\) => scheduleAccountTab\(b\)\)/,
+    'Settings tab Down only highlights; the panel switch settles so Right is not dropped');
+  assert.match(ui, /if \(k === 'ArrowRight'\) \{[\s\S]+activateAccountTab\(tab\)[\s\S]+focusSectionControl\(formCtls\(activeSectionPanel\(cfg\)\)\[0\]\)/,
+    'Settings Right commits the focused tab then enters that panel');
   assert.match(ui, /function leaveSettingsPanelToTabs\(\) \{[\s\S]+focusActiveSectionTab\(cfg\)[\s\S]+if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+leaveSettingsPanelToTabs\(\)[\s\S]+window\.__tvBack = \(\) => \{[\s\S]+S\.view === 'prefs' \|\| S\.view === 'settings'[\s\S]+leaveSettingsPanelToTabs\(\)/,
     'TV Back from a Settings panel control returns to the left tab before leaving Settings');
-  assert.match(ui, /function focusContent\(retried\) \{[\s\S]+if \(S\.view === 'settings' \|\| S\.view === 'prefs'\) \{[\s\S]+formCtls\(\$\(S\.view === 'prefs' \? 'prefs' : 'settings'\)\)[\s\S]+els\[0\]\.focus\(\{ preventScroll: false \}\)/,
-    'entering Settings or Preferences from the rail should land on the first visible form target');
+  assert.match(ui, /function focusContent\(retried\) \{[\s\S]+if \(S\.view === 'settings' \|\| S\.view === 'prefs'\) \{[\s\S]+focusActiveSectionTab\(cfg\)[\s\S]+formCtls\(\$\('prefs'\) \|\| \$\('settings'\)\)/,
+    'entering Settings or Preferences from the rail should land on the active tab, not the emptied settings page');
   assert.match(ui, /function scrollSectionTabIntoView\(el\) \{[\s\S]+#prefTabs, #setTabs[\s\S]+function applyFocus\(el, scroll = true\) \{[\s\S]+scrollSectionTabIntoView\(el\)/,
     'focusing a Settings tab scrolls only the tab list, not the whole page');
   assert.match(ui, /function focusSectionControl\(el\) \{[\s\S]+el\.focus\(\{ preventScroll: true \}\)/,
@@ -3756,7 +3817,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'the web-player error path records the MediaError code (3=decode vs 4=src-not-supported) before failing over — pinpoints audio vs container/video walls on iOS');
   assert.match(server, /function parseCaps\(raw\) \{[\s\S]+\['mkv', 'mp4', 'h264', 'hevc', 'dovi', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'eac3Joc', 'dts', 'dtsHd', 'truehd', 'passthrough', 'native', 'lowPower'\][\s\S]+caps\.audioOutput = String\(raw\.audioOutput\)\.slice\(0, 64\)/,
     'server should accept sanitized native playback capability fields');
-  assert.match(server, /const imdbRaw = String\(ctx\.url\.searchParams\.get\('imdb'\) \|\| ctx\.url\.searchParams\.get\('imdbid'\) \|\| ''\)\.trim\(\);[\s\S]+const imdbId = \/\^tt\\d\{5,10\}\$\/i\.test\(imdbRaw\) \? imdbRaw\.toLowerCase\(\) : '';[\s\S]+let searchImdbId = imdbId;[\s\S]+episode\/\$\{episodeParam\}\/external_ids[\s\S]+searchImdbId = epImdb;[\s\S]+key, tmdbId, imdbId: searchImdbId, query: subQuery[\s\S]+const catalogId = searchImdbId \|\| tmdbId;/,
+  assert.match(server, /async function resolveEpisodeImdb\([\s\S]+if \(hit && Date\.now\(\) - hit\.at < EPISODE_IMDB_TTL_MS\) return hit\.imdb[\s\S]+episode\/\$\{episodeParam\}\/external_ids/,
+    'episode IMDb resolution is cached so pause/seek remounts do not re-hit TMDB or re-log the same resolve');
+  assert.match(server, /const imdbRaw = String\(ctx\.url\.searchParams\.get\('imdb'\) \|\| ctx\.url\.searchParams\.get\('imdbid'\) \|\| ''\)\.trim\(\);[\s\S]+const imdbId = \/\^tt\\d\{5,10\}\$\/i\.test\(imdbRaw\) \? imdbRaw\.toLowerCase\(\) : '';[\s\S]+let searchImdbId = imdbId;[\s\S]+const epImdb = await resolveEpisodeImdb\(tmdbId, seasonParam, episodeParam\);[\s\S]+searchImdbId = epImdb;[\s\S]+key, tmdbId, imdbId: searchImdbId, query: subQuery[\s\S]+const catalogId = searchImdbId \|\| tmdbId;/,
     'server subtitle route accepts IMDb ids, resolves the EPISODE imdb from TMDB for tmdb-only TV (shows with no show imdb, e.g. Goosebumps: The Vanishing), searches Wyzie by it, and caches by the active catalog id');
   assert.match(android, /private boolean pageTvReady;[\s\S]+private final java\.util\.ArrayList<String> pendingTvKeys[\s\S]+public void appReady\(\) \{[\s\S]+pageTvReady = true;[\s\S]+flushPendingTvKeys\(\);/,
     'Android should buffer early D-pad input until the web focus model is ready');
@@ -4399,8 +4462,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native subtitles should respect manual mode before considering saved online subtitle choices');
   assert.match(ui, /function activeSubtitleCues\(tt\) \{[\s\S]+tt\.activeCues[\s\S]+tt\.cues[\s\S]+\$\(\'video\'\)[\s\S]+v\.currentTime[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
     'web subtitle rendering should fall back to scanning loaded cues when activeCues is empty');
-  assert.match(ui, /function renderSubCues\(\) \{[\s\S]+const active = activeSubtitleCues\(tt\);[\s\S]+for \(const c of active\.slice\(-3\)\)/,
-    'web subtitle overlay should render from the shared active-cue helper and cap noisy tracks');
+  assert.match(ui, /function renderSubCues\(\) \{[\s\S]+const active = activeSubtitleCues\(tt\);[\s\S]+for \(const c of active\.slice\(-5\)\)/,
+    'web subtitle overlay should render from the shared active-cue helper and cap noisy tracks at 5 lines');
   assert.match(ui, /function applySubtitleTrack\(\) \{[\s\S]+const seq = \(p\._subSeq \|\| 0\) \+ 1; p\._subSeq = seq;[\s\S]+if \(p\.subTrack === null \|\| p\.subTrack === undefined\) \{ clearTimeout\(_subPrepT\); return; \}/,
     'turning subtitles off should invalidate pending track loads and clear stale preparing messages');
   assert.match(playerMap, /\| P11 \| Subtitles\/CC must be selectable, visible, synced, and quiet[\s\S]+activeSubtitleCues[\s\S]+\/api\/ossubs[\s\S]+subtitle sync smoke \|/,
@@ -4825,12 +4888,16 @@ test('Android native player: direct source and native chrome stay out of the web
   {
     const start = ui.indexOf('function liveChannelSearchText');
     const end = ui.indexOf('function renderLiveTvBody', start);
+    const closeStart = ui.indexOf('function searchWords');
+    const closeEnd = ui.indexOf('function catalogSearchItems', closeStart);
     assert.ok(start >= 0 && end > start, 'live channel search helpers stay next to the Live TV body render');
-    const helpers = new Function(`${ui.slice(start, end)}; return { liveChannelMatchesQuery, liveChannelSubtitle };`)();
+    assert.ok(closeStart >= 0 && closeEnd > closeStart, 'close-title helpers stay with catalog search');
+    const helpers = new Function(`${ui.slice(closeStart, closeEnd)}${ui.slice(start, end)}; return { liveChannelMatchesQuery, liveChannelSubtitle };`)();
     const espn = { name: 'ESPN', group: 'Sports', sourceName: 'Sportsnet' };
     const dup = { name: 'Shared News', group: 'Alpha TV · News', sourceName: 'Alpha TV' };
     assert.ok(helpers.liveChannelMatchesQuery(espn, 'sportsnet'), 'playlist source name is searchable');
     assert.ok(helpers.liveChannelMatchesQuery(espn, 'espn'), 'channel name still matches');
+    assert.ok(helpers.liveChannelMatchesQuery(espn, 'espm'), 'a close channel typo still matches');
     assert.strictEqual(helpers.liveChannelMatchesQuery(espn, 'cnn'), false, 'unrelated queries stay out');
     assert.strictEqual(helpers.liveChannelSubtitle(espn), 'Sports · Sportsnet');
     assert.strictEqual(helpers.liveChannelSubtitle(dup), 'Alpha TV · News',
@@ -5519,8 +5586,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'native subtitle sync must not refresh or rebuild the playing video');
   assert.match(android, /private ValidatedNativeUrl validateNativeSubtitleOverlayUrl\(String raw, String pinnedHostHeader\) throws IOException \{[\s\S]+ValidatedNativeUrl safe = validateNativePlaybackUrl\(raw\);[\s\S]+hostLooksLiteral\(connectHost\)[\s\S]+hostHeader = pinnedHostHeader\.trim\(\);[\s\S]+return new ValidatedNativeUrl\(safe\.originalUrl, safe\.connectUrl, hostHeader\);[\s\S]+\}/,
     'native subtitle overlay URLs should be validated inside the fetch helper and preserve pinned personal-IPTV Host headers');
-  assert.match(android, /private void loadNativeSubtitleOverlay\(String url\) \{[\s\S]+validateNativeSubtitleOverlayUrl\(cleanUrl, nativeSubtitleHostHeader\);[\s\S]+final String fetchUrl = subtitleUrl\.connectUrl;[\s\S]+new URL\(fetchUrl\)\.openConnection\(\)[\s\S]+c\.setRequestProperty\("Host", hostHeader\);[\s\S]+int status = c\.getResponseCode\(\);[\s\S]+readNativeSubtitleResponse\(c, status >= 400\)[\s\S]+parseNativeVtt\(body\)[\s\S]+nativeSubtitleHandler\.postDelayed\(nativeSubtitleTick, 250\)/,
+  assert.match(android, /private void loadNativeSubtitleOverlay\(String url\) \{[\s\S]+validateNativeSubtitleOverlayUrl\(cleanUrl, nativeSubtitleHostHeader\);[\s\S]+final String fetchUrl = subtitleUrl\.connectUrl;[\s\S]+new URL\(fetchUrl\)\.openConnection\(\)[\s\S]+c\.setRequestProperty\("Host", hostHeader\);[\s\S]+int status = c\.getResponseCode\(\);[\s\S]+readNativeSubtitleResponse\(c, status >= 400, token\)[\s\S]+parseNativeVtt\(body\)[\s\S]+nativeSubtitleHandler\.postDelayed\(nativeSubtitleTick, 250\)/,
     'native online subtitles should be fetched once and rendered by a live Exo overlay');
+  assert.match(android, /bumpNativeSubtitleLoadToken\(\) \{[\s\S]+disconnectNativeSubtitleFetch\(\)[\s\S]+token != nativeSubtitleLoadToken[\s\S]+subtitle fetch cancelled/,
+    'a new seek/remount must disconnect the previous subtitle HTTP so old Wyzie/OS work dies');
+  assert.match(android, /disableNativeTextTracks\(\);[\s\S]+reuseQuietVideo && keepSubtitleCues && previousSubtitleUrl\.equals\(nativeSubtitleUrl\)[\s\S]+updateNativeSubtitleOverlay\(\);/,
+    'pause/seek remounts must keep the same VTT cues and hide embedded tracks so CC does not blank or stack');
+  assert.match(android, /private void updateNativeSubtitleOverlay\(\) \{[\s\S]+if \(nativePercentResumePending\) \{[\s\S]+View\.GONE[\s\S]+return;/,
+    'percent-resume remounts must not paint opening-credit cues over the resume spot');
   assert.match(android, /c\.setReadTimeout\(nativeSubtitleReadTimeoutMs\(cleanUrl\)\);[\s\S]+private int nativeSubtitleReadTimeoutMs\(String url\) \{[\s\S]+raw\.contains\("\/api\/subtitle\/"\) \? 135000 : 20000;[\s\S]+\}/,
     'native built-in subtitle overlay fetches should outlive slow server-side extraction while online VTT stays quick');
   assert.match(android, /new java\.io\.IOException\("subtitle HTTP " \+ status \+ ": " \+ subtitleErrorSnippet\(body\)\)/,
@@ -5572,8 +5645,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should not show success popups over playback');
   assert.match(android, /private boolean nativeVodSeekable\(\) \{[\s\S]+if \(nativePlayer == null \|\| "live"\.equals\(nativeMode\)\) return false;/,
     'live streams should not expose movie-style seeking behavior');
-  assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide, keepVideoLoader\);[\s\S]+if \(reuseLivePlayer\) \{[\s\S]+nativePlayer\.stop\(\);[\s\S]+nativePlayer\.clearMediaItems\(\);[\s\S]+applyNativeHttpHostHeader\(\);[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);/,
-    'native Live TV zaps should reuse ExoPlayer, refresh pinned Host headers, and explicitly release the old live source before replacing the media item');
+  assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide, keepVideoLoader\);[\s\S]+if \(reuseLivePlayer \|\| reuseQuietVideo\) \{[\s\S]+nativePlayer\.stop\(\);[\s\S]+nativePlayer\.clearMediaItems\(\);[\s\S]+applyNativeHttpHostHeader\(\);[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);/,
+    'native Live TV zaps and VOD quiet remounts should reuse ExoPlayer and drop the old buffer before the new item');
   assert.ok([
     'private long nativePendingStartMs;',
     'private long nativeStartSeekIssuedAtMs;',
@@ -6008,6 +6081,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // setting) × the file bitrate, clamped to a device-RAM-safe ceiling — not a hard-coded constant.
   assert.match(android, /if \(video && nativeBufferGoalSec > 0\) \{[\s\S]+nativeBufferCeilingMb\(conservative, heavyVod\)[\s\S]+nativePlaybackSizeBytes \/ nativePlaybackDurationSec[\s\S]+maxMs = \(int\) Math\.max\(30000L, Math\.min\(conservative \? 120000L : 300000L, nativeBufferGoalSec \* 1000L\)\)/,
     'the on-device buffer scales with the owner read-ahead-goal setting and the file bitrate');
+  assert.match(android, /if \(heavyVod && !conservative\) maxMs = Math\.min\(maxMs, 90000\);[\s\S]+setPrioritizeTimeOverSizeThresholds\(!heavyVod\)/,
+    '4K/heavy VOD must honor the RAM byte ceiling so Shield cannot grow a 300s buffer past device memory');
   assert.match(android, /private int nativeBufferCeilingMb\(boolean conservative, boolean heavyVod\) \{[\s\S]+getMemoryInfo\(mi\)[\s\S]+totalRamMb \* 22 \/ 100[\s\S]+conservative \? \(heavyVod \? 96 : 48\) : \(heavyVod \? 768 : 256\)/,
     'the buffer ceiling is a safe share of THIS device RAM, capped per tier so cheap boxes never over-commit');
   assert.match(android, /int bufferGoalSec = Math\.max\(0, j\.optInt\("bufferGoalSec", 0\)\)[\s\S]+nativeBufferGoalSec = bufferGoalSec/,
