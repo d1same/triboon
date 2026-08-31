@@ -414,8 +414,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the 4K quality toggle must be gated on the user being allowed to play 4K');
   assert.match(ui, /function releaseResolutionRankFromName\(name\) \{[\s\S]+2160p\|4k\|uhd[\s\S]+return 4;[\s\S]+function localPlaybackFitsQuality\(it, qRank\) \{[\s\S]+if \(qRank === 4\) return rank === 4;[\s\S]+if \(qRank === 3\) return rank !== 4;/,
     'local playback should be allowed only when it matches the requested source class');
-  assert.match(ui, /const picked = pick && typeof pick === 'object'[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+localExact = !picked && localPlaybackForItem\(it\) \? \{ \.\.\.it, _local: localPlaybackForItem\(it\) \} : null;[\s\S]+if \(localExact && localPlaybackFitsQuality\(localExact, qRank\)\)[\s\S]+playLocal\(localExact/,
-    'Play should compute quality before the local shortcut so selected 4K cannot be replaced by a local 1080p file');
+  assert.match(ui, /const picked = pick && typeof pick === 'object'[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+localExact = !picked && localPlaybackForItem\(it\) \? \{ \.\.\.it, _local: localPlaybackForItem\(it\) \} : null;[\s\S]+if \(localExact && \(isAttachedLibraryItem\(it\) \|\| localPlaybackFitsQuality\(localExact, qRank\)\)\)[\s\S]+playLocal\(localExact/,
+    'IR Movies\/TV always play the disk file; catalog Play still honors 1080p\/4K so a local 1080 cannot replace a selected 4K');
+  assert.match(ui, /if \(localNow && \(!it\.tmdbId \|\| isAttachedLibraryItem\(it\)\)\) \{[\s\S]+return playLocal\(\{ \.\.\.it, _local: localNow \}/,
+    'clicking a library card plays the ripped file even when a leftover Hollywood TMDB id is still on the row');
+  assert.match(ui, /if \(it\._lib && it\._lib\.path\) \{[\s\S]+return it\._episode \? playLocal\(it\) : openLocalDetail\(it\);/,
+    'attached-library cards open local details instead of the Hollywood TMDB page');
   assert.match(ui, /catch \(e\) \{[\s\S]+if \(S\._playTicket !== playTicket \|\| S\.view !== 'player'\) return;[\s\S]+if \(localExact && !picked && \/no playable\|no \.\*candidate\|all candidates failed\/i\.test\(String\(e && e\.message \|\| ''\)\)\) \{[\s\S]+return playLocal\(localExact, \{ replacementStarted: true, nativeFirst, playTicket \}\);[\s\S]+\}/,
     'Local library files should fall back to disk playback when online source search has no playable candidate');
   assert.doesNotMatch(ui, /Your pick couldn't be streamed|4K wasn’t available right now|Source failed health check|Source failed — advancing|Source is still stalled|Stream hiccup|Codec not supported — optimizing/,
@@ -1422,7 +1426,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   const resumeCw = ui.match(/async function resumeContinueWatching\(it\) \{[\s\S]*?\n\}/)[0];
   assert.doesNotMatch(resumeCw, /await ensureLocalPlaybackForItem/,
     'Home Continue Watching must not wait on local-lookup before the loader covers the page');
-  assert.match(ui, /function isPersonalLibraryWatchItem\(it\) \{[\s\S]+if \(\/\^local:\/i\.test\(String\(it\.key \|\| ''\)\)\) return true;[\s\S]+if \(it\.tmdbId\) return false;/,
+  assert.match(ui, /function isPersonalLibraryWatchItem\(it\) \{[\s\S]+if \(\/\^local:\/i\.test\(String\(it\.key \|\| ''\)\)\) return true;[\s\S]+if \(isAttachedLibraryItem\(it\)\) return true;[\s\S]+if \(it\.tmdbId\) return false;/,
     'matched TMDB titles still use usenet when no local file is attached');
   assert.match(ui, /function localLookupKeysForItem\(it\) \{[\s\S]+it\.key/,
     'local playback lookup includes unmatched local: library keys, not only TMDB ids');
@@ -7997,6 +8001,12 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
     'tmdbLookup folds the year back into the query when the year-filtered search misses');
   assert.match(server, /pickLibraryTmdbHit\(/,
     'library TMDB search verifies the hit title against the folder/file name');
+  assert.match(server, /const nfoLocal = libraryNfoPrefersLocal\(nfo, ov\);[\s\S]+const prev = \(ov === 'none' \|\| nfoLocal\) \? null : reuse\(best\.file\);[\s\S]+if \(ov === 'none' \|\| nfoLocal\) \{ item\.tmdbId = null/,
+    'a movie NFO without a TMDB uniqueid stays on folder info and does not reuse a Hollywood id');
+  assert.match(server, /const nfoLocalShow = libraryNfoPrefersLocal\(nfo, ovS\);[\s\S]+if \(ovS === 'none' \|\| nfoLocalShow\) \{ show\.tmdbId = null/,
+    'a tvshow.nfo without a TMDB uniqueid stays on folder info');
+  assert.match(server, /if \(!\(nfo && nfo\.title\)\) item\.title = hit\.title \|\| hit\.name \|\| item\.title/,
+    'TMDB must not overwrite an NFO title with a close English Hollywood name');
   assert.match(server, /libraryItemMatchesTmdb\(/,
     'local-lookup refuses a stored TMDB id whose file title does not match');
   assert.match(server, /const byLocalKey = \/\^local:\/i\.test\(key\);[\s\S]+if \(!byLocalKey && !libraryItemMatchesTmdb\(row\.item\)\) continue/,

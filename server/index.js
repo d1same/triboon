@@ -13,7 +13,7 @@ const { Store, VerdictCache } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
-const { parseLibraryName, pickLibraryTmdbHit, libraryItemMatchesTmdb, unboundLibraryItem } = require('./library-match');
+const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryItemMatchesTmdb, unboundLibraryItem } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline, mountHasActivePlayback } = require('./pipeline');
 const {
@@ -6833,11 +6833,13 @@ async function performScan(lib, state, mode = 'scan') {
       });
       const ov = ovOf(best.file);
       if (ov !== undefined) item.matchOverride = ov;
-      const prev = ov === 'none' ? null : reuse(best.file);
-      if (ov === 'none') { item.tmdbId = null; item.poster = null; item.backdrop = null; }
+      const nfoLocal = libraryNfoPrefersLocal(nfo, ov);
+      const prev = (ov === 'none' || nfoLocal) ? null : reuse(best.file);
+      if (ov === 'none' || nfoLocal) { item.tmdbId = null; item.poster = null; item.backdrop = null; }
       else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
         item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
-        item.genres = prev.genres || []; item.title = prev.title; // prev title is TMDB-final
+        item.genres = prev.genres || [];
+        if (!(nfo && nfo.title)) item.title = prev.title;
         item.originalTitle = prev.originalTitle || null;
         item.overview = item.overview || prev.overview; item.rating = item.rating || prev.rating;
       } else if (wantTmdb) lookupJobs.push(async () => {
@@ -6847,9 +6849,10 @@ async function performScan(lib, state, mode = 'scan') {
         if (hit) {
           item.tmdbId = hit.id; item.poster = hit.poster_path; item.backdrop = hit.backdrop_path;
           item.genres = genresOf(hit);
-          item.title = hit.title || hit.name || item.title; // TMDB display name beats messy NFO/folder titles
+          if (!(nfo && nfo.title)) item.title = hit.title || hit.name || item.title;
           item.originalTitle = hit.original_title || hit.original_name || null;
-          item.overview = item.overview || hit.overview || ''; item.rating = item.rating || hit.vote_average || null;
+          if (!(nfo && nfo.plot)) item.overview = item.overview || hit.overview || '';
+          if (!(nfo && nfo.rating)) item.rating = item.rating || hit.vote_average || null;
         } else keepPrev(item, best.file);
       });
     };
@@ -6865,11 +6868,13 @@ async function performScan(lib, state, mode = 'scan') {
       });
       const ovS = ovOf(`show:${dir}`);
       if (ovS !== undefined) show.matchOverride = ovS;
-      const prevShow = ovS === 'none' ? null : reuse(`show:${dir}`);
-      if (ovS === 'none') { show.tmdbId = null; show.poster = null; show.backdrop = null; }
+      const nfoLocalShow = libraryNfoPrefersLocal(nfo, ovS);
+      const prevShow = (ovS === 'none' || nfoLocalShow) ? null : reuse(`show:${dir}`);
+      if (ovS === 'none' || nfoLocalShow) { show.tmdbId = null; show.poster = null; show.backdrop = null; }
       else if (prevShow && (typeof ovS !== 'number' || prevShow.tmdbId === ovS)) {
         show.tmdbId = prevShow.tmdbId; show.poster = prevShow.poster; show.backdrop = prevShow.backdrop;
-        show.genres = prevShow.genres || []; show.title = prevShow.title;
+        show.genres = prevShow.genres || [];
+        if (!(nfo && nfo.title)) show.title = prevShow.title;
         show.originalTitle = prevShow.originalTitle || null;
         show.overview = show.overview || prevShow.overview; show.rating = show.rating || prevShow.rating;
       } else if (wantTmdb) lookupJobs.push(async () => {
@@ -6877,9 +6882,10 @@ async function performScan(lib, state, mode = 'scan') {
         if (hit) {
           show.tmdbId = hit.id; show.poster = hit.poster_path; show.backdrop = hit.backdrop_path;
           show.genres = genresOf(hit);
-          show.title = hit.name || show.title; // TMDB display name beats messy NFO/folder titles
+          if (!(nfo && nfo.title)) show.title = hit.name || show.title;
           show.originalTitle = hit.original_name || hit.original_title || null;
-          show.overview = show.overview || hit.overview || ''; show.rating = show.rating || hit.vote_average || null;
+          if (!(nfo && nfo.plot)) show.overview = show.overview || hit.overview || '';
+          if (!(nfo && nfo.rating)) show.rating = show.rating || hit.vote_average || null;
         } else keepPrev(show, `show:${dir}`);
         if (!show.tmdbId) return;
         // Episodes were created before the lookup resolved — sync their show-derived fields.

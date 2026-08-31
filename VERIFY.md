@@ -126,6 +126,26 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-31, v3.1.21 ship — local NFO first, library Play uses the disk file:
+
+- Version contract: `package.json` 3.1.21; Android `versionName` 3.1.21 /
+  `versionCode` 366; Windows client package/Tauri/Cargo 3.1.21.
+- Scan reads the NFO first. No TMDB uniqueid → stay local, never search
+  Hollywood. TMDB may fill poster/backdrop only when the NFO has an id or
+  there is no NFO — it does not overwrite the NFO title. Example: *دختر
+  برقی* stays that title; Play opens that MKV, not Return of the King.
+- IR Movies / IR TV cards always Play the file on the server. Catalog
+  Movies still honor 1080/4K so a local 1080 cannot replace a selected 4K.
+  Local files do not take Usenet sockets.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). Node suite **683/683**.
+  Isolated `/api/server` 3.1.21.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 20ms; FROM ready 4592ms SLOW; resume 26ms/22ms). IPTV web+native
+  retune PASS (8184 channels). Overlapping Play PASS (both ready in 28ms).
+  Android lint/unit/debug build PASS. Android ExoPlayer stress on
+  `emulator-5554` PASS. Windows GPU not instrumented.
+
 2026-08-31, v3.1.20 ship — 4K sockets, local library buffer, frankestein search, Settings tabs:
 
 - Version contract: `package.json` 3.1.20; Android `versionName` 3.1.20 /

@@ -7740,8 +7740,17 @@ function makeCard(it, poster, onFocus) {
       if (S.view !== 'library') switchView('library');
       return openLocalShowDetail({ ...it, _lib: lib });
     }
-    // TMDB-matched local items go to the full detail page (Play resolves locally there);
-    // unmatched MOVIES get an NFO-built detail page; episodes inside a show grid play directly.
+    // Attached-library cards stay on the library page. A wrong TMDB glue
+    // (Persian NFO → Hollywood) used to open that movie's detail and Play Usenet.
+    if (it._lib && it._lib.path) {
+      if (it._kind === 'show' || it._showOpen !== undefined) {
+        const lib = it._lib || S.currentLib;
+        S.currentLib = lib;
+        if (S.view !== 'library') switchView('library');
+        return openLocalShowDetail({ ...it, _lib: lib, _showOpen: it._showOpen !== undefined ? it._showOpen : it._idx });
+      }
+      return it._episode ? playLocal(it) : openLocalDetail(it);
+    }
     if (it._local && !(it.tmdbId && (it.type === 'movie' || it.type === 'tv'))) {
       return it._episode ? playLocal(it) : openLocalDetail(it);
     }
@@ -8695,13 +8704,17 @@ function releaseResolutionRankFromName(name) {
   if (/\b480p\b/.test(s)) return 0;
   return null;
 }
+function isAttachedLibraryItem(it) {
+  return !!(it && it._lib && it._lib.path);
+}
 function isPersonalLibraryWatchItem(it) {
   if (!it) return false;
   if (/^local:/i.test(String(it.key || ''))) return true;
-  // Matched TMDB titles can still use usenet. Only unmatched library files
-  // must never fall through to "Not available yet".
+  // IR Movies / IR TV cards are the file on disk even when a leftover TMDB id
+  // is still on the row. Catalog Movies can still use usenet.
+  if (isAttachedLibraryItem(it)) return true;
   if (it.tmdbId) return false;
-  return !!(it._local || it._lib || (typeof isLocalLibraryTitle === 'function' && isLocalLibraryTitle(it)));
+  return !!(it._local || (typeof isLocalLibraryTitle === 'function' && isLocalLibraryTitle(it)));
 }
 function localPlaybackForItem(it) {
   if (!it) return null;
@@ -8802,7 +8815,9 @@ async function play(it, pick, opts = {}) {
   // Local-first: if this exact title/episode exists in a scanned library, play the file on
   // disk instead of searching usenet, unless the chosen quality asks for another source class.
   const localNow = localPlaybackForItem(it);
-  if (localNow && !it.tmdbId) return playLocal({ ...it, _local: localNow }, { directHandoff: !!opts.directHandoff }); // NFO-only archive item: file is the only source
+  if (localNow && (!it.tmdbId || isAttachedLibraryItem(it))) {
+    return playLocal({ ...it, _local: localNow }, { directHandoff: !!opts.directHandoff });
+  }
   const btns = [$('btnPlay'), $('dPlay')];
   btns.forEach((b) => { b.disabled = true; });
   // No status toasts. Pressing Play must leave the detail page immediately; Android still
@@ -8829,7 +8844,7 @@ async function play(it, pick, opts = {}) {
       if (loc) it = { ...it, _local: loc };
     }
     localExact = !picked && localPlaybackForItem(it) ? { ...it, _local: localPlaybackForItem(it) } : null;
-    if (localExact && localPlaybackFitsQuality(localExact, qRank)) {
+    if (localExact && (isAttachedLibraryItem(it) || localPlaybackFitsQuality(localExact, qRank))) {
       return await playLocal(localExact, { replacementStarted: true, nativeFirst, playTicket });
     }
     if (!picked && isPersonalLibraryWatchItem(it) && !localExact) {
@@ -19173,7 +19188,7 @@ function mapLocal(lib, x, titleOverride) {
     tmdbId: x.tmdbId, type: matched ? type : null,
     _local: x.streamUrl ? { streamUrl: x.streamUrl, playUrl: x.playUrl, name: titleOverride || x.title } : null,
     _episode: x.kind === 'episode',
-    _showOpen: x.kind === 'show' && !matched ? x.idx : undefined,
+    _showOpen: x.kind === 'show' ? x.idx : undefined,
   };
   rememberLibrarySource(mapped);
   return mapped;

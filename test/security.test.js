@@ -1190,9 +1190,10 @@ test('library scan v2: Jellyfin layout — shows/episodes, NFO info, local poste
   const movie = items.find((i) => i.kind === 'movie');
   const show = items.find((i) => i.kind === 'show');
   const eps = items.filter((i) => i.kind === 'episode');
-  // Title rule: TMDB display name when the hit actually matches the folder (mock echoes the
-  // search query). The NFO still supplies year/plot/rating, which beat the filename parse.
-  assert.strictEqual(movie.title, 'My Film', 'TMDB display name wins over the NFO title when matched');
+  // Title rule: NFO wins when it has no TMDB uniqueid. Searching TMDB by folder
+  // name glued Persian films to Hollywood (Do Sag → Return of the King).
+  assert.strictEqual(movie.title, 'My Film Proper', 'NFO title wins; TMDB must not overwrite it');
+  assert.ok(!movie.tmdbId, 'NFO without a uniqueid must not attach a TMDB id');
   assert.strictEqual(movie.year, '2021', 'NFO year kept');
   assert.strictEqual(movie.overview, 'A test plot.', 'NFO plot kept');
   assert.strictEqual(movie.rating, 7.5, 'NFO rating kept');

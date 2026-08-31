@@ -106,6 +106,15 @@ function libraryItemKind(item) {
   return 'movie';
 }
 
+// An NFO without a TMDB uniqueid is the owner's title. Searching TMDB by that
+// name glued Persian films to Hollywood (Do Sag → Return of the King). Example:
+// movie.nfo says "دختر برقی" — keep it; do not pick a close English hit.
+function libraryNfoPrefersLocal(nfo, matchOverride) {
+  if (matchOverride === 'none') return true;
+  if (typeof matchOverride === 'number') return false;
+  return !!(nfo && !nfo.tmdbId);
+}
+
 function libraryItemMatchesTmdb(item) {
   if (!item || !item.tmdbId) return false;
   if (typeof item.matchOverride === 'number') return true;
@@ -156,6 +165,7 @@ module.exports = {
   libraryFileLabel,
   libraryTitleMatches,
   pickLibraryTmdbHit,
+  libraryNfoPrefersLocal,
   libraryItemMatchesTmdb,
   unboundLibraryItem,
 };

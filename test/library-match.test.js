@@ -7,6 +7,7 @@ const {
   parseLibraryName,
   libraryTitleMatches,
   pickLibraryTmdbHit,
+  libraryNfoPrefersLocal,
   libraryItemMatchesTmdb,
   unboundLibraryItem,
 } = require('../server/library-match');
@@ -107,4 +108,15 @@ test('stored TMDB ids are unbound when the file/folder title does not describe t
     year: 2025, file: doSagFile,
   };
   assert.strictEqual(libraryItemMatchesTmdb(originalOk), true);
+});
+
+test('NFO without a TMDB id stays on folder info and does not search Hollywood', () => {
+  assert.strictEqual(libraryNfoPrefersLocal({ title: 'دختر برقی', year: '2026' }, undefined), true);
+  assert.strictEqual(libraryNfoPrefersLocal({ title: 'Dokhtar Barghi', tmdbId: 123 }, undefined), false,
+    'an NFO uniqueid is an explicit TMDB pick');
+  assert.strictEqual(libraryNfoPrefersLocal(null, undefined), false, 'no NFO still allows TMDB search');
+  assert.strictEqual(libraryNfoPrefersLocal({ title: 'The Office' }, 2316), false,
+    'admin match override still searches that id');
+  assert.strictEqual(libraryNfoPrefersLocal({ title: 'The Office', tmdbId: 2316 }, 'none'), true,
+    'folder-info override wins even if the NFO had an id');
 });
