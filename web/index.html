@@ -3148,7 +3148,9 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 /* Button focus, Plex-style: the focused button fills SOLID LIGHT with dark glyphs — calmer
    and more readable than the old coral glow ring. Late in the sheet (+!important) so it also
    wins over the gold .btn.primary override above. */
-.btn.focusable.focus,.iconBtn.focusable.focus,.cbtn.focusable.focus,#micBtn:focus,#musicMicBtn:focus{
+.btn.focusable.focus,.iconBtn.focusable.focus,.cbtn.focusable.focus,
+#micBtn:focus,#micBtn.focus,#micBtn.focusable.focus,
+#musicMicBtn:focus,#musicMicBtn.focus,#musicMicBtn.focusable.focus{
   background:var(--btnHover)!important;color:var(--btnFocusText)!important;border-color:transparent!important;
   box-shadow:0 10px 28px rgba(0,0,0,.32)!important;outline:none;transform:translateZ(0)}
 #osd .cbtn.focusable.focus,#osd .cbtn:focus,#osd .cbtn:hover{
@@ -5620,8 +5622,8 @@ function hideToast() {
   if (msg) msg.textContent = '';
 }
 function releasePlaybackSession(sessionId, opts = {}) {
-  if (!sessionId) return;
-  api('/api/play/stop', { method: 'POST', body: { sessionId, keepPrepared: !!opts.keepPrepared } }).catch(() => {});
+  if (!sessionId) return Promise.resolve();
+  return api('/api/play/stop', { method: 'POST', body: { sessionId, keepPrepared: !!opts.keepPrepared } }).catch(() => {});
 }
 let bdFlip = false, bdCurrent = '';
 let _bdPendingUrl = null, _bdTimer = null;
@@ -8806,10 +8808,10 @@ function beginPlaybackTransition(it, opts = {}) {
     && !!(S.playing && S.playing.usingNative);
   const now = (typeof appMs === 'function' ? appMs() : Date.now());
   S._handoffQuietUntil = opts.directHandoff ? now + 12000 : 0;
-  stopActivePlaybackForReplacement({ preserveNativeSurface });
+  const stopP = stopActivePlaybackForReplacement({ preserveNativeSurface });
   if (nativeFirst) showNativePlayLoading(it, playTicket, !!opts.hot);
   else showPlayLoading(it, !!opts.hot);
-  return { nativeFirst, playTicket };
+  return { nativeFirst, playTicket, stopP };
 }
 async function play(it, pick, opts = {}) {
   if (!it) return;
@@ -8846,10 +8848,12 @@ async function play(it, pick, opts = {}) {
   // Begin that transition BEFORE the local-library lookup: the lookup is normally fast, but a
   // busy disk/server must never turn into ten seconds visibly parked on the show details page.
   const localReady = !picked && localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank);
-  const { nativeFirst, playTicket } = beginPlaybackTransition(it, {
+  const { nativeFirst, playTicket, stopP } = beginPlaybackTransition(it, {
     ...opts,
     hot: !picked && (playbackIsWarmed(it, qRank) || localReady),
   });
+  if (stopP) await stopP;
+  if (S._playTicket !== playTicket || S.view !== 'player') return;
   if (opts.directHandoff) armPlayHandoffWatchdog(playTicket);
   let localExact = null;
   try {
@@ -12384,10 +12388,11 @@ function stopActivePlaybackForReplacement(opts = {}) {
   S.playerSeasonStrip = null;
   S.nextEp = null;
   S.nextEpPrepared = false;
-  releasePlaybackSession(leavingSessionId);
+  const stopP = releasePlaybackSession(leavingSessionId);
   S.playing = null;
   updateNextEpisodeButton();
   updatePlayerControlAvailability();
+  return stopP;
 }
 function startNativePlayerHousekeeping(it) {
   stopWebVideoElement();
@@ -12571,7 +12576,7 @@ async function openPlayer(it, mount, opts = {}) {
   };
   v.onplaying = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
-    clearWebRebufferRecovery(); clearPauseIdleExit(); cancelPauseWarmAhead(); playingRef._pausedAt = 0; markVodPlaybackStarted(playingRef);
+    clearWebRebufferRecovery(); clearPauseIdleExit(); cancelPauseWarmAhead(); playingRef._pausedAt = 0; playingRef._webResuming = false; markVodPlaybackStarted(playingRef);
     bumpPlayClock(playingRef);
     clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame();
   };
@@ -12708,6 +12713,7 @@ function startSource(kind, atSeconds, opts = {}) {
   clearWebRebufferRecovery();
   if (p) { markPlaybackSourceSwap(p); p.usingNative = false; }
   if (opts.quietSeek && p) {
+    p._webResuming = true;
     p.suppressSeekLoaderUntil = appMs() + 4500;
     clearTimeout(S._waitT);
     $('playerLoader').classList.remove('show');
@@ -13366,9 +13372,10 @@ function tryNextNativeKind(failedKind, atSeconds, msg) {
   if (!p || !nativeVideoRequired(p.item)) return false;
   p.nativeTried = p.nativeTried || {};
   p.nativeTried[failedKind] = true;
+  const opts = vodPlaybackStarted(p) ? { quietSeek: true } : {};
   for (const next of nativePlaybackOrder(p, p.nativeStartKind)) {
     if (p.nativeTried[next]) continue;
-    if (tryNativeVideoPlayer(next, atSeconds)) return true;
+    if (tryNativeVideoPlayer(next, atSeconds, opts)) return true;
   }
   return false;
 }
@@ -13520,6 +13527,7 @@ window.__tvNativeVideoStats = (raw, token) => {
 window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   const p = S.playing;
   if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
+  p._nativeResuming = true;
   p._nativeSeekGen = (p._nativeSeekGen || 0) + 1;
   const seekGen = p._nativeSeekGen;
   const current = () => S.playing === p && S.view === 'player' && p.usingNative && p._nativeSeekGen === seekGen;
@@ -13640,8 +13648,8 @@ window.__tvNativeVideoQuality = (quality, pos, dur, token) => {
     p.usingNative = false;
     p.nativeTried = {};
     p.triedTranscode = false;
-    if (tryNativeVideoPlayer('direct', at)) return;
-    if (p.remuxUrl && tryNativeVideoPlayer('remux', at)) return;
+    if (tryNativeVideoPlayer('direct', at, { quietSeek: true })) return;
+    if (p.remuxUrl && tryNativeVideoPlayer('remux', at, { quietSeek: true })) return;
     restoreNative();
     toast('Original quality is not available in the native player');
     return;
@@ -13655,7 +13663,7 @@ window.__tvNativeVideoQuality = (quality, pos, dur, token) => {
   p.usingNative = false;
   p.quality = q;
   p.triedTranscode = true;
-  if (!tryNativeVideoPlayer('transcode', at)) {
+  if (!tryNativeVideoPlayer('transcode', at, { quietSeek: true })) {
     restoreNative();
     toast('Could not switch native quality');
   }
@@ -13908,6 +13916,7 @@ function recoverSamePlaybackSource(reason = '') {
   if (p.usingNative && p.nativePaused && !sourceDead && !decoderFailure) return false;
   // Play already asked for a quiet remount. A second recovery on top freezes the picture.
   if (p.usingNative && p._nativeResuming && !sourceDead && !decoderFailure) return false;
+  if (p._webResuming && !sourceDead && !decoderFailure) return false;
   // Server restart / swept mount: do not replay the dead URL (that flickers Preparing).
   // Wait, remount the same title, resume. Decoder failures stay on the codec path.
   const mountGone = playbackServerGone(reason) && !decoderFailure;
@@ -14028,7 +14037,7 @@ function failover() {
     startSource('remux', currentTime(), vodPlaybackStarted(p) ? { quietSeek: true } : {});
   } else if (!p.usingTranscode && p.transcodeUrl && !p.triedTranscode) {
     p.triedTranscode = true;
-    startSource('transcode', currentTime());
+    startSource('transcode', currentTime(), vodPlaybackStarted(p) ? { quietSeek: true } : {});
   } else if (p.sessionId) {
     autoAdvance();
   } else {
@@ -15530,6 +15539,7 @@ function togglePlay() {
     // Remux/transcode leftover buffer is a dead ffmpeg pipe that still looks "ready."
     // play() on it freezes or breaks up; remount the same file at the pause point.
     if (remux) {
+      if (p._webResuming) { updPP(); return; }
       p._pausedAt = 0;
       startSource(currentPlayerKind(p), currentTime(), { quietSeek: true });
       updPP();
@@ -16707,11 +16717,11 @@ function setQuality(q) {
   const at = currentTime();
   if (q === 'orig') {
     p.triedTranscode = false;
-    startSource(p.remuxUrl ? 'remux' : 'direct', at);
+    startSource(p.remuxUrl ? 'remux' : 'direct', at, { quietSeek: true });
   } else {
     if (!p.transcodeUrl) return toast('No H.264 encoder available on the server');
     p.quality = q;
-    startSource('transcode', at);
+    startSource('transcode', at, { quietSeek: true });
   }
 }
 // Background subtitle sync: re-request the same online sub with &sync=1 (the server runs alass
@@ -17083,7 +17093,7 @@ function setAudio(rel) {
   p._userPickedAudio = true;
   p.audioTrack = rel;
   if (!p.remuxUrl && !p.transcodeUrl) return toast('Audio selection needs ffmpeg on the server');
-  startSource(p.usingTranscode ? 'transcode' : 'remux', currentTime());
+  startSource(p.usingTranscode ? 'transcode' : 'remux', currentTime(), { quietSeek: true });
 }
 // Clicking the SAME button again closes; clicking a different one switches menus.
 const tmToggle = (kind) => {
@@ -17403,8 +17413,8 @@ function exitCastMode() {
   updateCastButtons();
   if (ended) { closePlayer({ ended: true, _fromCast: true }); return; }
   // Resume local playback where the TV left off (reuses the exact resume machinery).
-  if (p.usingTranscode) startSource('transcode', finalPos);
-  else if (p.usingRemux) startSource('remux', finalPos);
+  if (p.usingTranscode) startSource('transcode', finalPos, { quietSeek: true });
+  else if (p.usingRemux) startSource('remux', finalPos, { quietSeek: true });
   else { const v = $('video'); requestVideoPlay(v).then(() => { v.currentTime = finalPos; }).catch(() => {}); }
   showOsd();
 }
@@ -19692,6 +19702,8 @@ async function playLocal(it, opts = {}) {
     const transition = beginPlaybackTransition(it, opts);
     nativeFirst = transition.nativeFirst;
     playTicket = transition.playTicket;
+    if (transition.stopP) await transition.stopP;
+    if (S._playTicket !== playTicket || S.view !== 'player') return;
   }
   try {
     const ids = sourceIdentityFor(it);
@@ -24918,8 +24930,8 @@ function moveSearchUpFromResults() {
 // Land on the MIC when Search opens (owner: voice first on TV — it used to take two D-pad
 // presses to get there). Native .focus() inside the Android WebView often does not stick:
 // the menu Search button steals native focus back a beat later, so OK-on-Search flashes
-// the mic then returns to the left menu (Up was the workaround to reach voice again).
-// Retry across the WebView restore window, and stop if the user moved to type, results, or the rail.
+// the mic then the highlight dies (Left then Right was the workaround). The Android shell
+// re-requests WebView focus at 80/220/520/1100ms — pin past that last tick and re-land.
 let searchMicLand = 0;
 let searchMicPinUntil = 0;
 function cancelSearchMicLand() { searchMicLand += 1; searchMicPinUntil = 0; }
@@ -24935,7 +24947,7 @@ function focusSearchMic() {
   const mic = $('micBtn');
   if (!mic || mic.style.display === 'none') { $('searchInput').focus(); return false; }
   const token = ++searchMicLand;
-  searchMicPinUntil = performance.now() + 600;
+  searchMicPinUntil = performance.now() + 2000;
   const land = () => {
     if (token !== searchMicLand || !searchMicLandBusy()) return;
     try { mic.focus({ preventScroll: true }); } catch { try { mic.focus(); } catch {} }
@@ -24946,6 +24958,8 @@ function focusSearchMic() {
   setTimeout(land, 80);
   setTimeout(land, 220);
   setTimeout(land, 520);
+  setTimeout(land, 1100);
+  setTimeout(land, 1600);
   return true;
 }
 // One clear action shared by the mouse click, the browser element-keydown, AND the on-device global
@@ -27304,7 +27318,8 @@ function applyFocus(el, scroll = true) {
   // TV Music/Audiobooks: pin native focus on the cover so the WebView cannot snap the caret
   // back into the search field (arrows then die on the input). Other pages stay class-only.
   if (document.body.classList.contains('tv') && el.tagName === 'BUTTON'
-      && (S.view === 'music' || S.view === 'audiobooks' || S.view === 'prefs' || S.view === 'settings')
+      && (S.view === 'music' || S.view === 'audiobooks' || S.view === 'prefs' || S.view === 'settings'
+        || (S.view === 'search' && el.id === 'micBtn'))
       && !/musicSearch|abSearch/.test(el.id || '')) {
     try { el.focus({ preventScroll: true }); } catch {}
   }
@@ -29466,7 +29481,7 @@ document.addEventListener('focusin', (e) => {
   }
   if (document.body.classList.contains('tv') && S.zone !== 'rail' && e.target && $('rail').contains(e.target)) {
     try { e.target.blur(); } catch {}
-    if (S.view === 'search' && performance.now() < searchMicPinUntil) {
+    if (S.view === 'search' && (performance.now() < searchMicPinUntil || searchMicLandBusy())) {
       requestAnimationFrame(() => {
         if (!searchMicLandBusy()) return;
         const mic = $('micBtn');

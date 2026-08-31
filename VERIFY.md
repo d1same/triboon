@@ -126,6 +126,29 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-31, v3.1.23 ship — Search mic pin, remux remount guards:
+
+- Version contract: `package.json` 3.1.23; Android `versionName` 3.1.23 /
+  `versionCode` 368; Windows client package/Tauri/Cargo 3.1.23.
+- Search OK lands on Mic and stays there through Android's 80/220/520/1100ms
+  focus recovery. Example: you open Search, wait a second, Mic is still
+  focused — no Left-then-Right to get it back.
+- Remux Play / lock-screen Play / quality hop reuse the in-flight pipe
+  instead of stacking a second remount. `play()` awaits `/api/play/stop`
+  before the next mount so 1080↔4K cannot overlap. Example: you pause a
+  remux, press Play, then pick 4K — one pipe, not two.
+- Native CC stays on the same file through a quiet remount. Pause, +30, and
+  rewind keep the movie clock. A new Sources file reloads CC once.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). Node suite **685/685**.
+  Isolated `/api/server` 3.1.23.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 23ms; FROM ready 1619ms; resume 19ms/10ms). FROM seek 4786ms
+  SLOW (remux `-ss`, not a stacked-pipe miss). IPTV web+native retune
+  PASS (8181 channels). Overlapping Play PASS (both ready in 22ms).
+  Android lint/unit/debug build PASS. Android ExoPlayer stress on
+  `emulator-5554` PASS. Windows GPU not instrumented.
+
 2026-08-31, v3.1.22 ship — Plex-style search chips and D-pad:
 
 - Version contract: `package.json` 3.1.22; Android `versionName` 3.1.22 /

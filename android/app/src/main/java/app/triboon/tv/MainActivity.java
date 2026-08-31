@@ -515,6 +515,8 @@ public class MainActivity extends Activity {
     private void scheduleTvFocusRecovery(String reason) {
         final int epoch = ++focusRecoveryEpoch;
         recoverTvFocus(reason);
+        // Mirrored by focusSearchMic() retries in web/index.html (80/220/520/1100/1600).
+        // A later tick here without a matching JS re-land steals Search mic focus after ~1s.
         long[] delays = new long[] { 80L, 220L, 520L, 1100L };
         for (long delay : delays) {
             root.postDelayed(() -> {
@@ -3351,9 +3353,7 @@ public class MainActivity extends Activity {
         nativePlayBtn = nativeButton(R.drawable.ic_player_pause, "Pause", true);
         nativePlayBtn.setOnClickListener(v -> {
             if (!consumeNativeControlClick(v)) return;
-            if (nativePlayer == null) return;
-            if (nativePlayer.isPlaying()) nativePlayer.pause();
-            else resumeNativeVideoInPlace();
+            nativeTogglePlayPause();
             updateNativeChrome();
         });
         centerControls.addView(nativePlayBtn);
@@ -4931,7 +4931,8 @@ public class MainActivity extends Activity {
                 boolean bigRestart = backwardsBy > 60000L;
                 if (!bigRestart && ++nativeBackwardTicks < 2) return; // small regression — wait one more tick
                 long now = SystemClock.elapsedRealtime();
-                if (nativeLastAutoResumeSeekMs <= 0L || now - nativeLastAutoResumeSeekMs >= 1500L) {
+                if ((nativeLastAutoResumeSeekMs <= 0L || now - nativeLastAutoResumeSeekMs >= 1500L)
+                        && nativeAllowReconnectResume()) {
                     nativeLastAutoResumeSeekMs = now;
                     nativeBackwardTicks = 0;
                     Log.w(TAG, "Native VOD segment jumped back by " + backwardsBy + "ms"
@@ -5013,13 +5014,39 @@ public class MainActivity extends Activity {
         nativeUserPausedAtMs = SystemClock.elapsedRealtime();
     }
 
+    // playWhenReady, not isPlaying(): a remux remount has playWhenReady=false and isPlaying=false.
+    // Treating that as "paused" turns the next Play into a second remount (two 4K pipes).
+    private boolean nativeWantsPause() {
+        return nativePlayer != null
+                && nativePlayer.getPlayWhenReady()
+                && nativePlayer.getPlaybackState() != Player.STATE_IDLE
+                && nativePlayer.getPlaybackState() != Player.STATE_ENDED;
+    }
+
+    private void nativeTogglePlayPause() {
+        if (nativePlayer == null) return;
+        if (nativeWantsPause()) {
+            nativePlayer.pause();
+            markNativeUserPaused();
+        } else {
+            resumeNativeVideoInPlace();
+        }
+    }
+
     private void resumeNativeVideoInPlace() {
         if (nativePlayer == null) return;
+        boolean remux = nativeServerSeekMode();
+        // Dedicated Play / lock-screen Play (not toggle) used to remount again while the first
+        // remux pipe was still coming up — two 4K buffers, spinner or a dead app.
+        if ("video".equals(nativeMode) && remux && !nativePlayer.getPlayWhenReady()
+                && nativeUserPausedAtMs <= 0L
+                && (nativeQuietSeekHoldPlay || nativeResumeGraceUntilMs > SystemClock.elapsedRealtime())) {
+            return;
+        }
         hideNativeLoading();
         nativeVideoErrorNotified = false;
         nativeVideoUnhealthySinceMs = 0L;
         long now = SystemClock.elapsedRealtime();
-        boolean remux = nativeServerSeekMode();
         // Remux pipes die when ExoPlayer stops reading. A 25s grace on a dead pipe is the
         // freeze/breakup after Pause → Play. Direct play keeps the longer refill window.
         nativeResumeGraceUntilMs = now + (remux ? NATIVE_VIDEO_REMUX_RESUME_GRACE_MS : NATIVE_VIDEO_RESUME_GRACE_MS);
@@ -5059,7 +5086,11 @@ public class MainActivity extends Activity {
         nativeVideoUnhealthySinceMs = 0L;
         nativeResumeGraceUntilMs = SystemClock.elapsedRealtime() + NATIVE_VIDEO_RESUME_GRACE_MS;
         Log.w(TAG, "Native VOD direct stream dropped; retrying in place at " + displayMs + "ms");
-        nativePlayer.seekTo(Math.max(0L, displayMs - nativeStartOffsetMs));
+        androidx.media3.common.MediaItem item = nativePlayer.getCurrentMediaItem();
+        long at = Math.max(0L, displayMs - nativeStartOffsetMs);
+        nativePlayer.stop();
+        nativePlayer.clearMediaItems();
+        if (item != null) nativePlayer.setMediaItem(item, at);
         nativePlayer.prepare();
         if (nativePlayer.getPlayWhenReady()) nativePlayer.play();
     }
@@ -5068,6 +5099,12 @@ public class MainActivity extends Activity {
     private void requestNativeVideoSeek(long displayMs, boolean resume) { requestNativeVideoSeek(displayMs, resume, false); }
     private void requestNativeVideoSeek(long displayMs, boolean resume, boolean percentResume) {
         if (web == null || !"video".equals(nativeMode)) return;
+        nativeVideoUnhealthySinceMs = 0L;
+        nativeVideoErrorNotified = false;
+        nativeResumeGraceUntilMs = SystemClock.elapsedRealtime()
+                + (nativeServerSeekMode() ? NATIVE_VIDEO_REMUX_RESUME_GRACE_MS : NATIVE_VIDEO_RESUME_GRACE_MS);
+        web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
+                + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
         // Pass FRACTIONAL seconds (ms precision): the server -ss and the &start= URL both accept a
         // fractional start, so a resume no longer floors to the whole second (was up to ~1s backward).
         // Transcode (accurate -ss) becomes frame-exact; `resume` (a reconnect, not a user seek) tells the
@@ -8423,15 +8460,16 @@ public class MainActivity extends Activity {
                     boolean repeat = e.getRepeatCount() > 0;
                     switch (code) {
                         case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
-                            if (!repeat) {
-                                if (nativePlayer.isPlaying()) nativePlayer.pause();
-                                else resumeNativeVideoInPlace();
-                            }
+                            if (!repeat) nativeTogglePlayPause();
                             return true;
                         case KeyEvent.KEYCODE_MEDIA_PLAY:
                             if (!repeat) resumeNativeVideoInPlace(); return true;
                         case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                            if (!repeat) nativePlayer.pause(); return true;
+                            if (!repeat) {
+                                nativePlayer.pause();
+                                markNativeUserPaused();
+                            }
+                            return true;
                         case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
                             nativeSeekBy(30000);
                             return true;
@@ -8461,15 +8499,16 @@ public class MainActivity extends Activity {
                 boolean repeat = e.getRepeatCount() > 0;
                 switch (code) {
                     case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
-                        if (!repeat) {
-                            if (nativePlayer.isPlaying()) nativePlayer.pause();
-                            else resumeNativeVideoInPlace();
-                        }
+                        if (!repeat) nativeTogglePlayPause();
                         return true;
                     case KeyEvent.KEYCODE_MEDIA_PLAY:
                         if (!repeat) resumeNativeVideoInPlace(); return true;
                     case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                        if (!repeat) nativePlayer.pause(); return true;
+                        if (!repeat) {
+                            nativePlayer.pause();
+                            markNativeUserPaused();
+                        }
+                        return true;
                     case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
                         nativeSeekBy(30000);
                         return true;
@@ -8609,14 +8648,14 @@ public class MainActivity extends Activity {
         if (!nativePlayerOpen() || nativePlayer == null || !"video".equals(nativeMode)) return false;
         switch (action) {
             case "toggle":
-                if (nativePlayer.isPlaying()) nativePlayer.pause();
-                else resumeNativeVideoInPlace();
+                nativeTogglePlayPause();
                 return true;
             case "play":
                 resumeNativeVideoInPlace();
                 return true;
             case "pause":
                 nativePlayer.pause();
+                markNativeUserPaused();
                 return true;
             case "fast_forward":
                 nativeSeekBy(30000L);

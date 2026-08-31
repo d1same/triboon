@@ -370,8 +370,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'clicking a Sources row should carry its exact release key and quality class into Play');
   assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+const picked = pick && typeof pick === 'object' \? pick : \(pick \? \{ name: pick \} : null\);[\s\S]+const body = playbackRequestBody\(it, picked, qRank\);/,
     'manual source selection should re-resolve the latest resume point before mounting the exact picked release');
-  assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+saveWatch\(true, S\.playing\._ended \? \{ watched: true \} : \{\}\);[\s\S]+if \(!opts\.preserveNativeSurface[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(!opts\.preserveGuide\) closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+releasePlaybackSession\(leavingSessionId\);[\s\S]+S\.playing = null;[\s\S]+\}/,
+  assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+saveWatch\(true, S\.playing\._ended \? \{ watched: true \} : \{\}\);[\s\S]+if \(!opts\.preserveNativeSurface[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(!opts\.preserveGuide\) closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+releasePlaybackSession\(leavingSessionId\);[\s\S]+S\.playing = null;[\s\S]+return stopP;[\s\S]+\}/,
     'source replacement should stop active playback while allowing atomic native episode handoff and preserving forced-watched EOF');
+  assert.match(ui, /const \{ nativeFirst, playTicket, stopP \} = beginPlaybackTransition\(it, \{[\s\S]+if \(stopP\) await stopP;/,
+    '1080↔4K source switch waits for the old session to die before the new /api/play');
   assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+const parkForResume = !finished && closingItem && closingItem\.type !== 'live';[\s\S]+releasePlaybackSession\(closingSessionId, \{ keepPrepared: parkForResume \}\);[\s\S]+S\.playing = null;/,
     'Back from a mid-watch movie parks the RAM mount so Home Continue Watching can join it');
   assert.match(ui, /function hideToast\(\) \{[\s\S]+classList\.remove\('show'\)/,
@@ -779,14 +781,16 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'ambient colour comes from a dominant-hue histogram, not the single most extreme pixel');
   assert.match(ui, /#rail:not\(\.expanded\):not\(:hover\)\{opacity:\.62\}/,
     'the compact rail recedes as a whole surface, not just its icons');
-  assert.match(ui, /function focusSearchMic\(\) \{[\s\S]{0,1200}searchMicPinUntil = performance\.now\(\) \+ 600[\s\S]{0,400}setTimeout\(land, 80\)[\s\S]{0,80}setTimeout\(land, 220\)[\s\S]{0,80}setTimeout\(land, 520\)/,
-    'Search lands on the mic and re-tries across the Android WebView restore window');
+  assert.match(ui, /function focusSearchMic\(\) \{[\s\S]{0,1400}searchMicPinUntil = performance\.now\(\) \+ 2000[\s\S]{0,500}setTimeout\(land, 80\)[\s\S]{0,80}setTimeout\(land, 220\)[\s\S]{0,80}setTimeout\(land, 520\)[\s\S]{0,80}setTimeout\(land, 1100\)[\s\S]{0,80}setTimeout\(land, 1600\)/,
+    'Search lands on the mic and re-tries across the Android WebView restore window (incl. the 1100ms shell tick)');
   assert.match(ui, /function enterRail\(\) \{\s*\n\s*cancelSearchMicLand\(\);/,
     'opening the left menu cancels a pending Search mic landing so Left-from-mic stays on the rail');
   assert.match(ui, /function leaveRail\(\) \{[\s\S]+if \(!wasOpen\) return;[\s\S]+if \(ae && rail\.contains\(ae\)\) ae\.blur\(\)[\s\S]+lockTvRailTabIndex\(\)/,
     'leaving the TV rail blurs native focus and takes rail buttons out of the WebView tab order');
-  assert.match(ui, /S\.zone !== 'rail' && e\.target && \$\('rail'\)\.contains\(e\.target\)[\s\S]+searchMicPinUntil/,
+  assert.match(ui, /S\.zone !== 'rail' && e\.target && \$\('rail'\)\.contains\(e\.target\)[\s\S]+searchMicPinUntil \|\| searchMicLandBusy\(\)/,
     'if the WebView restores focus onto Search in the left menu, bounce it back to the mic');
+  assert.match(ui, /#micBtn:focus,#micBtn\.focus,#micBtn\.focusable\.focus/,
+    'Search mic keeps its fill from the .focus class, not only native :focus');
   assert.ok((ui.match(/focusSearchMic\(\)/g) || []).length >= 4,
     'every search-entry path routes through the mic-landing helper');
   assert.match(ui, /function fitRailWidth\(\) \{[\s\S]{0,1200}Math\.min\(RAIL_W_MAX, Math\.max\(RAIL_W_MIN, 60 \+ widest \+ 18\)\)/,
@@ -1546,7 +1550,8 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     ['stop', { preserveNativeSurface: true }],
     ['native', 'tmdb:tv:9:s1e2', 5, true],
   ], 'a direct native handoff synchronously replaces the old surface with the next loading surface');
-  assert.deepStrictEqual(transition, { nativeFirst: true, playTicket: 5 }, 'the replacement owns a fresh play token');
+  assert.deepStrictEqual(transition, { nativeFirst: true, playTicket: 5, stopP: 1 },
+    'the replacement owns a fresh play token and the previous-session stop so play() can await it');
   assert.ok(state._handoffQuietUntil > Date.now(),
     'next-episode handoff suppresses same-file remount so the opening cannot play twice');
 
@@ -2695,12 +2700,16 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'a dropped HTTP range during pause must not rebuild ExoPlayer');
   assert.match(android, /retryNativeDirectInPlace\(resumeAt\)/,
     'direct-play IO after a real start retries the same player in place');
-  assert.match(android, /private void resumeNativeVideoInPlace\(\) \{[\s\S]+hideNativeLoading\(\);[\s\S]+__tvNativeVideoResuming[\s\S]+STATE_IDLE \|\| state == Player\.STATE_ENDED[\s\S]+requestNativeVideoSeek\(at, true\)[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
-    'Play after a crash must hide the circles; remux/transcode Play remounts the same file instead of reading a leftover dead pipe');
+  assert.match(android, /private void resumeNativeVideoInPlace\(\) \{[\s\S]+nativeQuietSeekHoldPlay \|\| nativeResumeGraceUntilMs[\s\S]+hideNativeLoading\(\);[\s\S]+__tvNativeVideoResuming[\s\S]+STATE_IDLE \|\| state == Player\.STATE_ENDED[\s\S]+requestNativeVideoSeek\(at, true\)[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
+    'Play after a crash must hide the circles; remux/transcode Play remounts the same file instead of reading a leftover dead pipe; a second Play while remounting is ignored');
   assert.match(ui, /window\.__tvNativeVideoResuming = \(pos, dur, token\) => \{[\s\S]+p\.nativePaused = false;/,
     'user Play must clear nativePaused so a dead remux pipe can recover');
-  assert.match(ui, /function togglePlay\(\) \{[\s\S]+p\.usingRemux \|\| p\.usingTranscode[\s\S]+startSource\(currentPlayerKind\(p\), currentTime\(\), \{ quietSeek: true \}\)/,
-    'web remux Play after pause remounts the same file instead of reading a dead pipe');
+  assert.match(ui, /function togglePlay\(\) \{[\s\S]+p\.usingRemux \|\| p\.usingTranscode[\s\S]+if \(p\._webResuming\) \{ updPP\(\); return; \}[\s\S]+startSource\(currentPlayerKind\(p\), currentTime\(\), \{ quietSeek: true \}\)/,
+    'web remux Play after pause remounts the same file; a second Play while remounting does not spawn another ffmpeg');
+  assert.match(ui, /function setQuality\(q\) \{[\s\S]+startSource\(p\.remuxUrl \? 'remux' : 'direct', at, \{ quietSeek: true \}\)[\s\S]+startSource\('transcode', at, \{ quietSeek: true \}\)/,
+    'web quality Original/1080/720 remounts quietly instead of stacking a Preparing rebuild');
+  assert.match(ui, /function setAudio\(rel\) \{[\s\S]+startSource\(p\.usingTranscode \? 'transcode' : 'remux', currentTime\(\), \{ quietSeek: true \}\)/,
+    'web audio switch remounts quietly so a double-tap cannot spawn two remux pipes');
   assert.match(android, /updateNativeVideoWatchdog\(\) \{[\s\S]+!nativePlayer\.getPlayWhenReady\(\)[\s\S]+nativeVideoUnhealthySinceMs = 0L;[\s\S]+return;/,
     'the stall watchdog must ignore a user pause');
   assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+p\.usingNative && p\.nativePaused && !sourceDead && !decoderFailure\) return false;/,
@@ -2714,8 +2723,14 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
   assert.match(playbook, /must NOT rebuild ExoPlayer/);
   assert.match(playbook, /Health `blocked` \(missing usenet articles, not a slow pipe\)/);
   assert.match(playbook, /emulator-5554/);
-  assert.match(android, /private void retryNativeDirectInPlace\(long displayMs\) \{[\s\S]+nativePlayer\.seekTo[\s\S]+nativePlayer\.prepare\(\);/,
-    'direct retry must stay on the live ExoPlayer');
+  assert.match(android, /private void retryNativeDirectInPlace\(long displayMs\) \{[\s\S]+nativePlayer\.stop\(\);[\s\S]+clearMediaItems\(\);[\s\S]+setMediaItem[\s\S]+nativePlayer\.prepare\(\);/,
+    'direct retry must stay on the live ExoPlayer and drop the leftover 4K buffer');
+  assert.match(android, /private void nativeTogglePlayPause\(\) \{[\s\S]+nativeWantsPause\(\)[\s\S]+resumeNativeVideoInPlace\(\)/,
+    'Play button, media keys, and lock-screen toggle must use playWhenReady, not isPlaying');
+  assert.match(android, /nativePlayBtn\.setOnClickListener[\s\S]+nativeTogglePlayPause\(\)/,
+    'the on-screen Play button uses the same pause/play helper as the web OSD');
+  assert.match(android, /case "toggle":\s+nativeTogglePlayPause\(\);/,
+    'lock-screen toggle must not stack a second remount during remux resume');
   assert.match(android, /NATIVE_VIDEO_REMUX_RESUME_GRACE_MS = 20000L[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
     'remux Play remounts the same file with enough grace for 4K ffmpeg, not a 4s watchdog trip');
   assert.match(android, /if \(!\(reuseQuietVideo && nativeVideoStarted\)\) nativeVideoStarted = false/,
@@ -2726,6 +2741,14 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'quiet remux remount holds play until READY so the 30s watchdog does not start mid-seek');
   assert.match(ui, /if \(opts\.quietSeek\) p\._nativeResuming = true/,
     'web marks a quiet remount as resuming so recoverSamePlaybackSource does not stack');
+  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token, percentResume\) => \{[\s\S]+p\._nativeResuming = true;/,
+    'the keyframe fetch must pin _nativeResuming before recoverSamePlaybackSource can stack');
+  assert.match(ui, /if \(opts\.quietSeek && p\) \{\s+p\._webResuming = true;/,
+    'web remux pause/resume marks _webResuming so the stall watchdog cannot spawn a second ffmpeg');
+  assert.match(ui, /if \(p\._webResuming && !sourceDead && !decoderFailure\) return false;/,
+    'web recovery must not stack on top of a remux remount already in flight');
+  assert.match(ui, /tryNativeVideoPlayer\('transcode', at, \{ quietSeek: true \}\)/,
+    'native quality 1080↔4K must reuse ExoPlayer instead of Release+Init');
   assert.match(android, /nativeSeekHoldDisplayMs = Math\.max\(nativeStartOffsetMs \+ nativeRawPositionMs\(\), startOffsetMs\)/,
     'quiet remux +30 must freeze the clock before swapping startOffset so 10:00 does not become 20:30');
   assert.match(ui, /c\.startTime = Math\.max\(0, c\.startTime - off\);[\s\S]+c\.endTime = Math\.max\(0\.05, c\.endTime - off\);[\s\S]+c\._shifted = true;/,
@@ -4006,7 +4029,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native fallback state should distinguish direct, remux, and transcode correctly');
   assert.match(ui, /function showNativePlayLoading\(it, playTicket = 0, hot = false\) \{[\s\S]+\$\(\'player\'\)\.classList\.remove\('open', 'live', 'guideMode'\);[\s\S]+window\.TriboonTV\.showVideoLoading\(JSON\.stringify/,
     'Android movie playback should keep the web player closed while the native loader waits for the mount');
-  assert.match(ui, /function tryNextNativeKind\(failedKind, atSeconds, msg\) \{[\s\S]+p\.nativeTried\[failedKind\] = true;[\s\S]+nativePlaybackOrder\(p, p\.nativeStartKind\)[\s\S]+tryNativeVideoPlayer\(next, atSeconds\)/,
+  assert.match(ui, /function tryNextNativeKind\(failedKind, atSeconds, msg\) \{[\s\S]+p\.nativeTried\[failedKind\] = true;[\s\S]+vodPlaybackStarted\(p\) \? \{ quietSeek: true \} : \{\}[\s\S]+nativePlaybackOrder\(p, p\.nativeStartKind\)[\s\S]+tryNativeVideoPlayer\(next, atSeconds, opts\)/,
     'native player failures should advance to the next native start kind, not the WebView player');
   assert.match(ui, /function playbackStartKind\(mount\) \{[\s\S]+caps\.lowPower && is4k && !caps\.hevc && mount && mount\.transcodeUrl\) return 'transcode'/,
     '4K with no HEVC hardware must start transcode instead of remuxing 4K into a software decoder');
@@ -4439,8 +4462,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native subtitle row selection should persist the choice without restarting ExoPlayer');
   assert.doesNotMatch(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur, token\) => \{[\s\S]+tryNativeVideoPlayer\(kind, at\)/,
     'native subtitle changes must not reload the native player from the web callback');
-  assert.match(ui, /window\.__tvNativeVideoQuality = \(quality, pos, dur, token\) => \{[\s\S]+tryNativeVideoPlayer\('direct', at\)[\s\S]+tryNativeVideoPlayer\('transcode', at\)/,
-    'native quality row selection should restart ExoPlayer in original or optimized quality');
+  assert.match(ui, /window\.__tvNativeVideoQuality = \(quality, pos, dur, token\) => \{[\s\S]+tryNativeVideoPlayer\('direct', at, \{ quietSeek: true \}\)[\s\S]+tryNativeVideoPlayer\('transcode', at, \{ quietSeek: true \}\)/,
+    'native quality row selection should reuse ExoPlayer in original or optimized quality');
   assert.match(ui, /const restoreNative = \(\) => \{[\s\S]+p\.usingNative = true;[\s\S]+p\.quality = oldQuality;[\s\S]+p\.triedTranscode = oldTriedTranscode;[\s\S]+\}/,
     'failed native quality switches should preserve the still-playing ExoPlayer state');
   assert.match(android, /nativeSubtitleRel = choice\.subtitleRel;[\s\S]+disableNativeTextTracks\(\);[\s\S]+loadNativeSubtitleOverlay\(nativeSubtitleUrl\);[\s\S]+notifyNativeSubtitleSelect\(choice\.subtitleRel\)/,
