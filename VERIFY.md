@@ -126,6 +126,25 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-31, v3.1.22 ship — Plex-style search chips and D-pad:
+
+- Version contract: `package.json` 3.1.22; Android `versionName` 3.1.22 /
+  `versionCode` 367; Windows client package/Tauri/Cargo 3.1.22.
+- Search keeps the typed query and spell-checks words. Example: `office`
+  shows The Office, `oddyse` shows Odyssey, `longst yard` stays The
+  Longest Yard instead of Lord of the Rings.
+- D-pad walks field → chips → posters. Up from the first poster lands on
+  the last chip. Right on a chip stays put (no jump to the X). Back from
+  posters lands on the box.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). Node suite **685/685**.
+  Isolated `/api/server` 3.1.22.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 18ms; FROM ready 1813ms; resume 15ms/10ms). IPTV web+native
+  retune PASS (8181 channels). Overlapping Play PASS (both ready in 21ms).
+  Android lint/unit/debug build PASS. Android ExoPlayer stress on
+  `emulator-5554` PASS. Windows GPU not instrumented.
+
 2026-08-31, v3.1.21 ship — local NFO first, library Play uses the disk file:
 
 - Version contract: `package.json` 3.1.21; Android `versionName` 3.1.21 /

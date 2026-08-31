@@ -396,10 +396,10 @@ $page = Invoke-CdpJson @"
           try { if (typeof closeMusicNow === 'function') closeMusicNow(); } catch (e) {}
           try { document.getElementById('musicNow').classList.remove('open'); } catch (e) {}
         }
-        if (v === 'movies' || v === 'tv' || v === 'music') {
-          // Rail-first sections: the FIRST Back opens the menu rail (movies/tv -> section menu via
-          // backToBrowseSectionMenu; music -> main nav via enterRail, index.html __tvBack line ~22039),
-          // and only the SECOND Back returns Home (line ~22043). This is the intentional
+        if (v === 'movies' || v === 'tv' || v === 'music' || v === 'watchlist' || v === 'calendar') {
+          // Rail-first sections: the FIRST Back opens the menu rail (movies/tv/watchlist/calendar
+          // -> section menu via backToBrowseSectionMenu; music -> main nav via enterRail),
+          // and only the SECOND Back returns Home. This is the intentional
           // "Back always reaches the menu" section contract, not a flat single-Back-to-Home view.
           window.__tvBack();
           await wait(650);
@@ -409,11 +409,9 @@ $page = Invoke-CdpJson @"
           await wait(650);
           if (S.view !== 'home') failures.push(v + ' second Back did not return Home');
         } else if (v === 'discover') {
-          // Discover is row-based: Back from a deep card returns to the first card,
-          // then the next Back leaves for Home. switchView can land off 0,0.
-          window.__tvBack();
-          await wait(650);
-          if (S.view === 'discover') {
+          // Discover is three-step: a deep card returns to the first card, then the
+          // rail (backToBrowseSectionMenu), then Home. switchView can land off 0,0.
+          for (let i = 0; i < 3 && S.view === 'discover'; i++) {
             window.__tvBack();
             await wait(650);
           }
