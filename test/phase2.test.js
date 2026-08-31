@@ -12,9 +12,9 @@ const { parseRelease, scoreRelease, rankReleases, isCamCandidate, camScoringEnab
 const { parseNewznabRss, dedupe, fanout, searchIndexer, normTitle } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
 const {
-  Pipeline, GATE_MS, nzbVerdictKey, releaseFingerprint, summarizeAttempts, stubFeatureReason, mountHasActivePlayback,
+  Pipeline, GATE_MS, nzbVerdictKey, releaseFingerprint, summarizeAttempts, stubFeatureReason, mountHasActivePlayback, mountNeedsUsenetShare,
   ACTIVE_PLAYBACK_GRACE_MS, allocateStreamConnections, classifyStreamNeed,
-  autoStreamCap, cacheNeedWeight, playbackRamFraction, playbackCacheCapMb, preparedPeekSockets,
+  streamNeedMbps, streamIsUhd, autoStreamCap, cacheNeedWeight, playbackRamFraction, playbackCacheCapMb, preparedPeekSockets,
 } = require('../server/pipeline');
 const { NntpPool, ProviderPool } = require('../server/nntp');
 const { createMockNntp } = require('./mock-nntp');
@@ -3383,6 +3383,63 @@ test('pipeline: Auto starts at 10, grows only when behind, and sizes cache by RA
   assert.ok(capped[0] <= 12, 'Auto still honors Max 4K connections as a ceiling');
 });
 
+test('pipeline: a 4K episode under 4GB still gets 4K sockets and bitrate, not 1080p', () => {
+  const now = 2_000_000;
+  const ep4k = {
+    size: 3.2e9,
+    _releaseName: 'Show.Name.S01E01.2160p.WEB-DL.HDR.x265-GROUP',
+    _tracks: { duration: 3300 },
+    _activeStreamReads: 1,
+    _playbackTouched: now - 60_000,
+    _allocKind: 'starve',
+    _allocKindSince: now - 15_000,
+    aheadCacheBytes: 0,
+  };
+  const ep1080 = {
+    size: 3.2e9,
+    _releaseName: 'Show.Name.S01E01.1080p.WEB-DL.x264-GROUP',
+    _tracks: { duration: 3300 },
+    _activeStreamReads: 1,
+    _playbackTouched: now - 60_000,
+  };
+  assert.equal(streamIsUhd(ep4k), true, '2160p in the release name is 4K even under 4GB');
+  assert.equal(streamIsUhd(ep1080), false, 'same-size 1080p episode stays 1080p');
+  assert.ok(streamNeedMbps(ep4k) > streamNeedMbps(ep1080), '4K episode asks for more bitrate than 1080p');
+
+  const customPerf = {
+    usableConnections: 40,
+    reserveConnections: 4,
+    connectionMode: 'custom',
+    maxConnPerStream1080: 12,
+    maxConnPerStream4k: 20,
+  };
+  const custom4k = allocateStreamConnections([ep4k], customPerf, { viewerChanged: false, now });
+  const custom1080 = allocateStreamConnections([ep1080], customPerf, { viewerChanged: false, now });
+  assert.equal(custom4k[0], 20, 'Custom 4K cap applies to a short 2160p episode');
+  assert.equal(custom1080[0], 12, 'Custom 1080p cap stays on a same-size 1080p episode');
+
+  const autoPerf = { usableConnections: 24, reserveConnections: 4, connectionMode: 'auto' };
+  const starve4k = allocateStreamConnections([ep4k], autoPerf, { viewerChanged: false, now, holdMs: 0 });
+  const healthy1080 = allocateStreamConnections([ep1080], autoPerf, { viewerChanged: false, now });
+  assert.ok(starve4k[0] > healthy1080[0], 'a starving 4K episode grows past a healthy 1080p');
+});
+
+test('pipeline: two fresh Plays split leftover sockets instead of the first one taking them all', () => {
+  const now = 2_000_000;
+  const fat4k = {
+    size: 8e9,
+    _tracks: { duration: 700 },
+    _playbackTouched: now,
+    _activeStreamReads: 1,
+  };
+  const assigned = allocateStreamConnections(
+    [fat4k, { ...fat4k }],
+    { usableConnections: 28, reserveConnections: 4, connectionMode: 'auto' },
+    { viewerChanged: false, now },
+  );
+  assert.deepStrictEqual([...assigned], [12, 12], 'leftover sockets rotate so the second Play is not stuck at 10');
+});
+
 test('pipeline: prepared-only mounts keep a bounded speculative window without consuming a viewer share', () => {
   const now = Date.now();
   const mounts = new Map();
@@ -3436,6 +3493,40 @@ test('pipeline: prepared-only mounts keep a bounded speculative window without c
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 2, 'promotion by a real player read joins fair-share accounting');
   assert.strictEqual(playing.readAhead, 8);
   assert.strictEqual(prepared.readAhead, 8);
+});
+
+test('pipeline: a local library Play does not steal usenet sockets', () => {
+  const now = Date.now();
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+    performance: () => ({
+      usableConnections: 20,
+      reserveConnections: 4,
+      maxConnPerStream1080: 12,
+      maxConnPerStream4k: 20,
+    }),
+  });
+  const usenet = {
+    id: 'usenet', size: 2e9, streamable: true, _touched: now, _playbackTouched: now,
+    _activeStreamReads: 1, trimCache() {},
+  };
+  const local = {
+    id: 'local', size: 20e9, streamable: true, _local: { file: 'M:\\Movies\\foo.mkv' },
+    _touched: now, _playbackTouched: now, _activeStreamReads: 1, trimCache() {},
+  };
+  mounts.set(usenet.id, usenet);
+  assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1);
+  const ahead = usenet.readAhead;
+  const cache = usenet.cacheMaxBytes;
+  mounts.set(local.id, local);
+  assert.strictEqual(mountHasActivePlayback(local, now), true, 'the local file is still a live player');
+  assert.strictEqual(mountNeedsUsenetShare(local, now), false, 'disk add-ins do not take NNTP sockets');
+  assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1, 'local Play is not a second usenet viewer');
+  assert.strictEqual(usenet.readAhead, ahead, 'FROM keeps its sockets when someone plays a ripped movie');
+  assert.strictEqual(usenet.cacheMaxBytes, cache, 'FROM keeps its cache when someone plays a ripped movie');
 });
 
 test('pipeline: an idle details prepare uses leftover sockets so Play is further along', () => {
@@ -3773,8 +3864,9 @@ test('pipeline: Play/resume warmup uses the startup lane so first picture beats 
   };
   pipeline._startPlaybackWarmup(vf, { cacheMaxBytes: 360 * 1024 * 1024 }, 0.4, { hot: true });
   await new Promise((resolve) => setTimeout(resolve, 220));
-  assert.ok(calls.length >= 1 && calls.every((p) => p === 'seek'),
-    'Continue Watching warmup must use seek so it is not stuck behind health/read-ahead');
+  assert.ok(calls.includes('seek'), 'the first-picture resume slice uses seek');
+  assert.ok(calls.includes('readAhead'), 'the rest of a 4K warm stays off the seek lane');
+  assert.ok(calls.filter((p) => p === 'seek').length <= 2, 'seek is only the short first-picture slice');
 });
 
 test('pipeline: resume warmup supersession and mount cleanup abort only tracked speculative jobs', async () => {

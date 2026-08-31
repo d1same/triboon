@@ -1,6 +1,6 @@
 [package]
 name = "triboon-px8"
-version = "3.1.19"
+version = "3.1.20"
 description = "Triboon native Windows GPU client"
 edition = "2021"
 rust-version = "1.85"

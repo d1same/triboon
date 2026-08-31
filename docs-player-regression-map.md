@@ -366,7 +366,9 @@ them when the table is reorganized:
 - **P14 - playback resource isolation.** Viewer fairness is driven only by real
   non-background `/api/stream` reads (plus a 120-second grace from range end),
   never by prepare/probe lifecycle touches; direct audiobook tracks use the same
-  parent-mount lifecycle. Prepared mounts keep a bounded 4-read-ahead,
+  parent-mount lifecycle. A local-library Play is a live player for eviction, but
+  it is not a usenet viewer: it must not take NNTP sockets or shrink another
+  stream's cache. ffmpeg remux/transcode of an added file reads the disk path. Prepared mounts keep a bounded 4-read-ahead,
   96 MB/192 MB per-title window inside one 10%-RAM, 512 MB-capped aggregate pool
   and are promoted on their first player read. Grace expiry demotes stopped mounts
   and resizes survivors without waiting for another request; owner-cap/idle/overflow

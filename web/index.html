@@ -23908,11 +23908,6 @@ function accountTabButton(key) {
   if (!el || el.style.display === 'none') return null;
   return el;
 }
-let _accountTabFocusT = 0;
-function scheduleAccountTab(b) {
-  clearTimeout(_accountTabFocusT);
-  _accountTabFocusT = setTimeout(() => activateAccountTab(b), 90);
-}
 function activateAccountTab(b) {
   if (!b || !b.matches || !b.matches('button')) return;
   const isSrv = !!b.dataset.srv;
@@ -23938,11 +23933,9 @@ function activateAccountTab(b) {
   if (S.view === 'prefs' && key) replaceRoute(accountTabRoute(key));
 }
 document.querySelectorAll('#prefTabs button').forEach((b) => {
-  b.addEventListener('click', () => { clearTimeout(_accountTabFocusT); activateAccountTab(b); });
-  // Down the list only highlights. Switching every panel on focus made Settings crawl
-  // and dropped the next Right key (freeze-flood). Commit on click, Right, or a short settle.
-  b.addEventListener('focus', () => scheduleAccountTab(b));
-  if (document.body.classList.contains('tv')) b.addEventListener('mouseenter', () => scheduleAccountTab(b));
+  // Down/Up only moves the highlight. Swapping the panel on focus or hover rebuilt
+  // Dashboard/Engine and ate the next Right. Commit on click, OK, or Right.
+  b.addEventListener('click', () => activateAccountTab(b));
 });
 syncSectionTabs('prefTabs');
 S.dashRange = S.dashRange || 'month';
@@ -25046,6 +25039,16 @@ function searchCloseTitle(query, title) {
   if (searchCloseWord(qw.join(''), tw.join(''))) return true;
   return qw.every((w) => tw.some((t) => searchCloseWord(w, t) || t.startsWith(w) || w.startsWith(t)));
 }
+function searchWholeTitleClose(query, title) {
+  const qk = searchWords(query).join('');
+  if (qk.length < 4) return false;
+  if (searchCloseWord(qk, searchWords(title).join(''))) return true;
+  const tw = searchWords(title);
+  const noArt = tw[0] && ['the', 'a', 'an'].includes(tw[0]) ? tw.slice(1) : tw;
+  if (noArt.length && searchCloseWord(qk, noArt.join(''))) return true;
+  if (noArt.length >= 2 && noArt[0].length === 1 && searchCloseWord(qk, noArt.slice(1).join(''))) return true;
+  return false;
+}
 function catalogSearchItems() {
   const out = [];
   const seen = new Set();
@@ -25181,7 +25184,7 @@ async function doSearch() {
       const bySearchRank = (a, b) => tmdbSearchRank(b, q) - tmdbSearchRank(a, q);
       let movies = ok.filter((x) => x.media_type === 'movie').sort(bySearchRank).map(mapTmdb);
       let shows = ok.filter((x) => x.media_type === 'tv').sort(bySearchRank).map(mapTmdb);
-      const closeHit = ok.some((x) => searchCloseTitle(q, x.title || x.name || ''));
+      const closeHit = ok.some((x) => searchWholeTitleClose(q, x.title || x.name || ''));
       const serverHint = r.didYouMean || '';
       if (serverHint) showSearchSuggest(serverHint, r.originalQuery || q);
       if (!closeHit) {
@@ -26265,7 +26268,6 @@ $('iptvRefresh').addEventListener('click', async () => {
 function focusActiveSettingsPanel(rootId, panelAttr) {
   const focused = document.activeElement;
   if (focused && focused.closest('#prefTabs') && focused.tagName === 'BUTTON') {
-    clearTimeout(_accountTabFocusT);
     activateAccountTab(focused);
   }
   const root = $(rootId);
@@ -26527,6 +26529,12 @@ function switchView(v, push = true, opts = {}) {
     if (!S._prefsPainted) {
       openPrefs();
       S._prefsPainted = true;
+    }
+    // Warm server panels in the background so the first Right into Engine/Indexers
+    // does not hitch on /api/status + /api/settings.
+    if (S.user && S.user.role === 'admin' && !S._srvSettingsLoaded) {
+      S._srvSettingsLoaded = true;
+      refreshSettings();
     }
   }
   if (v === 'music' && !opts.preservePage) loadMusic();
@@ -27779,7 +27787,6 @@ function dpadSectionForm(k) {
     if (k === 'ArrowDown') { focusSectionControl(tabs[Math.min(tabs.length - 1, i + 1)] || tabs[tabs.length - 1]); return true; }
     if (k === 'ArrowRight') {
       const tab = i >= 0 ? tabs[i] : active;
-      clearTimeout(_accountTabFocusT);
       if (tab && tab.tagName === 'BUTTON') activateAccountTab(tab);
       focusSectionControl(formCtls(activeSectionPanel(cfg))[0]);
       return true;

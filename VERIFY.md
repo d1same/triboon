@@ -126,6 +126,26 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-31, v3.1.20 ship — 4K sockets, local library buffer, frankestein search, Settings tabs:
+
+- Version contract: `package.json` 3.1.20; Android `versionName` 3.1.20 /
+  `versionCode` 365; Windows client package/Tauri/Cargo 3.1.20.
+- 4K is the release, not “file > 4 GB”. A short 2160p episode now gets 4K
+  sockets and buffer. Spare sockets grow round-robin. Hot warmup only puts a
+  short first-picture slice on the seek/startup lane.
+- Local add-ins remux from the disk path and use 4 MB Range reads. A ripped
+  movie no longer steals Usenet sockets. Example: IR Movies next to FROM.
+- Search “frankestein” Did-you-mean is whole-title, so *I, Frankenstein*
+  stays visible. Settings tabs commit on click / OK / Right, not Down.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). Node suite **682/682**.
+  Isolated `/api/server` 3.1.20.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 5018ms SLOW; FROM ready 3810ms SLOW; resume 15ms/9ms). IPTV
+  web+native retune PASS (8184 channels). Overlapping Play PASS (both
+  ready in 16ms). Android lint/unit/debug build PASS. Android ExoPlayer
+  stress on `emulator-5554` PASS. Windows GPU not instrumented.
+
 2026-08-30, v3.1.19 ship — remux pause/CC/seek, trakt spam, IPTV 503, search, settings:
 
 - Version contract: `package.json` 3.1.19; Android `versionName` 3.1.19 /

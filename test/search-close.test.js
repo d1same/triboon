@@ -45,6 +45,16 @@ function closeTitle(query, title) {
   if (closeWord(qw.join(''), tw.join(''))) return true;
   return qw.every((w) => tw.some((t) => closeWord(w, t) || t.startsWith(w) || w.startsWith(t)));
 }
+function wholeTitleClose(query, title) {
+  const qk = words(query).join('');
+  if (qk.length < 4) return false;
+  if (closeWord(qk, words(title).join(''))) return true;
+  const tw = words(title);
+  const noArt = tw[0] && ['the', 'a', 'an'].includes(tw[0]) ? tw.slice(1) : tw;
+  if (noArt.length && closeWord(qk, noArt.join(''))) return true;
+  if (noArt.length >= 2 && noArt[0].length === 1 && closeWord(qk, noArt.slice(1).join(''))) return true;
+  return false;
+}
 
 test('search close-title: common typos still match the real name', () => {
   assert.ok(closeTitle('frekestein', 'Frankenstein'), 'frekestein → Frankenstein');
@@ -58,6 +68,9 @@ test('search close-title: common typos still match the real name', () => {
   assert.ok(closeTitle('batman', 'Batman'), 'exact still matches');
   assert.ok(!closeTitle('zzz', 'Frankenstein'), 'unrelated junk stays out');
   assert.ok(!closeTitle('cars', 'Frankenstein'), 'short unrelated stays out');
+  assert.ok(wholeTitleClose('frankestein', 'Frankenstein'), 'frankestein is the Frankenstein title');
+  assert.ok(wholeTitleClose('frankenstein', 'I, Frankenstein'), 'I, Frankenstein still counts as a Frankenstein title');
+  assert.ok(!wholeTitleClose('frankestein', 'Young Frankenstein'), 'Young Frankenstein must not cancel Did you mean');
 });
 
 test('search close-title: UI shows a Did you mean chip and retries TMDB', () => {
@@ -66,6 +79,7 @@ test('search close-title: UI shows a Did you mean chip and retries TMDB', () => 
   assert.match(ui, /function showSearchSuggest\(hint, original\)/);
   assert.match(ui, /function applySearchSuggest\(\)/);
   assert.match(ui, /showSearchSuggest\(closestCatalogTitle\(q\), q\)/);
+  assert.match(ui, /const closeHit = ok\.some\(\(x\) => searchWholeTitleClose\(q, x\.title \|\| x\.name \|\| ''\)\)/);
   assert.match(ui, /const serverHint = r\.didYouMean \|\| ''/);
   assert.match(ui, /closestCatalogTitle\(q\)[\s\S]+\/api\/tmdb\/search\/multi\?query=' \+ encodeURIComponent\(hintTitle\)/);
   assert.match(ui, /watchlistMap[\s\S]+S\.watchlist/);
@@ -80,4 +94,6 @@ test('search close-title: server retries TMDB with a cached close title', () => 
   assert.match(idx, /function cachedTmdbTitles\(\)/);
   assert.match(idx, /closestTitleInList\(q, cachedTmdbTitles\(\)\)/);
   assert.match(idx, /closestTitleInList\(q, SEARCH_CLOSE_SEEDS\)/);
+  assert.match(idx, /function searchWholeTitleClose\(query, title\)/);
+  assert.match(idx, /tmdbListHasCloseTitle[\s\S]+searchWholeTitleClose\(q, x\.title/);
 });

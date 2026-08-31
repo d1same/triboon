@@ -301,7 +301,8 @@ async function onDemandSubSync(vf, vtt, uid) {
     // also bypasses the active-player connection reserve — so enabling CC mid-playback would steal
     // connections from the live video and cause buffering. The embedded-subtitle extractor already
     // uses this lane; the on-demand sync path must too. (Sub-sync is background work by contract.)
-    const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
+    // Local add-ins skip the HTTP hop — alass reads the file on disk.
+    const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
     await new Promise((resolve, reject) => {
       const p = spawnSubSync(selfUrl, inSrt, outSrt);
       let err = '';
@@ -3769,6 +3770,9 @@ function beginMountPlayerRead(vf, now = Date.now()) {
   vf._preparedOnly = false;
   vf._playbackTouched = now;
   vf._activeStreamReads = (Number(vf._activeStreamReads) || 0) + 1;
+  // Disk add-ins do not use NNTP. Rebalancing them used to steal sockets from a
+  // live Usenet Play. Keep them off the connection share entirely.
+  if (vf._local) return true;
   // Every inactive→active transition must join fair-share accounting immediately. The 1s throttle
   // applies only to additional ranges from a mount already represented in the active set.
   if (!wasActive || now - _lastStreamRebalance > 1000) {
@@ -4606,6 +4610,28 @@ function localItemSorter(sort) {
   if (sort === 'rating.desc') return (a, b) => (+b.rating || 0) - (+a.rating || 0);
   return (a, b) => (b.addedAt || 0) - (a.addedAt || 0);
 }
+// Local add-ins sit on disk. ffmpeg must read the file path, not loop the bytes
+// through localhost /api/stream (64 KB HTTP ranges). That hop is why a 4K
+// library movie buffered like Usenet — example: a 60 Mbps MKV on M:\Movies
+// got copied through Node 150 times a second instead of a disk seek.
+const LOCAL_READ_CHUNK = 4 * 1024 * 1024;
+function localMediaInput(vf) {
+  const file = vf && vf._local && typeof vf._local.file === 'string' ? vf._local.file : '';
+  if (!file) return null;
+  try {
+    const st = fs.statSync(file);
+    if (!st.isFile() || !(st.size > 0)) return null;
+  } catch { return null; }
+  return path.resolve(file);
+}
+function openLocalReadStream(file, start, end, opts = {}) {
+  return fs.createReadStream(file, {
+    start,
+    end: Math.max(start, end - 1),
+    highWaterMark: LOCAL_READ_CHUNK,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+}
 function localMountFor(ctx, libId, idx, caps = {}, playCtx = {}) {
   const found = localItemFor(ctx, libId, idx);
   if (found.error) return found;
@@ -4621,8 +4647,8 @@ function localMountFor(ctx, libId, idx, caps = {}, playCtx = {}) {
       container: 'local', method: null, streamable: true, tags: [], health: { verdict: 'verified' },
       mountedAt: Date.now(), _local: { libId, idx: parseInt(idx, 10), file: mediaFile },
       triage: async () => ({ verdict: 'verified', checked: 1, missing: 0, local: true }),
-      read: async function* (start, end) {
-        const rs = fs.createReadStream(mediaFile, { start, end: Math.max(start, end - 1) });
+      read: async function* (start, end, opts = {}) {
+        const rs = openLocalReadStream(mediaFile, start, end, opts);
         try {
           for await (const chunk of rs) yield chunk;
         } finally {
@@ -7217,6 +7243,18 @@ function searchCloseTitle(query, title) {
   if (searchCloseWord(qw.join(''), tw.join(''))) return true;
   return qw.every((w) => tw.some((t) => searchCloseWord(w, t) || t.startsWith(w) || w.startsWith(t)));
 }
+// Whole-title only. "frankestein" is close to Frankenstein, not to Young Frankenstein —
+// that longer hit used to cancel Did you mean and hide I, Frankenstein.
+function searchWholeTitleClose(query, title) {
+  const qk = searchTitleKey(query);
+  if (qk.length < 4) return false;
+  if (searchCloseWord(qk, searchTitleKey(title))) return true;
+  const tw = String(title || '').toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  const noArt = tw[0] && ['the', 'a', 'an'].includes(tw[0]) ? tw.slice(1) : tw;
+  if (noArt.length && searchCloseWord(qk, noArt.join(''))) return true;
+  if (noArt.length >= 2 && noArt[0].length === 1 && searchCloseWord(qk, noArt.slice(1).join(''))) return true;
+  return false;
+}
 function searchTitleKey(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
@@ -7232,7 +7270,7 @@ function closestTitleInList(query, titles) {
   return best;
 }
 function tmdbListHasCloseTitle(data, q) {
-  return ((data && data.results) || []).some((x) => x && x.media_type !== 'person' && searchCloseTitle(q, x.title || x.name || ''));
+  return ((data && data.results) || []).some((x) => x && x.media_type !== 'person' && searchWholeTitleClose(q, x.title || x.name || ''));
 }
 function cachedTmdbTitles() {
   const out = [];
@@ -7554,7 +7592,7 @@ Object.assign(H, {
     headers['content-length'] = String(end - start);
     ctx.res.writeHead(code, headers);
     if (ctx.req.method === 'HEAD') return ctx.res.end();
-    const rs = fs.createReadStream(item.file, { start, end: end - 1 });
+    const rs = openLocalReadStream(item.file, start, end);
     rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
     rs.pipe(ctx.res);
   },
@@ -8405,7 +8443,7 @@ Object.assign(H, {
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     const at = parseFloat(ctx.url.searchParams.get('at') || '0') || 0;
     if (!(at > 0) || !detectFfprobe()) return send(ctx.res, 200, { k: Math.max(0, at) });
-    const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
+    const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
     const k = await ffprobeKeyframeAtOrAfter(selfUrl, at).catch(() => at);
     send(ctx.res, 200, { k: Math.max(at, Number(k) || at) });
   },
@@ -8427,7 +8465,7 @@ Object.assign(H, {
     try { ctx.res.setTimeout(0); if (ctx.res.socket) ctx.res.socket.setTimeout(0); } catch {}
     const startSeconds = parseFloat(ctx.url.searchParams.get('start') || '0') || 0;
     const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;
-    const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
+    const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
     // Audio decides itself: most browsers can't decode DDP/AC3/DTS, so a pure copy-remux of
     // most releases error'd the <video> and fell to a FULL transcode ("codec not supported"
     // on every movie). The codec (cached probe) is weighed against the CLIENT's declared
@@ -8494,7 +8532,7 @@ Object.assign(H, {
     const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
     const height = parseInt(ctx.url.searchParams.get('height') || '1080', 10);
     const hdr = (vf._tracks && vf._tracks.video && vf._tracks.video[0] && vf._tracks.video[0].hdr) || false;
-    const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
+    const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
     const ff = spawnTranscode(selfUrl, { startSeconds, audioTrack, height: LADDER[height] ? height : 1080, hdr, safeStereo: forceAudioSafe });
     ctx.res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store' });
     ff.on('error', (e) => { console.error('[transcode spawn]', e.message); try { ctx.res.destroy(); } catch {} });
@@ -8578,7 +8616,7 @@ Object.assign(H, {
       // local <video>, even inside HLS — its canPlayType over-reports Dolby for AirPlay/passthrough only).
       const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
       const transcodeAudio = forceAudioSafe || !audioCopyOk(aud, vf._caps);
-      const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
+      const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
       let ff;
       // 2 s segments keep time-to-first-frame down (Safari can start after the first segment) — the whole
       // point on iOS is fast startup, the #1 value; the rolling window bounds disk either way.
@@ -8624,7 +8662,7 @@ Object.assign(H, {
     if (!detectFfprobe()) return send(ctx.res, 200, { available: false, audio: [], subs: [], releaseSubs, duration: null });
     if (vf._tracks) return send(ctx.res, 200, vf._tracks);
     try {
-      const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}&priority=background`;
+      const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}&priority=background`;
       const t = await probeTracks(selfUrl);
       vf._tracks = { available: true, ...t, releaseSubs };
       send(ctx.res, 200, vf._tracks);
@@ -8687,7 +8725,7 @@ Object.assign(H, {
       return vf._chapters ? send(ctx.res, 200, vf._chapters) : send(ctx.res, 404, { error: 'no chapter data' });
     }
     try {
-      const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}&priority=background`;
+      const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}&priority=background`;
       const chaps = await probeChapters(selfUrl);
       vf._chapters = chaps; // cache (null included) so a chapterless book isn't re-probed every open
       if (!chaps) return send(ctx.res, 404, { error: 'no chapter data' });
@@ -9096,7 +9134,7 @@ Object.assign(H, {
       if (!job) {
         job = (async () => {
           const out = path.join(require('os').tmpdir(), `triboon-thumb-${key.replace(/[^a-z0-9]/gi, '_')}.jpg`);
-          const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}&priority=background`;
+          const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}&priority=background`;
           const ok = await makeThumb(selfUrl, out, bucket);
           if (!ok) return null;
           const b = fs.readFileSync(out);
@@ -9556,7 +9594,7 @@ function ensureSubtitleVtt(vf, track, uid, opts = {}) {
   if (recentFailure) return Promise.reject(new Error(recentFailure.message || 'embedded subtitle extraction recently failed'));
   vf._subJobs = vf._subJobs || new Map();
   if (vf._subJobs.has(track)) return vf._subJobs.get(track);
-  const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
+  const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
   const timeoutMs = embeddedSubtitleTimeoutMs(opts.mode, vf);
   const job = new Promise((resolve, reject) => {
     let ff; let done = false;

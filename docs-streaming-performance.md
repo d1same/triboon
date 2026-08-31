@@ -33,9 +33,9 @@ Settings -> Streaming performance owns the capacity profile:
 | Stream mix | Mostly 1080p, mostly 4K, or mixed | Estimates bandwidth pressure and picks safer defaults. |
 | Server download Mbps | Server-to-usenet download budget | Used by the recommendation flow and the live allocator; 80% is treated as safe usable capacity. Extra sockets cannot create bandwidth past this pipe. |
 | Server upload Mbps | Server-to-remote-user upload budget | Used for remote streaming warnings. |
-| Connections Auto / Custom | How live sockets are shared | Auto starts each Play at 10, adds sockets only when that playhead is falling behind, and gives extras back when another viewer needs them. The live cap is bitrate ÷ measured (or 8 Mbps) per connection, never past 24. Custom keeps even fair-share using the typed 1080/4K numbers. A 502 still shrinks either mode. |
+| Connections Auto / Custom | How live sockets are shared | Auto starts each Play at 10, adds sockets only when that playhead is falling behind, and gives extras back when another viewer needs them. The live cap is bitrate ÷ measured (or 8 Mbps) per connection, never past 24. Custom keeps even fair-share using the typed 1080/4K numbers. A 502 still shrinks either mode. 4K is the release (2160p name, or ~20 Mbps+), not "file bigger than 4 GB" — a short 2160p episode still gets the 4K cap and buffer. |
 | 1080p / 4K read-ahead goals | Owner-facing server-side read-ahead goal | Saved as seconds, translated into bounded article windows by the engine. |
-| Per-stream 1080p / 4K connections | Maximum article window for one active stream | Used in Custom. Auto ignores these and sizes from bandwidth + who is behind. |
+| Per-stream 1080p / 4K connections | Maximum article window for one active stream | Used as the hard ceiling in Custom. Auto sizes from bandwidth + who is behind, but still honors these numbers as a ceiling when set. |
 | Startup reserve | Percentage of usable connections held back | Keeps new starts and seeks responsive. |
 | Device preload | MB of opening bytes an Android TV may pre-cache ahead of press-play (detail open + Up Next) | Direct-play mounts only; `/api/prepare` offers a tokened prefetch target within this budget, the shell stores it in a 100MB on-device LRU, and press-play buffers its first seconds from disk. 0 disables. |
 | NNTP pipelining | Article requests each provider connection keeps on the wire for read-ahead/background work | Low lanes only — startup/seek/playback/health never share a socket, and stacking stands down while player work is queued. Rides provider pool opts; saving rebuilds pools live. Bench: ~2.2x per-connection read-ahead throughput at depth 4 on a latency-dominated provider. |
@@ -384,6 +384,11 @@ Playback windows are applied when a mount is selected and rebalanced again when
 stream routes are touched or housekeeping removes mounts. That lets existing
 streams shrink their read-ahead/cache budget as additional users become active,
 instead of keeping the larger window they received at mount time.
+
+A local-library Play (added Movies/TV on disk) is not a usenet viewer. It does
+not take NNTP sockets or shrink another stream's cache. ffmpeg reads the file
+path; `/api/stream` serves it in 4 MB disk chunks. Example: you play a ripped
+4K from `M:\Movies` while someone else watches FROM — they keep their sockets.
 
 After a source mounts successfully, Triboon starts a bounded low-priority
 playback warmup over the first chunk of the file. This is not allowed to block

@@ -526,6 +526,13 @@ function mountHasActivePlayback(mount, now = Date.now()) {
   return touched > 0 && now - touched < ACTIVE_PLAYBACK_GRACE_MS;
 }
 
+// Disk add-ins share the HTTP mounts map, but they do not pull NNTP articles.
+// Counting them as viewers used to shrink a live Usenet Play — example: a
+// ripped 4K from M:\Movies stole 4K sockets from FROM next door.
+function mountNeedsUsenetShare(mount, now = Date.now()) {
+  return !!(mount && !mount._local && mountHasActivePlayback(mount, now));
+}
+
 // Live connection allocator. Fair-share is the default. Auto mode may grow a starving
 // playhead and take extra read-ahead sockets from a fat one. Custom mode stays on even
 // split. Coverage is bytes AHEAD of the last player read — tail warmup must not look fat.
@@ -538,9 +545,28 @@ const ALLOC_STEAL_COOLDOWN_MS = 5000;
 const AUTO_BASE_CONNS = 10;
 const AUTO_HARD_MAX = 24;
 const DEFAULT_MBPS_PER_CONN = 8;
+const UHD_SIZE_BYTES = 4e9;
+const UHD_AVG_MBPS = 20;
+
+// 4K is the release, not "bigger than 4 GB". A 3 GB 2160p episode still needs
+// the 4K socket cap and buffer; a 12 GB 1080p remux already qualifies by size.
+function streamIsUhd(vf) {
+  if (vf === true) return true;
+  if (vf == null || typeof vf !== 'object') return Number(vf) > UHD_SIZE_BYTES;
+  const size = Number(vf.size) || 0;
+  if (size > UHD_SIZE_BYTES) return true;
+  const name = String(vf._releaseName || '').trim() || String(vf.name || '').trim();
+  if (name && parseRelease(name).resolutionRank >= 4) return true;
+  const durationSec = vf._tracks && Number(vf._tracks.duration) > 0 ? Number(vf._tracks.duration) : 0;
+  if (durationSec > 0 && size > 0) {
+    const avgMbps = ((size * 8) / durationSec) / 1e6;
+    if (Number.isFinite(avgMbps) && avgMbps >= UHD_AVG_MBPS) return true;
+  }
+  return false;
+}
 
 function streamNeedMbps(vf) {
-  const big = (Number(vf && vf.size) || 0) > 4e9;
+  const big = streamIsUhd(vf);
   const durationSec = vf && vf._tracks && Number(vf._tracks.duration) > 0 ? Number(vf._tracks.duration) : 0;
   const size = Number(vf && vf.size) || 0;
   const measuredMbps = durationSec > 0 && size > 0 ? ((size * 8) / durationSec) / 1e6 : 0;
@@ -717,12 +743,12 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
     const raw = custom ? 'ok' : classifyStreamNeed(vf, now);
     const kind = custom ? 'ok' : heldAllocKind(vf, raw, now, holdMs);
     const configured = Number(caps && caps[i]);
-    const ownerCap = (Number(vf.size) || 0) > 4e9
+    const ownerCap = streamIsUhd(vf)
       ? Number(perf.maxConnPerStream4k)
       : Number(perf.maxConnPerStream1080);
     const autoCap = autoStreamCap(vf, perf, { starving: kind === 'starve' });
     const fallback = custom
-      ? Math.max(floor, Number.isFinite(ownerCap) && ownerCap > 0 ? ownerCap : ((Number(vf.size) || 0) > 4e9 ? 20 : 12))
+      ? Math.max(floor, Number.isFinite(ownerCap) && ownerCap > 0 ? ownerCap : (streamIsUhd(vf) ? 20 : 12))
       : (Number.isFinite(ownerCap) && ownerCap > 0 ? Math.min(autoCap, ownerCap) : autoCap);
     const cap = Math.max(floor, Number.isFinite(configured) && configured > 0 ? configured : fallback);
     return { vf, floor, cap, needMbps: streamNeedMbps(vf), kind };
@@ -781,13 +807,24 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
     spare--;
     return true;
   };
+  const growRoundRobin = (indexes) => {
+    let progressed = true;
+    while (progressed && spare > 0) {
+      progressed = false;
+      for (const i of indexes) {
+        if (grow(i)) progressed = true;
+      }
+    }
+  };
   if (!growFrozen && !custom) {
     const starting = [];
     meta.forEach((m, i) => {
       if (isStartupViewer(m.vf, now)) starting.push(i);
     });
-    for (const i of starting) while (grow(i)) { /* a fresh Play/resume may use leftover spare immediately */ }
-    for (const i of starve) while (grow(i)) { /* leftover spare goes to starving streams first */ }
+    // Take turns. Filling the first Play to its cap left a 1080p seek waiting
+    // while a 4K next to it vacuumed leftover sockets.
+    growRoundRobin(starting);
+    growRoundRobin(starve);
   }
 
   let stole = false;
@@ -808,7 +845,7 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
   }
 
   if (spare > 0 && !growFrozen && !custom) {
-    for (const i of starve) while (grow(i)) { /* leftover spare stays unused unless a playhead is behind */ }
+    growRoundRobin(starve);
   }
   return Object.assign(assigned, { stole });
 }
@@ -1322,7 +1359,7 @@ class Pipeline {
     const exceptId = exceptVf && exceptVf.id;
     for (const vf of this.mounts.values()) {
       if (!vf || (exceptId && vf.id === exceptId)) continue;
-      if (mountHasActivePlayback(vf, now)) return true;
+      if (mountNeedsUsenetShare(vf, now)) return true;
     }
     return false;
   }
@@ -1478,7 +1515,7 @@ class Pipeline {
     const vf = (vfOrBig && typeof vfOrBig === 'object') ? vfOrBig : { size: vfOrBig ? 5e9 : 2e9 };
     const custom = perf.connectionMode === 'custom';
     const configured = custom
-      ? ((Number(vf.size) || 0) > 4e9 ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12))
+      ? (streamIsUhd(vf) ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12))
       : autoStreamCap(vf, perf);
     let pressure = 1;
     try {
@@ -1511,7 +1548,7 @@ class Pipeline {
   }
 
   _playbackWindowFor(vf, activeMounts, perf = this.performance() || {}, assignedReadAhead, activeList) {
-    const big = (vf.size || 0) > 4e9;
+    const big = streamIsUhd(vf);
     const siblings = Array.isArray(activeList) && activeList.length ? activeList : null;
     const activeCount = Math.max(1, siblings ? siblings.length : (activeMounts || 1));
     const usable = perf.usableConnections || 0;
@@ -1643,7 +1680,7 @@ class Pipeline {
     const aheadCap = this._preparedPeekSockets();
     const wide = aheadCap > PREPARED_PEEK_MIN;
     const activeWin = vf._activePlayWin || win;
-    const cap = (Number(vf.size) || 0) > 4e9
+    const cap = streamIsUhd(vf)
       ? (wide ? PREPARED_CACHE_BYTES_4K_WIDE : PREPARED_CACHE_BYTES_4K)
       : (wide ? PREPARED_CACHE_BYTES_1080_WIDE : PREPARED_CACHE_BYTES_1080);
     const previousCacheMaxBytes = Math.max(1, Number(vf._playWin && vf._playWin.cacheMaxBytes) || Infinity);
@@ -1686,11 +1723,15 @@ class Pipeline {
     if (!vf || !vf.streamable || typeof vf.read !== 'function') return;
     const size = Number(vf.size) || 0;
     if (size <= 0) return;
-    const big = size > 4e9;
+    const big = streamIsUhd(vf);
+    const othersPlaying = [...this.mounts.values()].some((m) => (
+      m && m !== vf && m.streamable && mountNeedsUsenetShare(m)
+    ));
     const capBytes = Number(win && win.cacheMaxBytes) || 0;
-    const warmBytes = Math.min(size, capBytes || Infinity, (big ? 96 : 32) * 1024 * 1024);
+    const warmMb = (big && !othersPlaying) ? 96 : 32;
+    const warmBytes = Math.min(size, capBytes || Infinity, warmMb * 1024 * 1024);
     if (!Number.isFinite(warmBytes) || warmBytes <= 0) return;
-    const warm = (key, from, to) => {
+    const warm = (key, from, to, priority = 'readAhead') => {
       if (!(to > from)) return;
       this._cancelPlaybackWarmup(vf, key);
       if (!(vf._playbackWarmupJobs instanceof Map)) vf._playbackWarmupJobs = new Map();
@@ -1699,13 +1740,10 @@ class Pipeline {
       job.timer = setTimeout(() => {
         job.timer = null;
         job.promise = (async () => {
-          const hot = opts && opts.hot === true;
-          const frac = Number(resumeFrac) || 0;
-          const warmPriority = hot ? (frac > 0.02 && frac < 0.985 ? 'seek' : 'startup') : 'readAhead';
+          const warmPriority = priority || 'readAhead';
           for await (const _chunk of vf.read(from, to, { priority: warmPriority, signal: controller.signal })) {
-            // Play/resume (hot) uses startup/seek so first picture beats health and background
-            // fill. Detail-page prepare stays on read-ahead so it cannot steal another user's
-            // playing sockets.
+            // Only a short first-picture slice stays on startup/seek. The old path put the
+            // whole 4K head+tail+resume window on that lane, so a 1080p seek next to it waited.
           }
         })().catch(() => {}).finally(() => {
           // VFS read-ahead is fire-and-forget. Ending the explicit generator does not mean its
@@ -1731,6 +1769,7 @@ class Pipeline {
     const resuming = frac > 0.02 && frac < 0.985;
     if (!resuming) {
       this._cancelPlaybackWarmup(vf, 'resume');
+      this._cancelPlaybackWarmup(vf, 'resume:tail');
       vf._warmedResumeFrac = null;
       vf._warmedResumeRange = null;
     }
@@ -1746,7 +1785,14 @@ class Pipeline {
         const start = Math.max(0, Math.min(Math.max(0, size - warmBytes), target - back));
         const end = Math.min(size, start + warmBytes);
         vf._warmedResumeRange = { start, end, at: Date.now() };
-        warm('resume', start, end);
+        const hot = opts && opts.hot === true;
+        if (hot) {
+          const urgent = Math.min(end, start + (big ? 16 : 8) * 1024 * 1024);
+          warm('resume', start, urgent, 'seek');
+          if (end > urgent) warm('resume:tail', urgent, end, 'readAhead');
+        } else {
+          warm('resume', start, end, 'readAhead');
+        }
       }
     }
     // HEAD: a fresh start plays from the head (full warm); a resume only needs the container header
@@ -1759,7 +1805,14 @@ class Pipeline {
     if (vf._playbackWarmupStarted && !needFullHead) return;
     const firstWarm = !vf._playbackWarmupStarted;
     vf._playbackWarmupStarted = true;
-    warm('head', 0, headBytes);
+    const hot = opts && opts.hot === true;
+    if (hot && !resuming) {
+      const urgent = Math.min(headBytes, (big ? 16 : 8) * 1024 * 1024);
+      warm('head', 0, urgent, 'startup');
+      if (headBytes > urgent) warm('head:tail', urgent, headBytes, 'readAhead');
+    } else {
+      warm('head', 0, headBytes, 'readAhead');
+    }
     if (!resuming) vf._fullHeadWarmed = true;
     if (!firstWarm) return;
     // TAIL warm — the decisive fix for "plays fine, then buffers after a minute". The browser fMP4
@@ -1772,7 +1825,7 @@ class Pipeline {
     // concurrently with the head warm (own timer), bounded by the cache cap, and skipped when it
     // would overlap the head warm (small files).
     const tailBytes = Math.min(size, capBytes || Infinity, (big ? 48 : 24) * 1024 * 1024);
-    if (tailBytes > 0 && size - tailBytes > warmBytes) warm('tail', size - tailBytes, size);
+    if (tailBytes > 0 && size - tailBytes > warmBytes) warm('tail', size - tailBytes, size, 'readAhead');
   }
 
   _cancelPlaybackWarmup(vf, key) {
@@ -1845,7 +1898,7 @@ class Pipeline {
       }
     }
     const active = [...this.mounts.values()]
-      .filter((m) => mountHasActivePlayback(m, now));
+      .filter((m) => mountNeedsUsenetShare(m, now));
     const activeCount = Math.max(1, active.length);
     const viewerChanged = this._allocActiveCount !== active.length;
     this._allocActiveCount = active.length;
@@ -2491,7 +2544,7 @@ class Pipeline {
     // prepare-only mounts. Details-page focus may prepare several titles; those mounts retain their
     // own capped warm window without shrinking the share of a playing 4K stream.
     const now = Date.now();
-    const activeMounts = [...this.mounts.values()].filter((m) => mountHasActivePlayback(m, now)).length + 1;
+    const activeMounts = [...this.mounts.values()].filter((m) => mountNeedsUsenetShare(m, now)).length + 1;
     const win = this._applyPlaybackWindow(vf, activeMounts, perf);
 
     // Bounded gate: verdict within 500ms or we play anyway and keep checking in background.
@@ -3068,8 +3121,8 @@ module.exports = {
   candidateKey, nzbVerdictKey,
   releaseFingerprint, applyNzbFingerprintFields,
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
-  isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, ACTIVE_PLAYBACK_GRACE_MS,
-  allocateStreamConnections, classifyStreamNeed, streamNeedMbps, mountAheadBytes, fileIsFullyAhead,
+  isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, mountNeedsUsenetShare, ACTIVE_PLAYBACK_GRACE_MS,
+  allocateStreamConnections, classifyStreamNeed, streamNeedMbps, streamIsUhd, mountAheadBytes, fileIsFullyAhead,
   householdConnPressure, preparedHouseHasRoom, preparedPeekSockets, autoStreamCap, cacheNeedWeight,
   playbackRamFraction, playbackCacheCapMb,
   AUTO_BASE_CONNS,

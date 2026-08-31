@@ -2231,10 +2231,14 @@ test('preferences profile manager has TV-friendly profile icons and add action',
     'the add-profile control should use the styled TV-friendly primary button');
   assert.doesNotMatch(ui, /LEVEL_BADGE/,
     'profile UI should not reintroduce emoji maturity badges');
-  // Settings section tabs switch on CLICK (+ D-pad focus); hover-to-switch is bound only on TV so a
-  // web/desktop pointer ROLLOVER never changes the section (the owner's accidental-jump complaint).
-  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]*?b\.addEventListener\('click', \(\) => \{ clearTimeout\(_accountTabFocusT\); activateAccountTab\(b\); \}\);[\s\S]*?b\.addEventListener\('focus', \(\) => scheduleAccountTab\(b\)\);[\s\S]*?if \(document\.body\.classList\.contains\('tv'\)\) b\.addEventListener\('mouseenter', \(\) => scheduleAccountTab\(b\)\);/,
-    'settings tabs commit on click; focus/hover only schedule so Right from the 2nd item is not dropped');
+  // Settings section tabs switch on CLICK / OK / Right only. Focus and hover must not
+  // rebuild the panel — that made Down the list crawl and dropped the next Right.
+  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]*?b\.addEventListener\('click', \(\) => activateAccountTab\(b\)\);/,
+    'settings tabs commit on click');
+  assert.doesNotMatch(ui, /addEventListener\('focus', \(\) => scheduleAccountTab/,
+    'Down the Settings tab list must not swap panels');
+  assert.doesNotMatch(ui, /addEventListener\('mouseenter', \(\) => scheduleAccountTab/,
+    'hover must not swap Settings panels');
 });
 
 test('admin security panel exposes own-password change separately from user resets', () => {
@@ -2556,7 +2560,7 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'embedded subtitle extraction should read through the background stream lane');
   // The on-demand alass sub-sync pulls the mount's AUDIO; it MUST read through the background lane
   // too, or enabling CC mid-playback steals the player's connections (startup/seek lane) and buffers.
-  assert.match(server, /async function onDemandSubSync\(vf, vtt, uid\) \{[\s\S]+const selfUrl = `http:\/\/127\.0\.0\.1:\$\{server\.address\(\)\.port\}\/api\/stream\/\$\{vf\.id\}\?t=\$\{auth\.streamToken\(uid, vf\.id\)\}&priority=background`;/,
+  assert.match(server, /async function onDemandSubSync\(vf, vtt, uid\) \{[\s\S]+const selfUrl = localMediaInput\(vf\) \|\| `http:\/\/127\.0\.0\.1:\$\{server\.address\(\)\.port\}\/api\/stream\/\$\{vf\.id\}\?t=\$\{auth\.streamToken\(uid, vf\.id\)\}&priority=background`;/,
     'on-demand subtitle sync must pull audio through the background NNTP lane so CC never starves the active player');
   assert.match(server, /function subtitleVttHasCues\(vtt\) \{[\s\S]+-->/,
     'embedded subtitle extraction should require real cue timings before treating WebVTT as valid');
@@ -3589,7 +3593,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(ui, /function syncSectionTabs\(tabsId, activeButton = null\) \{[\s\S]+setAttribute\('role', 'tablist'\)[\s\S]+setAttribute\('role', 'tab'\)[\s\S]+setAttribute\('aria-selected', on \? 'true' : 'false'\)[\s\S]+\}/,
     'Settings and Preferences side tabs should initialize selected state for D-pad and accessibility');
   // Server settings are folded into the Preferences page as one menu (Preferences group · divider ·
-  // Server settings group; Appearance dropped). Click commits immediately; focus/hover settle first.
+  // Server settings group; Appearance dropped). Click / OK / Right commits; focus never swaps.
   assert.match(ui, /function mergeServerSettingsIntoPrefs\(\) \{[\s\S]+data-tab="display"[\s\S]+data-stab="display"[\s\S]+prefTabDivider[\s\S]+b\.dataset\.srv = b\.dataset\.tab[\s\S]+prefs\.appendChild\(p\)/,
     'Server-settings tabs + panels should be folded into the Preferences page (Appearance removed, divider added)');
   assert.match(ui, /\.prefTabDivider\{margin:8px 0 2px;padding:4px 12px 2px;border:0/,
@@ -3603,8 +3607,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Update app sits with Profile (this device), not Connections');
   assert.match(ui, /function activateAccountTab\(b\) \{[\s\S]+const isSrv = !!b\.dataset\.srv;[\s\S]+syncSectionTabs\('prefTabs', b\)[\s\S]+#prefs \[data-ptab\][\s\S]+#prefs \.setGrid\[data-stab\][\s\S]+refreshSettings\(\)[\s\S]+replaceRoute\(accountTabRoute\(key\)\)/,
     'the unified account-tab handler shows the right pref/server panel, lazy-loads server data, and keeps the section in the URL');
-  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]+addEventListener\('click', \(\) => \{[\s\S]+activateAccountTab\(b\)[\s\S]+addEventListener\('focus', \(\) => scheduleAccountTab\(b\)\)[\s\S]+addEventListener\('mouseenter', \(\) => scheduleAccountTab\(b\)\)/,
-    'account tabs commit on click; focus/hover settle so Settings does not crawl');
+  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]+addEventListener\('click', \(\) => activateAccountTab\(b\)\)/,
+    'account tabs commit on click only');
+  assert.doesNotMatch(ui, /scheduleAccountTab/,
+    'Settings must not debounce a panel swap on focus or hover');
   assert.match(ui, /function openServerSettings\(\) \{[\s\S]+switchView\('prefs'\)[\s\S]+#prefTabs \.srvTab[\s\S]+activateAccountTab\(first\)/,
     'admin entry points open the account page on the first Server-settings tab');
   assert.match(ui, /if \(v === 'settings'\) return openServerSettings\(\)/,
@@ -3643,8 +3649,8 @@ test('Android native player: direct source and native chrome stay out of the web
   }
   assert.match(ui, /function sectionFormConfig\(\) \{[\s\S]+S\.view === 'prefs' \|\| S\.view === 'settings'[\s\S]+root: \$\('prefs'\)[\s\S]+tabs: \$\('prefTabs'\)[\s\S]+panelAttr: 'data-ptab'/,
     'Settings D-pad must use the folded Preferences tabs, not the emptied #setTabs');
-  assert.match(ui, /function scheduleAccountTab\(b\) \{[\s\S]+activateAccountTab\(b\), 90\)[\s\S]+addEventListener\('focus', \(\) => scheduleAccountTab\(b\)\)/,
-    'Settings tab Down only highlights; the panel switch settles so Right is not dropped');
+  assert.match(ui, /if \(S\.user && S\.user\.role === 'admin' && !S\._srvSettingsLoaded\) \{[\s\S]+S\._srvSettingsLoaded = true;[\s\S]+refreshSettings\(\);/,
+    'opening Settings warms server panels in the background so the first Right is instant');
   assert.match(ui, /if \(k === 'ArrowRight'\) \{[\s\S]+activateAccountTab\(tab\)[\s\S]+focusSectionControl\(formCtls\(activeSectionPanel\(cfg\)\)\[0\]\)/,
     'Settings Right commits the focused tab then enters that panel');
   assert.match(ui, /function leaveSettingsPanelToTabs\(\) \{[\s\S]+focusActiveSectionTab\(cfg\)[\s\S]+if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+leaveSettingsPanelToTabs\(\)[\s\S]+window\.__tvBack = \(\) => \{[\s\S]+S\.view === 'prefs' \|\| S\.view === 'settings'[\s\S]+leaveSettingsPanelToTabs\(\)/,
@@ -4378,6 +4384,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'alass output must pass the cue-count sanity guard before it is trusted/cached');
   assert.match(server, /function localMountFor\(ctx, libId, idx, caps = \{\}, playCtx = \{\}\)[\s\S]+const q = String\(playCtx\.q \|\| found\.item\.q \|\| found\.item\.title \|\| name\)[\s\S]+const season = playCtx\.season \?\? found\.item\.s[\s\S]+const ep = playCtx\.ep \?\? playCtx\.episode \?\? found\.item\.e[\s\S]+vf\._subQuery = episodeSubtitleQuery\(vf\._q, season, ep\)/,
     'local library mounts should preserve episode-aware subtitle queries for Wyzie');
+  assert.match(server, /const LOCAL_READ_CHUNK = 4 \* 1024 \* 1024;[\s\S]+function localMediaInput\(vf\) \{[\s\S]+vf\._local[\s\S]+return path\.resolve\(file\);/,
+    'ffmpeg must read added-library files from disk, not loop them through localhost HTTP');
+  assert.match(server, /function openLocalReadStream\(file, start, end, opts = \{\}\) \{[\s\S]+highWaterMark: LOCAL_READ_CHUNK/,
+    'local Range reads should pull megabytes from disk, not 64 KB Node defaults');
+  assert.match(server, /read: async function\* \(start, end, opts = \{\}\) \{[\s\S]+openLocalReadStream\(mediaFile, start, end, opts\)/,
+    'a local mount reader must use the fat disk stream');
+  assert.match(server, /localStream: async \(ctx\) => \{[\s\S]+openLocalReadStream\(item\.file, start, end\)/,
+    'the direct local download URL must use the same fat disk stream');
+  assert.match(server, /remux: async \(ctx\) => \{[\s\S]+const selfUrl = localMediaInput\(vf\) \|\| `http:\/\/127\.0\.0\.1:\$\{server\.address\(\)\.port\}\/api\/stream\/\$\{vf\.id\}\?t=\$\{auth\.streamToken\(ctx\.claims\.uid, vf\.id\)\}`;/,
+    'remux of a ripped movie must feed ffmpeg the file path');
+  assert.match(server, /transcode: async \(ctx\) => \{[\s\S]+const selfUrl = localMediaInput\(vf\) \|\| `http:\/\/127\.0\.0\.1:\$\{server\.address\(\)\.port\}\/api\/stream\/\$\{vf\.id\}\?t=\$\{auth\.streamToken\(ctx\.claims\.uid, vf\.id\)\}`;/,
+    'transcode of a ripped movie must feed ffmpeg the file path');
+  assert.match(server, /function beginMountPlayerRead\(vf, now = Date\.now\(\)\) \{[\s\S]+if \(vf\._local\) return true;[\s\S]+pipeline\.rebalancePlaybackWindows\(now\);/,
+    'playing a local file must not rebalance usenet sockets');
   assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(saved === 'off'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+const builtIn = bestBuiltInSubtitleRel\(\);[\s\S]+if \(builtIn\) return builtIn;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
     'startup subtitles should stay off in manual mode and prefer online subtitles while built-ins are disabled');
   assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
