@@ -283,26 +283,50 @@ class LibraryDb {
     };
   }
 
+  _contentWords(s) {
+    const stop = new Set(['the', 'a', 'an', 'of']);
+    const words = this._titleKey(s).split(/\s+/).filter(Boolean);
+    const content = words.filter((w) => !stop.has(w));
+    return content.length ? content : words;
+  }
+
+  _titleMatches(query, title) {
+    const need = this._contentWords(query);
+    const tw = this._titleKey(title).split(/\s+/).filter(Boolean);
+    if (!need.length || !tw.length) return false;
+    if (need.every((w) => tw.some((t) => t === w || t === w + 's' || w === t + 's'))) return true;
+    const packed = tw.join('');
+    return need.every((w) => w.length >= 4 && packed.includes(w));
+  }
+
   search(query, allowedLibIds = [], limit = 24) {
     if (!this.available || !this.db || !allowedLibIds.length) return [];
     const raw = String(query || '').trim();
-    const key = this._titleKey(raw);
     if (raw.length < 2) return [];
+    const needles = this._contentWords(raw)
+      .map((w) => w.replace(/[%_]/g, ''))
+      .filter((w) => w.length >= 2)
+      .slice(0, 6);
+    if (!needles.length) return [];
     const libs = [...new Set(allowedLibIds.map(String))].slice(0, 40);
-    const like = `%${(key || raw.toLowerCase()).replace(/[%_]/g, '')}%`;
-    const rawLike = `%${raw.toLowerCase().replace(/[%_]/g, '')}%`;
     const placeholders = libs.map(() => '?').join(',');
+    const clause = needles.map(() => '(title_key LIKE ? OR lower(title) LIKE ?)').join(' AND ');
+    const likeArgs = [];
+    for (const w of needles) {
+      const like = `%${w}%`;
+      likeArgs.push(like, like);
+    }
     const rows = this.db.prepare(`
       SELECT lib_id, payload FROM library_items
       WHERE lib_id IN (${placeholders})
         AND kind != 'episode'
-        AND (title_key LIKE ? OR lower(title) LIKE ? OR lower(payload) LIKE ?)
+        AND (${clause})
       ORDER BY added_at DESC
       LIMIT ?
-    `).all(...libs, like, rawLike, like, Math.max(1, Math.min(40, parseInt(limit, 10) || 24)));
+    `).all(...libs, ...likeArgs, Math.max(1, Math.min(40, parseInt(limit, 10) || 24)));
     return rows.map((row) => {
       const item = this._parsePayload(row);
-      return item ? { libId: row.lib_id, item } : null;
+      return item && this._titleMatches(raw, item.title) ? { libId: row.lib_id, item } : null;
     }).filter(Boolean);
   }
 

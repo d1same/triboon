@@ -183,8 +183,10 @@ test('release contract: Android verification fails fast on device and app precon
     'stress distinguishes an unreachable server from an unfinished authentication gate');
   assert.match(stress, /gateLogin[\s\S]+gateSetup[\s\S]+gateProfiles[\s\S]+gatePin/,
     'stress reports actionable login, setup, profile, and PIN preconditions');
-  assert.match(stress, /function Ensure-EmulatorServerRoute[\s\S]+127\.0\.0\.1[\s\S]+Invoke-RestMethod[\s\S]+Invoke-Adb reverse "tcp:\$devicePort" "tcp:\$HostServerPort"/,
-    'stress verifies the host Triboon server before bridging a loopback-configured emulator');
+  assert.match(stress, /function Ensure-EmulatorServerRoute[\s\S]+127\.0\.0\.1[\s\S]+10\.0\.2\.2[\s\S]+Invoke-RestMethod[\s\S]+Invoke-Adb reverse "tcp:\$devicePort" "tcp:\$HostServerPort"/,
+    'stress verifies the host Triboon server before bridging a loopback-configured emulator, including 10.0.2.2');
+  assert.match(stress, /hostname === '10\.0\.2\.2'[\s\S]+location\.replace\('http:\/\/127\.0\.0\.1:'[\s\S]+serverVersion[\s\S]+hostVersion/,
+    'stress moves 10.0.2.2 onto 127.0.0.1 so adb reverse reaches the verify server, and refuses a version mismatch');
   assert.match(verify, /AndroidHostServerPort[\s\S]+android-tv-stress\.ps1[\s\S]+-HostServerPort \$AndroidHostServerPort/,
     'verify:full forwards the emulator host-port route into the Android stress gate');
   assert.match(verify, /household IPTV first-byte \+ retune[\s\S]+verify-live\.js --base \$LiveBase --iptv/,

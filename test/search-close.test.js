@@ -97,12 +97,57 @@ test('search close-title: common typos still match the real name', () => {
   assert.ok(wholeTitleClose('frankenstein', 'I, Frankenstein'), 'I, Frankenstein still counts as a Frankenstein title');
   assert.ok(!wholeTitleClose('frankestein', 'Young Frankenstein'), 'Young Frankenstein must not cancel Did you mean');
   assert.ok(wholeTitleClose('office', 'The Office'), 'office is the Office title');
+  function libraryTitle(query, title) {
+    const qw = words(query), tw = words(title);
+    const need = contentWords(qw);
+    if (!need.length || !tw.length) return false;
+    if (need.every((w) => tw.some((t) => t === w || t === w + 's' || w === t + 's'))) return true;
+    const packed = tw.join('');
+    if (need.every((w) => w.length >= 4 && packed.includes(w))) return true;
+    return wholeTitleClose(query, title);
+  }
+  assert.ok(libraryTitle('the office', 'The Office'), 'library keeps the real Office title');
+  assert.ok(libraryTitle('the office', 'The Office Retrospective'), 'a real Office-titled extra still counts');
+  assert.ok(libraryTitle('the ofice', 'The Office'), 'a close Office typo still finds the folder');
+  assert.ok(!libraryTitle('the office', 'Police Javan'), 'Police is not The Office');
+  assert.ok(!libraryTitle('the office', 'Onside'), 'Onside is not The Office');
+  assert.ok(!libraryTitle('the office', 'Sedaye Bartar The Voice'), 'Voice is not Office');
+  assert.ok(!libraryTitle('the office', 'Rice Cake'), 'Rice Cake is not The Office');
+  assert.ok(!libraryTitle('the office', 'ABC Africa'), 'Africa is not The Office');
+  assert.ok(!libraryTitle('the office', 'Fire with Fire'), 'Fire with Fire is not a correction for The Office');
+  assert.ok(!libraryTitle('the office', 'Fire Keeper'), 'Fire Keeper is not The Office');
+  function titleNoArt(title) {
+    const tw = words(title);
+    return (tw[0] && ['the', 'a', 'an'].includes(tw[0]) ? tw.slice(1) : tw).join('');
+  }
+  function rank(title, q, pop = 1) {
+    const titleWords = words(title);
+    const queryWords = words(q);
+    const noLead = titleWords[0] === 'the' ? titleWords.slice(1) : titleWords;
+    const content = queryWords.filter((w) => !['the', 'a', 'an', 'of'].includes(w));
+    let score = pop * 20;
+    if (closeTitle(q, title)) score += 8000;
+    if (content.length && content.every((w) => titleWords.some((t) => t === w || t + 's' === w || w + 's' === t))) score += 1200;
+    if (content.join('') && titleNoArt(title) === content.join('')) score += 25000;
+    if (noLead[0] === queryWords[0] || noLead[0] === content[0]) score += 10000;
+    return score;
+  }
+  assert.ok(rank('The Office', 'office', 80) > rank('Office Romance', 'office', 400),
+    'office must rank The Office above Office Romance');
+  assert.ok(rank('The Office', 'the office', 80) > rank('Office Space', 'the office', 200),
+    'the office must rank The Office above Office Space');
 });
 
 test('search close-title: UI shows a Did you mean chip and retries TMDB', () => {
   assert.match(ui, /id="searchSuggest"/);
   assert.match(ui, /function catalogSearchSuggestions\(q\)/);
-  assert.match(ui, /label\.textContent = i === 0 \? 'Showing results for' : 'Also try'/);
+  assert.doesNotMatch(ui, /Showing results for/);
+  assert.doesNotMatch(ui, /Also try/);
+  assert.match(ui, /searchSuggestPicked = true/);
+  assert.match(ui, /if \(searchSuggestPicked \|\| searchTitleResolved\(q\) \|\| closeHit\) showSearchSuggest\(null\)/);
+  assert.match(ui, /function searchTitleResolved\(q\)/);
+  assert.match(ui, /function searchLibraryTitleMatch\(query, title\)/);
+  assert.match(ui, /scoreSearchTitles\(q\)\.filter\(\(x\) => \{[\s\S]+x\.rank < 40[\s\S]+qn\.length >= 3 && \(noArt\.startsWith\(qn\) \|\| packed\.startsWith\(qn\)\)[\s\S]+return x\.d <= 2;[\s\S]+\}\)\.slice\(0, 1\)/);
   assert.match(ui, /if \(i === 0\) btn\.id = 'searchSuggestBtn'/);
   assert.match(ui, /function showSearchSuggest\(hint, original\)/);
   assert.match(ui, /function applySearchSuggest\(hint\)/);
@@ -114,7 +159,7 @@ test('search close-title: UI shows a Did you mean chip and retries TMDB', () => 
   assert.match(ui, /function paintInstantSearch\(q\)/);
   assert.match(ui, /function scoreSearchTitles\(q\)/);
   assert.match(ui, /watchlistMap[\s\S]+S\.watchlist/);
-  assert.match(ui, /liveChannelMatchesQuery\(ch, q\) \{[\s\S]+searchCloseTitle\(q, \(ch && ch\.name\) \|\| ''\)/);
+  assert.match(ui, /liveChannelMatchesQuery\(ch, q\) \{[\s\S]+searchLibraryTitleMatch\(q, \(ch && ch\.name\) \|\| ''\)/);
   assert.match(ui, /const SEARCH_CLOSE_SEEDS = \[[\s\S]+'Frankenstein'[\s\S]+'Odyssey'[\s\S]+'The Longest Yard'/);
   assert.match(ui, /for \(const title of SEARCH_CLOSE_SEEDS\) add\(title\)/);
   assert.match(ui, /setTimeout\(doSearch, 120\)/);
@@ -129,7 +174,10 @@ test('search close-title: UI shows a Did you mean chip and retries TMDB', () => 
 test('search suggestions hang under the field and D-pad walks them', () => {
   assert.match(ui, /#searchSuggest\{display:none;position:relative;left:0;width:min\(680px,100%\);margin-top:4px/);
   assert.match(ui, /<\/div>\s*<div id="searchSuggest"/, 'suggestions sit beside the wrap, not inside it, so the mic cannot jump');
-  assert.match(ui, /#micBtn:focus,#micBtn\.focusable\.focus[\s\S]+transform:translateY\(-50%\)!important/);
+  assert.match(ui, /#micBtn\{position:absolute;left:10px;top:0;bottom:0;margin-block:auto;transform:none/);
+  assert.match(ui, /#micBtn:focus,#micBtn\.focus,#micBtn\.focusable\.focus[\s\S]+transform:none!important/);
+  assert.match(ui, /#searchClearBtn:focus,#searchClearBtn\.focus,#searchClearBtn\.focusable\.focus[\s\S]+transform:translateY\(-50%\)!important/);
+  assert.match(ui, /\$\('searchInput'\)\.addEventListener\('focus', \(\) => \{[\s\S]+cancelSearchMicLand\(\);[\s\S]+\$\('micBtn'\)\.classList\.remove\('focus'\)/);
   assert.match(ui, /function moveSearchDownFromField\(\) \{[\s\S]+if \(searchSuggestVisible\(\)\) return focusSearchSuggest\(0\)/);
   assert.match(ui, /if \(e\.key === 'ArrowDown'\) \{ e\.preventDefault\(\); e\.stopPropagation\(\); moveSearchDownFromField\(\); \}/);
   assert.match(ui, /if \(k === 'ArrowDown'\) \{[\s\S]+moveSearchDownFromField\(\)/);
@@ -162,4 +210,8 @@ test('search close-title: server retries TMDB with a cached close title', () => 
   assert.match(idx, /'The Odyssey', '2001: A Space Odyssey', 'Odyssey'/);
   assert.match(idx, /function searchWholeTitleClose\(query, title\)/);
   assert.match(idx, /tmdbListHasCloseTitle[\s\S]+searchWholeTitleClose\(q, x\.title/);
+  assert.match(idx, /function searchLibraryTitleMatch\(query, title\)/);
+  assert.match(idx, /function searchLibraryItemMatch\(query, item\)/);
+  assert.match(idx, /found = found.filter\(\(row\) => searchLibraryItemMatch\(q, row && row\.item\)\)/);
+  assert.doesNotMatch(idx, /lower\(payload\) LIKE/);
 });

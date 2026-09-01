@@ -134,13 +134,18 @@ function Get-DebugConfiguredServerUri {
 function Ensure-EmulatorServerRoute {
   if (!$script:isEmulator -or $HostServerPort -le 0) { return $null }
   $configured = Get-DebugConfiguredServerUri
-  if (!$configured) { return $null }
-  $configuredHost = $configured.Host.ToLowerInvariant()
-  if (@("127.0.0.1", "localhost", "::1") -notcontains $configuredHost) { return $null }
-  $devicePort = $configured.Port
-  if ($devicePort -le 0) {
-    $devicePort = if ($configured.Scheme -eq "https") { 443 } else { 80 }
-  }
+  $configuredHost = if ($configured) { $configured.Host.ToLowerInvariant() } else { "" }
+  # 10.0.2.2 is the emulator's host-loopback. It hits the host port DIRECTLY and
+  # used to skip adb reverse, so -HostServerPort 7799 silently tested the house
+  # :7777 install. Reverse the saved (or default) device port, then move the
+  # WebView to 127.0.0.1:thatPort so the reverse applies. The native bridge
+  # already trusts same-port localhost / 10.0.2.2 aliases.
+  $loopbackHosts = @("127.0.0.1", "localhost", "::1", "10.0.2.2")
+  if ($configured -and ($loopbackHosts -notcontains $configuredHost)) { return $null }
+  $devicePort = if ($configured -and $configured.Port -gt 0) {
+    $configured.Port
+  } elseif ($configured -and $configured.Scheme -eq "https") { 443 }
+  else { 7777 }
   try {
     $server = Invoke-RestMethod -Uri "http://127.0.0.1:$HostServerPort/api/server" -TimeoutSec 5
     if (!$server -or !$server.version) { throw "response was not Triboon" }
@@ -148,11 +153,12 @@ function Ensure-EmulatorServerRoute {
     throw "Android emulator is configured for $configured, but no Triboon server is reachable on host port $HostServerPort. Start Triboon there or pass -HostServerPort 0 to manage ADB routing yourself."
   }
   Invoke-Adb reverse "tcp:$devicePort" "tcp:$HostServerPort" | Out-Null
-  Write-Host "Android emulator route: $configured -> host 127.0.0.1:$HostServerPort"
+  Write-Host "Android emulator route: $(if ($configured) { $configured } else { "127.0.0.1:$devicePort" }) -> host 127.0.0.1:$HostServerPort (v$($server.version))"
   return [ordered]@{
-    configured = [string]$configured
+    configured = if ($configured) { [string]$configured } else { $null }
     devicePort = $devicePort
     hostPort = $HostServerPort
+    hostVersion = [string]$server.version
   }
 }
 function Get-WebViewSocket {
@@ -316,6 +322,39 @@ Invoke-Adb shell am start -n $Activity | Out-Host
 Start-Sleep -Seconds 8
 $report['socket'] = Connect-Devtools
 
+# 10.0.2.2:<port> bypasses adb reverse (that only remaps device localhost).
+# Move the WebView to 127.0.0.1:<same port> so HostServerPort is what we test.
+$retarget = Invoke-CdpJson @"
+(function(){
+  try {
+    const u = new URL(location.href);
+    if (u.hostname === '10.0.2.2') {
+      const port = u.port || (u.protocol === 'https:' ? '443' : '80');
+      location.replace('http://127.0.0.1:' + port + (u.pathname || '/') + u.search + u.hash);
+      return { retargeted: true, from: u.origin };
+    }
+    return { retargeted: false, href: location.href };
+  } catch (e) {
+    return { retargeted: false, error: String(e && e.message || e) };
+  }
+})()
+"@
+if ($retarget.retargeted) {
+  Write-Host "Android emulator WebView retargeted $($retarget.from) -> 127.0.0.1 so adb reverse applies"
+  Start-Sleep -Seconds 3
+  $report['socket'] = Connect-Devtools
+}
+if ($retarget -and $retarget.retargeted) { $report['retargeted'] = $true }
+
+# New origin (127.0.0.1 vs 10.0.2.2) has an empty login. Reuse the household
+# verify token when the operator already set it for :7799. Never print it.
+if (-not [string]::IsNullOrWhiteSpace($env:TRIBOON_TOKEN)) {
+  $tokenJson = ConvertTo-Json -Compress -InputObject $env:TRIBOON_TOKEN
+  Invoke-CdpJson "(function(){ try { localStorage.setItem('triboon.token', $tokenJson); location.reload(); return { seeded: true }; } catch (e) { return { seeded: false }; } })()" | Out-Null
+  Start-Sleep -Seconds 3
+  $report['socket'] = Connect-Devtools
+}
+
 $boot = Invoke-CdpJson @"
 (async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -338,7 +377,9 @@ $boot = Invoke-CdpJson @"
       // Without this, cutting a newer release makes the nav sections flap even though the app is fine.
       try { if (typeof _updatePromptDone !== 'undefined') _updatePromptDone = true; } catch (e) {}
       try { if (typeof closeUpdateModal === 'function') closeUpdateModal(); } catch (e) {}
-      return { ok: true, view: S.view, cards, focus: document.activeElement && (document.activeElement.id || document.activeElement.className || document.activeElement.tagName) };
+      let serverVersion = null;
+      try { const srv = await api('/api/server'); serverVersion = srv && srv.version || null; } catch (e) {}
+      return { ok: true, view: S.view, cards, href, serverVersion, focus: document.activeElement && (document.activeElement.id || document.activeElement.className || document.activeElement.tagName) };
     }
     await wait(500);
   }
@@ -368,6 +409,9 @@ if (!$boot.ok) {
   }
   throw "Android stress preflight: boot did not reach a configured, authenticated, focusable home state (view=$($boot.view), cards=$($boot.cards), href=$($boot.href))."
 }
+if ($serverRoute -and $serverRoute.hostVersion -and $boot.serverVersion -and $boot.serverVersion -ne $serverRoute.hostVersion) {
+  throw "Android stress preflight: WebView is $($boot.href) v$($boot.serverVersion), but host :$HostServerPort is v$($serverRoute.hostVersion). The emulator is still on another install (10.0.2.2 hits the host port directly unless the page is on 127.0.0.1 so adb reverse applies)."
+}
 
 $page = Invoke-CdpJson @"
 (async () => {
@@ -376,6 +420,13 @@ $page = Invoke-CdpJson @"
   // it and pin the done-flag so it can't reopen mid-churn and hijack a Back press.
   try { if (typeof _updatePromptDone !== 'undefined') _updatePromptDone = true; } catch (e) {}
   try { if (typeof closeUpdateModal === 'function') closeUpdateModal(); } catch (e) {}
+  // Household VOD / a leftover native surface can still be up after boot. Back then
+  // dismisses OSD or closes the movie instead of opening the section rail.
+  if ((document.getElementById('player') && document.getElementById('player').classList.contains('open'))
+      || (S.playing && S.playing.usingNative) || S.view === 'player') {
+    try { if (typeof closePlayer === 'function') await closePlayer(); } catch (e) {}
+    await wait(400);
+  }
   const views = ['home', 'movies', 'tv', 'watchlist', 'calendar', 'discover', 'livetv', 'music'];
   const failures = [];
   const samples = [];
@@ -392,6 +443,13 @@ $page = Invoke-CdpJson @"
         switchView(v, false);
         await wait(v === 'music' ? 900 : 650);
         if (S.view !== v) failures.push('switch ' + v + ' landed on ' + S.view);
+        const landed = snap();
+        if ((v === 'movies' || v === 'tv' || v === 'watchlist' || v === 'calendar' || v === 'music') && landed.railOpen) {
+          failures.push(v + ' landed with section rail still open (zone=' + landed.zone + ')');
+          try { if (typeof leaveRail === 'function') leaveRail(); } catch (e) {}
+          S.zone = '';
+          await wait(200);
+        }
         if (v === 'music') {
           try { if (typeof closeMusicNow === 'function') closeMusicNow(); } catch (e) {}
           try { document.getElementById('musicNow').classList.remove('open'); } catch (e) {}
@@ -404,7 +462,9 @@ $page = Invoke-CdpJson @"
           window.__tvBack();
           await wait(650);
           const first = snap();
-          if (first.view !== v || !first.railOpen) failures.push(v + ' first Back did not open section rail');
+          if (first.view !== v || !first.railOpen) {
+            failures.push(v + ' first Back did not open section rail (view=' + first.view + ' zone=' + first.zone + ' rail=' + first.railOpen + ' gridIdx=' + (S.gridIdx || 0) + ')');
+          }
           window.__tvBack();
           await wait(650);
           if (S.view !== 'home') failures.push(v + ' second Back did not return Home');

@@ -126,6 +126,28 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-01, v3.1.24 ship — TV focus reclaim, search prefix, remux pipe cap, Back rail:
+
+- Version contract: `package.json` 3.1.24; Android `versionName` 3.1.24 /
+  `versionCode` 369; Windows client package/Tauri/Cargo 3.1.24.
+- First Back on Movies / TV / Watchlist / Calendar opens the section menu.
+  A leftover Home zone no longer jumps straight Home. Example: you open
+  Watchlist, press Back, the left menu lights up; second Back is Home.
+- Search `ody` suggests Odyssey (3-letter prefix). Kids TMDB genres keep
+  the encoded `|`. Remux caps concurrent mount pipes at 3.
+- Emulator `10.0.2.2:7777` used to skip `adb reverse` and test the house
+  `:7777` install. Stress now moves the WebView to `127.0.0.1:7777` so
+  host `:7799` is what we test, and refuses a version mismatch.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). Node suite **685/685**.
+  Isolated `/api/server` 3.1.24.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 1887ms; FROM ready 1638ms; resume 20ms/16ms). FROM seek 2412ms
+  SLOW (remux `-ss`). IPTV web+native retune PASS (8180 channels).
+  Overlapping Play PASS (both ready in 24ms). Android lint/unit/debug
+  build PASS. Android ExoPlayer stress on `emulator-5554` PASS
+  (`android-tv-stress-20260901-150020.json`). Windows GPU not instrumented.
+
 2026-08-31, v3.1.23 ship — Search mic pin, remux remount guards:
 
 - Version contract: `package.json` 3.1.23; Android `versionName` 3.1.23 /

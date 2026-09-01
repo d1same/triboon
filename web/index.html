@@ -101,7 +101,8 @@ select option,select optgroup{background:var(--surface);color:var(--text)}
 @keyframes bdDrift{from{transform:scale(1) translateY(0)}to{transform:scale(1.05) translateY(-1.2%)}}
 @media (prefers-reduced-motion:reduce){#backdrop .layer.show{animation:none}}
 /* TV: slightly tighter than desktop so the rows keep clear ink beneath the fade. */
-body.tv{--bdW:min(54vw,980px);--bdH:min(70vh,760px);--overscan:1.5vmin;--tvCoverBot:12px} /* TV title-safe margin (edge→rail on the left, edge→clock on the right). Owner wanted the left menu tighter to the edge — dropped 2.5vmin(~27px@1080p) → 1.5vmin(~16px). Content still clears the rail by the gutter (content left = rail + overscan). --tvCoverBot is a little air under poster years so 2026 is not on the bezel. */
+:root{--tvRowWin:calc(var(--homePoster, var(--poster)) * 1.5 + 48px)}
+body.tv{--bdW:min(54vw,980px);--bdH:min(70vh,760px);--overscan:1.5vmin;--tvCoverBot:12px;--bdInfoPadT:52px;--bdInfoPadB:48px;--appClockReserve:168px} /* TV title-safe margin (edge→rail on the left, edge→clock on the right). Owner wanted the left menu tighter to the edge — dropped 2.5vmin(~27px@1080p) → 1.5vmin(~16px). Content still clears the rail by the gutter (content left = rail + overscan). --tvCoverBot is a little air under poster years so 2026 is not on the bezel. Backdrop copy (Home, Movies, TV, Kids, Discover, Watchlist, libraries, details, Cast) uses --bdInfoPadT / --bdInfoPadB so the plot is not glued to the clock or the poster row. --tvRowWin lives on :root so JS can replace the fallback with the measured poster window. */
 body.shortBrowseBd{--bdH:min(60vh,660px)}
 /* TV Movies/TV/Discover keep Home's backdrop box. A shorter --bdH ended the still
    in a hard cut above the posters; Home continues and melts into the row. */
@@ -284,10 +285,9 @@ body.tv #rail:hover .logo .wordmark,#rail.expanded .logo .wordmark,body.railOpen
   place-items:center;background:var(--panel);border:1px solid var(--line);color:var(--text);
   pointer-events:auto;touch-action:manipulation;-webkit-user-select:none;user-select:none}
 body.tv #rail:hover .rlabel,#rail.expanded .rlabel,body.railOpen .rlabel,
-body.tv #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.railOpen #railUser .rlabel{max-width:210px;opacity:1}
-/* Active item = a FLAT translucent pill. No inset light edge, no border: the top highlight read
-   as embossed/3D (owner call, 2026-08-06). Selection is carried by fill + the gold bar alone —
-   the same treatment the Sources rows use, so the two surfaces match. */
+body.tv #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.railOpen #railUser .rlabel{max-width:210px!important;opacity:1!important}
+/* Active item = a FLAT translucent pill. No inset light edge, no gold bar, no boxed edges.
+   Focus is the solid fill only — same contract as Settings tabs. */
 .railBtn.active{color:var(--text);background:transparent;border-radius:13px;box-shadow:none}
 body.tv .railBtn.active{background:rgba(255,255,255,.09)}
 /* COLLAPSED rail recedes as a WHOLE — the glass panel fades with its icons (fading only the
@@ -308,11 +308,11 @@ body.mobileNav #rail #railUser{opacity:1!important}
 #rail .railBtn:hover,#rail .railBtn.focus{opacity:1}
 /* D-pad has no hover: focusRail() adds .expanded (and body.railOpen), so entering the menu with
    the remote restores full strength through the :not(.expanded) guard above. */
-.railBtn.active::after,.railBtn.focusable.focus::after,.railBtn:focus-visible::after{content:"";position:absolute;width:3px;height:22px;left:-12px;border-radius:4px;background:var(--focus)}
+.railBtn.active::after,.railBtn.focusable.focus::after,.railBtn:focus-visible::after{content:none!important;display:none!important}
 .railBtn.focusable::before{display:none}
 .railBtn.focusable.focus,.railBtn:focus-visible{
-  transform:none;color:var(--text);
-  background:var(--soft);box-shadow:none}
+  transform:none;color:var(--btnFocusText);
+  background:var(--btnHover);box-shadow:none}
 /* A menu row must NEVER scale on focus. #railMain is a scroller (overflow-x:hidden), so a scaled
    pill grows ~10px wider than its own container and gets sliced ~5px on BOTH sides — the owner's
    "the goldish rollover is cut on the left and the right" (2026-08-06). The rule above already
@@ -321,8 +321,7 @@ body.mobileNav #rail #railUser{opacity:1!important}
    cover every themed variant. Cards still scale on focus; only the rail is exempt. */
 body[data-spotlight] .railBtn.focusable.focus,body[data-spotlight] .railBtn:focus-visible,
 body[data-spotlight] #railUser.focusable.focus,body[data-spotlight] #railUser:focus-visible{transform:none}
-.railBtn.focusable.focus::after,.railBtn:focus-visible::after{height:24px;box-shadow:0 0 14px var(--focusSoft)}
-.railBtn.active.focusable.focus,.railBtn.active:focus-visible{background:var(--soft)}
+.railBtn.active.focusable.focus,.railBtn.active:focus-visible{background:var(--btnHover);color:var(--btnFocusText)}
 /* Rail grouping used to add 14px (10px on TV) above Search/Movies/Live/Music. Combined with
    railMain's 6px gap that made Movies→TV 6px and Calendar→Movies 20px — the icons looked randomly
    spaced (owner, 2026-08-13: match every gap to Movies/TV). Grouping stays for expanded LABELS
@@ -346,8 +345,8 @@ body.tv #rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{heig
 #railUser:hover{color:var(--text);background:rgba(43,32,63,.48)}
 #railUser.focusable::before{top:auto;left:8px;right:8px;bottom:-6px;height:1px;padding:0;border-radius:0;background:var(--line);opacity:1;
   -webkit-mask:none;mask:none}
-#railUser.focusable.focus,#railUser:focus-visible{transform:none;color:var(--text);
-  background:var(--soft);box-shadow:none}
+#railUser.focusable.focus,#railUser:focus-visible{transform:none;color:var(--btnFocusText);
+  background:var(--btnHover);box-shadow:none}
 #railUser .av{width:24px;height:24px;border-radius:50%;background:var(--focus);display:grid;place-items:center;font:700 12px "Sora";color:var(--onAccent);flex:none;margin:0 12px}
 /* Android TV WebView can leave CSS :hover latched after remote navigation. On TV, the rail
    expands only from our explicit D-pad state, never from hover. Desktop keeps hover expand. */
@@ -377,15 +376,9 @@ body.tv:not(.railOpen) #rail:not(.expanded){
 }
 body.tv:not(.railOpen) #rail:not(.expanded) .railBtn:not(.active):not(.focus),
 body.tv:not(.railOpen) #rail:not(.expanded) #railUser{opacity:.6}
-/* The selection accent is a 3px bar 12px to the LEFT of the button, plus a 16px glow on focus.
-   That was designed when the rail floated inset from the screen edge. Now that the column is FLUSH,
-   the bar lands ~2px from the edge and its glow reaches about -12px, so the rail's own
-   overflow:hidden sliced it and the highlight looked cut off (owner, on the Shield 2026-08-06).
-   On TV: drop the glow everywhere, and drop the BAR entirely while compact — at that width it sits
-   outside the title-safe margin anyway, and the focused item is already an unmistakable solid gold
-   pill, fully rounded and comfortably inside the column. Expanded keeps the bar, which has room. */
-body.tv .railBtn.focusable.focus::after,body.tv .railBtn:focus-visible::after{box-shadow:none}
-body.tv:not(.railOpen) #rail:not(.expanded) .railBtn::after{display:none}
+/* No gold left bar on the rail — compact or expanded. Focus is the solid fill only. */
+body.tv .railBtn.focusable.focus::after,body.tv .railBtn:focus-visible::after,
+body.tv:not(.railOpen) #rail:not(.expanded) .railBtn::after{content:none!important;display:none!important}
 body.tv:not(.railOpen) #rail:not(.expanded) #railMain{
   width:48px!important;align-items:center
 }
@@ -408,7 +401,10 @@ body.tv:not(.railOpen) #rail:not(.expanded) .railSec{height:0!important;opacity:
 #rail:not(.expanded):not(:hover) #railMain > *:not(#railAddLib),
 body.tv:not(.railOpen) #rail:not(.expanded) #railMain > *:not(#railAddLib){
   margin-top:0!important;margin-bottom:0!important}
-body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del{opacity:0!important}
+/* Opacity-0 still occupies flex space, so admin ✎✕ shoved the library icon off the
+   left edge of the 48px TV slot (IR - TV Shows looked like a clipped bracket). */
+body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del,
+#rail:not(.expanded):not(:hover) .railBtn .del{display:none!important}
 /* ---- TV rail: flush to the edge, but the SAME GLASS as the web build (owner, 2026-08-06) ----
    The owner reported a gap between the screen edge and the menu, AND content sliding under the
    menu. The gap was real and is fixed here. The "content under the menu" turned out to be a
@@ -431,7 +427,10 @@ body.tv #rail{
    pill. It read as the yellow highlight being cut off (owner, 2026-08-06). Equal padding also
    keeps the gap wider than the 18px corner radius, so nothing can catch the rounding. */
 body.tv #rail:hover,body.tv #rail.expanded,body.tv.railOpen #rail{
-  width:calc(var(--railExpandedW,252px) + var(--overscan));
+  /* Shield WebView drops `calc(px + vmin)` on width and shrink-wraps the fixed rail
+     to the icon column (~76px). Labels then stay clipped, so Left looks like it
+     never opened the menu. Use the measured px width only. */
+  width:var(--railExpandedW,252px)!important;min-width:236px;
   padding-left:calc(12px + var(--overscan));padding-right:calc(12px + var(--overscan))}
 
 /* ---------- signature: gradient focus ring ---------- */
@@ -491,17 +490,17 @@ body[data-spotlight] .userNameBtn.focusable.focus,
 body[data-spotlight] .dashRecentItem.focusable.focus{transform:none}
 /* Guide keeps the one professional steel accent even on spotlight themes (no gold fill), so the
    focused channel/category label stays normal-coloured — no dark-on-fill override here. */
-/* Left menu: the focused row becomes a solid amber chip with dark text + a bold bar. */
+/* Left menu: the focused row is a solid fill with contrasting text. No gold bar. */
 body[data-spotlight] .railBtn.focusable.focus,
 body[data-spotlight] .railBtn:focus-visible,
 body[data-spotlight] .railBtn.active.focusable.focus,
 body[data-spotlight] .railBtn.active:focus-visible,
 body[data-spotlight] #railUser.focusable.focus,
-body[data-spotlight] #railUser:focus-visible{background:var(--focus);color:var(--btnFocusText)}
+body[data-spotlight] #railUser:focus-visible{background:var(--btnHover);color:var(--btnFocusText)}
 body[data-spotlight] .railBtn.focusable.focus svg,
 body[data-spotlight] .railBtn:focus-visible svg{color:var(--btnFocusText)}
 body[data-spotlight] .railBtn.focusable.focus::after,
-body[data-spotlight] .railBtn:focus-visible::after{width:5px;height:30px;box-shadow:0 0 16px var(--focus)}
+body[data-spotlight] .railBtn:focus-visible::after{content:none!important;display:none!important}
 /* Artwork stays FULLY OPAQUE at rest (owner call, 2026-08-06 — the old spotlight fade to .62
    read as washed-out covers/cast/episodes). Focus pops via the gold ring/fill alone. */
 /* (The old thick amber ring on the in-player episode still is gone — every tile now shares the
@@ -535,14 +534,14 @@ body[data-spotlight] .mbBar.focus{box-shadow:0 0 0 3px var(--focus) !important}
    otherwise Right into Change password leaves Profile looking selected. */
 body[data-spotlight] #setTabs button.on,
 body[data-spotlight] #prefTabs button.on{
-  background:transparent!important;box-shadow:inset 2px 0 0 var(--focus)!important}
+  background:transparent!important;box-shadow:none!important}
 body[data-spotlight] #setTabs button.on.focus,
 body[data-spotlight] #prefTabs button.on.focus,
 body[data-spotlight] #setTabs button.on:focus,
 body[data-spotlight] #prefTabs button.on:focus,
 body[data-spotlight] #setTabs button.on:focus-visible,
 body[data-spotlight] #prefTabs button.on:focus-visible{
-  background:transparent!important;color:var(--text)!important;box-shadow:inset 2px 0 0 var(--focus)!important}
+  background:var(--btnHover)!important;color:var(--btnFocusText)!important;box-shadow:none!important}
 /* Theme-picker buttons are excluded from the generic dark-on-focus rule; give their label dark
    text when the amber fill is on, so the theme name/tone stays readable. */
 body[data-spotlight] #settings .setGrid button.themeChoice:hover,
@@ -788,7 +787,7 @@ body.tv #filterMenu{backdrop-filter:none}
 .gChip{padding:8px 13px;border-radius:11px;background:var(--btn);border:1px solid rgba(255,255,255,.045);font:600 12px "Sora";color:var(--muted)}
 .gChip.sel{background:var(--btnSelected);color:var(--text);border-color:transparent}
 #grid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,var(--poster));gap:20px 16px;align-content:start;justify-content:start;padding:6px 4px 30px}
-#grid .pcard{flex:none}
+#grid .pcard,#grid .card{flex:none;width:var(--poster);max-width:var(--poster);min-width:0}
 #browse.searchMode{padding-top:var(--searchPad, 110px)!important} /* clears the floating search bar */
 #browse.searchMode.hasSuggest{padding-top:168px!important} /* TV WebView drops CSS max(); tight gap — JS then measures the real chip */
 #browse.searchMode .browseHead{display:none}
@@ -874,7 +873,7 @@ body.tv .trailerCtl{min-height:46px;padding:10px 20px;font-size:14.5px}
      sides of the photo itself — over-zooming a few % pushes those edges outside the card. */
 .castCard .nm{font:600 13.5px "Albert Sans";line-height:1.25}
 .castCard .ch{font:500 11px "JetBrains Mono";color:var(--muted);margin-top:2px;display:-webkit-box;
-  -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:var(--ctEpisodeCopy)}
 
 /* ---------- person page ---------- */
 #person{position:fixed;inset:0;z-index:8;display:none;overflow-y:auto;padding:30px 50px 40px 116px}
@@ -894,15 +893,26 @@ body.personOpen #bdInfo{display:none!important}
 .personHead{display:flex;gap:26px;align-items:flex-start;margin:18px 0 26px}
 .personHead .pPhoto{flex:0 0 var(--poster);aspect-ratio:2/3;border-radius:18px;background-size:108% auto;background-position:center 12%;background-color:var(--raise);border:0} /* same zoom-crop as .castCard .ph */
 .personHead .pInfo{flex:1}
-.personHead h1{font:800 38px "Sora";margin-bottom:6px}
-.personHead #pKnown{font:600 12px "JetBrains Mono";color:var(--amber);text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px}
-.personHead #pBio{color:var(--muted);max-width:70ch;font-size:14px;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden}
+.personHead h1{font:800 38px "Sora";margin-bottom:6px;font-size:var(--ctDetailTitle)}
+.personHead #pKnown{font:600 12px "JetBrains Mono";color:var(--amber);text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px;font-size:var(--ctDetailMeta)}
+.personHead #pBio{color:var(--muted);max-width:70ch;font-size:var(--ctDetailCopy);display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden}
 #person h2{font:600 15px "Sora";color:var(--muted);margin:0 0 12px 2px}
 #personGrid{display:grid;grid-template-columns:repeat(auto-fill,var(--poster));gap:20px 16px;align-content:start;justify-content:start;padding-bottom:30px}
+/* TMDB adult flag = hardcore. Same cover, super-blurred, clipped in an opaque frame
+   so the edges are not a see-through halo. The sharp poster never paints. */
+.pcard.adultBlur .art{background-color:#d8d4de;background-size:0 0}
+.pcard.adultBlur .art::before{content:'';position:absolute;inset:-55%;
+  background-image:inherit;background-size:cover;background-position:center;
+  filter:blur(52px);pointer-events:none}
+.pcard.adultBlur .art::after{content:'';position:absolute;inset:0;background:rgba(255,255,255,.16);pointer-events:none}
+body.tv .pcard.adultBlur .art::before{inset:-70%;filter:blur(90px)}
+body.tv .pcard.adultBlur .art::after{background:rgba(255,255,255,.4)}
+.pcard.adultBlur .cap,.pcard.adultBlur .sub{filter:blur(8px);user-select:none}
+.pcard.adultBlur .badge,.pcard.adultBlur .wbadge{display:none}
 
 /* ---------- library + fix-match modals (shared chrome) ---------- */
-#libModal,#matchModal{position:fixed;inset:0;z-index:48;display:none;place-items:center;background:rgba(5,3,9,.8);backdrop-filter:blur(6px)}
-#libModal.open,#matchModal.open{display:grid}
+#libModal,#matchModal,#plotModal{position:fixed;inset:0;z-index:48;display:none;place-items:center;background:rgba(5,3,9,.8);backdrop-filter:blur(6px)}
+#libModal.open,#matchModal.open,#plotModal.open{display:grid}
 #libModal .box,#matchModal .box{width:min(440px,92vw);background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:28px}
 #libModal h2,#matchModal h2{font:800 22px "Sora";margin-bottom:4px}
 #libModal .sub,#matchModal .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
@@ -923,6 +933,15 @@ body.personOpen #bdInfo{display:none!important}
 #libModal .modalBtns{display:flex;gap:10px;margin-top:22px}
 #updateModal .modalBtns{display:flex;gap:12px;margin-top:24px;align-items:stretch}
 #updateModal .modalBtns .btn{min-height:48px}
+#plotModal .box{width:min(720px,90vw);max-height:min(78vh,680px);background:var(--panel);border:1px solid var(--line);
+  border-radius:20px;padding:26px 28px 22px;display:flex;flex-direction:column;min-height:0}
+#plotModal h2{font:800 22px "Sora";margin-bottom:12px;flex:none}
+#plotModalBody{min-height:0;overflow-y:auto;font:500 var(--ctDetailCopy)/1.55 "Albert Sans";
+  color:rgba(var(--fg),.88);padding-right:6px}
+#plotModal .modalBtns{display:flex;gap:10px;margin-top:18px;flex:none}
+#dOverview.canReadMore{cursor:pointer;pointer-events:auto}
+#dOverview.canReadMore.focus,#dOverview.canReadMore:focus-visible{
+  outline:none;box-shadow:0 0 0 2px var(--focus);border-radius:10px}
 #seasonChips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
 .seasonChip{padding:10px 16px;border-radius:12px;background:var(--raise);border:1px solid var(--line);
   font:600 13px "Sora";border-radius:var(--r)}
@@ -1051,6 +1070,19 @@ body.tv:not(.railOpen) #rail:not(.expanded){
 body.tv .panel{background:var(--panel)}
 /* The idle backdrop drift is a composited transform, but on TV it runs behind every page for the
    whole session — hold it still there and keep the motion for desktop. */
+/* Original still: right ~54vw, same left melt as desktop. Dual mask-composite
+   fails after the 1440 scale, so TV keeps the left mask alone and fades the
+   bottom with ink (the one extra the owner asked for). */
+body.tv #backdrop .layer{
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,rgba(0,0,0,.18) 12%,rgba(0,0,0,.55) 26%,rgba(0,0,0,.85) 40%,#000 54%,#000 100%);
+  mask-image:linear-gradient(90deg,transparent 0%,rgba(0,0,0,.18) 12%,rgba(0,0,0,.55) 26%,rgba(0,0,0,.85) 40%,#000 54%,#000 100%);
+  -webkit-mask-composite:source-over;
+  mask-composite:add;
+}
+body.tv #backdrop .layer::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(180deg,transparent 38%,rgba(11,8,18,.22) 62%,rgba(11,8,18,.62) 82%,var(--ink) 100%);
+}
 body.tv #backdrop .layer.show{animation:none}
 /* ---------- player ---------- */
 #player{position:fixed;inset:0;z-index:30;background:#000;display:none}
@@ -1268,8 +1300,8 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 #volSlider::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:#fff;border:0}
 #playerEpisodes{display:flex;max-height:0;margin-top:12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;gap:14px;padding:0 8px;opacity:0;transform:translateY(14px) scale(.985);pointer-events:none;transition:max-height .24s cubic-bezier(.2,.8,.2,1),opacity .2s ease,transform .24s cubic-bezier(.2,.8,.2,1),padding .24s cubic-bezier(.2,.8,.2,1)}
 #playerEpisodes::-webkit-scrollbar{display:none}
-#playerEpisodes.open{max-height:calc(var(--thumb) * 0.5625 + 68px);padding:5px 8px 20px;opacity:1;transform:translateY(0) scale(1);pointer-events:auto}
-.playerEpCard{position:relative;flex:0 0 var(--thumb);height:auto;border:0;border-radius:10px;overflow:visible;background:transparent;color:#fff;text-align:left;padding:0;box-shadow:none;transition:transform .16s ease,filter .16s ease,box-shadow .16s ease}
+#playerEpisodes.open{max-height:calc(var(--playerThumb, var(--thumb)) * 0.5625 + 68px);padding:5px 8px 20px;opacity:1;transform:translateY(0) scale(1);pointer-events:auto}
+.playerEpCard{position:relative;flex:0 0 var(--playerThumb, var(--thumb));height:auto;border:0;border-radius:10px;overflow:visible;background:transparent;color:#fff;text-align:left;padding:0;box-shadow:none;transition:transform .16s ease,filter .16s ease,box-shadow .16s ease}
 .playerEpCard.focusable::before,.playerEpCard.focusable:focus-visible::before{display:none}
 .playerEpCard .peStill{position:relative;width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#16101f;background-image:var(--still);background-size:cover;background-position:center;filter:saturate(1.04);box-shadow:none}
 .playerEpCard .peStill::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(0,0,0,.08))}
@@ -1339,6 +1371,7 @@ body.tv .paCastNm{width:100%;font-size:11.5px}
   text-shadow:0 2px 6px rgba(0,0,0,.58)}
 #appClock .ampm{font-size:.72em;letter-spacing:.02em}
 #appClock.show{display:flex}
+body.tv #appClock{min-width:132px;height:44px;font-size:20px}
 @media (max-width:600px){#appClock{top:12px;right:12px;min-width:100px;height:34px;padding:0 2px;font-size:14px}}
 #screensaver{position:fixed;inset:0;z-index:55;visibility:hidden;opacity:0;pointer-events:none;overflow:hidden;color:var(--text);
   background:#050309;transition:opacity .55s ease,visibility .55s;contain:layout paint}
@@ -1413,7 +1446,7 @@ body.tv #vlcCopy{display:none}
 #setTabs button svg,#prefTabs button svg{width:18px;height:18px;color:currentColor}
 #setTabs button:hover,#prefTabs button:hover{color:var(--text);background:rgba(255,255,255,.06)}
 #setTabs button.on,#prefTabs button.on{color:var(--text);background:transparent;font-weight:700;
-  box-shadow:inset 2px 0 0 var(--focus)}
+  box-shadow:none}
 /* Section label between Preferences and Server settings — label only, no hairline
    (owner, Shield: Dashboard/Profile have no line above or below; Server settings must match). */
 .prefTabDivider{margin:8px 0 2px;padding:4px 12px 2px;border:0;pointer-events:none}
@@ -1947,8 +1980,8 @@ body.tv .detailScroll{scroll-behavior:smooth;padding-bottom:var(--tvCoverBot)}
    bottom-anchored row window so the focused title's backdrop owns the space above.
    adaptRowWindows() overrides max-height inline with the exact 1/2-row fit. */
 #browse.rowsWin #grid{flex:none;margin-top:auto;max-height:calc(var(--rowH) * 2 - 10px)}
-/* TV 720p cannot fit two Large poster rows. The two-row fallback clipped the top of
-   the first row (owner, Movies + Large). One row, with a little top pad for focus lift. */
+/* TV browse keeps one poster row under the backdrop (Plex preplay). Two Large rows
+   still clip the first row's top even at 1080p. One row, with a little top pad for focus lift. */
 /* One row only. Clip at the full card (cover + title + year), not the gap —
    a taller window showed the next posters after Down. No extra bottom margin:
    that 6px strip sat under a clipped year and looked like a dead gap. */
@@ -1956,12 +1989,17 @@ body.tv #browse.rowsWin #grid{max-height:calc(var(--rowH) - 2px);padding-top:10p
 /* TV Cast: same bottom-anchored one-row window as Movies. The page used to be a
    normal scroller, so Known For sat mid-screen with a dead ink band under it. */
 body.tv #person.open{display:flex;flex-direction:column;overflow:hidden}
-body.tv #person .personHead{margin:8px 0 0;flex:none}
+body.tv #person .personHead{margin:var(--bdInfoPadT) 0 var(--bdInfoPadB);flex:none}
 body.tv #person .personHead #pBio{-webkit-line-clamp:4}
 body.tv #person h2{margin-top:auto;margin-bottom:8px;flex:none}
 body.tv #personGrid{flex:none;margin-top:0;max-height:calc(var(--rowH) - 2px);padding-top:10px;padding-bottom:0;box-sizing:border-box;overflow-x:hidden;overflow-y:hidden;margin-bottom:0;scroll-padding:0}
 body.tv #personGrid .pcard{scroll-margin:0}
-body.tv #hero{margin-bottom:18px}
+body.tv #hero{margin-bottom:var(--bdInfoPadB);padding-top:40px;padding-bottom:24px}
+/* Same band as Home: browse/discover #bdInfo sits above the one-row poster window,
+   not pinned to the clock. --tvRowWin is the measured row (fallback until JS runs). */
+body.tv #bdInfo{top:var(--bdInfoPadT);bottom:calc(var(--tvCoverBot) + var(--bdInfoPadB) + var(--tvRowWin));
+  display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;box-sizing:border-box}
+body.tv .detailHero{padding-top:max(5vh,var(--bdInfoPadT));padding-bottom:var(--bdInfoPadB)}
 body.tv #discoverRows{margin-bottom:0}
 body.tv #browse.rowsWin .pcard{scroll-margin:0}
 body.tv #rows .pcard,body.tv #discoverRows .pcard{scroll-margin:0}
@@ -2045,7 +2083,7 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
   #browse .browseHead{margin-left:48px;margin-top:0;margin-bottom:8px;justify-content:flex-start;padding-right:0;min-height:42px;align-items:center}
   #browse{justify-content:flex-start;padding-top:calc(12px + var(--safeT))!important}
   body:not(.tv) #grid,body:not(.tv) #personGrid{grid-template-columns:repeat(auto-fill,minmax(102px,1fr));gap:10px 6px;justify-content:stretch;padding-top:0}
-  body:not(.tv) #grid .pcard,body:not(.tv) #personGrid .pcard{width:100%;min-width:0;max-width:none;flex:none}
+  body:not(.tv) #grid .pcard,body:not(.tv) #personGrid .pcard,body:not(.tv) #grid .card{width:100%;min-width:0;max-width:none;flex:none}
   #discover{padding-top:62px!important}
   #discover h1{margin-left:48px;margin-bottom:10px}
   body:not(.tv) #discoverRows{margin-top:0;max-height:none!important;flex:1!important;gap:22px}
@@ -2200,7 +2238,7 @@ body.mobileShell #browse .filterBar{position:static;top:auto;right:auto;z-index:
 body.mobileShell #browse .filterBar select{min-width:0}
 body.mobileShell #browse{justify-content:flex-start;padding-top:calc(12px + var(--safeT))!important}
 body.mobileShell #grid,body.mobileShell #personGrid{grid-template-columns:repeat(auto-fill,minmax(102px,1fr));gap:10px 6px;justify-content:stretch;padding-top:0}
-body.mobileShell #grid .pcard,body.mobileShell #personGrid .pcard{width:100%;min-width:0;max-width:none;flex:none}
+body.mobileShell #grid .pcard,body.mobileShell #personGrid .pcard,body.mobileShell #grid .card{width:100%;min-width:0;max-width:none;flex:none}
 body.mobileShell #discover{padding-top:62px!important;justify-content:flex-start}
 body.mobileShell #discover h1{margin-left:48px;margin-bottom:10px}
 body.mobileShell #discoverRows{margin-top:0;max-height:none!important;flex:1!important;gap:22px}
@@ -2504,18 +2542,16 @@ body.tv #playerEpisodes{gap:14px}
 /* 1080p/4K pills: focus uses the shared button hover token, not a neon ring. */
 .qToggle button.focus{background:var(--btnHover);color:var(--btnFocusText)}
 .qToggle button.qon.focus{background:var(--btnSelectedHover);color:var(--text)}
-/* TV: calmer display type — the desktop clamps land gigantic after the 1.5× TV scale —
-   and no on-screen Back button (the remote's BACK is the back button). */
-body.tv #hero h1{font-size:34px}
-body.tv #dTitle{font-size:36px}
-body.tv #bdInfo .bdiT{font-size:36px}
-body.tv #dBack{display:none}
+/* TV: calmer display type — desktop vw clamps land gigantic after the 1.5× TV scale.
+   Cover size owns the px tokens (body.tv / coverS / coverL). No on-screen Back button. */
+body.tv #dBack,body.tv #pBack{display:none}
 /* CONSTANT hero block height: every text line is clamped and height-locked, so focusing
    a long title / long overview can't reflow the rows below (they bounced a few px per card). */
 body.tv #hero h1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;line-height:1.15;height:39px}
 body.tv #hero .eyebrow{height:11px;overflow:hidden}
 body.tv #hero .meta{flex-wrap:nowrap;overflow:hidden;height:28px}
-body.tv #hero p{-webkit-line-clamp:3;line-height:1.5;height:4.5em;margin-bottom:12px} /* a bit more story — height still LOCKED so rows never bounce */
+body.tv #hero{overflow:hidden;flex-shrink:1;min-height:0}
+body.tv #hero p{-webkit-line-clamp:2;line-height:1.5;height:3em;margin-bottom:12px} /* two lines so the story stays above Continue Watching */
 body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 /* Long-press OK menu for Continue Watching cards — floats over the pressed card. */
 #cwMenu{position:fixed;right:auto;top:auto;z-index:75;min-width:240px}
@@ -2656,7 +2692,7 @@ body.tv .ctWells{display:none}
 @media (max-width:600px){
   body:not(.tv) #rows,body:not(.tv) #discoverRows,body:not(.tv) #dSections,body:not(.tv) #calList{gap:22px}
   body:not(.tv) #grid,body:not(.tv) #personGrid{grid-template-columns:repeat(auto-fill,minmax(102px,1fr));gap:10px 6px;justify-content:stretch}
-  body:not(.tv) #grid .pcard,body:not(.tv) #personGrid .pcard{width:100%;min-width:0;max-width:none;flex:none}
+  body:not(.tv) #grid .pcard,body:not(.tv) #personGrid .pcard,body:not(.tv) #grid .card{width:100%;min-width:0;max-width:none;flex:none}
   body:not(.tv) .abRow{margin-bottom:22px}
 }
 body.mobileShell:not(.tv) #rows,body.mobileShell:not(.tv) #discoverRows,
@@ -2668,7 +2704,7 @@ body.mobileShell:not(.tv) #grid,body.mobileShell:not(.tv) #personGrid{grid-templ
 @media (min-width:1024px){
   body.mobileShell:not(.tv) #grid,body.mobileShell:not(.tv) #personGrid{grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:16px 14px}
 }
-body.mobileShell:not(.tv) #grid .pcard,body.mobileShell:not(.tv) #personGrid .pcard{width:100%;min-width:0;max-width:none;flex:none;scroll-margin:0}
+body.mobileShell:not(.tv) #grid .pcard,body.mobileShell:not(.tv) #personGrid .pcard,body.mobileShell:not(.tv) #grid .card{width:100%;min-width:0;max-width:none;flex:none;scroll-margin:0}
 body.mobileShell:not(.tv) #grid,body.mobileShell:not(.tv) #personGrid{scroll-padding:0}
 body.mobileShell:not(.tv) #grid .pcard .cap,body.mobileShell:not(.tv) #grid .pcard .sub{opacity:.92}
 body.mobileShell:not(.tv) .abRow{margin-bottom:22px}
@@ -3136,11 +3172,12 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 .menuRow button{width:30px;height:30px;border-radius:7px;background:var(--btn);color:var(--muted);border:1px solid rgba(255,255,255,.045)}
 .menuRow button:hover,.menuRow button.focus,.menuRow button:focus{color:var(--text);background:var(--btnHover)}
 
-/* Voice search mic. */
-#micBtn{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:38px;height:38px;border-radius:50%;
+/* Voice search mic. Center with insets, not translateY — leftover .focus used to
+   swap in translateZ(0) and drop the button the instant the box was focused. */
+#micBtn{position:absolute;left:10px;top:0;bottom:0;margin-block:auto;transform:none;width:38px;height:38px;border-radius:50%;
   display:grid;place-items:center;color:var(--muted);background:var(--soft)}
 #micBtn.listening{background:var(--btnPrimary);color:var(--onAccent);animation:micPulse 1s ease-in-out infinite}
-@keyframes micPulse{0%,100%{opacity:.85;transform:translateY(-50%) scale(1)}50%{opacity:1;transform:translateY(-50%) scale(1.05)}}
+@keyframes micPulse{0%,100%{opacity:.85;transform:scale(1)}50%{opacity:1;transform:scale(1.05)}}
 #searchBar{position:fixed}
 #searchBar .wrap{position:relative;width:min(680px,100%)}
 #searchBar .wrap.hasMic input{padding-left:58px}
@@ -3152,7 +3189,8 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 #micBtn:focus,#micBtn.focus,#micBtn.focusable.focus,
 #musicMicBtn:focus,#musicMicBtn.focus,#musicMicBtn.focusable.focus{
   background:var(--btnHover)!important;color:var(--btnFocusText)!important;border-color:transparent!important;
-  box-shadow:0 10px 28px rgba(0,0,0,.32)!important;outline:none;transform:translateZ(0)}
+  box-shadow:0 10px 28px rgba(0,0,0,.32)!important;outline:none}
+.btn.focusable.focus,.iconBtn.focusable.focus,.cbtn.focusable.focus{transform:translateZ(0)}
 #osd .cbtn.focusable.focus,#osd .cbtn:focus,#osd .cbtn:hover{
   background:rgba(5,3,9,.56)!important;color:var(--text)!important;
   box-shadow:0 12px 30px rgba(0,0,0,.2)!important;outline:none}
@@ -3160,10 +3198,12 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
    the focus cue, and ring+fill together read as noise. */
 .btn.focusable.focus::before,.iconBtn.focusable.focus::before,.cbtn.focusable.focus::before,
 .qToggle button.focus::before{opacity:0!important}
-/* The mic is vertically centered with translateY(-50%); the shared focus rule above swapped
-   in translateZ(0) and the button JUMPED 19px up whenever it took focus. Keep centering. */
-#micBtn:focus,#micBtn.focusable.focus,#musicMicBtn:focus,#musicMicBtn.focusable.focus,
-#searchClearBtn:focus,#searchClearBtn.focusable.focus{
+/* Mic stays inset-centered. Never let .focus apply a transform that drops it.
+   Clear still uses top:50% + translateY, so keep that rule for the X only. */
+#micBtn:focus,#micBtn.focus,#micBtn.focusable.focus,
+#musicMicBtn:focus,#musicMicBtn.focus,#musicMicBtn.focusable.focus{
+  transform:none!important}
+#searchClearBtn:focus,#searchClearBtn.focus,#searchClearBtn.focusable.focus{
   transform:translateY(-50%)!important}
 .cbtn:disabled,.cbtn.disabled,.cbtn:disabled:hover,.cbtn.disabled:hover,.cbtn.focusable.disabled.focus{
   background:rgba(5,3,9,.22)!important;color:rgba(var(--fg),.42)!important;box-shadow:none!important;
@@ -3199,6 +3239,7 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
    Pad the PAGE (Home, Discover, Movies, TV, Kids, Watchlist, libraries, Cast,
    details, Music, Audiobooks), not the measured grid window.
    Live TV and Settings stay flush — a bottom band clipped the last Settings tab. */
+body.tv #home{padding-top:var(--bdInfoPadT)}
 body.tv #home,body.tv #discover,body.tv #browse,body.tv #person,
 body.tv #music{padding-bottom:var(--tvCoverBot)!important}
 body.tv #settings,body.tv #prefs{padding-bottom:0!important}
@@ -3231,7 +3272,8 @@ body.tv:not(.abMiniOpen) #audiobooks{padding-bottom:var(--tvCoverBot)!important}
   outline:none;box-shadow:0 0 0 2.5px var(--coral)}
 
 /* Settings/Preferences button authority: same primary/ghost/focus path as Details. */
-#settings button.focusable::before,#prefs button.focusable::before{display:none!important}
+#settings button.focusable::before,#prefs button.focusable::before,
+#setTabs button::before,#prefTabs button::before{content:none!important;display:none!important;opacity:0!important}
 #settings .btn,#prefs .btn{
   min-height:44px;border-radius:10px;align-items:center;justify-content:center;
   font:600 14px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em;
@@ -3267,32 +3309,41 @@ body:not(.tv) #setTabs button:hover,body:not(.tv) #prefTabs button:hover,
 #setTabs button.focus,#prefTabs button.focus,
 #setTabs button:focus,#prefTabs button:focus,
 #setTabs button:focus-visible,#prefTabs button:focus-visible{
-  background:rgba(255,255,255,.07)!important;color:var(--text)!important;border-color:transparent!important;
+  background:var(--btnHover)!important;color:var(--btnFocusText)!important;border-color:transparent!important;
   box-shadow:none!important;outline:none!important;transform:none}
 #setTabs button.on,#prefTabs button.on{
-  background:transparent!important;border-color:transparent!important;color:var(--muted)!important;box-shadow:inset 2px 0 0 var(--focus)!important}
+  background:transparent!important;border-color:transparent!important;color:var(--muted)!important;box-shadow:none!important}
 #setTabs button.on.focus,#prefTabs button.on.focus,
 #setTabs button.on:focus,#prefTabs button.on:focus,
 #setTabs button.on:focus-visible,#prefTabs button.on:focus-visible{
-  background:rgba(255,255,255,.08)!important;color:var(--text)!important;border-color:transparent!important;
-  box-shadow:inset 2px 0 0 var(--focus)!important;outline:none!important}
-/* Unfocused Settings tabs stay readable. The focused row is full-strength --text.
+  background:var(--btnHover)!important;color:var(--btnFocusText)!important;border-color:transparent!important;
+  box-shadow:none!important;outline:none!important}
+body.tv #setTabs button,body.tv #prefTabs button{border-radius:0;box-shadow:none!important;border:0!important;outline:none!important}
+/* Unfocused Settings tabs stay readable. The focused row uses --btnFocusText on --btnHover.
    On TV, :hover can stay latched after Right into the panel — do not use hover to light
    the tab, or Profile stays "on" while you are editing the password. */
 #setTabs button,#prefTabs button{opacity:.72;color:rgba(var(--fg),.82)!important}
 #setTabs button.on,#prefTabs button.on{opacity:.80;color:rgba(var(--fg),.88)!important}
+body.tv #setTabs button,body.tv #prefTabs button{opacity:.56;color:rgba(var(--fg),.68)!important}
+body.tv #setTabs button.on,body.tv #prefTabs button.on{opacity:.64;color:rgba(var(--fg),.76)!important}
 #setTabs button.focus,#prefTabs button.focus,
 #setTabs button:focus,#prefTabs button:focus,
 #setTabs button:focus-visible,#prefTabs button:focus-visible,
 #setTabs button.on.focus,#prefTabs button.on.focus,
 #setTabs button.on:focus,#prefTabs button.on:focus,
-#setTabs button.on:focus-visible,#prefTabs button.on:focus-visible{opacity:1;color:var(--text)!important}
-body:not(.tv) #setTabs button:hover,body:not(.tv) #prefTabs button:hover{opacity:1;color:var(--text)!important}
+#setTabs button.on:focus-visible,#prefTabs button.on:focus-visible{opacity:1;color:var(--btnFocusText)!important}
+body.tv #setTabs button.focus,body.tv #prefTabs button.focus,
+body.tv #setTabs button:focus,body.tv #prefTabs button:focus,
+body.tv #setTabs button:focus-visible,body.tv #prefTabs button:focus-visible,
+body.tv #setTabs button.on.focus,body.tv #prefTabs button.on.focus,
+body.tv #setTabs button.on:focus,body.tv #prefTabs button.on:focus,
+body.tv #setTabs button.on:focus-visible,body.tv #prefTabs button.on:focus-visible{opacity:1;color:var(--btnFocusText)!important}
+body:not(.tv) #setTabs button:hover,body:not(.tv) #prefTabs button:hover{opacity:1;color:var(--btnFocusText)!important}
 body.tv #setTabs button:hover:not(:focus):not(.focus),
 body.tv #prefTabs button:hover:not(:focus):not(.focus){
-  background:transparent!important;opacity:.72;color:rgba(var(--fg),.82)!important}
+  background:transparent!important;opacity:.56;color:rgba(var(--fg),.68)!important}
 body.tv #setTabs button.on:hover:not(:focus):not(.focus),
-body.tv #prefTabs button.on:hover:not(:focus):not(.focus){opacity:.80;color:rgba(var(--fg),.88)!important}
+body.tv #prefTabs button.on:hover:not(:focus):not(.focus){opacity:.64;color:rgba(var(--fg),.76)!important}
 /* Browser, phone, and Android phone share one recede. Focus is full-strength. */
 body:not(.tv) #setTabs button,body:not(.tv) #prefTabs button{opacity:.78}
 body:not(.tv) #setTabs button.on,body:not(.tv) #prefTabs button.on{opacity:.86}
@@ -3454,10 +3505,10 @@ body[data-spotlight] .dashRecentItem.focusable.focus,body[data-spotlight] .dashR
 #musicSearch:focus{border-color:var(--magenta)}
 .musicHead .wrap.hasMic #musicSearch{padding-left:58px}
 .musicHead .wrap.hasClear #musicSearch{padding-right:58px}
-#musicMicBtn{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:38px;height:38px;border-radius:50%;
+#musicMicBtn{position:absolute;left:10px;top:0;bottom:0;margin-block:auto;transform:none;width:38px;height:38px;border-radius:50%;
   display:grid;place-items:center;color:var(--muted);background:var(--soft)}
 #musicMicBtn.listening{background:var(--btnPrimary);color:var(--onAccent);animation:micPulse 1s ease-in-out infinite}
-#musicMicBtn:focus{transform:translateY(-50%)}
+#musicMicBtn:focus{transform:none}
 /* One clear (X) button style shared by every search field: Music, global search, Live TV filter. */
 #musicClearBtn,#searchClearBtn,#chClearBtn{position:absolute;right:8px;top:50%;transform:translateY(-50%);width:36px;height:36px;border-radius:50%;
   display:grid;place-items:center;color:var(--muted);background:var(--soft)}
@@ -3730,40 +3781,79 @@ body.mobileShell #musicNow:not(.queueHidden) .mnCover,body.mobileShell #musicNow
 @media (max-width:900px){.musicTiles{grid-template-columns:repeat(auto-fill,minmax(calc(var(--poster) * 0.76),1fr))}.musicRail{grid-auto-columns:calc(var(--poster) * 0.76)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
 @media (max-width:600px){#music{left:0!important}#audiobooks,#abDetail{left:0!important}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
 
-/* Content text-size preference: scoped to media/content surfaces only.
-   The rail, Settings, Preferences, auth gates and player controls keep fixed geometry. */
+/* Content text-size preference: media/content surfaces plus Settings/Preferences labels.
+   The rail, auth gates and player controls keep fixed geometry. */
 body{
-  --ctHeroTitle:clamp(30px,4.2vw,58px);--ctHeroCopy:16px;--ctHeroMeta:13.5px;
-  --ctSection:13px;--ctBrowseTitle:30px;--ctBackdropTitle:clamp(34px,4.6vw,64px);
-  --ctBackdropCopy:15.5px;--ctBackdropMeta:13.5px;--ctCardTitle:13px;--ctCardMeta:10.5px;--ctCardTag:9px;
-  --ctDetailTitle:clamp(34px,4.6vw,64px);--ctDetailCopy:15.5px;--ctDetailMeta:13.5px;
-  --ctEpisodeTitle:14px;--ctEpisodeCopy:13px;--ctCalendarTitle:15px;--ctCalendarMeta:12px;
-  --ctLiveTitle:12.5px;--ctLiveMeta:10px;--ctLiveNow:12.5px;--ctMusicTitle:15px;--ctMusicMeta:12.5px;
-  --ctMusicSearchTitle:15.5px;--ctMusicSearchMeta:13px;
-  --ctSrcTitle:13.5px;--ctSrcName:11.5px;--ctSrcChip:9.5px;
-  --ctLineScale:1;
-}
-body.contentTextS{
-  --ctHeroTitle:clamp(28px,3.85vw,52px);--ctHeroCopy:14px;--ctHeroMeta:12.5px;
-  --ctSection:12px;--ctBrowseTitle:27px;--ctBackdropTitle:clamp(30px,4vw,56px);
-  --ctBackdropCopy:14px;--ctBackdropMeta:12px;--ctCardTitle:12px;--ctCardMeta:9.8px;--ctCardTag:8.4px;
-  --ctDetailTitle:clamp(30px,4vw,56px);--ctDetailCopy:14px;--ctDetailMeta:12.5px;
-  --ctEpisodeTitle:13px;--ctEpisodeCopy:12px;--ctCalendarTitle:14px;--ctCalendarMeta:11px;
-  --ctLiveTitle:11.5px;--ctLiveMeta:9.2px;--ctLiveNow:11.5px;--ctMusicTitle:14px;--ctMusicMeta:11.5px;
-  --ctMusicSearchTitle:14.5px;--ctMusicSearchMeta:12px;
-  --ctSrcTitle:12.5px;--ctSrcName:10.5px;--ctSrcChip:8.8px;
-  --ctLineScale:.94;
-}
-body.contentTextL{
   --ctHeroTitle:clamp(34px,4.75vw,66px);--ctHeroCopy:17px;--ctHeroMeta:14.5px;
   --ctSection:14px;--ctBrowseTitle:34px;--ctBackdropTitle:clamp(38px,5vw,72px);
-  --ctBackdropCopy:17px;--ctBackdropMeta:14.5px;--ctCardTitle:14.5px;--ctCardMeta:11.5px;--ctCardTag:10px;
+  --ctBackdropCopy:17px;--ctBackdropMeta:14.5px;--ctCardTitle:13.5px;--ctCardMeta:11px;--ctCardTag:9px;
   --ctDetailTitle:clamp(38px,5vw,72px);--ctDetailCopy:17px;--ctDetailMeta:14.5px;
   --ctEpisodeTitle:15.5px;--ctEpisodeCopy:14px;--ctCalendarTitle:16.5px;--ctCalendarMeta:13px;
   --ctLiveTitle:14px;--ctLiveMeta:11px;--ctLiveNow:13.5px;--ctMusicTitle:16.5px;--ctMusicMeta:13.5px;
   --ctMusicSearchTitle:17px;--ctMusicSearchMeta:14px;
   --ctSrcTitle:15px;--ctSrcName:13px;--ctSrcChip:10.5px;
+  --ctSetTab:15px;--ctSetTitle:17px;--ctSetCopy:14.5px;--ctSetLabel:15px;--ctSetMeta:12px;
   --ctLineScale:1.12;
+}
+body.contentTextS{
+  --ctHeroTitle:clamp(30px,4.2vw,58px);--ctHeroCopy:16px;--ctHeroMeta:13.5px;
+  --ctSection:13px;--ctBrowseTitle:30px;--ctBackdropTitle:clamp(34px,4.6vw,64px);
+  --ctBackdropCopy:15.5px;--ctBackdropMeta:13.5px;
+  --ctDetailTitle:clamp(34px,4.6vw,64px);--ctDetailCopy:15.5px;--ctDetailMeta:13.5px;
+  --ctEpisodeTitle:14px;--ctEpisodeCopy:13px;--ctCalendarTitle:15px;--ctCalendarMeta:12px;
+  --ctLiveTitle:12.5px;--ctLiveMeta:10px;--ctLiveNow:12.5px;--ctMusicTitle:15px;--ctMusicMeta:12.5px;
+  --ctMusicSearchTitle:15.5px;--ctMusicSearchMeta:13px;
+  --ctSrcTitle:13.5px;--ctSrcName:11.5px;--ctSrcChip:9.5px;
+  --ctSetTab:13.5px;--ctSetTitle:15.5px;--ctSetCopy:13px;--ctSetLabel:13.5px;--ctSetMeta:11px;
+  --ctLineScale:1;
+}
+body.contentTextL{
+  --ctHeroTitle:clamp(38px,5.3vw,74px);--ctHeroCopy:19px;--ctHeroMeta:16px;
+  --ctSection:16px;--ctBrowseTitle:38px;--ctBackdropTitle:clamp(42px,5.6vw,80px);
+  --ctBackdropCopy:19px;--ctBackdropMeta:16px;
+  --ctDetailTitle:clamp(42px,5.6vw,80px);--ctDetailCopy:19px;--ctDetailMeta:16px;
+  --ctEpisodeTitle:17.5px;--ctEpisodeCopy:16px;--ctCalendarTitle:18.5px;--ctCalendarMeta:14.5px;
+  --ctLiveTitle:16px;--ctLiveMeta:12.5px;--ctLiveNow:15px;--ctMusicTitle:18.5px;--ctMusicMeta:15px;
+  --ctMusicSearchTitle:19px;--ctMusicSearchMeta:15.5px;
+  --ctSrcTitle:17px;--ctSrcName:14.5px;--ctSrcChip:12px;
+  --ctSetTab:17px;--ctSetTitle:19px;--ctSetCopy:16px;--ctSetLabel:17px;--ctSetMeta:13.5px;
+  --ctLineScale:1.24;
+}
+/* Cover size owns the thumbnail caption only. Text size owns backdrop/hero/detail
+   plus Music, Live TV, calendar, Sources, and Settings copy. */
+body.coverS{--ctCardTitle:12px;--ctCardMeta:10px;--ctCardTag:8px}
+body.coverL{--ctCardTitle:15.5px;--ctCardMeta:12.5px;--ctCardTag:10.5px}
+/* TV locks px — desktop vw clamps explode after the 1.5× layout scale.
+   These follow Text size (contentTextS/L), not Cover size. */
+body.tv{
+  --ctHeroTitle:44px;--ctHeroCopy:18px;--ctHeroMeta:16px;
+  --ctBackdropTitle:46px;--ctBackdropCopy:18px;--ctBackdropMeta:16px;
+  --ctDetailTitle:46px;--ctDetailCopy:18px;--ctDetailMeta:16px;
+  --ctSection:16px;--ctEpisodeTitle:17px;--ctEpisodeCopy:15px;
+  --ctLiveTitle:16px;--ctLiveMeta:13px;--ctLiveNow:15px;
+  --ctMusicTitle:18px;--ctMusicMeta:15px;--ctCalendarTitle:18px;--ctCalendarMeta:14px;
+  --ctSetTab:16px;--ctSetTitle:18px;--ctSetCopy:15.5px;--ctSetLabel:16px;--ctSetMeta:13px;
+  --ctBdSlot:96px;
+}
+body.tv.contentTextS{
+  --ctHeroTitle:34px;--ctHeroCopy:15px;--ctHeroMeta:13px;
+  --ctBackdropTitle:36px;--ctBackdropCopy:15px;--ctBackdropMeta:13px;
+  --ctDetailTitle:36px;--ctDetailCopy:15px;--ctDetailMeta:13px;
+  --ctSection:13px;--ctEpisodeTitle:14px;--ctEpisodeCopy:13px;
+  --ctLiveTitle:12.5px;--ctLiveMeta:10px;--ctLiveNow:12.5px;
+  --ctMusicTitle:15px;--ctMusicMeta:12.5px;--ctCalendarTitle:15px;--ctCalendarMeta:12px;
+  --ctSetTab:13.5px;--ctSetTitle:15.5px;--ctSetCopy:13px;--ctSetLabel:13.5px;--ctSetMeta:11px;
+  --ctBdSlot:72px;
+}
+body.tv.contentTextL{
+  --ctHeroTitle:52px;--ctHeroCopy:21px;--ctHeroMeta:18px;
+  --ctBackdropTitle:54px;--ctBackdropCopy:21px;--ctBackdropMeta:18px;
+  --ctDetailTitle:54px;--ctDetailCopy:21px;--ctDetailMeta:18px;
+  --ctSection:18px;--ctEpisodeTitle:19px;--ctEpisodeCopy:17px;
+  --ctLiveTitle:18px;--ctLiveMeta:15px;--ctLiveNow:17px;
+  --ctMusicTitle:20px;--ctMusicMeta:17px;--ctCalendarTitle:20px;--ctCalendarMeta:16px;
+  --ctSetTab:18px;--ctSetTitle:20px;--ctSetCopy:17px;--ctSetLabel:18px;--ctSetMeta:15px;
+  --ctBdSlot:110px;
 }
 #hero h1{font-size:var(--ctHeroTitle)}
 #hero p{font-size:var(--ctHeroCopy)}
@@ -3799,7 +3889,14 @@ body.contentTextL{
 .srcRow .srcMeta{font-size:var(--ctSrcTitle)}
 .srcRow .name{font-size:var(--ctSrcName)}
 .srcRow .chip{font-size:var(--ctSrcChip)}
-body.tv #hero h1{font-size:min(var(--ctHeroTitle),42px);height:calc(39px * var(--ctLineScale))}
+#setTabs button,#prefTabs button{font-size:var(--ctSetTab)}
+#settings .panel h2,#prefs .panel h2,.panel h2{font-size:var(--ctSetTitle)}
+#settings .panel p,#prefs .panel p,.panel p{font-size:var(--ctSetCopy)}
+.menuRow .mn,.kv{font-size:var(--ctSetLabel)}
+.settingsControl>span,#settings .hint,#prefs .hint,.prefTabDivider span{font-size:var(--ctSetMeta)}
+#prefs .sizePick button,#settings .sizePick button{font-size:var(--ctSetCopy)}
+#settings .settingsControl input,#prefs .settingsControl input{font-size:var(--ctSetCopy)}
+body.tv #hero h1{font-size:var(--ctHeroTitle)}
 /* ---------- FIXED-HEIGHT TITLE SLOTS (hero + detail) ---------- */
 /* LAST hero/detail-title rules on purpose so they beat every earlier clamp/height override.
    Logo or text, long or short — the title block ALWAYS occupies the same slot with content
@@ -3815,11 +3912,11 @@ body.tv #hero h1{font-size:min(var(--ctHeroTitle),42px);height:calc(39px * var(-
 #heroTitle.hasLogo img,#dTitle.hasLogo img{max-width:min(380px,86%);max-height:150px;object-fit:contain;
   object-position:left bottom;display:block;filter:drop-shadow(0 4px 18px rgba(0,0,0,.55));animation:logoIn .3s ease}
 #dTitle.hasLogo img{max-height:140px}
-body.tv #hero h1{height:104px}
+body.tv #hero h1{height:var(--ctBdSlot)}
 body.tv #hero h1 .tt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:100%}
-body.tv #heroTitle.hasLogo img{max-height:104px}
-body.tv #dTitle{height:120px}
-body.tv #dTitle.hasLogo img{max-height:120px}
+body.tv #heroTitle.hasLogo img{max-height:var(--ctBdSlot)}
+body.tv #dTitle{height:calc(var(--ctBdSlot) + 8px)}
+body.tv #dTitle.hasLogo img{max-height:calc(var(--ctBdSlot) + 8px)}
 /* Browse/discover backdrop title gets the SAME treatment as the hero and the detail page: logo art
    when TMDB has one, text when it doesn't (owner, 2026-08-06). The slot is FIXED-height and
    bottom-aligned for the same reason those two are — otherwise every focus move would rebound the
@@ -3828,12 +3925,20 @@ body.tv #dTitle.hasLogo img{max-height:120px}
 #bdInfo .bdiT .tt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 #bdInfo .bdiT.hasLogo img{max-width:min(380px,86%);max-height:132px;object-fit:contain;
   object-position:left bottom;display:block;filter:drop-shadow(0 4px 18px rgba(0,0,0,.55));animation:logoIn .3s ease}
-body.tv #bdInfo .bdiT{height:112px}
-body.tv #bdInfo .bdiT.hasLogo img{max-height:112px}
+body.tv #bdInfo .bdiT{height:var(--ctBdSlot)}
+body.tv #bdInfo .bdiT.hasLogo img{max-height:var(--ctBdSlot)}
+body.tv #hero .eyebrow{margin-bottom:10px}
+body.tv #hero h1{margin-bottom:10px}
+body.tv #hero .meta{margin-bottom:10px}
+body.tv #heroCredits{margin-bottom:8px;font-size:var(--ctBackdropMeta)}
+body.tv #hero p{margin-bottom:0}
+body.tv #bdInfo .bdiT{margin-bottom:10px}
+body.tv #bdInfo .bdiM{margin-bottom:10px}
+body.tv #bdInfo .bdiC{margin-bottom:8px;font-size:var(--ctBackdropMeta)}
 body.mobileShell #hero h1{height:96px;justify-content:center}
 body.mobileShell #heroTitle.hasLogo img{margin:0 auto;object-position:center bottom;max-height:96px}
 /* Phone detail must not keep the 140px desktop title slot. That empty box is the
-   "too much space above the title" on mobile web and Android phone. TV stays 120px. */
+   "too much space above the title" on mobile web and Android phone. TV stays 80px. */
 @media (max-width:600px){
   #dTitle{height:auto;min-height:0;justify-content:center;margin-bottom:10px}
   #dTitle.hasLogo img{max-height:72px;margin:0 auto;object-position:center bottom}
@@ -3851,7 +3956,8 @@ body.mobileShell #detail .detailHero{padding-top:calc(12px + var(--safeT));min-h
 #detail .dInfo .eyebrow{display:none}
 #dMeta .rating,.metaLine .rating{color:var(--amber)}
 @keyframes logoIn{from{opacity:0}to{opacity:1}}
-body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
+body.tv #dTitle{font-size:var(--ctDetailTitle)}
+body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -4532,11 +4638,11 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <div class="setGrid" data-ptab="display" hidden>
     <div class="panel">
       <h2>Size on this device</h2>
-      <p>Poster and thumbnail size on Home, Movies, TV, Search, details, and the player episode row.</p>
+      <p>Posters and landscape thumbs (Continue Watching, episodes) plus the title under each. Small is 7 posters / 5 thumbs, Medium is 6 / 4, Large is 5 / 3 — the same 1080p counts Plex and Jellyfin use.</p>
       <div class="sizePick" id="prefCoverSize">
         <button data-sz="S">Small</button><button data-sz="M">Medium</button><button data-sz="L">Large</button>
       </div>
-      <p style="margin-top:18px">Text size for movies, shows, music, Live TV and library pages. The left menu and Settings stay fixed.</p>
+      <p style="margin-top:18px">Text size for the backdrop title and plot, plus movies, shows, music, Live TV, library pages, and Settings labels. The left menu stays fixed.</p>
       <div class="sizePick" id="prefContentTextSize">
         <button data-ts="S">Compact</button><button data-ts="M">Standard</button><button data-ts="L">Larger</button>
       </div>
@@ -5183,8 +5289,8 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
   <div class="setGrid" data-stab="display" hidden>
   <div class="panel"><h2>Display defaults</h2>
-    <p>Cover-art size for posters and thumbnails on this device, including Search, details, and
-       the player episode row. Every user can also set this under Display in their own sidebar.</p>
+    <p>Posters and landscape thumbs (Continue Watching, episodes) plus the title under each. Small is
+       7 posters / 5 thumbs, Medium is 6 / 4, Large is 5 / 3. Every user can also set this under Display.</p>
     <div class="sizePick" id="coverSize">
       <button data-sz="S">Small</button><button data-sz="M">Medium</button><button data-sz="L">Large</button>
     </div>
@@ -5751,9 +5857,14 @@ function ensureGateArt() {
 
 /* ============ gates ============ */
 const COVER_SIZES = { S: '176px', M: '220px', L: '244px' };
-// TV layout is 1280 CSS px in a fixed 16:9 (720px tall). Medium is a notch larger than
-// the old 155 so 4K sets read closer to Home. Home / Movies / TV / person all share --poster.
-const COVER_SIZES_TV = { S: '142px', M: '170px', L: '182px' };
+// TV layout is 1440 CSS px in a 16:9 (810px tall). On 1080p, Plex and Jellyfin use
+// 7 / 6 / 5 posters in a row (~220 / 270 / 330 physical px after the menu).
+// TV_COVER_COLS locks that count; width-fit fills the row so leftover is not a dead strip.
+const COVER_SIZES_TV = { S: '165px', M: '202px', L: '248px' };
+const TV_COVER_COLS = { S: 7, M: 6, L: 5 };
+// 16:9 thumbs (Continue Watching, episodes, player strip). Plex/Jellyfin show
+// fewer landscape cards than posters: 5 / 4 / 3 on a 1080p row.
+const TV_THUMB_COLS = { S: 5, M: 4, L: 3 };
 const COVER_SIZES_PHONE = { S: '118px', M: '140px', L: '158px' };
 function isPosterBrowseView() {
   return ['movies', 'tv', 'kids', 'watchlist', 'library'].includes(S.view);
@@ -5785,8 +5896,22 @@ function tvCoverRowAvail() {
   const overscan = tvCssPx(cs.getPropertyValue('--overscan'), 0);
   return Math.max(320, Math.round(innerWidth - rail - overscan - gut * 2 - 20));
 }
+function fitTvThumbPx(avail, gap, size) {
+  const cols = TV_THUMB_COLS[size] || TV_THUMB_COLS.M;
+  if (!(avail > 200) || !cols) return Math.round((parseFloat(COVER_SIZES_TV[size] || COVER_SIZES_TV.M) || 202) * 1.327);
+  return Math.max(120, Math.floor((avail - (cols - 1) * gap) / cols));
+}
+function tvPlayerThumbAvail() {
+  // Player is full-bleed — do not subtract the Home rail, or episode stills stay catalog-narrow.
+  const cs = getComputedStyle(document.body);
+  const gut = tvCssPx(cs.getPropertyValue('--gut'), 30);
+  const overscan = tvCssPx(cs.getPropertyValue('--overscan'), 0);
+  return Math.max(320, Math.round(innerWidth - overscan - gut * 2));
+}
 function fitTvCoverPx(avail, target, gap, size) {
   if (!(avail > 200) || !(target > 80)) return Math.round(target);
+  const cols = TV_COVER_COLS[size];
+  if (cols) return Math.max(96, Math.floor((avail - (cols - 1) * gap) / cols));
   const nFit = Math.max(1, Math.floor((avail + gap) / (target + gap)));
   const slack = size === 'S' ? Math.max(16, target * 0.14) : size === 'L' ? 4 : 10;
   const nPlus = nFit + 1;
@@ -5795,7 +5920,7 @@ function fitTvCoverPx(avail, target, gap, size) {
   return Math.max(96, Math.floor((avail - (n - 1) * gap) / n));
 }
 function tvHomeCoverCapPx() {
-  // Home keeps a locked hero (~349px on 720p). Large width-fit grew posters to 207px,
+  // Home keeps a locked hero (~349px). Large width-fit grew posters to 207px on 720p.
   // so the 2:3 art hit the bezel and "Outer Banks / 2020" sat off-screen. Cap the
   // Home/Discover width so art + title + year fit under the hero.
   const home = $('home');
@@ -5814,6 +5939,8 @@ function phoneCatalogCols() {
 }
 function applyCoverSize() {
   const s = (() => { try { return localStorage.getItem('triboon.cover') || 'M'; } catch { return 'M'; } })();
+  document.body.classList.toggle('coverS', s === 'S');
+  document.body.classList.toggle('coverL', s === 'L');
   const table = document.body.classList.contains('tv') ? COVER_SIZES_TV : COVER_SIZES;
   // Phones always get compact covers — 220px posters mean ONE giant column on a 375px screen.
   // Android WebView can report a CSS width over 600px, so mobileShell counts as phone too.
@@ -5831,6 +5958,7 @@ function applyCoverSize() {
     posterPx = cell + 'px';
     document.documentElement.style.setProperty('--phoneCols', String(cols));
     document.documentElement.style.setProperty('--thumb', posterPx);
+    document.documentElement.style.setProperty('--playerThumb', posterPx);
     document.documentElement.style.removeProperty('--homePoster');
     document.documentElement.style.setProperty('--poster', posterPx);
     try { if (window.TriboonTV && window.TriboonTV.coverSize) window.TriboonTV.coverSize(s); } catch {}
@@ -5847,11 +5975,13 @@ function applyCoverSize() {
     const target = parseFloat(px) || 170;
     const gap = tvCoverGap();
     posterPx = fitTvCoverPx(avail, target, gap, s) + 'px';
-    document.documentElement.style.setProperty('--thumb', fitTvCoverPx(avail, target * 1.327, 14, s) + 'px');
+    document.documentElement.style.setProperty('--thumb', fitTvThumbPx(avail, gap, s) + 'px');
+    document.documentElement.style.setProperty('--playerThumb', fitTvThumbPx(tvPlayerThumbAvail(), 14, s) + 'px');
     const homePoster = Math.min(parseFloat(posterPx) || target, tvHomeCoverCapPx());
     document.documentElement.style.setProperty('--homePoster', Math.round(homePoster) + 'px');
   } else {
     document.documentElement.style.removeProperty('--thumb');
+    document.documentElement.style.removeProperty('--playerThumb');
     document.documentElement.style.removeProperty('--homePoster');
   }
   document.documentElement.style.setProperty('--poster', posterPx);
@@ -5868,6 +5998,20 @@ function applyCoverSize() {
 // of a fixed 899px breakpoint — at in-between resolutions the old breakpoint chose 2 rows
 // that didn't fit: the grid climbed over the focused title's text and clipped the bottom row.
 // Works for every resolution and cover-size setting: phone, tablet, 1080p, 2K, 4K.
+function syncTvBackdropInfoBand() {
+  if (!document.body.classList.contains('tv')) {
+    document.documentElement.style.removeProperty('--tvRowWin');
+    return;
+  }
+  let el = null;
+  if (S.view === 'home') el = $('rows');
+  else if (S.view === 'discover') el = $('discoverRows');
+  else if (S.view === 'person') el = $('personGrid');
+  else if ($('browse') && $('browse').classList.contains('rowsWin')) el = $('grid');
+  if (!el) return;
+  const h = Math.round(el.getBoundingClientRect().height);
+  if (h > 40 && h < innerHeight * 0.72) document.documentElement.style.setProperty('--tvRowWin', h + 'px');
+}
 function adaptRowWindows() {
   const rowH = (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--poster')) || 190) * 1.5 + 106;
   const h = window.innerHeight;
@@ -5937,6 +6081,7 @@ function adaptRowWindows() {
     // Exactly one card + top pad. Including the row-gap (pitch2) let the next
     // artwork peek once D-pad scrolled off the first row.
     grid.style.maxHeight = `${Math.ceil(padTop + h)}px`;
+    syncTvBackdropInfoBand();
     return;
   }
   grid.style.maxHeight = pitch > 50 ? `${n * pitch - 4}px` : `calc(var(--rowH) * ${n} - ${n * 2}px)`;
@@ -6271,8 +6416,12 @@ function mapTmdb(x) {
     overview: x.overview || '',
     backdrop: img(x.backdrop_path) || procBackdrop(260, 30, x.id),
     poster: img(x.poster_path, POSTER_W) || img(x.backdrop_path, POSTER_W) || procBackdrop(260, 30, x.id),
+    adult: !!x.adult,
     progress: 0,
   };
+}
+function tmdbAdult(it) {
+  return !!(it && it.adult);
 }
 
 // Maturity filtering — a profile's level hides titles above it.
@@ -6313,7 +6462,7 @@ function kidsFreshSince() {
   return d.toISOString().slice(0, 10);
 }
 function kidsMovieFreshPath() {
-  return '/api/tmdb/discover/movie?sort_by=primary_release_date.desc&vote_count.gte=10&with_genres=16|10751'
+  return '/api/tmdb/discover/movie?sort_by=primary_release_date.desc&vote_count.gte=10&with_genres=' + encodeURIComponent('16|10751')
     + `&primary_release_date.gte=${kidsFreshSince()}&primary_release_date.lte=${todayStr()}`
     + `&certification_country=US&certification.lte=${encodeURIComponent(kidsCertCap())}` + CATALOG_Q;
 }
@@ -6974,7 +7123,7 @@ function homeKidsCatalogRow(name, popular, fresh, seen) {
 }
 // Kids shelf: Family + Animation movies up to PG, plus TMDB's Kids TV genre (not all
 // animation TV — that list includes adult anime). Same idea as a Max Kids row on a regular profile.
-const HOME_KIDS_MOVIE_PATH = '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16|10751';
+const HOME_KIDS_MOVIE_PATH = '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=' + encodeURIComponent('16|10751');
 const HOME_KIDS_TV_PATH = '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=10762';
 // Fetch every row's first page in PARALLEL, then build rows in ORDER through ONE shared `seen` set —
 // the de-dupe is order-dependent (earlier rows win, later rows drop repeats), so it can't run inside
@@ -7438,7 +7587,7 @@ function isLocalLibraryTitle(it) {
   return !!(it && it._lib && it._lib.path && it._idx !== undefined && it._kind !== 'episode');
 }
 function cardHasItemMenu(it) {
-  return !!(it && !it.trailer && it._channel === undefined
+  return !!(it && !tmdbAdult(it) && !it.trailer && it._channel === undefined
     && (isContinueWatchingItem(it) || (it.tmdbId && ['movie', 'tv'].includes(it.type))
       || isLocalLibraryTitle(it)));
 }
@@ -7697,10 +7846,10 @@ function closeCwMenu() {
 function makeCard(it, poster, onFocus) {
   const c = document.createElement('button');
   if (poster) {
-    c.className = 'pcard focusable';
+    c.className = 'pcard focusable' + (tmdbAdult(it) ? ' adultBlur' : '');
     c.innerHTML = `<div class="art">` +
-      `${it.rating && it.rating !== '—' ? `<span class="badge">★ ${esc(it.rating)}</span>` : ''}` +
-      `${isWatched(it) ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}</div>` +
+      `${!tmdbAdult(it) && it.rating && it.rating !== '—' ? `<span class="badge">★ ${esc(it.rating)}</span>` : ''}` +
+      `${!tmdbAdult(it) && isWatched(it) ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}</div>` +
       `<div class="cap">${esc(it.title)}</div><div class="sub">${esc(it.year || it.genre || '')}</div>`;
     bgLazy(c.querySelector('.art'), it.poster, it.backdrop, artFallback(it.key || it.title, 11));
   } else if (it.trailer) {
@@ -7741,6 +7890,7 @@ function makeCard(it, poster, onFocus) {
   attachCardMenuButton(c, c.querySelector('.art') || c, it, onFocus);
   c.addEventListener('click', () => {
     onFocus && onFocus();
+    if (tmdbAdult(it)) return;
     if (it.trailer) return openTrailer(it.trailer, it);
     if (it._nextEp) {
       // Next-up is resume: play the episode. Details stay on hold-OK (TV) / ⋯ (web).
@@ -7858,6 +8008,7 @@ function sizeRowsWindow(root) {
   const n = rowWindowCountFor(isDiscover ? 'discover' : 'home', rowH, innerHeight);
   const gap = parseFloat(getComputedStyle(root).rowGap || getComputedStyle(root).gap) || 22;
   root.style.maxHeight = rowsWindowHeight(root, rows, n, gap) + 'px';
+  syncTvBackdropInfoBand();
 }
 window.addEventListener('resize', () => {
   sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); fitRailToFullIcons(); fitRailWidth();
@@ -7983,7 +8134,7 @@ function homeFocusSnapshot() {
 }
 function restoreHomeFocus(snap) {
   if (!snap || S.view !== 'home') return false;
-  if (snap.zone === 'rail') return true;
+  if (snap.zone === 'rail') { enterRail(); return true; }
   if (snap.zone === 'hero') { focusHero(snap.heroIdx || 0); return true; }
   if (snap.zone !== 'rows') return false;
   const rowCount = (S.rows || []).length;
@@ -8425,6 +8576,7 @@ function applyTitleLogo(el, it) {
   }, 180);
 }
 function setHero(it) {
+  if (tmdbAdult(it)) { S.focusedItem = it; return; }
   S.focusedItem = it;
   prefetchSources(it);
   setTitleText($('heroTitle'), it.title);
@@ -9405,6 +9557,68 @@ function restoreDetailFocus(ret) {
   focusContent();
 }
 
+async function loadDetailTmdbPage(it, reqId) {
+  const detailCacheKey = `${it.type}:${it.tmdbId}`;
+  const cachedDetail = S.detailPageCache && S.detailPageCache[detailCacheKey];
+  if (cachedDetail && Date.now() - cachedDetail.at < PAGE_CACHE_MS) return cachedDetail.data;
+  let d;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // Related (recommendations/similar) is a second request so a slow extras payload
+      // cannot hold back cast, seasons, and episode tabs.
+      const append = it.type === 'tv'
+        ? 'credits,aggregate_credits,videos,content_ratings,release_dates,external_ids'
+        : 'credits,videos,content_ratings,release_dates,external_ids';
+      d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=${append}`);
+      break;
+    } catch (e) {
+      if (reqId !== S.detailReq) return null;
+      if (attempt >= 2 || [401, 403, 404].includes(e.status)) throw e;
+      await new Promise((res) => setTimeout(res, attempt === 0 ? 600 : 1400));
+      if (reqId !== S.detailReq) return null;
+    }
+  }
+  S.detailPageCache = S.detailPageCache || {};
+  S.detailPageCache[detailCacheKey] = { at: Date.now(), data: d };
+  return d;
+}
+function fillDetailRelated(it, recs) {
+  const seen = new Set();
+  const related = [];
+  for (const x of recs || []) {
+    if (!x || !x.poster_path || x.id === it.tmdbId || !passesMaturity(x)) continue;
+    const m = mapTmdb(x);
+    if (seen.has(m.key)) continue;
+    seen.add(m.key);
+    related.push(m);
+    if (related.length >= 20) break;
+  }
+  if (!related.length) return;
+  $('dRelatedWrap').style.display = '';
+  const row = $('relatedRow');
+  row.innerHTML = '';
+  S.detailRelated = related;
+  related.forEach((rit, i) => {
+    const card = makeCard(rit, true, () => {});
+    card.dataset.relIdx = i;
+    row.appendChild(card);
+  });
+  bindEdgeScroll(row);
+}
+function loadDetailRelated(it, d, reqId) {
+  const cached = [...((((d || {}).recommendations || {}).results) || []), ...((((d || {}).similar || {}).results) || [])];
+  if (cached.length) {
+    fillDetailRelated(it, cached);
+    return;
+  }
+  Promise.all([
+    api(`/api/tmdb/${it.type}/${it.tmdbId}/recommendations`).catch(() => null),
+    api(`/api/tmdb/${it.type}/${it.tmdbId}/similar`).catch(() => null),
+  ]).then(([rec, sim]) => {
+    if (reqId !== S.detailReq || S.view !== 'detail') return;
+    fillDetailRelated(it, [...((rec && rec.results) || []), ...((sim && sim.results) || [])]);
+  }).catch(() => {});
+}
 async function openDetail(it, push = true, opts = {}) {
   if (!it) return;
   bindLibrarySource(it);
@@ -9456,10 +9670,13 @@ async function openDetail(it, push = true, opts = {}) {
   S.qualityPref = null;
   paintQualityToggle(normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || 3);
   const reqId = (S.detailReq = (S.detailReq || 0) + 1); // rapid clicks: only the LAST request may render
+  // Ask TMDB immediately. Waiting on local episode pages first left cast/related/episodes
+  // blank for 10–30s on library-backed titles (The Office, long shows).
+  const tmdbJob = loadDetailTmdbPage(it, reqId);
   // Matched shows/movies from an added library use the normal TMDB detail page, but Play
-  // still needs the local episode/file map. The library page already fetched these items, so
-  // hydrate from that cache before seasons and the main Play target are calculated.
-  if (it._lib && it._lib.path) {
+  // still needs the local episode/file map. Hydrate in parallel — availability still waits.
+  const localHydrate = (async () => {
+    if (!(it._lib && it._lib.path)) return;
     try {
       const r = it._kind === 'show'
         ? await loadAllLocalShowEpisodes(it._lib, it._idx)
@@ -9467,7 +9684,7 @@ async function openDetail(it, push = true, opts = {}) {
       if (reqId !== S.detailReq) return;
       mergeLocalItems(it._lib, r.items || []);
     } catch {}
-  }
+  })();
   // checkAvailability must run AFTER the detailReq bump — it snapshots the id to guard its own
   // async result, and bumping afterwards orphaned every check (toggle/Unavailable never applied).
   // Set the Play target first so TV availability/prepare search the next episode, not the show
@@ -9481,7 +9698,6 @@ async function openDetail(it, push = true, opts = {}) {
     const detailResume = resumePositionForItem(it);
     updateDetailPlayLabel(detailResume ? { label: 'Resume', target: { ...it, resume: detailResume } } : { label: 'Play', target: it });
   }
-  checkAvailability(it);
   syncDetailButtons(it);
   syncFixMatchBtn(it); // admin, library-born items only: fix a wrong TMDB match
   const _ds = $('detail').querySelector('.detailScroll'); _ds.scrollTop = 0; wireBackdropScrollFade(_ds); $('backdrop').style.opacity = '';
@@ -9492,37 +9708,8 @@ async function openDetail(it, push = true, opts = {}) {
     requestAnimationFrame(() => { if (S.view === 'detail' && !S._detailRestore) applyFocus($('dPlay')); });
   }
 
-  try {
-    // The WHOLE detail body (meta, crew, cast, seasons, related) renders from this one fetch, so a
-    // single transient failure (Wi-Fi blip on a TV, a TMDB hiccup the server couldn't absorb) used
-    // to leave the page half-empty until the user backed out and reopened it — a manual retry
-    // (owner, 2026-08-08). Retry it FOR them: up to 3 attempts with short backoff, abandoned the
-    // moment a newer detail page supersedes this one. Auth/permission/not-found failures (401/403/
-    // 404) still surface immediately — retrying cannot fix those.
-    let d;
-    const detailCacheKey = `${it.type}:${it.tmdbId}`;
-    const cachedDetail = S.detailPageCache && S.detailPageCache[detailCacheKey];
-    if (cachedDetail && Date.now() - cachedDetail.at < PAGE_CACHE_MS) {
-      d = cachedDetail.data;
-    } else {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const append = it.type === 'tv'
-          ? 'credits,aggregate_credits,videos,content_ratings,release_dates,recommendations,similar,external_ids'
-          : 'credits,videos,content_ratings,release_dates,recommendations,similar,external_ids';
-        d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=${append}`);
-        break;
-      } catch (e) {
-        if (reqId !== S.detailReq) return;
-        if (attempt >= 2 || [401, 403, 404].includes(e.status)) throw e;
-        await new Promise((res) => setTimeout(res, attempt === 0 ? 600 : 1400));
-        if (reqId !== S.detailReq) return;
-      }
-    }
-    S.detailPageCache = S.detailPageCache || {};
-    S.detailPageCache[detailCacheKey] = { at: Date.now(), data: d };
-    }
-    if (reqId !== S.detailReq) return; // a newer detail page superseded this fetch
+  const painted = tmdbJob.then(async (d) => {
+    if (!d || reqId !== S.detailReq) return; // a newer detail page superseded this fetch
     S.detailData = d;
     applyExternalIds(it, d);
     if (it.imdbId || it.tvdbId) {
@@ -9614,25 +9801,8 @@ async function openDetail(it, push = true, opts = {}) {
     const hasProgress = !!it.resume || (detailPlayTarget && /Resume|Continue/.test($('dPlayLabel').textContent));
     $('dStartOver').style.display = hasProgress ? '' : 'none';
 
-    // "More like this" — recommendations (fall back to similar), ~20, deduped, maturity-filtered.
-    const recs = [...(((d.recommendations || {}).results) || []), ...(((d.similar || {}).results) || [])];
-    const seen = new Set(); const related = [];
-    for (const x of recs) {
-      if (!x.poster_path || x.id === it.tmdbId || !passesMaturity(x)) continue;
-      const m = mapTmdb(x); if (seen.has(m.key)) continue; seen.add(m.key); related.push(m);
-      if (related.length >= 20) break;
-    }
-    if (related.length) {
-      $('dRelatedWrap').style.display = '';
-      const row = $('relatedRow'); row.innerHTML = '';
-      S.detailRelated = related; // hold-OK on a related cover resolves its item from here
-      related.forEach((rit, i) => {
-        const card = makeCard(rit, true, () => {});
-        card.dataset.relIdx = i;
-        row.appendChild(card);
-      });
-      bindEdgeScroll(row);
-    }
+    // Related is a follow-up so a slow extras payload cannot hold back cast/seasons.
+    loadDetailRelated(it, d, reqId);
     if (S._detailRestore && sameDetailIdentity(S.detailItem, S._detailRestore.item) && reqId === S.detailReq) {
       const snap = S._detailRestore;
       S._detailRestore = null;
@@ -9642,7 +9812,7 @@ async function openDetail(it, push = true, opts = {}) {
         if (!restoreLeavingDetailFocus(snap)) applyFocus($('dPlay'));
       });
     }
-  } catch (e) {
+  }).catch((e) => {
     if (reqId !== S.detailReq || S.view !== 'detail') return;
     bootReady();
     if (!$('dOverview').textContent) $('dOverview').textContent = 'Details could not be loaded. Try again, or go back.';
@@ -9651,7 +9821,11 @@ async function openDetail(it, push = true, opts = {}) {
       if (reqId !== S.detailReq || S.view !== 'detail') return;
       S.zone = ''; applyFocus($('dBack'), false);
     });
-  }
+  });
+  await localHydrate;
+  if (reqId !== S.detailReq) return;
+  checkAvailability(it);
+  await painted;
 }
 
 function certOf(d, type) {
@@ -17614,7 +17788,7 @@ async function fetchScreensaverTrendingItems() {
     const urls = kid ? [
       '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=10751' + CATALOG_Q + certParams(),
       '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16' + CATALOG_Q + certParams(),
-      '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=10762|16' + CATALOG_Q,
+      '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=' + encodeURIComponent('10762|16') + CATALOG_Q,
     ] : [
       '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=100' + CATALOG_Q + certParams(),
       '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60' + CATALOG_Q,
@@ -20303,6 +20477,7 @@ function restoreLiveTvDom() {
   S._gridKind = 'livetv';
   bootReady();
   if (S.zone === 'rail') paintRailPreviewHero();
+  else setTimeout(() => { if (S.view === 'livetv' && S.zone !== 'rail') focusContent(); }, 80);
   return true;
 }
 function refreshLiveTvInBackground(reqId) {
@@ -20332,6 +20507,7 @@ async function loadLiveTv() {
       S.gridRoot = grid;
       bootReady();
       if (S.zone === 'rail') paintRailPreviewHero();
+      else setTimeout(() => { if (S.view === 'livetv' && S.zone !== 'rail') focusContent(); }, 80);
       return;
     }
     scaffoldLiveTv(grid);
@@ -20350,6 +20526,7 @@ async function loadLiveTv() {
       S.gridRoot = grid;
       bootReady();
       if (S.zone === 'rail') paintRailPreviewHero();
+      else setTimeout(() => { if (S.view === 'livetv' && S.zone !== 'rail') focusContent(); }, 80);
       refreshLiveTvInBackground(reqId);
       return;
     }
@@ -20454,7 +20631,7 @@ function liveChannelMatchesQuery(ch, q) {
   const needle = String(q || '').toLowerCase().trim();
   if (!needle) return true;
   if (liveChannelSearchText(ch).includes(needle)) return true;
-  return searchCloseTitle(q, (ch && ch.name) || '');
+  return searchLibraryTitleMatch(q, (ch && ch.name) || '');
 }
 function liveChannelSubtitle(ch) {
   const group = String((ch && ch.group) || '').trim();
@@ -23590,6 +23767,7 @@ function applyContentTextSize() {
   return s;
 }
 applyContentTextSize(); // boot: content pages use the saved text size before rows render
+applyCoverSize(); // boot: poster + caption thumbnail size before first row paint
 function renderProfileSessionActions() {
   const pr = S.profile || {};
   const name = pr.name || (S.user && S.user.name) || 'Current profile';
@@ -24877,6 +25055,7 @@ $('prefReset').addEventListener('click', () => {
 
 /* ============ global search ============ */
 let searchTimer = null, searchSeq = 0;
+let searchSuggestPicked = false;
 function clearSearchResults(opts = {}) {
   if (opts.invalidate) searchSeq++;
   const grid = $('grid');
@@ -24934,11 +25113,21 @@ function moveSearchUpFromResults() {
 // re-requests WebView focus at 80/220/520/1100ms — pin past that last tick and re-land.
 let searchMicLand = 0;
 let searchMicPinUntil = 0;
+let searchComposing = false;
 function cancelSearchMicLand() { searchMicLand += 1; searchMicPinUntil = 0; }
+// Box has focus, IME is composing, or a query is already typed — never steal back to Mic.
+function searchInputBusy() {
+  const input = $('searchInput');
+  if (!input) return false;
+  if (searchComposing) return true;
+  if (input.value.trim()) return true;
+  return document.activeElement === input;
+}
 function searchMicLandBusy() {
   if (S.view !== 'search' || S.zone === 'rail') return false;
+  if (searchInputBusy()) return false;
   const ae = document.activeElement;
-  if (ae === $('searchInput') || ae === $('searchClearBtn')) return false;
+  if (ae === $('searchClearBtn')) return false;
   if (ae && ae.closest && ae.closest('#searchSuggest')) return false;
   if (document.querySelector('#grid .focus')) return false;
   return true;
@@ -24946,6 +25135,7 @@ function searchMicLandBusy() {
 function focusSearchMic() {
   const mic = $('micBtn');
   if (!mic || mic.style.display === 'none') { $('searchInput').focus(); return false; }
+  if (searchInputBusy()) return false;
   const token = ++searchMicLand;
   searchMicPinUntil = performance.now() + 2000;
   const land = () => {
@@ -25010,11 +25200,31 @@ function moveSearchDownFromField() {
   if (searchSuggestVisible()) return focusSearchSuggest(0);
   return searchAndFocusResults();
 }
-$('searchInput').addEventListener('input', () => {
+$('searchInput').addEventListener('focus', () => {
+  cancelSearchMicLand();
+  try { $('micBtn').classList.remove('focus'); $('micBtn').blur(); } catch {}
+});
+$('searchInput').addEventListener('compositionstart', () => {
+  searchComposing = true;
+  cancelSearchMicLand();
+});
+$('searchInput').addEventListener('compositionend', () => {
+  searchComposing = false;
+  cancelSearchMicLand();
+});
+$('searchInput').addEventListener('input', (e) => {
+  cancelSearchMicLand();
   syncSearchClear();
   clearTimeout(searchTimer);
+  const composing = searchComposing || !!(e && e.isComposing);
   const q = $('searchInput').value.trim();
-  if (!q) { showSearchSuggest(null); clearSearchResults({ invalidate: true }); return; }
+  // Android TV IME can fire an empty input mid-composition. Do not wipe results or bump
+  // searchSeq — that is the "typed odyssey, grid went blank and never came back" bug.
+  if (!q) {
+    if (composing) return;
+    showSearchSuggest(null); clearSearchResults({ invalidate: true }); return;
+  }
+  searchSuggestPicked = false;
   showSearchSuggest(catalogSearchSuggestions(q), q);
   paintInstantSearch(q);
   searchTimer = setTimeout(doSearch, 120);
@@ -25307,7 +25517,16 @@ function searchCloseTitle(query, title) {
   if (!qw.length || !tw.length) return false;
   const need = searchContentWords(qw);
   const single = need.length === 1;
-  return need.every((w) => tw.some((t) => searchCloseWord(w, t, single) || searchWordAffix(w, t)));
+  return need.every((w) => tw.some((t) => searchCloseWord(w, t, single) || searchWordAffix(w, t) || (w.length >= 3 && t.startsWith(w))));
+}
+function searchLibraryTitleMatch(query, title) {
+  const qw = searchWords(query), tw = searchWords(title);
+  const need = searchContentWords(qw);
+  if (!need.length || !tw.length) return false;
+  if (need.every((w) => tw.some((t) => searchWordEq(w, t)))) return true;
+  const packed = tw.join('');
+  if (need.every((w) => w.length >= 4 && packed.includes(w))) return true;
+  return searchWholeTitleClose(query, title);
 }
 function searchSuggestRank(q, title) {
   if (!searchCloseTitle(q, title)) return 0;
@@ -25418,10 +25637,34 @@ function scoreSearchTitles(q) {
   _scoreMemo = { q, at: now, scored };
   return scored;
 }
+function searchTitleResolved(q) {
+  const qw = searchWords(q);
+  const qn = qw.join('');
+  const qc = searchContentWords(qw).join('');
+  if (qn.length < 3) return false;
+  const hit = (title) => {
+    if (!title) return false;
+    const noArt = searchTitleNoArt(title);
+    if (noArt === qn || noArt === qc) return true;
+    const tw = searchWords(title);
+    if (tw.join('') === qn) return true;
+    const tc = searchContentWords(tw).join('');
+    return tc.length >= 4 && tc === qc;
+  };
+  if (SEARCH_CLOSE_SEEDS.some(hit)) return true;
+  return catalogSearchItems().some((it) => hit(it.title || it.name || ''));
+}
 function catalogSearchSuggestions(q) {
+  if (searchSuggestPicked || searchTitleResolved(q)) return [];
   const qn = searchWords(q).join('');
   if (qn.length < 2) return [];
-  return scoreSearchTitles(q).slice(0, 2).map((x) => x.title);
+  return scoreSearchTitles(q).filter((x) => {
+    if (x.rank < 40) return false;
+    const packed = searchWords(x.title).join('');
+    const noArt = searchTitleNoArt(x.title) || packed;
+    if (qn.length >= 3 && (noArt.startsWith(qn) || packed.startsWith(qn))) return true;
+    return x.d <= 2;
+  }).slice(0, 1).map((x) => x.title);
 }
 function paintInstantSearch(q) {
   if (searchWords(q).join('').length < 3) return;
@@ -25476,12 +25719,9 @@ function showSearchSuggest(hint, original) {
     if (i === 0) btn.id = 'searchSuggestBtn';
     btn.dataset.hint = title;
     btn.setAttribute('role', 'option');
-    const label = document.createElement('span');
-    label.className = 'hint';
-    label.textContent = i === 0 ? 'Showing results for' : 'Also try';
     const name = document.createElement('b');
     name.textContent = title;
-    btn.append(label, name);
+    btn.append(name);
     return btn;
   }));
   box.hidden = false;
@@ -25497,6 +25737,7 @@ function applySearchSuggest(hint) {
   if (!title) return;
   $('searchInput').value = title;
   syncSearchClear();
+  searchSuggestPicked = true;
   showSearchSuggest(null);
   doSearch().then(() => focusSearchResultsSoon()).catch(() => focusSearchResultsSoon());
 }
@@ -25537,6 +25778,10 @@ function tmdbSearchRank(x, q) {
   if (searchCloseTitle(q, title)) score += 8000;
   if (content.length && content.every((w) => titleWords.some((t) => searchWordEq(t, w)))) score += 1200;
   if (content.length && titleWords.length && !searchWordEq(noLeadArticle[0] || titleWords[0], content[0])) score -= 1800;
+  // "office" is The Office, not Office Romance. Extra words lose to the exact title.
+  const qExact = searchContentWords(queryWords).join('');
+  const tExact = searchTitleNoArt(title);
+  if (qExact && tExact === qExact) score += 25000;
   return score;
 }
 async function searchLibrary(q) {
@@ -25586,8 +25831,12 @@ async function doSearch() {
       let shows = ok.filter((x) => x.media_type === 'tv').sort(bySearchRank).map(mapTmdb);
       const closeHit = ok.some((x) => searchWholeTitleClose(q, x.title || x.name || ''));
       const serverHint = r.didYouMean || '';
-      if (serverHint) showSearchSuggest([serverHint, ...catalogSearchSuggestions(q)], r.originalQuery || q);
-      else showSearchSuggest(catalogSearchSuggestions(q), q);
+      if (searchSuggestPicked || searchTitleResolved(q) || closeHit) showSearchSuggest(null);
+      else {
+        const hints = catalogSearchSuggestions(q);
+        if (serverHint && searchWholeTitleClose(q, serverHint)) hints.unshift(serverHint);
+        showSearchSuggest(hints, r.originalQuery || q);
+      }
       if (!closeHit) {
         for (const it of catalogSearchItems()) {
           if (!searchCloseTitle(q, it.title || it.name || '')) continue;
@@ -25598,11 +25847,16 @@ async function doSearch() {
       }
       hydrateSearchLibrary(movies, lib);
       hydrateSearchLibrary(shows, lib);
-      if (lib.length || movies.length || shows.length || live.length) {
+      const libHits = lib.filter((it) => searchLibraryTitleMatch(q, it.title || it.name || ''));
+      const movieLead = movies[0] ? tmdbSearchRank(movies[0], q) : -1;
+      const showLead = shows[0] ? tmdbSearchRank(shows[0], q) : -1;
+      const catalogSecs = showLead > movieLead
+        ? [{ name: 'TV Shows', items: shows }, { name: 'Movies', items: movies }]
+        : [{ name: 'Movies', items: movies }, { name: 'TV Shows', items: shows }];
+      if (libHits.length || movies.length || shows.length || live.length) {
         return renderSearchSections([
-          { name: 'Library', items: lib },
-          { name: 'Movies', items: movies },
-          { name: 'TV Shows', items: shows },
+          { name: 'Library', items: libHits },
+          ...catalogSecs,
           { name: 'Live TV', items: live },
         ]);
       }
@@ -25610,7 +25864,7 @@ async function doSearch() {
   }
   // Raw usenet search has no ratings at all — restricted profiles never get the fallback.
   if (!current()) return;
-  const lib = await libJob.catch(() => []);
+  const lib = (await libJob.catch(() => [])).filter((it) => searchLibraryTitleMatch(q, it.title || it.name || ''));
   if ((S.maxLevel ?? 4) < 4) {
     if (lib.length) return renderSearchSections([{ name: 'Library', items: lib }]);
     renderGrid([]); $('grid').innerHTML = '<div class="gridMore">No results for this profile.</div>'; return;
@@ -26816,6 +27070,10 @@ function switchView(v, push = true, opts = {}) {
   if (prevView === 'search' && v !== 'search' && !opts.preserveSearch) resetSearchPage();
   if (prevView === 'home' && v !== 'home') S._homeLoadRun = (S._homeLoadRun || 0) + 1;
   if (['movies', 'tv', 'kids'].includes(prevView) && prevView !== v) saveBrowseCache(prevView);
+  if (['movies', 'tv', 'kids', 'watchlist', 'library'].includes(prevView) && prevView !== v) S._gridKind = '';
+  // A leftover TV/Movies index (poster 40) used to come with you. Then the first
+  // Back went to poster 0 instead of the menu. Fresh landings start at the first card.
+  if (['movies', 'tv', 'kids', 'watchlist', 'library'].includes(v) && !opts.restoreFocus) S.gridIdx = 0;
   if (prevView === 'livetv' && v !== 'livetv') parkLiveTvDom();
   if (v !== 'livetv') {
     $('grid').classList.remove('liveGuideGrid', 'liveTvPage');
@@ -26830,9 +27088,18 @@ function switchView(v, push = true, opts = {}) {
   // keepRail = rollover PREVIEW from the menu: the page switches behind the still-open rail.
   if (!opts.keepRail) {
     if (S.zone === 'rail') S.zone = '';
-    if (document.body.classList.contains('railOpen')) {
-      requestAnimationFrame(() => requestAnimationFrame(leaveRail));
-    } else leaveRail();
+    else {
+      // Calendar/Audiobooks land with .focus but S.zone ''. Leaving them
+      // used to keep that hidden card selected, so Live TV / Preferences
+      // OK clicked Lanterns or Hail Mary. Always drop the old highlight.
+      clearFocus();
+      S.zone = '';
+    }
+    // Always close now. A leftover open menu made Watchlist/Calendar Back
+    // skip the rail and jump Home. The extra frames still slide the page.
+    const wasOpen = document.body.classList.contains('railOpen') || $('rail').classList.contains('expanded');
+    leaveRail();
+    if (wasOpen) requestAnimationFrame(() => requestAnimationFrame(leaveRail));
   }
   if (v === 'search') $('bdInfo').classList.remove('show'); // stale hero text bled through the results
   // Cached Home/Movies keep their last still so the page does not flash ink. Settings,
@@ -26930,6 +27197,9 @@ function switchView(v, push = true, opts = {}) {
   // Settings is NOT a synchronous landing: refreshSettings() fills the panels async, and
   // dropping the loader early flashed an empty page — it calls bootReady() itself when done.
   if (['prefs', 'search', 'music', 'audiobooks'].includes(v)) bootReady(); // synchronous landings
+  if (['movies', 'tv', 'kids', 'watchlist', 'discover', 'calendar', 'audiobooks', 'livetv', 'prefs'].includes(v) && !opts.keepRail && !opts.restoreFocus) {
+    setTimeout(() => { if (S.view === v && S.zone !== 'rail') focusContent(); }, 80);
+  }
 }
 document.querySelectorAll('.railBtn[data-nav]').forEach((b) => b.addEventListener('click', () => {
   switchView(b.dataset.nav);
@@ -27148,9 +27418,25 @@ function clearFocus() { document.querySelectorAll('.focus').forEach((e) => e.cla
 // Land focus on the CURRENT view's natural element — used when entering content from the
 // rail and when an overlay (detail/person) closes. retried=internal: async views (calendar,
 // home rows) may still be rendering on the first attempt.
+function focusContentStillWanted() {
+  return S.zone !== 'rail'
+    && !document.body.classList.contains('railOpen')
+    && !($('rail') && $('rail').classList.contains('expanded'));
+}
 function focusContent(retried) {
+  // Movies/Calendar can still be painting when Back opens the menu. A 200ms
+  // retry used to hit leaveRail() and slam the rail shut — first Back looked dead.
+  if (retried && !focusContentStillWanted()) return;
   if (S.zone === 'rail') S.zone = '';
   leaveRail();
+  const browseGrid = ['movies', 'tv', 'kids', 'watchlist', 'library'].includes(S.view);
+  const visGrid = document.querySelector('#grid .pcard.focus, #grid .card.focus');
+  if (browseGrid && visGrid && visGrid.getBoundingClientRect().width > 40 && S._gridKind === S.view) return;
+  if (browseGrid && S._gridKind !== S.view) {
+    const tries = typeof retried === 'number' ? retried : (retried ? 1 : 0);
+    if (tries < 12) return setTimeout(() => { if (S.view && focusContentStillWanted()) focusContent(tries + 1); }, 200);
+    return;
+  }
   clearFocus();
   if (S.view === 'detail') {
     const currentEp = detailPlayEpisodeParts();
@@ -27165,10 +27451,22 @@ function focusContent(retried) {
     const els = formCtls($('prefs') || $('settings'));
     return els[0] && els[0].focus({ preventScroll: false });
   }
+  if (S.view === 'discover') {
+    if (rowsViewBelongsToCurrentView() && $('discoverRows').querySelector('[data-row]')) {
+      return focusCard(S.rowIdx || 0, S.colIdx[S.rowIdx] || 0);
+    }
+    const dTries = typeof retried === 'number' ? retried : (retried ? 1 : 0);
+    if (dTries < 20) return setTimeout(() => { if (S.view === 'discover' && focusContentStillWanted()) focusContent(dTries + 1); }, 200);
+    return;
+  }
   if (S.view === 'calendar') {
-    const it = document.querySelector('.calItem,.calEmpty');
-    if (!it && !retried) return setTimeout(() => S.view === 'calendar' && focusContent(true), 400);
-    return it ? applyFocus(it) : undefined;
+    const it = document.querySelector('#calList .calItem, #calList .calEmpty');
+    if (!it) {
+      const cTries = typeof retried === 'number' ? retried : (retried ? 1 : 0);
+      if (cTries < 20) return setTimeout(() => { if (S.view === 'calendar' && focusContentStillWanted()) focusContent(cTries + 1); }, 200);
+      return;
+    }
+    return applyFocus(it);
   }
   if (S.view === 'audiobooks') {
     // Content (Continue Listening + discovery rows) loads async; landing before it renders would strand
@@ -27180,14 +27478,18 @@ function focusContent(retried) {
     const abTries = typeof retried === 'number' ? retried : 0;
     if (abTries === 0) abFocusEntry(); // nothing rendered yet → park on the search bar for now
     const parked = (document.activeElement === $('abSearch') || document.activeElement === $('abMicBtn')) && !$('abSearch').value.trim();
-    if (abTries < 6 && (abTries === 0 || parked)) return setTimeout(() => { if (S.view === 'audiobooks') focusContent(abTries + 1); }, 250);
+    if (abTries < 6 && (abTries === 0 || parked)) return setTimeout(() => { if (S.view === 'audiobooks' && focusContentStillWanted()) focusContent(abTries + 1); }, 250);
     return;
   }
   // Search lands on the MIC whenever there is no result grid to navigate. Stale text used to
-  // strand focus on an empty grid after leaving/re-entering Search.
-  if (S.view === 'search' && (!$('searchInput').value.trim() || !gridEls().length)) {
-    if (focusSearchMic()) return;
-    return $('searchInput').focus();
+  // strand focus on an empty grid after leaving/re-entering Search. Never yank the box while
+  // the user is typing — empty grid is normal until 3 letters / the API returns.
+  if (S.view === 'search') {
+    if (searchInputBusy()) return;
+    if (!$('searchInput').value.trim() || !gridEls().length) {
+      if (focusSearchMic()) return;
+      return $('searchInput').focus();
+    }
   }
   // Music: results present → first row; browse chips → first cover. Same async retry as
   // Audiobooks — landing before shelves render used to strand the remote on the search field.
@@ -27201,11 +27503,18 @@ function focusContent(retried) {
     const parked = (document.activeElement === $('musicSearch') || document.activeElement === $('musicMicBtn'))
       && !$('musicSearch').value.trim();
     if (musicTries < 6 && (musicTries === 0 || parked)) {
-      return setTimeout(() => { if (S.view === 'music') focusContent(musicTries + 1); }, 250);
+      return setTimeout(() => { if (S.view === 'music' && focusContentStillWanted()) focusContent(musicTries + 1); }, 250);
     }
     return focusMusicSearch();
   }
-  if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) return focusGrid(S.gridIdx || 0);
+  if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) {
+    if (gridEls().length || document.querySelector('#grid .pcard, #grid .card, #grid .lcat, #grid .chCard')) {
+      return focusGrid(S._gridKind === S.view ? (S.gridIdx || 0) : 0);
+    }
+    const tries = typeof retried === 'number' ? retried : (retried ? 1 : 0);
+    if (tries < 12 && S.view !== 'search') return setTimeout(() => { if (S.view && focusContentStillWanted()) focusContent(tries + 1); }, 200);
+    return;
+  }
   const v2 = S.rowsView || { hasHero: true };
   return v2.hasHero ? focusHero(0) : focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0);
 }
@@ -27310,6 +27619,8 @@ function scrollSectionTabIntoView(el) {
 function applyFocus(el, scroll = true) {
   // Reclaim REAL focus from any lingering form control — a focused <select>/<input> eats
   // every subsequent key natively and the spatial nav goes dead (live TV finding).
+  // Search typing is the exception: landing the mic must never blur the box / kill IME.
+  if (el && el.id === 'micBtn' && searchInputBusy()) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae !== el) ae.blur();
   clearFocus();
@@ -27360,7 +27671,11 @@ function focusCard(ri, ci, opts = {}) {
     }
   }
   const it = view.data[ri] && view.data[ri].items[ci];
-  if (it) { if (view.hasHero) setHero(it); else { S.focusedItem = it; setBackdrop(it.backdrop || it.poster); setBdInfo(it); } }
+  if (it) {
+    if (tmdbAdult(it)) S.focusedItem = it;
+    else if (view.hasHero) setHero(it);
+    else { S.focusedItem = it; setBackdrop(it.backdrop || it.poster); setBdInfo(it); }
+  }
   // Resume should feel like a local file: when a resumable card (Continue Watching / next
   // episode / has a saved position) settles under focus, warm the best source all the way to a
   // MOUNTED state — not just the search. Scene TV releases are almost always multi-volume RARs,
@@ -27688,8 +28003,9 @@ function focusedGridAtVisualRowStart() {
   return Math.abs(prev.offsetTop - cur.offsetTop) > 4;
 }
 function focusPersonBack() {
-  applyFocus($('pBack'), false);
   $('person').scrollTo({ top: 0, behavior: 'smooth' });
+  if (document.body.classList.contains('tv')) return focusGrid(S.gridIdx || 0);
+  applyFocus($('pBack'), false);
 }
 function focusGrid(i) {
   if (shouldVirtualizeGrid(S.gridRoot || $('grid'))) {
@@ -27709,7 +28025,7 @@ function focusGrid(i) {
     const needsWindow = !mounted || !S.gridVirt || row < S.gridVirt.firstRow || row >= S.gridVirt.lastRow;
     if (needsWindow) renderVirtualGridWindow(S.gridIdx, { topRow });
     else S.gridTopRow = topRow;
-    const el = gridElForIndex(S.gridIdx);
+    const el = gridElForIndex(S.gridIdx) || gridEls().find((x) => x.classList.contains('pcard') || x.classList.contains('card')) || gridEls()[0];
     if (!el) return;
     applyFocus(el, false);
     if (S.pointer) {
@@ -27725,9 +28041,12 @@ function focusGrid(i) {
     const it = (S.gridItems || [])[S.gridIdx];
     if (it) {
       S.focusedItem = it;
-      if (S.view !== 'search' && S.view !== 'livetv') { setBackdrop(it.backdrop || it.poster); if (S.view !== 'person') setBdInfo(it); }
+      if (S.view !== 'search' && S.view !== 'livetv' && !tmdbAdult(it)) { setBackdrop(it.backdrop || it.poster); if (S.view !== 'person') setBdInfo(it); }
     }
-    if (S.gridIdx >= count - cols * 2) {
+    // Last two loaded rows only — a 2-row first page used to treat index 0 as
+    // "near the end", fetch page 2, remount the virtual window, and leave TV
+    // Shows with posters but no .focus (OK did nothing).
+    if (S.gridIdx >= Math.max(cols, count - cols * 2)) {
       if (['movies', 'tv'].includes(S.view)) runBrowse(false);
       else if (S.view === 'kids') runKidsBrowse(false);
       else if (S.view === 'library' && !(S.currentLib && S.currentLib.path)) runLibrary(false);
@@ -27806,7 +28125,7 @@ function focusGrid(i) {
     S.focusedItem = it;
     // Search is a clean full-page list — no backdrop swapping under the results.
     // Cast keeps the focused Known For art (same fade as Movies) but not the Home title band.
-    if (S.view !== 'search' && S.view !== 'livetv' && !liveGuideRow) { setBackdrop(it.backdrop || it.poster); if (S.view !== 'person') setBdInfo(it); }
+    if (S.view !== 'search' && S.view !== 'livetv' && !liveGuideRow && !tmdbAdult(it)) { setBackdrop(it.backdrop || it.poster); if (S.view !== 'person') setBdInfo(it); }
   }
   if (S.view === 'person' && S.gridIdx >= (S.gridItems || []).length - Math.max(2, gridCols() * 2)) {
     loadMorePersonWorks(false);
@@ -27830,7 +28149,7 @@ function paintRailPreviewHero() {
   if (!it) return false;
   S.focusedItem = it;
   if (S.view === 'home') { setHero(it); return true; }
-  setBackdrop(it.backdrop || it.poster);
+  if (!tmdbAdult(it)) setBackdrop(it.backdrop || it.poster);
   if (S.view !== 'search' && S.view !== 'person') setBdInfo(it);
   alignTvBrowseFirstRow();
   return true;
@@ -27886,6 +28205,8 @@ function leaveRail() {
   const wasOpen = document.body.classList.contains('railOpen') || rail.classList.contains('expanded');
   rail.classList.remove('expanded');
   document.body.classList.remove('railOpen');
+  syncTvRailBox();
+  if (S.zone === 'rail') S.zone = '';
   if (!wasOpen) return; // D-pad on Home calls this every card — don't relayout a closed rail
   // Focusing a bottom rail item (Preferences/Settings) scrolls the rail list — never leave
   // it stuck scrolled, or the logo sits half off the top of the screen afterwards.
@@ -27914,10 +28235,17 @@ function blurTextEntry() {
   }
   return false;
 }
+function railOwnsFocus() {
+  if (S.zone !== 'rail' || S.view === 'player') return false;
+  const rail = $('rail');
+  if (!rail) return false;
+  const open = document.body.classList.contains('railOpen') || rail.classList.contains('expanded');
+  return open && !!rail.querySelector('.focus');
+}
 function collapseStaleRail() {
   if (!document.body.classList.contains('tv')) return;
   if (!document.body.classList.contains('railOpen') && !$('rail').classList.contains('expanded')) return;
-  if (S.zone === 'rail' && $('rail').querySelector('.focus')) return;
+  if (railOwnsFocus()) return;
   leaveRail();
 }
 function visibleRailButtons() {
@@ -27953,11 +28281,23 @@ function railPreviewAction(btn) {
   }
   return null;
 }
+function syncTvRailBox() {
+  const rail = $('rail');
+  if (!rail || !document.body.classList.contains('tv')) return;
+  const open = document.body.classList.contains('railOpen') || rail.classList.contains('expanded');
+  if (open) {
+    const w = (document.documentElement.style.getPropertyValue('--railExpandedW') || '').trim() || '236px';
+    rail.style.setProperty('width', w, 'important');
+  } else {
+    rail.style.removeProperty('width');
+  }
+}
 function focusRail(i, opts = {}) {
   const btns = visibleRailButtons();
   S.zone = 'rail'; S.railIdx = Math.max(0, Math.min(btns.length - 1, i));
   $('rail').classList.add('expanded'); // D-pad has no hover — show the labels while we're here
   document.body.classList.add('railOpen');
+  syncTvRailBox();
   applyFocus(btns[S.railIdx]);
   // TV rollover preview: lingering on a menu item switches the page BEHIND the open menu —
   // no OK needed (owner request). Debounced so walking the list doesn't load every page.
@@ -28255,7 +28595,8 @@ document.addEventListener('keydown', (e) => {
     const aeEarly = document.activeElement;
     const typing = aeEarly && /^(INPUT|SELECT|TEXTAREA)$/.test(aeEarly.tagName)
       && !(aeEarly.tagName === 'INPUT' && /^(checkbox|radio)$/.test(aeEarly.type));
-    if (!typing) { e.preventDefault(); return; }
+    const printable = k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey;
+    if (!typing && !printable) { e.preventDefault(); return; }
   }
   if (e.isTrusted) { S.pointer = false; S._lastKeyAt = appMs(); } // keyboard takes over → focus moves may scroll again
   const ae = document.activeElement;
@@ -28556,7 +28897,8 @@ document.addEventListener('keydown', (e) => {
   // ----- The rail zone, handled ONCE for every page -----
   // Per-view copies drifted: calendar never got one, so entering the menu there dead-ended
   // (no up/down, no way back). ArrowRight re-enters the content the way each view expects.
-  if (S.zone === 'rail' && S.view !== 'player') {
+  if (S.zone === 'rail' && S.view !== 'player' && !railOwnsFocus()) S.zone = '';
+  if (railOwnsFocus()) {
     const btns = visibleRailButtons();
     // Wrap-around: Up from the top jumps straight to the bottom (where Preferences / Profile live),
     // so they're reachable in one press instead of scrolling the whole menu; Down past the end wraps
@@ -29048,8 +29390,24 @@ document.addEventListener('keydown', (e) => {
         if (searchSuggestVisible()) return focusSearchSuggest(0);
         return gridEls().length ? focusGrid(S.gridIdx || 0) : $('searchInput').focus();
       }
-      if (k === 'ArrowRight') { $('micBtn').blur(); return $('searchInput').focus(); }
+      if (k === 'ArrowRight') { $('micBtn').blur(); cancelSearchMicLand(); return $('searchInput').focus(); }
       if (k === 'ArrowLeft') { $('micBtn').blur(); return enterRail(); }
+      // Hardware keyboard / late IME letter while the remote is still on Mic: move to
+      // the box and type. A bare `return` used to swallow the character so Search felt stuck.
+      if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        cancelSearchMicLand();
+        $('micBtn').blur();
+        const input = $('searchInput');
+        if (!input) return;
+        try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
+        const start = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? input.value.length;
+        input.value = input.value.slice(0, start) + k + input.value.slice(end);
+        try { input.setSelectionRange(start + 1, start + 1); } catch {}
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        e.preventDefault();
+        return;
+      }
       return;
     }
     // Search / Live TV clear (X): on-device the shell delivers keys to `document`, so the buttons'
@@ -29228,7 +29586,7 @@ document.addEventListener('keydown', (e) => {
       if (t >= 0) return focusGrid(t);
       if (S.view === 'livetv' && document.querySelector('#chBody.liveGuideShell') && cur && liveContentEls().includes(cur)) return focusLiveFilter();
       if (S.view === 'search') { moveSearchUpFromResults(); return; }
-      if (S.view === 'person') return focusPersonBack();
+      if (S.view === 'person') return document.body.classList.contains('tv') ? undefined : focusPersonBack();
       // Movies/TV/local Library: the genre filter sits above the grid — give the D-pad a stop
       // there. (Native <select> handling takes over; Escape backs out, change re-runs the view.)
       if (['movies', 'tv', 'library'].includes(S.view) && $('genreSel').offsetParent) return focusBrowseFilter(0);
@@ -29327,7 +29685,12 @@ document.addEventListener('keyup', (e) => {
 function backToBrowseSectionMenu() {
   const browseSection = S.view === 'movies' || S.view === 'tv' || S.view === 'kids' || S.view === 'library'
     || S.view === 'discover' || S.view === 'calendar' || S.view === 'watchlist';
-  if (!browseSection || S.zone === 'rail' || document.body.classList.contains('railOpen')) return false;
+  if (!browseSection) return false;
+  // Only the open menu counts. A leftover zone==='rail' with the menu closed
+  // used to skip this and jump Home (Watchlist/Calendar first Back).
+  const railOpen = document.body.classList.contains('railOpen')
+    || ($('rail') && $('rail').classList.contains('expanded'));
+  if (railOpen) return false;
   enterRail();
   return true;
 }
@@ -29483,7 +29846,7 @@ document.addEventListener('focusin', (e) => {
     try { e.target.blur(); } catch {}
     if (S.view === 'search' && (performance.now() < searchMicPinUntil || searchMicLandBusy())) {
       requestAnimationFrame(() => {
-        if (!searchMicLandBusy()) return;
+        if (!searchMicLandBusy() || searchInputBusy()) return;
         const mic = $('micBtn');
         if (!mic || document.activeElement === mic) return;
         try { mic.focus({ preventScroll: true }); } catch {}
@@ -29751,7 +30114,7 @@ function loadAudiobooks() {
   if ($('audiobooks').querySelector('.abCard') && !inp.value.trim()) {
     if (S.zone !== 'rail') setTimeout(() => {
       if (S.view === 'audiobooks' && S.zone !== 'rail' && !$('audiobooks').querySelector('.abCard.focus')) {
-        try { (abMicVisible() ? $('abMicBtn') : inp).focus(); } catch {}
+        focusContent();
       }
     }, 60);
     return;

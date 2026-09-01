@@ -535,6 +535,9 @@ public class MainActivity extends Activity {
             }
             return;
         }
+        // IME / text-field focus: do not steal the WebView out from under Gboard.
+        // Search typing used to die when window-focus recovery re-requested web at 520/1100ms.
+        if (pageInputFocused) return;
         // In native GUIDE mode the WebView owns focus (the EPG is web-rendered), so fall through to
         // the web.requestFocus() branch below. Without this guard a lost focus in guide/PiP mode
         // requested focus on the non-focusable player layer (a no-op) and the guide went dead to
@@ -1194,17 +1197,16 @@ public class MainActivity extends Activity {
 
         // TV surfaces vary (1080p UI on onn-class boxes, true 4K on a Shield set to 4K UI).
         // Left to its own devices the WebView lays the page out at a tablet-ish width and
-        // upscales — soft on a 4K panel. Instead: lay out at a fixed 1920 CSS px (the web
-        // UI's designed TV layout) and scale it 1:1 onto the REAL surface — 100% on a
-        // 1080p surface, 200% on a 4K surface, i.e. native-resolution rendering either way.
+        // upscales — soft on a 4K panel. Lay out at a fixed CSS width and scale it onto
+        // the REAL surface. 1440 matches Plex Home on this TV (1280 too big, 1920 too small).
         android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
         getWindowManager().getDefaultDisplay().getRealMetrics(dm);
         if (isTv) {
             s.setUseWideViewPort(false);
-            // 1280 CSS px layout (not 1920): sized against Plex's Android TV app — fonts,
-            // icons and posters land at Plex proportions on the same panel.
+            // 1440 CSS px is the Plex 10-foot size on this TV (checked on-device against
+            // Plex Home). 1280 was ~50% too big; 1920 made rail/icons/posters desktop-small.
             // Only the page LAYOUT scales — video still decodes at full surface resolution.
-            web.setInitialScale((int) Math.round(Math.max(dm.widthPixels, dm.heightPixels) / 1280.0 * 100));
+            web.setInitialScale((int) Math.round(Math.max(dm.widthPixels, dm.heightPixels) / 1440.0 * 100));
         } else {
             // Phone/tablet sideloads keep stock responsive behavior.
             s.setLoadWithOverviewMode(true);
@@ -6726,29 +6728,21 @@ public class MainActivity extends Activity {
         v.addOnLayoutChangeListener((view, l, t, r, b, ol, ot, or, ob) -> view.invalidateOutline());
     }
 
-    private int nativeEpisodeThumbTargetDp() {
-        if ("S".equals(nativeCoverSize)) return 200;
-        if ("L".equals(nativeCoverSize)) return 260;
-        return 236;
-    }
-
-    private int fitCoverDp(int availDp, int targetDp, int gapDp, String size) {
-        if (availDp < 200 || targetDp < 80) return targetDp;
-        int nFit = Math.max(1, (availDp + gapDp) / (targetDp + gapDp));
-        float slack = "S".equals(size) ? Math.max(16f, targetDp * 0.14f)
-            : "L".equals(size) ? 4f : 10f;
-        int nPlus = nFit + 1;
-        float wPlus = (availDp - (nPlus - 1) * gapDp) / (float) nPlus;
-        int n = (wPlus >= targetDp - slack && wPlus >= 96f) ? nPlus : nFit;
-        return Math.max(96, (availDp - (n - 1) * gapDp) / n);
+    private int nativeThumbCols() {
+        if ("S".equals(nativeCoverSize)) return 5;
+        if ("L".equals(nativeCoverSize)) return 3;
+        return 4;
     }
 
     private int nativeEpisodeThumbDp() {
-        int target = nativeEpisodeThumbTargetDp();
+        // Same 5/4/3 landscape row as web Continue Watching / player episodes.
+        int cols = nativeThumbCols();
+        int gap = 14;
         int chromePad = 34;
         float density = getResources().getDisplayMetrics().density;
         int availDp = Math.round(getResources().getDisplayMetrics().widthPixels / density) - chromePad * 2;
-        return fitCoverDp(availDp, target, 14, nativeCoverSize);
+        if (availDp < 200 || cols < 1) return 236;
+        return Math.max(120, (availDp - (cols - 1) * gap) / cols);
     }
 
     private int nativeEpisodeStripHeightPx() {

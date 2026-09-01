@@ -3756,12 +3756,36 @@ function closeMountHls(vf) {
   for (const sess of vf._hls.values()) closeHlsSession(sess);
   vf._hls.clear();
 }
+// Remux/transcode pipes are one ffmpeg per GET. A seek/Play storm can leave the old HTTP
+// open long enough that 4K holds two or three encoders and the player starves. Cap +
+// evict so a leftover pipe cannot freeze the server or the current stream.
+const MAX_MOUNT_FFMPEG_PIPES = 3;
+function attachMountFfmpegPipe(vf, ff) {
+  if (!vf || !ff) return;
+  vf._ffPipes = vf._ffPipes || [];
+  vf._ffPipes.push({ ff, at: Date.now() });
+  while (vf._ffPipes.length > MAX_MOUNT_FFMPEG_PIPES) {
+    const old = vf._ffPipes.shift();
+    try { if (old && old.ff && old.ff !== ff) old.ff.kill('SIGKILL'); } catch {}
+  }
+  const drop = () => { vf._ffPipes = (vf._ffPipes || []).filter((x) => x.ff !== ff); };
+  ff.once('close', drop);
+  ff.once('error', drop);
+}
+function closeMountFfmpegPipes(vf) {
+  if (!vf || !vf._ffPipes) return;
+  for (const p of vf._ffPipes) {
+    try { if (p && p.ff) p.ff.kill('SIGKILL'); } catch {}
+  }
+  vf._ffPipes = [];
+}
 // Cancel only this mount's speculative warm jobs; their AbortSignals are independent consumers, so
 // eviction/supersession never aborts an active player sharing the same VFS article fetch.
 function releaseMountResources(vf) {
   if (!vf) return;
   try { pipeline.cancelPlaybackWarmups(vf); } catch {}
   closeMountHls(vf);
+  closeMountFfmpegPipes(vf);
 }
 function beginMountPlayerRead(vf, now = Date.now()) {
   if (!vf) return false;
@@ -7397,6 +7421,24 @@ async function tmdbSearchWithCloseHint(route, search) {
   const hint = closestTitleInList(q, titles) || closestTitleInList(fixed, titles) || fixed;
   return { ...next, didYouMean: hint, spellQuery: fixed, originalQuery: q };
 }
+function searchLibraryTitleMatch(query, title) {
+  const qw = String(query || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  const tw = String(title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  const need = searchContentWords(qw);
+  if (!need.length || !tw.length) return false;
+  if (need.every((w) => tw.some((t) => t === w || t === w + 's' || w === t + 's'))) return true;
+  const packed = tw.join('');
+  if (need.every((w) => w.length >= 4 && packed.includes(w))) return true;
+  return searchWholeTitleClose(query, title);
+}
+function searchLibraryItemMatch(query, item) {
+  if (!item) return false;
+  if (searchLibraryTitleMatch(query, item.title) || searchLibraryTitleMatch(query, item.originalTitle)) return true;
+  const raw = String(query || '').trim().toLowerCase();
+  if (raw.length < 4) return false;
+  const blob = `${item.file || ''} ${item.dir || ''}`.toLowerCase();
+  return blob.includes(raw);
+}
 function searchLibraryRecords(query, allowedLibIds = [], limit = 24) {
   const raw = String(query || '').trim().toLowerCase();
   const key = String(query || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -7413,20 +7455,7 @@ function searchLibraryRecords(query, allowedLibIds = [], limit = 24) {
     const rec = libraryRecord(libId);
     for (const item of (rec && rec.items) || []) {
       if (!item || item.kind === 'episode') continue;
-      const blob = `${item.title || ''} ${item.originalTitle || ''} ${item.file || ''} ${item.dir || ''}`.toLowerCase();
-      const blobKey = blob.replace(/[^a-z0-9]+/g, ' ');
-      if ((key && blobKey.includes(key)) || (raw && blob.includes(raw))) push(libId, item);
-      if (out.length >= limit) return out;
-    }
-  }
-  if (out.length) return out;
-  for (const libId of allowedLibIds) {
-    const rec = libraryRecord(libId);
-    for (const item of (rec && rec.items) || []) {
-      if (!item || item.kind === 'episode') continue;
-      if (searchCloseTitle(key || raw, item.title) || searchCloseTitle(key || raw, item.originalTitle)) {
-        push(libId, item);
-      }
+      if (searchLibraryItemMatch(query, item)) push(libId, item);
       if (out.length >= limit) return out;
     }
   }
@@ -7442,6 +7471,7 @@ Object.assign(H, {
       ? libraryDb.search(q, allowed, 24)
       : searchLibraryRecords(q, allowed, 24);
     if (!found.length) found = searchLibraryRecords(q, allowed, 24);
+    found = found.filter((row) => searchLibraryItemMatch(q, row && row.item));
     const libs = new Map(store.read('libraries', { list: [] }).list.map((l) => [String(l.id), l]));
     send(ctx.res, 200, {
       items: found.map((row) => ({
@@ -8550,6 +8580,7 @@ Object.assign(H, {
       probeTracks(selfUrl).then((t) => { vf._tracks = { available: true, ...t }; }).catch(() => {}).finally(() => { vf._probing = false; });
     }
     const ff = spawnRemux(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe });
+    attachMountFfmpegPipe(vf, ff);
     if (STARTUP_TRACE) {
       // Measure the ffmpeg restart cost for BOTH the initial play (startSeconds 0, once) and every
       // seek/resume (startSeconds > 0 re-spawns ffmpeg at -ss): spawn → first output byte, which
@@ -8604,6 +8635,7 @@ Object.assign(H, {
     const hdr = (vf._tracks && vf._tracks.video && vf._tracks.video[0] && vf._tracks.video[0].hdr) || false;
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
     const ff = spawnTranscode(selfUrl, { startSeconds, audioTrack, height: LADDER[height] ? height : 1080, hdr, safeStereo: forceAudioSafe });
+    attachMountFfmpegPipe(vf, ff);
     ctx.res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store' });
     ff.on('error', (e) => { console.error('[transcode spawn]', e.message); try { ctx.res.destroy(); } catch {} });
     ff.stdout.pipe(ctx.res);

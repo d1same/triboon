@@ -39,6 +39,17 @@ test('library sqlite catalog pages and looks up local media without genre false 
     assert.strictEqual(named[0].item.title, 'The Matrix');
     assert.deepStrictEqual(db.search('matrix', ['otherLib']), [], 'search respects allowed library ids');
     assert.deepStrictEqual(db.search('m', ['libA']), [], 'one-letter search stays empty');
+    db.replaceLibrary('libOffice', 12346, [
+      { idx: 1, kind: 'show', title: 'The Office', year: 2005, tmdbId: 2316, addedAt: 1, dir: '/media/The Office' },
+      { idx: 2, kind: 'show', title: 'Police Javan', year: 2020, tmdbId: 2, addedAt: 9, dir: '/media/police', overview: 'A cop walks into the office' },
+      { idx: 3, kind: 'movie', title: 'Rice Cake', year: 1988, tmdbId: 3, addedAt: 8, file: '/media/rice.mkv' },
+      { idx: 4, kind: 'movie', title: 'ABC Africa', year: 2001, tmdbId: 4, addedAt: 7, file: '/media/africa.mkv' },
+      { idx: 5, kind: 'show', title: 'Onside', year: 2024, tmdbId: 5, addedAt: 6, dir: '/media/onside' },
+    ]);
+    const officeHits = db.search('the office', ['libOffice']);
+    assert.deepStrictEqual(officeHits.map((x) => x.item.title), ['The Office'],
+      'The Office must not pull in Police/Onside/Africa just because office is close');
+    assert.deepStrictEqual(db.search('office', ['libOffice']).map((x) => x.item.title), ['The Office']);
 
     const found = db.lookup(['tmdb:movie:603', 'tmdb:tv:424242:s1e2', 'local:libA:1'], ['libA']);
     assert.strictEqual(found['tmdb:movie:603'].item.title, 'The Matrix');
