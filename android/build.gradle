@@ -2,5 +2,5 @@
 // the web UI owns browsing/auth/details/guide/settings, while video and live playback
 // stay native through Media3/ExoPlayer on Android TV.)
 plugins {
-    id 'com.android.application' version '9.2.1' apply false
+    id 'com.android.application' version '9.3.2' apply false
 }
