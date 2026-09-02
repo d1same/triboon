@@ -337,7 +337,7 @@ class NzbFileStream {
     let rec = this.inflight.get(i);
     if (rec && priorityRank(priority) < priorityRank(rec.priority) && priorityRank(priority) <= priorityRank('playback')) {
       return this.pool.body(this.segments[i].msgId, priority, {
-        signal, drainMs: this.abortDrainMs, needSlots: streamStartupNeedSlots(this.size, priority),
+        signal, drainMs: this.abortDrainMs, needSlots: streamStartupNeedSlots(this.size, priority, this._releaseName || this.name),
       })
         .then((raw) => decodeAndCache(raw, 0))
         .catch((e) => {
@@ -354,7 +354,7 @@ class NzbFileStream {
       // dequeued immediately either way. This is what keeps a 4K pause/skip storm from killing the
       // whole pool's connections and lagging the next seek behind a reconnect storm.
       rec.promise = this.pool.body(this.segments[i].msgId, priority, {
-        signal: controller.signal, drainMs: this.abortDrainMs, needSlots: streamStartupNeedSlots(this.size, priority),
+        signal: controller.signal, drainMs: this.abortDrainMs, needSlots: streamStartupNeedSlots(this.size, priority, this._releaseName || this.name),
       }).then((raw) => {
         this.inflight.delete(i);
         return decodeAndCache(raw, skipDecoded);
@@ -540,17 +540,35 @@ class NzbFileStream {
     }
     const list = [...idxs];
     const results = await Promise.all(
-      list.map((i) => this.pool.stat(this.segments[i].msgId, 'health').catch(() => false))
+      list.map((i) => this.pool.stat(this.segments[i].msgId, 'health', { throwIfUnreachable: true })
+        .then((ok) => ({ ok: !!ok, unreachable: false }))
+        .catch((e) => {
+          if (e && e.code === 'NO_PROVIDER') return { ok: false, unreachable: true };
+          return { ok: false, unreachable: false };
+        }))
     );
-    results.forEach((ok, k) => {
-      if (ok) { this._statOkAt.set(list[k], now); this._statMissing.delete(list[k]); }
+    if (results.length && results.every((r) => r.unreachable)) {
+      // VPN/port/cap — not a missing article. Do not accumulate _statMissing or cache blocked.
+      this.health = {
+        verdict: (this.health && this.health.verdict) || 'unverified',
+        missing: 0,
+        sampled: 0,
+        unreachable: true,
+        checkedAt: new Date().toISOString(),
+      };
+      return this.health;
+    }
+    results.forEach((r, k) => {
+      if (r.unreachable) return;
+      if (r.ok) { this._statOkAt.set(list[k], now); this._statMissing.delete(list[k]); }
       else { this._statMissing.add(list[k]); this._statOkAt.delete(list[k]); }
     });
-    const missing = results.filter((ok) => !ok).length;
+    const reached = results.filter((r) => !r.unreachable);
+    const missing = reached.filter((r) => !r.ok).length;
     this.health = {
-      verdict: missing === 0 ? 'verified' : missing >= results.length / 2 ? 'blocked' : 'degraded',
+      verdict: missing === 0 ? 'verified' : missing >= reached.length / 2 ? 'blocked' : 'degraded',
       missing,
-      sampled: results.length,
+      sampled: reached.length,
       checkedAt: new Date().toISOString(),
     };
     return this.health;

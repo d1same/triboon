@@ -336,7 +336,22 @@ function releaseMatches(name, wanted) {
   }
   if (wanted.year) {
     const years = [...norm.matchAll(/\b(19|20)\d{2}\b/g)].map((m) => +m[0]);
-    if (years.length && !years.some((y) => Math.abs(y - wanted.year) <= 1)) return false;
+    if (years.length) {
+      if (wanted.s !== null) {
+        // Episode air year AFTER SxxExx (The.Simpsons.S35E05.2024) must not reject a
+        // long-running show whose catalog year is first-air (1989). Only a remake-style
+        // year BETWEEN title and episode (The.Office.2024.S01E01) is a hard reject —
+        // and only on early seasons, where that year is the remake, not the air year.
+        const beforeEp = String(norm.split(/\b(?:s\d{1,2}\s?e\d{1,3}|\d{1,2}x\d{1,3})\b/)[0] || '');
+        const remakeYears = [...beforeEp.matchAll(/\b(19|20)\d{2}\b/g)].map((m) => +m[0]);
+        if (remakeYears.length && !remakeYears.some((y) => Math.abs(y - wanted.year) <= 1)) {
+          const looksLikeAirYear = wanted.s >= 3 && remakeYears.every((y) => y >= wanted.year);
+          if (!looksLikeAirYear) return false;
+        }
+      } else if (!years.some((y) => Math.abs(y - wanted.year) <= 1)) {
+        return false;
+      }
+    }
   }
   // A movie query (year, no episode) must not play a TV series with the same short name.
   // The.Batman.S01E01 has no year token, so the ±1 year check would let it through for The Batman 2022.
@@ -499,6 +514,9 @@ const PREPARE_MAX_ATTEMPTS = 6; // background detail prep: walk past several dea
                                 // prefetch actually PRE-MOUNTS a working source (new releases often have
                                 // 2-3 missing/unmappable variants ranked first). Bounded by PREPARE_MAX_MS.
 const PREPARE_MAX_MS = 15000;
+// A false-empty prepare (indexer timeout, year-filter miss) must not hide the title for
+// 15 minutes. 45s stops a focus-loop hammer without looking like "no sources exist."
+const PREPARE_FAIL_RETRY_MS = 45 * 1000;
 // Next-episode prepare starts ~120s before EOF. Search cache is only 60s, so Play Next
 // would otherwise fan out indexers again even though the mount is already live.
 const TITLE_PREPARED_READY_MS = 180000;
@@ -2565,7 +2583,13 @@ class Pipeline {
     const streamClass = vf.container === 'flat' ? 'flat' : vf.method; // consistent across both paths
     if (gate === 'timeout') {
       this.metrics.healthGateTimeouts++;
-      triage.then((h) => { if (h && h.verdict) recordSelectionVerdict(h.verdict, { streamClass }); }).catch(() => {});
+      triage.then((h) => {
+        if (h && h.verdict && !h.unreachable && h.verdict !== 'unverified') {
+          recordSelectionVerdict(h.verdict, { streamClass });
+        }
+      }).catch(() => {});
+    } else if (gate && gate.unreachable) {
+      // Provider down is not a rotten NZB. Play and retry health later.
     } else if (gate && gate.verdict === 'blocked') {
       this.metrics.healthGateBlocked++;
       recordSelectionVerdict('blocked', { streamClass });
@@ -2604,6 +2628,11 @@ class Pipeline {
     const _we = wantedEpisodeOf(params);
     if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we }; // so a season pack mounts the wanted episode
     this.forgetMismatchedPrepared(params, policy);
+    // A smash-Play after a false-empty prepare must re-search now, not wait out the fail TTL.
+    this.prepareFailUntil.delete(this._prepareJobKey(params, policy));
+    if (params.imdbid || params.tvdbid) {
+      this.prepareFailUntil.delete(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }));
+    }
     const ready = !((params.pickKey || params.pick) && !params.pinnedResume)
       && this._findTitlePreparedReady(params, policy);
     if (ready) {
@@ -2804,7 +2833,7 @@ class Pipeline {
       return r;
     }, (e) => {
       if (e && /no playable/.test(String(e.message || ''))) {
-        this.prepareFailUntil.set(key, Date.now() + 15 * 60 * 1000);
+        this.prepareFailUntil.set(key, Date.now() + PREPARE_FAIL_RETRY_MS);
         if (this.prepareFailUntil.size > 80) {
           const oldest = this.prepareFailUntil.keys().next().value;
           this.prepareFailUntil.delete(oldest);

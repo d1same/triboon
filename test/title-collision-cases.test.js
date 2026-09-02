@@ -668,6 +668,20 @@ test('office US: catalog year on an episode query rejects the 2024 remake', () =
   assert.ok(!releaseMatches('The Office (2024) S01E01 (1080p AMZN WEB-DL H265)', wanted));
 });
 
+test('long-running TV: first-air year must not reject a current-season air year', () => {
+  const simpsons = parseWantedTitle('the simpsons s35e05');
+  assert.equal(simpsons.year, null);
+  simpsons.year = 1989;
+  assert.ok(releaseMatches('The.Simpsons.S35E05.2024.1080p.WEB-DL-NTb', simpsons),
+    'air year after SxxExx is not a remake year');
+  assert.ok(releaseMatches('The.Simpsons.2024.S35E05.1080p.WEB-DL-NTb', simpsons),
+    'air year before a late-season episode is still the current season, not a remake');
+  assert.ok(releaseMatches('The.Simpsons.S35E05.1080p.WEB-DL-NTb', simpsons));
+  const greys = parseWantedTitle('greys anatomy s21e01');
+  greys.year = 2005;
+  assert.ok(releaseMatches('Greys.Anatomy.S21E01.2024.1080p.WEB-DL-NTb', greys));
+});
+
 test('catalog identity: tagged remake is rejected even when the filename has no year', () => {
   const params = { imdbid: 'tt0386679' };
   assert.ok(catalogIdentityMatches({ name: 'The.Office.S01E01.1080p.WEB-DL-NTb' }, params),

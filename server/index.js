@@ -15,7 +15,7 @@ const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
 const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryItemMatchesTmdb, unboundLibraryItem } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
-const { Pipeline, mountHasActivePlayback } = require('./pipeline');
+const { Pipeline, mountHasActivePlayback, streamIsUhd } = require('./pipeline');
 const {
   isCamCandidate, camScoringEnabled,
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
@@ -3756,16 +3756,20 @@ function closeMountHls(vf) {
   for (const sess of vf._hls.values()) closeHlsSession(sess);
   vf._hls.clear();
 }
-// Remux/transcode pipes are one ffmpeg per GET. A seek/Play storm can leave the old HTTP
-// open long enough that 4K holds two or three encoders and the player starves. Cap +
-// evict so a leftover pipe cannot freeze the server or the current stream.
-const MAX_MOUNT_FFMPEG_PIPES = 3;
-function attachMountFfmpegPipe(vf, ff) {
+// Remux/transcode pipes are one ffmpeg per GET. A skip-back storm used to keep the old
+// HTTP open, so leftover encoders kept reading usenet after the player had already moved.
+// One live encoder per user per mount — the new seek kills THAT viewer's leftover, not
+// someone else remuxing the same title.
+const MAX_USER_FFMPEG_PIPES = 1;
+function attachMountFfmpegPipe(vf, ff, uid) {
   if (!vf || !ff) return;
+  const who = uid || '';
   vf._ffPipes = vf._ffPipes || [];
-  vf._ffPipes.push({ ff, at: Date.now() });
-  while (vf._ffPipes.length > MAX_MOUNT_FFMPEG_PIPES) {
-    const old = vf._ffPipes.shift();
+  vf._ffPipes.push({ ff, at: Date.now(), uid: who });
+  const mine = vf._ffPipes.filter((x) => (x.uid || '') === who);
+  while (mine.length > MAX_USER_FFMPEG_PIPES) {
+    const old = mine.shift();
+    vf._ffPipes = (vf._ffPipes || []).filter((x) => x !== old);
     try { if (old && old.ff && old.ff !== ff) old.ff.kill('SIGKILL'); } catch {}
   }
   const drop = () => { vf._ffPipes = (vf._ffPipes || []).filter((x) => x.ff !== ff); };
@@ -5433,7 +5437,7 @@ const H = {
       // its OWN buffer from the Streaming-performance setting (clamped to device RAM) instead of a
       // hard-coded constant. The client already has size+duration to turn seconds into bytes.
       const __prof = streamingRuntimeProfile();
-      const bufferGoalSec = (vf.size > 4e9 ? __prof.buffer4kSec : __prof.buffer1080Sec) || 0;
+      const bufferGoalSec = (streamIsUhd(vf) ? __prof.buffer4kSec : __prof.buffer1080Sec) || 0;
       const mountMs = Date.now() - t0;
       debug.log('play', `ok "${candidate.name}" mount=${vf.id} session=${session.id} ms=${mountMs} live=${mounts.size}`);
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
@@ -8543,8 +8547,14 @@ Object.assign(H, {
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     const at = parseFloat(ctx.url.searchParams.get('at') || '0') || 0;
     if (!(at > 0) || !detectFfprobe()) return send(ctx.res, 200, { k: Math.max(0, at) });
+    // One ffprobe at a time per mount. A stacked reconnect probe is a second /api/stream
+    // reader on top of the remux that just dropped — that is what froze the house.
+    if (vf._keyframeInflight) return send(ctx.res, 200, { k: Math.max(0, at) });
+    vf._keyframeInflight = true;
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
-    const k = await ffprobeKeyframeAtOrAfter(selfUrl, at).catch(() => at);
+    let k = at;
+    try { k = await ffprobeKeyframeAtOrAfter(selfUrl, at).catch(() => at); }
+    finally { vf._keyframeInflight = false; }
     send(ctx.res, 200, { k: Math.max(at, Number(k) || at) });
   },
 
@@ -8580,7 +8590,7 @@ Object.assign(H, {
       probeTracks(selfUrl).then((t) => { vf._tracks = { available: true, ...t }; }).catch(() => {}).finally(() => { vf._probing = false; });
     }
     const ff = spawnRemux(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe });
-    attachMountFfmpegPipe(vf, ff);
+    attachMountFfmpegPipe(vf, ff, ctx.claims && ctx.claims.uid);
     if (STARTUP_TRACE) {
       // Measure the ffmpeg restart cost for BOTH the initial play (startSeconds 0, once) and every
       // seek/resume (startSeconds > 0 re-spawns ffmpeg at -ss): spawn → first output byte, which
@@ -8635,7 +8645,7 @@ Object.assign(H, {
     const hdr = (vf._tracks && vf._tracks.video && vf._tracks.video[0] && vf._tracks.video[0].hdr) || false;
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
     const ff = spawnTranscode(selfUrl, { startSeconds, audioTrack, height: LADDER[height] ? height : 1080, hdr, safeStereo: forceAudioSafe });
-    attachMountFfmpegPipe(vf, ff);
+    attachMountFfmpegPipe(vf, ff, ctx.claims && ctx.claims.uid);
     ctx.res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store' });
     ff.on('error', (e) => { console.error('[transcode spawn]', e.message); try { ctx.res.destroy(); } catch {} });
     ff.stdout.pipe(ctx.res);

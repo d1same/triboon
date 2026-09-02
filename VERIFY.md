@@ -126,6 +126,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-01, v3.1.25 ship — TV search year, skip-back seek storm, remux pause Play:
+
+- Version contract: `package.json` 3.1.25; Android `versionName` 3.1.25 /
+  `versionCode` 370; Windows client package/Tauri/Cargo 3.1.25.
+- Episode search no longer hard-rejects air years after SxxExx (Simpsons S35
+  with 2024 in the filename). Prepare fail cache is 45s; smash-Play clears it.
+- Provider unreachable no longer writes a 6h blocked verdict. Short 4K episodes
+  get UHD startup slots from the release name. Continue Watching remount sends
+  live `resumeFrac`.
+- Skip-back debounces 320ms and kills that viewer's leftover remux pipe. Pause
+  then Play uses leftover when the buffer is still ahead; dead pipe remounts.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). Node suite **688/688**.
+  Isolated `/api/server` 3.1.25.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 4759ms SLOW; FROM ready 10577ms SLOW, seek 3876ms SLOW, resume 11ms).
+  IPTV web+native retune PASS (8180 channels). Overlapping Play PASS.
+  Android lint/unit/debug build PASS. Android ExoPlayer stress on
+  `emulator-5554` PASS (`android-tv-stress-20260901-210629.json`). Windows
+  GPU not instrumented.
+
 2026-09-01, v3.1.24 ship — TV focus reclaim, search prefix, remux pipe cap, Back rail:
 
 - Version contract: `package.json` 3.1.24; Android `versionName` 3.1.24 /

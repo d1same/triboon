@@ -54,9 +54,15 @@ function providerPickScore(p, needSlots = 0) {
   return load;
 }
 
-function streamStartupNeedSlots(size, priority) {
+function streamStartupNeedSlots(size, priority, name) {
   if (priority !== 'startup' && priority !== 'seek') return 0;
-  return (Number(size) || 0) > 4e9 ? 18 : 10;
+  const bytes = Number(size) || 0;
+  const label = String(name || '');
+  // Same 4K rule as streamIsUhd: a 3 GB 2160p episode still needs the 4K startup
+  // slot budget. Size-only treated short 4K episodes as 1080p and picked the
+  // wrong provider on a multi-account box.
+  const uhd = bytes > 4e9 || /\b(?:2160p|4320p|uhd|4k)\b/i.test(label);
+  return uhd ? 18 : 10;
 }
 
 function signalAborted(signal) {

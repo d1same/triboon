@@ -383,6 +383,19 @@ public class MainActivity extends Activity {
     private androidx.mediarouter.media.MediaRouter.Callback castRouteCallback;
     private boolean castDiscovering;   // a foreground MediaRouter discovery scan is active
     private final Handler nativeProgress = new Handler(Looper.getMainLooper());
+    // Remux/transcode cannot seek in-place. Each Left used to spawn a new ffmpeg + usenet
+    // reader immediately. Hold 320ms (same as web nudgeSeek) and remount only the last target.
+    private static final long NATIVE_SERVER_SEEK_DEBOUNCE_MS = 320L;
+    // Leftover remux should play immediately. If Play does not start, remount the same file.
+    private static final long NATIVE_REMUX_INPLACE_RESUME_MS = 900L;
+    private final Handler nativeSeekHandler = new Handler(Looper.getMainLooper());
+    private final Runnable nativeRemuxInPlaceResumeCheck = this::checkNativeRemuxInPlaceResume;
+    private long nativePendingServerSeekMs = -1L;
+    private final Runnable nativeServerSeekFlush = () -> {
+        long at = nativePendingServerSeekMs;
+        nativePendingServerSeekMs = -1L;
+        if (at >= 0L) requestNativeVideoSeek(at);
+    };
     private final Runnable nativeSubtitleTick = new Runnable() {
         @Override public void run() {
             updateNativeSubtitleOverlay();
@@ -4998,7 +5011,9 @@ public class MainActivity extends Activity {
         if (d > 0 && d != C.TIME_UNSET) target = Math.min(d, target);
         nativeLastVideoDisplayMs = target;
         if (nativeServerSeekMode()) {
-            requestNativeVideoSeek(target);
+            nativePendingServerSeekMs = target;
+            nativeSeekHandler.removeCallbacks(nativeServerSeekFlush);
+            nativeSeekHandler.postDelayed(nativeServerSeekFlush, NATIVE_SERVER_SEEK_DEBOUNCE_MS);
             return;
         }
         nativePlayer.seekTo(Math.max(0L, target - nativeStartOffsetMs));
@@ -5049,37 +5064,70 @@ public class MainActivity extends Activity {
         nativeVideoErrorNotified = false;
         nativeVideoUnhealthySinceMs = 0L;
         long now = SystemClock.elapsedRealtime();
-        // Remux pipes die when ExoPlayer stops reading. A 25s grace on a dead pipe is the
-        // freeze/breakup after Pause → Play. Direct play keeps the longer refill window.
-        nativeResumeGraceUntilMs = now + (remux ? NATIVE_VIDEO_REMUX_RESUME_GRACE_MS : NATIVE_VIDEO_RESUME_GRACE_MS);
+        int state = nativePlayer.getPlaybackState();
+        boolean remuxNeedsRebuild = remux && "video".equals(nativeMode)
+                && (state == Player.STATE_IDLE || state == Player.STATE_ENDED || !nativeRemuxBufferLooksLive());
+        // A remount needs the 20s ffmpeg grace. In-place remux Play must not — that long
+        // grace is what froze Pause → Play on a leftover that never started.
+        nativeResumeGraceUntilMs = now + (remuxNeedsRebuild
+                ? NATIVE_VIDEO_REMUX_RESUME_GRACE_MS
+                : NATIVE_VIDEO_RESUME_GRACE_MS);
         // User hit Play — recovery must be allowed even if PLAYING never fires on a dead pipe.
         if (web != null) {
             web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
                     + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
         }
-        int state = nativePlayer.getPlaybackState();
         if ("video".equals(nativeMode) && (state == Player.STATE_IDLE || state == Player.STATE_ENDED)) {
             long at = nativeResumePositionMs();
             nativeUserPausedAtMs = 0L;
             if (nativeServerSeekMode()) {
-                nativePlayer.setPlayWhenReady(false);
-                requestNativeVideoSeek(at, true);
+                remountNativeRemuxAtResume();
                 return;
             }
             retryNativeDirectInPlace(at);
             nativePlayer.play();
             return;
         }
-                if ("video".equals(nativeMode) && remux) {
-                    // Leftover remux/transcode buffer is a dead ffmpeg pipe that still reports
-                    // seconds of "buffered." play() on that reads frozen/broken frames.
-                    nativeUserPausedAtMs = 0L;
-                    nativePlayer.setPlayWhenReady(false);
-                    requestNativeVideoSeek(nativeResumePositionMs(), true);
-                    return;
-                }
+        if ("video".equals(nativeMode) && remux) {
+            if (remuxNeedsRebuild) {
+                remountNativeRemuxAtResume();
+                return;
+            }
+            nativeUserPausedAtMs = 0L;
+            nativeResumeGraceUntilMs = now + NATIVE_REMUX_INPLACE_RESUME_MS;
+            nativeSeekHandler.removeCallbacks(nativeRemuxInPlaceResumeCheck);
+            nativePlayer.play();
+            nativeSeekHandler.postDelayed(nativeRemuxInPlaceResumeCheck, NATIVE_REMUX_INPLACE_RESUME_MS);
+            return;
+        }
         nativeUserPausedAtMs = 0L;
         nativePlayer.play();
+    }
+
+    private boolean nativeRemuxBufferLooksLive() {
+        if (nativePlayer == null) return false;
+        int state = nativePlayer.getPlaybackState();
+        if (state == Player.STATE_IDLE || state == Player.STATE_ENDED) return false;
+        long pos = nativePlayer.getCurrentPosition();
+        long buf = nativePlayer.getBufferedPosition();
+        if (pos == C.TIME_UNSET) return false;
+        if (buf == C.TIME_UNSET) return state == Player.STATE_READY || state == Player.STATE_BUFFERING;
+        return buf > pos + 400L;
+    }
+
+    private void remountNativeRemuxAtResume() {
+        if (nativePlayer == null) return;
+        nativeSeekHandler.removeCallbacks(nativeRemuxInPlaceResumeCheck);
+        nativeUserPausedAtMs = 0L;
+        nativePlayer.setPlayWhenReady(false);
+        requestNativeVideoSeek(nativeResumePositionMs(), true);
+    }
+
+    private void checkNativeRemuxInPlaceResume() {
+        if (nativePlayer == null || !"video".equals(nativeMode) || !nativeServerSeekMode()) return;
+        if (!nativePlayer.getPlayWhenReady()) return;
+        if (nativePlayer.isPlaying()) return;
+        remountNativeRemuxAtResume();
     }
 
     private void retryNativeDirectInPlace(long displayMs) {
@@ -7912,6 +7960,9 @@ public class MainActivity extends Activity {
     private void releaseNativePlayer(boolean notifyClosed, boolean preserveGuideMode, boolean keepLoading) {
         nativeProgress.removeCallbacksAndMessages(null);
         nativeSubtitleHandler.removeCallbacksAndMessages(null);
+        nativeSeekHandler.removeCallbacks(nativeServerSeekFlush);
+        nativeSeekHandler.removeCallbacks(nativeRemuxInPlaceResumeCheck);
+        nativePendingServerSeekMs = -1L;
         bumpNativeSubtitleLoadToken();
         nativeSeekAccel.reset(); // a new playback must start at the base seek step
         if (!keepLoading) hideNativeLoading();

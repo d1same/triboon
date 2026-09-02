@@ -16,7 +16,8 @@ const {
   ACTIVE_PLAYBACK_GRACE_MS, allocateStreamConnections, classifyStreamNeed,
   streamNeedMbps, streamIsUhd, autoStreamCap, cacheNeedWeight, playbackRamFraction, playbackCacheCapMb, preparedPeekSockets,
 } = require('../server/pipeline');
-const { NntpPool, ProviderPool } = require('../server/nntp');
+const { NntpPool, ProviderPool, streamStartupNeedSlots } = require('../server/nntp');
+const { NzbFileStream } = require('../server/vfs');
 const { createMockNntp } = require('./mock-nntp');
 const { encodePart } = require('../server/yenc');
 const { seededPayload, writeRar4Store } = require('./archive-fixtures');
@@ -3422,6 +3423,40 @@ test('pipeline: a 4K episode under 4GB still gets 4K sockets and bitrate, not 10
   const starve4k = allocateStreamConnections([ep4k], autoPerf, { viewerChanged: false, now, holdMs: 0 });
   const healthy1080 = allocateStreamConnections([ep1080], autoPerf, { viewerChanged: false, now });
   assert.ok(starve4k[0] > healthy1080[0], 'a starving 4K episode grows past a healthy 1080p');
+  assert.equal(streamStartupNeedSlots(3.2e9, 'startup', ep4k._releaseName), 18,
+    'short 2160p episode still asks for 4K startup slots');
+  assert.equal(streamStartupNeedSlots(3.2e9, 'startup', ep1080._releaseName), 10,
+    'same-size 1080p episode keeps the 1080p startup budget');
+  assert.equal(streamStartupNeedSlots(3.2e9, 'readAhead', ep4k._releaseName), 0,
+    'read-ahead does not reserve startup slots');
+});
+
+test('vfs: unreachable providers do not mark a release blocked', async () => {
+  const fileEntry = {
+    subject: 'Show.S01E01.mkv (1/6)',
+    segments: [
+      { msgId: 'a@test', bytes: 1000 },
+      { msgId: 'b@test', bytes: 1000 },
+      { msgId: 'c@test', bytes: 1000 },
+      { msgId: 'd@test', bytes: 1000 },
+      { msgId: 'e@test', bytes: 1000 },
+      { msgId: 'f@test', bytes: 1000 },
+    ],
+  };
+  const down = {
+    async stat() {
+      const e = new Error('no usenet provider reachable');
+      e.code = 'NO_PROVIDER';
+      throw e;
+    },
+  };
+  const missing = { async stat() { return false; } };
+  const downHealth = await new NzbFileStream(down, fileEntry).triage(6);
+  assert.notEqual(downHealth.verdict, 'blocked', 'a down provider is not a rotten NZB');
+  assert.equal(downHealth.unreachable, true);
+  assert.equal(downHealth.missing, 0);
+  const blocked = await new NzbFileStream(missing, fileEntry).triage(6);
+  assert.equal(blocked.verdict, 'blocked', 'real missing articles still block');
 });
 
 test('pipeline: two fresh Plays split leftover sockets instead of the first one taking them all', () => {

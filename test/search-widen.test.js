@@ -87,6 +87,22 @@ const CASES = [
     ],
   },
   {
+    id: 'simpsons-s35',
+    params: { q: 'The Simpsons', season: 35, ep: 5 },
+    policy: { wantedYear: 1989 },
+    byQuery: {
+      'The Simpsons S35E05': [
+        { name: 'The.Simpsons.S35E05.2024.1080p.WEB-DL-NTb', url: 'http://x/s35', size: 1.2e9 },
+        { name: 'The.Simpsons.S35E05.1080p.WEB-DL-NTb', url: 'http://x/s35b', size: 1.1e9 },
+      ],
+    },
+    mustIncludeAfter: [
+      'The.Simpsons.S35E05.2024.1080p.WEB-DL-NTb',
+      'The.Simpsons.S35E05.1080p.WEB-DL-NTb',
+    ],
+    mustReject: [],
+  },
+  {
     id: 'lioness',
     params: { q: 'Lioness', season: 1, ep: 1, tvdbid: '421590', aliases: ['Special Ops Lioness'] },
     byQuery: {

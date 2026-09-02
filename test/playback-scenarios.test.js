@@ -35,10 +35,10 @@ function traktSeekSeconds({ catalogDur, videoDur, remux, pct }) {
 test('playback scenarios: long pause stays open for 1 hour then exits', () => {
   assert.match(ui, /const PAUSE_IDLE_EXIT_MS = 60 \* 60 \* 1000;/);
   assert.match(ui, /function armPauseIdleExit\([\s\S]+closePlayer\(\)/);
-  assert.match(ui, /function togglePlay\(\) \{[\s\S]+startSource\(currentPlayerKind\(p\), currentTime\(\), \{ quietSeek: true \}\)/,
-    'web remux Play after pause remounts the same file');
-  assert.match(android, /resumeNativeVideoInPlace\(\) \{[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
-    'native remux Play remounts the same file instead of reading a dead pipe');
+  assert.match(ui, /function togglePlay\(\) \{[\s\S]+remuxResumeLooksLive\(v\)[\s\S]+requestVideoPlay\(v\)[\s\S]+remountWebRemuxResume\(p\)/,
+    'web remux Play after pause uses leftover when live and remounts a dead pipe');
+  assert.match(android, /resumeNativeVideoInPlace\(\) \{[\s\S]+nativeRemuxBufferLooksLive\(\)[\s\S]+nativePlayer\.play\(\)[\s\S]+remountNativeRemuxAtResume\(\)/,
+    'native remux Play uses leftover when live and remounts only a dead pipe');
   assert.match(android, /updateNativeVideoWatchdog\(\) \{[\s\S]+!nativePlayer\.getPlayWhenReady\(\)[\s\S]+return;/,
     'paused playback must not trip the freeze watchdog');
 });
@@ -49,6 +49,19 @@ test('playback scenarios: remux +30 / pause / resume do not freeze or save the w
   assert.match(android, /nativeSeekHoldDisplayMs = Math\.max\(nativeStartOffsetMs \+ nativeRawPositionMs\(\), startOffsetMs\)/);
   assert.match(ui, /if \(opts\.quietSeek\) p\._nativeResuming = true/);
   assert.match(ui, /p\._nativeSeekGen = \(p\._nativeSeekGen \|\| 0\) \+ 1/);
+});
+
+test('playback scenarios: remux Pause Play uses leftover when the pipe is still live', () => {
+  const start = ui.indexOf('function remuxResumeLooksLive(v)');
+  const end = ui.indexOf('function remountWebRemuxResume', start);
+  assert.ok(start >= 0 && end > start, 'web remux leftover helper should stay next to togglePlay');
+  const remuxResumeLooksLive = new Function(`${ui.slice(start, end)}\nreturn remuxResumeLooksLive;`)();
+  const live = { ended: false, readyState: 3, currentTime: 12, buffered: { length: 1, start: () => 0, end: () => 20 } };
+  const dead = { ended: false, readyState: 3, currentTime: 12, buffered: { length: 1, start: () => 0, end: () => 12.1 } };
+  assert.strictEqual(remuxResumeLooksLive(live), true, '10s of leftover remux must play in place');
+  assert.strictEqual(remuxResumeLooksLive(dead), false, 'an empty remux tail must remount');
+  assert.match(android, /nativeRemuxBufferLooksLive\(\) \{[\s\S]+buf > pos \+ 400L/);
+  assert.match(android, /NATIVE_REMUX_INPLACE_RESUME_MS = 900L[\s\S]+nativePlayer\.play\(\);[\s\S]+nativeRemuxInPlaceResumeCheck/);
 });
 
 test('playback scenarios: captions shift only after a successful write', () => {
@@ -90,7 +103,8 @@ test('playback scenarios: Trakt scrobble heartbeats do not spam the same percent
 test('playback scenarios: dead prepares and hivecast 503 do not keep hammering', () => {
   const pipeline = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
   assert.match(pipeline, /e\.cachedFail = true;/);
-  assert.match(pipeline, /this\.prepareFailUntil\.set\(key, Date\.now\(\) \+ 15 \* 60 \* 1000\)/);
+  assert.match(pipeline, /PREPARE_FAIL_RETRY_MS = 45 \* 1000/);
+  assert.match(pipeline, /this\.prepareFailUntil\.set\(key, Date\.now\(\) \+ PREPARE_FAIL_RETRY_MS\)/);
   assert.match(server, /if \(!e\.cachedFail\) debug\.log\('prepare'/);
   assert.match(server, /\/\\b\(401\|403\|429\|503\)\\b\//);
   assert.match(server, /reason !== 'idle \(no viewers\)' && reason !== 'playlist sent'/);

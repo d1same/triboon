@@ -23,12 +23,12 @@ Example: you pause The Rookie for a minute, press Play, and sit on Preparing. Th
 5. Stall watchdog while paused.
 6. `recoverSamePlaybackSource` while `nativePaused` and the source is not dead.
 7. `notifyNativeVideoError` must not `releaseNativePlayer`. A quiet remount needs the live player.
-8. After playback has started, an error must not show the circling Preparing loader. Resume uses `resumeNativeVideoInPlace` (play, or prepare+seek if IDLE/ENDED). Remux/transcode Play after pause remounts the same file quietly (`requestNativeVideoSeek`) — leftover buffer still looks healthy and must not be played. Multiple Play presses must not rebuild.
+8. After playback has started, an error must not show the circling Preparing loader. Resume uses `resumeNativeVideoInPlace` (play leftover if the remux buffer is still ahead, or remount if IDLE/ENDED/no leftover). Multiple Play presses must not rebuild.
 
 ## Triggers that MAY remount the same file (quiet)
 
 - Recoverable IO while **playing** (direct: `retryNativeDirectInPlace`; remux/transcode: `__tvNativeVideoSeek` + `quietSeek`).
-- User Play on remux/transcode after pause. Same file, last frame held, no Preparing. Leftover remux/transcode buffer is a dead ffmpeg pipe. Quiet remount must `stop()` + `clearMediaItems()` first so 4K does not hold two buffers. Already-started playback keeps the rebuffer watchdog, not the 12s cold-start path. Same subtitle URL keeps its cues.
+- User Play on remux/transcode after pause when the leftover is dead (IDLE/ENDED, or no buffer ahead of now). Same file, last frame held, no Preparing. A live leftover must `nativePlayer.play()` / `video.play()` — remounting that is the Pause→Play delay. Quiet remount must `stop()` + `clearMediaItems()` first so 4K does not hold two buffers. Already-started playback keeps the rebuffer watchdog, not the 12s cold-start path. Same subtitle URL keeps its cues.
 - User seek on remux/transcode (`start=` URL). Quiet remount must re-arm remux grace and hold `playWhenReady` false until `STATE_READY`. Zeroing grace while already playing lets the 30s watchdog remount again.
 - Quality / audio change that needs a new server stream.
 - Mid-title remux `ENDED` while **playing**.

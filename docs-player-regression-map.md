@@ -223,8 +223,8 @@ them when the table is reorganized:
   `ENDED` while `playWhenReady` is false keeps that player. `notifyNativeVideoError`
   must not `releaseNativePlayer` (a later quiet remount would become a 30s 4K
   rebuild) and must not show the circling loader after playback has started.
-  Resume uses `resumeNativeVideoInPlace`. Remux/transcode Play remounts the same file
-  instead of playing leftover dead-pipe buffer until it freezes.
+  Resume uses `resumeNativeVideoInPlace`. Remux/transcode Play uses leftover when
+  the buffer is still ahead, and remounts the same file only when that leftover is dead.
   That remount must not reset `nativeVideoStarted` or stack a second recovery
   while `_nativeResuming`. Heavy/4K VOD honors the RAM byte ceiling
   (`setPrioritizeTimeOverSizeThresholds(false)`). Same subtitle URL keeps cues

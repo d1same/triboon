@@ -1970,6 +1970,24 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
   assert.strictEqual(staleEntry.nativePos, undefined,
     'a seek callback already queued by the old player must be rejected before touching the replacement');
 
+  seekCalls.length = 0;
+  const liveSeek = {
+    usingNative: true,
+    playbackToken: 31,
+    item: { key: 'episode-a', type: 'episode' },
+    remuxUrl: '/api/remux/abc123?t=tok',
+  };
+  seekState.playing = liveSeek;
+  seekState.view = 'player';
+  nativeSeek(90, 2400, false, 31);
+  nativeSeek(60, 2400, false, 31);
+  assert.deepStrictEqual(seekCalls, [],
+    'user remux skip-back must wait before remounting ffmpeg');
+  await new Promise((r) => setTimeout(r, 360));
+  assert.deepStrictEqual(seekCalls, [['remux', 60, { quietSeek: true, percentResume: false }]],
+    'rapid remux Left presses must remount only the last target');
+  seekState.playing = staleEntry;
+
   const errorStart = ui.indexOf('window.__tvNativeVideoError =');
   const errorEnd = ui.indexOf('window.__tvNativeVideoNext =', errorStart);
   const errorWindow = {};
@@ -2767,12 +2785,12 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'a dropped HTTP range during pause must not rebuild ExoPlayer');
   assert.match(android, /retryNativeDirectInPlace\(resumeAt\)/,
     'direct-play IO after a real start retries the same player in place');
-  assert.match(android, /private void resumeNativeVideoInPlace\(\) \{[\s\S]+nativeQuietSeekHoldPlay \|\| nativeResumeGraceUntilMs[\s\S]+hideNativeLoading\(\);[\s\S]+__tvNativeVideoResuming[\s\S]+STATE_IDLE \|\| state == Player\.STATE_ENDED[\s\S]+requestNativeVideoSeek\(at, true\)[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
-    'Play after a crash must hide the circles; remux/transcode Play remounts the same file instead of reading a leftover dead pipe; a second Play while remounting is ignored');
+  assert.match(android, /private void resumeNativeVideoInPlace\(\) \{[\s\S]+nativeQuietSeekHoldPlay \|\| nativeResumeGraceUntilMs[\s\S]+hideNativeLoading\(\);[\s\S]+__tvNativeVideoResuming[\s\S]+STATE_IDLE \|\| state == Player\.STATE_ENDED[\s\S]+remountNativeRemuxAtResume\(\)[\s\S]+nativeRemuxBufferLooksLive\(\)[\s\S]+nativePlayer\.play\(\)[\s\S]+nativeRemuxInPlaceResumeCheck/,
+    'Play after a crash must hide the circles; remux Play uses leftover when live and remounts only a dead pipe; a second Play while remounting is ignored');
   assert.match(ui, /window\.__tvNativeVideoResuming = \(pos, dur, token\) => \{[\s\S]+p\.nativePaused = false;/,
     'user Play must clear nativePaused so a dead remux pipe can recover');
-  assert.match(ui, /function togglePlay\(\) \{[\s\S]+p\.usingRemux \|\| p\.usingTranscode[\s\S]+if \(p\._webResuming\) \{ updPP\(\); return; \}[\s\S]+startSource\(currentPlayerKind\(p\), currentTime\(\), \{ quietSeek: true \}\)/,
-    'web remux Play after pause remounts the same file; a second Play while remounting does not spawn another ffmpeg');
+  assert.match(ui, /function remuxResumeLooksLive\(v\) \{[\s\S]+ranges\.end\(i\) > t \+ 0\.4[\s\S]+function togglePlay\(\) \{[\s\S]+p\.usingRemux \|\| p\.usingTranscode[\s\S]+if \(p\._webResuming\) \{ updPP\(\); return; \}[\s\S]+if \(remuxResumeLooksLive\(v\)\) \{[\s\S]+requestVideoPlay\(v\)[\s\S]+remountWebRemuxResume\(p\)/,
+    'web remux Play after pause uses leftover when live and remounts only a dead pipe; a second Play while remounting does not spawn another ffmpeg');
   assert.match(ui, /function setQuality\(q\) \{[\s\S]+startSource\(p\.remuxUrl \? 'remux' : 'direct', at, \{ quietSeek: true \}\)[\s\S]+startSource\('transcode', at, \{ quietSeek: true \}\)/,
     'web quality Original/1080/720 remounts quietly instead of stacking a Preparing rebuild');
   assert.match(ui, /function setAudio\(rel\) \{[\s\S]+startSource\(p\.usingTranscode \? 'transcode' : 'remux', currentTime\(\), \{ quietSeek: true \}\)/,
@@ -2798,8 +2816,8 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'the on-screen Play button uses the same pause/play helper as the web OSD');
   assert.match(android, /case "toggle":\s+nativeTogglePlayPause\(\);/,
     'lock-screen toggle must not stack a second remount during remux resume');
-  assert.match(android, /NATIVE_VIDEO_REMUX_RESUME_GRACE_MS = 20000L[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
-    'remux Play remounts the same file with enough grace for 4K ffmpeg, not a 4s watchdog trip');
+  assert.match(android, /NATIVE_VIDEO_REMUX_RESUME_GRACE_MS = 20000L[\s\S]+NATIVE_REMUX_INPLACE_RESUME_MS = 900L[\s\S]+remountNativeRemuxAtResume\(\) \{[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
+    'dead remux leftover remounts with enough grace for 4K ffmpeg; live leftover plays in place');
   assert.match(android, /if \(!\(reuseQuietVideo && nativeVideoStarted\)\) nativeVideoStarted = false/,
     'quiet remount of an already-playing title must keep the rebuffer watchdog, not the 12s cold start');
   assert.match(android, /if \(reuseQuietVideo && "video"\.equals\(mode\)\) \{[\s\S]+nativeResumeGraceUntilMs = SystemClock\.elapsedRealtime\(\)[\s\S]+NATIVE_VIDEO_REMUX_RESUME_GRACE_MS/,
@@ -2822,8 +2840,8 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'web remux CC shift must mark _shifted only after both cue times write');
   assert.match(ui, /p\._nativeSeekGen = \(p\._nativeSeekGen \|\| 0\) \+ 1/,
     'rapid remux FF must ignore stale keyframe remounts');
-  assert.match(android, /setPlayWhenReady\(false\);[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
-    'remux Play must not read the leftover dead pipe while the new start= URL is mounting');
+  assert.match(android, /remountNativeRemuxAtResume\(\) \{[\s\S]+setPlayWhenReady\(false\);[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
+    'dead remux leftover remounts the same file and must not play the empty pipe while the new start= URL is mounting');
   assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+p\._nativeResuming && !sourceDead && !decoderFailure\) return false;/,
     'web recovery must not stack a second remount on top of user Play');
   assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)/,
@@ -3889,13 +3907,13 @@ test('Android native player: direct source and native chrome stay out of the web
   // while the native ExoPlayer path (never sends audioSafe) keeps 5.1 surround.
   assert.match(transcode, /function spawnTranscode\(streamUrl, \{ startSeconds = 0, audioTrack = 0, height = 1080, hdr = false, safeStereo = false \} = \{\}\)[\s\S]+'-c:a', 'aac', '-b:a', safeStereo \? '192k' : '256k', '-ac', safeStereo \? '2' : '6'/,
     'spawnTranscode downmixes the audio-safe path to stereo AAC (2ch) and keeps 5.1 (6ch) otherwise');
-  assert.match(server, /MAX_MOUNT_FFMPEG_PIPES = 3;[\s\S]+function attachMountFfmpegPipe\(vf, ff\) \{[\s\S]+old\.ff\.kill\('SIGKILL'\)[\s\S]+function closeMountFfmpegPipes\(vf\)/,
-    'a remux/transcode seek storm must kill leftover ffmpeg so 4K cannot stack encoders');
+  assert.match(server, /MAX_USER_FFMPEG_PIPES = 1;[\s\S]+function attachMountFfmpegPipe\(vf, ff, uid\) \{[\s\S]+old\.ff\.kill\('SIGKILL'\)[\s\S]+function closeMountFfmpegPipes\(vf\)/,
+    'a remux/transcode skip-back must kill that viewer leftover ffmpeg without cutting another user on the same title');
   assert.match(server, /function releaseMountResources\(vf\) \{[\s\S]+closeMountHls\(vf\);[\s\S]+closeMountFfmpegPipes\(vf\);/,
     'sweeping a mount must reap remux/transcode ffmpeg, not only HLS sessions');
-  assert.match(server, /const ff = spawnRemux\(selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}\);\s*\n\s*attachMountFfmpegPipe\(vf, ff\);/,
-    'every remux pipe is tracked against the per-mount cap');
-  assert.match(server, /transcode: async \(ctx\)[\s\S]+const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+spawnTranscode\(selfUrl, \{ startSeconds, audioTrack, height: LADDER\[height\] \? height : 1080, hdr, safeStereo: forceAudioSafe \}\)[\s\S]+attachMountFfmpegPipe\(vf, ff\)/,
+  assert.match(server, /const ff = spawnRemux\(selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}\);\s*\n\s*attachMountFfmpegPipe\(vf, ff, ctx\.claims && ctx\.claims\.uid\);/,
+    'every remux pipe is tracked against that viewer leftover cap');
+  assert.match(server, /transcode: async \(ctx\)[\s\S]+const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+spawnTranscode\(selfUrl, \{ startSeconds, audioTrack, height: LADDER\[height\] \? height : 1080, hdr, safeStereo: forceAudioSafe \}\)[\s\S]+attachMountFfmpegPipe\(vf, ff, ctx\.claims && ctx\.claims\.uid\)/,
     'the /api/transcode handler honors audioSafe=1 (stereo) while the native path stays 5.1');
   assert.match(ui, /kind === 'transcode'\) \{[\s\S]+v\.src = `\$\{p\.transcodeUrl\}&start=\$\{seekStart\}&audio=\$\{p\.audioTrack \|\| 0\}&height=\$\{p\.quality \|\| 1080\}\$\{p\.forceAacRemux \? '&audioSafe=1' : ''\}`/,
     'the browser transcode fallback also requests stereo audio so an HEVC/10-bit source is not played silent');
@@ -4040,8 +4058,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'source recovery must never enter the next-episode path');
   assert.match(sourceRecoveryBlock, /S\._handoffQuietUntil/,
     'next-episode startup must not remount the opening after a one-time remux wobble');
-  assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+typeof waitForTriboonServer === 'function'[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\) \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
-    'reMountAndResume should wait for the server, re-play the same title, reject stale ownership, resume at position, and retry with backoff then fall back');
+  assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+typeof waitForTriboonServer === 'function'[\s\S]+playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\)[\s\S]+resumeFrac = Math\.max\(0, Math\.min\(0\.98, at \/ remountDur\)\)[\s\S]+api\('\/api\/play', \{ method: 'POST', body: remountBody \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
+    'reMountAndResume should wait for the server, re-play the same title, warm the live timestamp, reject stale ownership, resume at position, and retry with backoff then fall back');
   assert.match(ui, /function playbackServerGone\(reason\) \{[\s\S]+Source error[\s\S]+function recoverSamePlaybackSource/,
     'a server restart (404/502/Source error) remounts instead of replaying the dead URL');
   assert.match(ui, /function holdPlaybackAcrossRestart\(\) \{[\s\S]+clearPlayerLoadingStages\(\)[\s\S]+playerLoader[\s\S]+showSeekHoldFrame/,
@@ -5330,8 +5348,10 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(nativeServerSeekStart >= 0 && nativeServerSeekEnd > nativeServerSeekStart,
     'native server-seek methods should remain in one bounded implementation block');
   const nativeServerSeekBlock = android.slice(nativeServerSeekStart, nativeServerSeekEnd);
-  assert.match(nativeServerSeekBlock, /private boolean nativeServerSeekMode\(\) \{[\s\S]*?"remux"\.equals\(nativeKind\) \|\| "transcode"\.equals\(nativeKind\)[\s\S]*?private void nativeSeekToDisplayPosition\(long displayMs\) \{[\s\S]*?if \(nativeServerSeekMode\(\)\) \{[\s\S]*?requestNativeVideoSeek\(target\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?nativePlayer\.seekTo/,
-    'native remux/transcode seeking should restart through the web handoff instead of seeking inside a restarted segment');
+  assert.match(nativeServerSeekBlock, /private boolean nativeServerSeekMode\(\) \{[\s\S]*?"remux"\.equals\(nativeKind\) \|\| "transcode"\.equals\(nativeKind\)[\s\S]*?private void nativeSeekToDisplayPosition\(long displayMs\) \{[\s\S]*?if \(nativeServerSeekMode\(\)\) \{[\s\S]*?nativePendingServerSeekMs = target;[\s\S]*?nativeSeekHandler\.postDelayed\(nativeServerSeekFlush, NATIVE_SERVER_SEEK_DEBOUNCE_MS\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?nativePlayer\.seekTo/,
+    'native remux/transcode seeking should debounce then restart through the web handoff instead of seeking inside a restarted segment');
+  assert.match(android, /NATIVE_SERVER_SEEK_DEBOUNCE_MS = 320L[\s\S]+nativeServerSeekFlush = \(\) -> \{[\s\S]+requestNativeVideoSeek\(at\);/,
+    'Android remux skip-back must wait 320ms and remount only the last Left target');
   assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token, percentResume\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+if \(!percentResume\) p\.nativePos = at;[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true, percentResume: !!percentResume \}\);[\s\S]+\};/,
     'web should quietly remount the active native source kind when Android requests an absolute seek');
   assert.match(android, /private boolean handleNativeSeekBarKey\(KeyEvent e\) \{[\s\S]+View current = getCurrentFocus\(\);[\s\S]+current != nativeSeek && \(!nativeSeekDpadMode \|\| isNativeControl\(current\)\)[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+KEYCODE_DPAD_RIGHT[\s\S]+nativeSeekBy\(code == KeyEvent\.KEYCODE_DPAD_RIGHT \? 30000 : -30000\);[\s\S]+\}/,
@@ -5842,8 +5862,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'the web seek frame hold should disappear as soon as the replacement stream has a frame');
   assert.match(ui, /v\.onwaiting = \(\) => \{[\s\S]+pWait\.suppressSeekLoaderUntil && appMs\(\) < pWait\.suppressSeekLoaderUntil[\s\S]+return;/,
     'web rebuffer events during a user seek should keep the current frame instead of flashing the loader');
-  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token, percentResume\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true, percentResume: !!percentResume \}\);/,
-    'native remux/transcode seek restarts should be marked as quiet seeks from the web bridge');
+  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token, percentResume\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show'\);[\s\S]+if \(!resume && \(kind === 'remux' \|\| kind === 'transcode'\)\) \{[\s\S]+p\._remuxSeekT[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true, percentResume: !!percentResume \}\);/,
+    'native remux/transcode user skip-back must debounce 320ms and remount only the last target');
+  assert.match(server, /if \(vf\._keyframeInflight\) return send\(ctx\.res, 200, \{ k: Math\.max\(0, at\) \}\);[\s\S]+vf\._keyframeInflight = true/,
+    'a stacked keyframe probe must not open a second /api/stream reader on the same mount');
   assert.match(ui, /quietSeek: !!opts\.quietSeek/,
     'native playback payload should carry whether this is a user seek instead of startup');
   assert.match(ui, /window\.TriboonTV && window\.TriboonTV\.updateVideoDuration[\s\S]+window\.TriboonTV\.updateVideoDuration\(String\(p\.nativeDuration\)\)/,
@@ -6258,6 +6280,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'the buffer ceiling is a safe share of THIS device RAM, capped per tier so cheap boxes never over-commit');
   assert.match(android, /int bufferGoalSec = Math\.max\(0, j\.optInt\("bufferGoalSec", 0\)\)[\s\S]+nativeBufferGoalSec = bufferGoalSec/,
     'native player reads the server-sent bufferGoalSec for this stream');
+  assert.match(server, /const bufferGoalSec = \(streamIsUhd\(vf\) \? __prof\.buffer4kSec : __prof\.buffer1080Sec\) \|\| 0/,
+    'server buffer goal uses 4K-by-name, not file-bigger-than-4GB');
   assert.match(android, /new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)[\s\S]+setBandwidthMeter\(nativeBandwidthMeterForMode\(mode\)\)[\s\S]+setSeekParameters\(SeekParameters\.CLOSEST_SYNC\)/,
     'native ExoPlayer should use decoder fallback plumbing, seeded bandwidth, and closest-sync seeking');
   assert.match(android, /private DefaultRenderersFactory nativeRenderersFactory\(\) \{[\s\S]+setEnableDecoderFallback\(true\)[\s\S]+setEnableAudioOutputPlaybackParameters\(true\)/,

@@ -12481,6 +12481,12 @@ function handleMultiViewKey(k, e) {
 }
 function clearPlaybackTimers() {
   clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
+  if (S.playing) {
+    clearTimeout(S.playing._remuxPlayT);
+    clearTimeout(S.playing._remuxSeekT);
+    S.playing._remuxPlayT = 0;
+    S.playing._remuxSeekT = 0;
+  }
   clearPauseIdleExit();
   clearWebRebufferRecovery();
   if (S._healthKickT) { clearTimeout(S._healthKickT); S._healthKickT = null; }
@@ -13732,6 +13738,16 @@ window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
     } catch { if (!current()) return; }
   }
   if (!current()) return;
+  // User remux/transcode skip cannot seek the pipe. Rapid Left was one ffmpeg per press.
+  // Wait out the same 320ms window as nudgeSeek and remount only the last target.
+  if (!resume && (kind === 'remux' || kind === 'transcode')) {
+    clearTimeout(p._remuxSeekT);
+    p._remuxSeekT = setTimeout(() => {
+      if (!current()) return;
+      tryNativeVideoPlayer(kind, at, { quietSeek: true, percentResume: !!percentResume });
+    }, 320);
+    return;
+  }
   tryNativeVideoPlayer(kind, at, { quietSeek: true, percentResume: !!percentResume });
 };
 function nativePlaybackCallbackMatches(p, token) {
@@ -14160,7 +14176,10 @@ async function reMountAndResume(reason = '', attempt = 0) {
     if (!up) { p._reMounting = false; showPlaybackInterrupted('server did not come back'); return; }
   }
   try {
-    const r = await api('/api/play', { method: 'POST', body: playbackRequestBody(p.item, p.name ? { name: p.name } : null) });
+    const remountBody = playbackRequestBody(p.item, p.name ? { name: p.name } : null);
+    const remountDur = (p.duration && isFinite(p.duration) && p.duration) || 0;
+    if (at > 0 && remountDur > 0) remountBody.resumeFrac = Math.max(0, Math.min(0.98, at / remountDur));
+    const r = await api('/api/play', { method: 'POST', body: remountBody });
     if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; } // user moved on / replaced playback
     // Adopt the new mount (same field set autoAdvance maps), then resume the current source kind.
     p.sessionId = r.sessionId; p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl; p.hlsUrl = r.hlsUrl;
@@ -15693,6 +15712,25 @@ function requestVideoPlay(v, opts = {}) {
 function activePlayerVideo() {
   return liveSplitEnabled() && liveSplitActivePane() === 1 ? $('liveSplitVideo') : $('video');
 }
+function remuxResumeLooksLive(v) {
+  if (!v || v.ended || (v.readyState || 0) < 2) return false;
+  try {
+    const t = Number(v.currentTime) || 0;
+    const ranges = v.buffered;
+    if (!ranges || !ranges.length) return false;
+    for (let i = 0; i < ranges.length; i++) {
+      if (ranges.start(i) <= t + 0.15 && ranges.end(i) > t + 0.4) return true;
+    }
+  } catch {}
+  return false;
+}
+function remountWebRemuxResume(p) {
+  if (!p || p !== S.playing) return;
+  clearTimeout(p._remuxPlayT);
+  p._remuxPlayT = 0;
+  if (p._webResuming) return;
+  startSource(currentPlayerKind(p), currentTime(), { quietSeek: true });
+}
 function togglePlay() {
   if (S.playing && S.playing.castingActive) {
     if (_castRpc) { try { _castRpc.playOrPause(); } catch {} }                                   // browser Cast SDK
@@ -15710,12 +15748,24 @@ function togglePlay() {
   if (v.paused) {
     const p = S.playing;
     const remux = !!(!live && p && (p.usingRemux || p.usingTranscode));
-    // Remux/transcode leftover buffer is a dead ffmpeg pipe that still looks "ready."
-    // play() on it freezes or breaks up; remount the same file at the pause point.
+    // Leftover remux plays immediately when the buffer is still ahead. A dead pipe
+    // (no leftover, or play() never starts) remounts the same file.
     if (remux) {
       if (p._webResuming) { updPP(); return; }
       p._pausedAt = 0;
-      startSource(currentPlayerKind(p), currentTime(), { quietSeek: true });
+      if (remuxResumeLooksLive(v)) {
+        clearTimeout(p._remuxPlayT);
+        requestVideoPlay(v).then(() => {
+          if (S.playing !== p || !v.paused) clearTimeout(p._remuxPlayT);
+        }).catch(() => remountWebRemuxResume(p));
+        p._remuxPlayT = setTimeout(() => {
+          if (S.playing !== p || !v.paused) return;
+          remountWebRemuxResume(p);
+        }, 900);
+        updPP();
+        return;
+      }
+      remountWebRemuxResume(p);
       updPP();
       return;
     }
