@@ -1900,20 +1900,20 @@ test('admin: connection tests for saved providers/indexers; daily API limit gate
   if (ixServer) ixServer.close(); // teardown only closes the LAST one — don't leak the first
   const ixPort = await startIndexer();
   await httpJson(srv.port, 'POST', '/api/settings', {
-    indexers: [{ name: 'limited', url: `http://127.0.0.1:${ixPort}`, apikey: 'k', apiDayLimit: 2, grabDayLimit: 50 }],
+    indexers: [{ name: 'limited', url: `http://127.0.0.1:${ixPort}`, apikey: 'k', apiDayLimit: 6, grabDayLimit: 50 }],
   }, admin);
 
-  // Indexer test performs a real 1-query search (counted: 1/2).
+  // Indexer test performs a real 1-query search (counted: 1/6).
   const okI = (await httpJson(srv.port, 'POST', '/api/test/indexer', { index: 0 }, admin)).json;
   assert.strictEqual(okI.ok, true, JSON.stringify(okI));
   assert.strictEqual(okI.items, 1, 'test search parsed the indexer response');
 
-  // A real search consumes the second hit (2/2) and usage is visible in settings.
+  // A real search also runs yearless/quality/remux extras (5 more → 6/6).
   const s1 = await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Sec Test 2024'), null, admin);
   assert.strictEqual(s1.status, 200);
   const stg = (await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json;
-  assert.strictEqual(stg.indexers[0].usage.api, 2, 'test + search both counted');
-  assert.strictEqual(stg.indexers[0].apiDayLimit, 2);
+  assert.strictEqual(stg.indexers[0].usage.api, 6, 'test + widened search both counted');
+  assert.strictEqual(stg.indexers[0].apiDayLimit, 6);
 
   // Limit reached → the indexer drops out; with no indexer left the API says WHY.
   const s2 = await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Sec Test 2024 encore'), null, admin);
@@ -2408,10 +2408,10 @@ test('search: an "&" title finds ALL its releases, not just one', async () => {
 
 test('search: source drawer forwards TVDB season and episode identifiers to indexers', async () => {
   const http2 = require('http');
-  let seen;
+  const seenAll = [];
   const ix = http2.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
-    seen = Object.fromEntries(u.searchParams.entries());
+    seenAll.push(Object.fromEntries(u.searchParams.entries()));
     res.writeHead(200);
     res.end(`<?xml version="1.0"?><rss xmlns:newznab="http://x"><channel>
       <item><title>Route.Show.S01E02.1080p.WEB-DL-GRP</title><enclosure url="http://x/route" length="4000000000"/></item>
@@ -2426,10 +2426,8 @@ test('search: source drawer forwards TVDB season and episode identifiers to inde
     const r = await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Route Show S01E02') + '&tvdbid=777&season=1&ep=2', null, admin);
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.json.candidates[0].name, 'Route.Show.S01E02.1080p.WEB-DL-GRP');
-    assert.strictEqual(seen.t, 'tvsearch');
-    assert.strictEqual(seen.tvdbid, '777');
-    assert.strictEqual(seen.season, '1');
-    assert.strictEqual(seen.ep, '2');
+    const tv = seenAll.find((s) => s.t === 'tvsearch' && s.tvdbid === '777' && s.season === '1' && s.ep === '2');
+    assert.ok(tv, 'main episode query must keep tvsearch + TVDB season/ep');
   } finally {
     await httpJson(srv.port, 'POST', '/api/settings', { indexers: prevIx }, admin);
     ix.close();

@@ -126,6 +126,25 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-01, v3.1.26 ship — wider source search, 2-at-a-time extras, 4K-only drawer:
+
+- Version contract: `package.json` 3.1.26; Android `versionName` 3.1.26 /
+  `versionCode` 371; Windows client package/Tauri/Cargo 3.1.26.
+- Titled search now also runs yearless, 1080p/2160p, remux, BluRay, season-pack,
+  and aka queries. Extra fan-outs are capped at 2 at a time so Sources cannot
+  freeze Node. Play still joins one warmed search job.
+- 4K Sources stays 4K-only. If those rows are all unplayable, the subtitle
+  says so. Example: Mutiny 2026 4K is one dead HUNSUB; 1080p stays in 1080p.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). Node suite **690/690**.
+  Isolated `/api/server` 3.1.26.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 2427ms; FROM ready 3658ms SLOW, seek 6535ms SLOW, resume 9ms).
+  IPTV web+native retune PASS (8180 channels). Overlapping Play PASS (19ms).
+  Android lint/unit/debug build PASS. Android ExoPlayer stress on
+  `emulator-5554` PASS (`android-tv-stress-20260901-232015.json`). Windows
+  GPU not instrumented.
+
 2026-09-01, v3.1.25 ship — TV search year, skip-back seek storm, remux pause Play:
 
 - Version contract: `package.json` 3.1.25; Android `versionName` 3.1.25 /

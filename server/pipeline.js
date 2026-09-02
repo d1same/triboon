@@ -237,6 +237,63 @@ function yearlessSearchQuery(paramsQ, wanted) {
   return next && next.toLowerCase() !== current.toLowerCase() ? next : '';
 }
 
+// Tight resolution query. Movies use the yearless title ("Mutiny 1080p").
+// Episodes keep SxxExx ("Dickensian S01E01 1080p") so TV is not stuck on one HDTV row.
+function qualitySearchQuery(paramsQ, wanted, token) {
+  const t = String(token || '').trim();
+  if (!t) return '';
+  const yearless = yearlessSearchQuery(paramsQ, wanted);
+  const episodeQ = wanted && wanted.s != null ? String(paramsQ || '').trim() : '';
+  const base = yearless || episodeQ;
+  if (!base) return '';
+  const safe = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp(`\\b${safe}\\b`, 'i').test(base)) return '';
+  return `${base} ${t}`;
+}
+
+// "Dickensian S01E01" often indexes as a season pack ("Dickensian S01"). Search the pack;
+// releaseQualifies still requires that pack to cover this episode.
+function seasonPackSearchQuery(paramsQ, wanted) {
+  if (!wanted || wanted.s == null) return '';
+  const current = String(paramsQ || '').trim();
+  const next = current
+    .replace(/\bS(\d{1,2})E\d{1,3}\b/gi, (_, s) => `S${String(s).padStart(2, '0')}`)
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!next || next.toLowerCase() === current.toLowerCase()) return '';
+  if (!new RegExp(`\\bS0?${wanted.s}\\b`, 'i').test(next)) return '';
+  return next;
+}
+
+// Extra indexer queries that run WITH the titled search, not only when it is empty.
+// Recency page-1 plus remux/BluRay/size-desc finds older proper files the ID search buried.
+function widenSearchQueries(paramsQ, wanted, { wantUhd, aliases } = {}) {
+  const currentLc = String(paramsQ || '').trim().toLowerCase();
+  const out = [];
+  const seen = new Set(currentLc ? [currentLc] : []);
+  const add = (q) => {
+    const s = String(q || '').trim();
+    if (!s) return;
+    const lc = s.toLowerCase();
+    if (seen.has(lc)) return;
+    seen.add(lc);
+    out.push(s);
+  };
+  if (wantUhd && paramsQ && !/\b(2160p|4k|uhd)\b/i.test(paramsQ)) add(`${paramsQ} 2160p`);
+  const yearless = yearlessSearchQuery(paramsQ, wanted);
+  add(yearless);
+  add(qualitySearchQuery(paramsQ, wanted, wantUhd ? '2160p' : '1080p'));
+  add(seasonPackSearchQuery(paramsQ, wanted));
+  // Movies use the yearless title; episodes keep SxxExx so older remux/BluRay rows still surface.
+  const remuxBase = yearless || (wanted && wanted.s != null ? String(paramsQ || '').trim() : '');
+  if (remuxBase) {
+    add(`${remuxBase} remux`);
+    add(`${remuxBase} bluray`);
+  }
+  for (const q of aliasSearchQueries(paramsQ, aliases, wanted)) add(q);
+  return out;
+}
+
 function mergeQualifiedResults(results, extraResults, qualifies) {
   const verified = (extraResults || []).filter(qualifies);
   if (!verified.length) return results;
@@ -1947,19 +2004,22 @@ class Pipeline {
       const aliasParams = { q: titleQ };
       aliasP = this._fanoutMeasured(ixs, aliasParams, { timeoutMs });
     }
-    // 4K toggle: ID/title searches often fill the first page with 1080p. A parallel
-    // q-only "2160p" fan-out finds UHD WEB-DLs the id search never ranked high enough to return.
-    let uhdP = null;
-    if (opts.wantUhd && params.q && !/\b(2160p|4k|uhd)\b/i.test(params.q)) {
+    // Yearless + quality + aka run in parallel with the titled search. Waiting until the
+    // titled page is empty skipped every proper Mutiny NTb/FLUX file once a small encode hit.
+    const extraQs = opts.widenSearch === false
+      ? (opts.wantUhd && params.q && !/\b(2160p|4k|uhd)\b/i.test(params.q) ? [`${params.q} 2160p`] : [])
+      : widenSearchQueries(params.q, wanted, { wantUhd: opts.wantUhd, aliases: params.aliases });
+    // Extra queries stay, but only 2 fan-outs at a time. Firing yearless + 1080p + remux +
+    // bluray + pack + page-2 against every indexer at once froze the local Node process
+    // (Chrome still connected, /api/server timed out).
+    const extraFns = extraQs.map((q) => async () => {
       ixs.forEach((ix) => this.usage.onSearch(ix.name));
-      const uhdParams = { q: `${params.q} 2160p` };
-      if (episodeSearch) { uhdParams.season = season; uhdParams.ep = ep; }
-      uhdP = this._fanoutMeasured(ixs, uhdParams, { timeoutMs });
-    }
-    const akaQs = opts.widenSearch === false ? [] : aliasSearchQueries(params.q, params.aliases, wanted);
-    const akaJobs = akaQs.map((q) => {
-      ixs.forEach((ix) => this.usage.onSearch(ix.name));
-      return this._fanoutMeasured(ixs, { q }, { timeoutMs });
+      const extraParams = { q };
+      if (episodeSearch && /\b(2160p|1080p)\b/i.test(q) && /\be\d{1,3}\b/i.test(q)) {
+        extraParams.season = season;
+        extraParams.ep = ep;
+      }
+      return this._fanoutMeasured(ixs, extraParams, { timeoutMs });
     });
     let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });
     // TITLE VERIFICATION — indexers return loosely-related releases; a release only
@@ -1972,13 +2032,17 @@ class Pipeline {
       results = mergeQualifiedResults(results, retry.results, qualifies);
       if (retry.errors && retry.errors.length) errors = errors.concat(retry.errors);
     }
-    if (uhdP) {
-      const extra = await uhdP;
-      results = mergeQualifiedResults(results, extra.results, qualifies);
-      if (extra.errors && extra.errors.length) errors = errors.concat(extra.errors);
-    }
-    if (akaJobs.length) {
-      const extras = await Promise.all(akaJobs);
+    if (extraFns.length) {
+      const extras = [];
+      let ei = 0;
+      const extraLimit = Math.min(2, extraFns.length);
+      const extraWorker = async () => {
+        while (ei < extraFns.length) {
+          const fn = extraFns[ei++];
+          extras.push(await fn());
+        }
+      };
+      await Promise.all(Array.from({ length: extraLimit }, () => extraWorker()));
       for (const extra of extras) {
         results = mergeQualifiedResults(results, extra.results, qualifies);
         if (extra.errors && extra.errors.length) errors = errors.concat(extra.errors);
@@ -2010,17 +2074,6 @@ class Pipeline {
       const retry = await this._fanoutMeasured(ixs, titleOnly, { timeoutMs });
       const verified = retry.results.filter(qualifies);
       if (verified.length) { results = verified; errors = retry.errors; }
-    }
-    // "Mutiny 2026" missed every file indexed as just "Mutiny". Only when the titled
-    // search is empty — a parallel yearless query on every movie splits Play/warmup.
-    if (!results.length && opts.widenSearch !== false) {
-      const yearless = yearlessSearchQuery(params.q, wanted);
-      if (yearless) {
-        ixs.forEach((ix) => this.usage.onSearch(ix.name));
-        const retry = await this._fanoutMeasured(ixs, { q: yearless }, { timeoutMs });
-        const verified = retry.results.filter(qualifies);
-        if (verified.length) { results = verified; errors = retry.errors; }
-      }
     }
     return { at: Date.now(), results, errors };
   }
@@ -2069,9 +2122,11 @@ class Pipeline {
       params = { ...params, year: wanted.year };
     }
     const wantUhd = policy.exactResolutionRank === 4 || policy.preferResolutionRank === 4;
-    const akaQueries = widenSearch === false ? [] : aliasSearchQueries(params.q, params.aliases, wanted);
-    const key = this._searchCacheKey(params, { wantUhd, akaQueries, widenSearch });
-    const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true, wantUhd, akaQueries, widenSearch });
+    const extraQueries = widenSearch === false
+      ? []
+      : widenSearchQueries(params.q, wanted, { wantUhd, aliases: params.aliases });
+    const key = this._searchCacheKey(params, { wantUhd, akaQueries: extraQueries, widenSearch });
+    const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true, wantUhd, akaQueries: extraQueries, widenSearch });
     const maxAgeMs = allowStale ? Number.POSITIVE_INFINITY : 60000;
     let hit = this._getFreshSearchHit(key, maxAgeMs);
     if (!hit && (params.imdbid || params.tvdbid)) {
@@ -3146,7 +3201,7 @@ class Pipeline {
 module.exports = {
   Pipeline, GATE_MS, STARTUP_SLOTS, PLAY_RACE_WIDTH, StartupGate,
   parseWantedTitle, releaseMatches, catalogIdentityMatches, releaseQualifies, shortTitleQuery,
-  aliasSearchQueries, yearlessSearchQuery,
+  aliasSearchQueries, yearlessSearchQuery, qualitySearchQuery, seasonPackSearchQuery, widenSearchQueries,
   candidateKey, nzbVerdictKey,
   releaseFingerprint, applyNzbFingerprintFields,
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,

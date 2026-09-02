@@ -15,7 +15,14 @@ const {
   Pipeline, GATE_MS, nzbVerdictKey, releaseFingerprint, summarizeAttempts, stubFeatureReason, mountHasActivePlayback, mountNeedsUsenetShare,
   ACTIVE_PLAYBACK_GRACE_MS, allocateStreamConnections, classifyStreamNeed,
   streamNeedMbps, streamIsUhd, autoStreamCap, cacheNeedWeight, playbackRamFraction, playbackCacheCapMb, preparedPeekSockets,
+  parseWantedTitle, widenSearchQueries,
 } = require('../server/pipeline');
+
+// One search job now also runs yearless/quality/remux extras. Play must still join that
+// job — the hit count is 1 + extras, not 1, and a second Play must not add more.
+function expectedIndexerHits(q, extra = {}) {
+  return 1 + widenSearchQueries(q, parseWantedTitle(q), extra).length;
+}
 const { NntpPool, ProviderPool, streamStartupNeedSlots } = require('../server/nntp');
 const { NzbFileStream } = require('../server/vfs');
 const { createMockNntp } = require('./mock-nntp');
@@ -718,6 +725,28 @@ test('newznab: TV episodes use tvsearch even when an IMDb id is also present', a
     assert.strictEqual(seen.searchParams.get('imdbid'), '0412142', 'IMDb is a tvsearch hint');
     assert.ok(seen.searchParams.get('t') !== 'movie', 'IMDb must not force movie search for an episode');
     assert.strictEqual(rows[0].name, 'House.S03E22.1080p.WEB-DL.H.264-NTb');
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
+test('newznab: size-desc uses order, not dir', async () => {
+  let seen;
+  const srv = http.createServer((req, res) => {
+    seen = new URL(req.url, 'http://127.0.0.1');
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(rssFor([{ name: 'It.2017.1080p.BluRay.REMUX-FGT', url: 'http://x/it.nzb', size: 20e9 }]));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    await searchIndexer(
+      { name: 'ix', url: `http://127.0.0.1:${srv.address().port}`, apikey: 'secret' },
+      { q: 'It', sort: 'size', dir: 'desc' },
+      { timeoutMs: 1000 }
+    );
+    assert.strictEqual(seen.searchParams.get('sort'), 'size');
+    assert.strictEqual(seen.searchParams.get('order'), 'desc');
+    assert.strictEqual(seen.searchParams.get('dir'), null);
   } finally {
     await new Promise((r) => srv.close(r));
   }
@@ -1828,12 +1857,12 @@ test('pipeline: detail warmup and immediate Play share one indexer fan-out', asy
     pipeline.play({ q: 'Movie 2024' }),
   ]);
 
-  assert.strictEqual(indexerFanouts, 1, 'a quick Play should join the active detail-page warmup search');
+  assert.strictEqual(indexerFanouts, expectedIndexerHits('Movie 2024'), 'a quick Play should join the active detail-page warmup search');
   assert.strictEqual(search.candidates[0].name, 'Movie.2024.1080p.WEB-DL.H.264-NTb');
   assert.strictEqual(play.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-NTb');
   assert.strictEqual(nzbHits, 1, 'Play should join the detail-page NZB prefetch instead of downloading it twice');
   const metrics = pipeline.metricsSnapshot();
-  assert.strictEqual(metrics.search.fanouts, 1, 'metrics should preserve the single fan-out proof');
+  assert.strictEqual(metrics.search.fanouts, indexerFanouts, 'metrics should preserve the single search-job proof');
   assert.ok(metrics.search.inflightJoins >= 1, 'metrics should show Play joined the warmup search');
   assert.ok(metrics.nzb.prefetches >= 1, 'detail warmup should still start the cheap NZB prefetch');
   assert.ok(metrics.nzb.inflightJoins >= 1, 'metrics should show Play joined the active NZB prefetch');
@@ -1873,7 +1902,7 @@ test('pipeline: exact-id Play reuses title-only detail warmup search', async () 
   await pipeline.search({ q: 'Movie 2024' });
   const play = await pipeline.play({ q: 'Movie 2024', imdbid: 'tt1234567' });
 
-  assert.strictEqual(indexerFanouts, 1, 'Play with catalog ids should reuse the title-only warmup search');
+  assert.strictEqual(indexerFanouts, expectedIndexerHits('Movie 2024'), 'Play with catalog ids should reuse the title-only warmup search');
   assert.strictEqual(play.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-NTb');
   assert.ok(pipeline.metricsSnapshot().search.cacheHits >= 1, 'metrics should record the warmup cache hit');
 
@@ -1910,7 +1939,7 @@ test('pipeline: TV episode Play reuses detail warmup even when season and episod
   await pipeline.search({ q: 'Show', season: '3', ep: '1' });
   const play = await pipeline.play({ q: 'Show', season: 3, ep: 1 });
 
-  assert.strictEqual(indexerFanouts, 1, 'URL-string detail warmup should satisfy numeric Play episode keys');
+  assert.strictEqual(indexerFanouts, expectedIndexerHits('Show S03E01'), 'URL-string detail warmup should satisfy numeric Play episode keys');
   assert.strictEqual(play.candidate.name, 'Show.S03E01.1080p.WEB-DL.H.264-NTb');
   assert.ok(pipeline.metricsSnapshot().search.cacheHits >= 1, 'metrics should record the episode warmup cache hit');
 
@@ -1952,7 +1981,7 @@ test('pipeline: prepared detail source is reused by Play without a second mount'
 
   assert.strictEqual(prepared.prepared, true, 'detail prepare should mount the top source');
   assert.strictEqual(play.vf.id, prepared.vf.id, 'Play should reuse the prepared live mount');
-  assert.strictEqual(indexerFanouts, 1, 'prepare and Play should reuse the warmed search');
+  assert.strictEqual(indexerFanouts, expectedIndexerHits('Movie 2024'), 'prepare and Play should reuse the warmed search');
   assert.strictEqual(pipeline.metricsSnapshot().mount.successes, 1, 'Play should not mount a second copy');
   assert.ok(pipeline.metricsSnapshot().prepare.inflightJoins >= 1, 'Play should join the in-flight title prepare');
 
@@ -1988,13 +2017,14 @@ test('pipeline: Play after a finished prepare skips a stale indexer search', asy
 
   const prepared = await pipeline.prepare({ q: 'Movie 2024' });
   assert.strictEqual(prepared.prepared, true, 'next-episode prepare should leave a live mount');
-  assert.strictEqual(indexerFanouts, 1, 'prepare should search once');
+  const warmedHits = expectedIndexerHits('Movie 2024');
+  assert.strictEqual(indexerFanouts, warmedHits, 'prepare should search once');
   for (const hit of pipeline.searchCache.values()) hit.at = Date.now() - 120000;
   const joinsBefore = pipeline.metricsSnapshot().prepare.inflightJoins;
   const play = await pipeline.play({ q: 'Movie 2024' });
 
   assert.strictEqual(play.vf.id, prepared.vf.id, 'Play Next should reuse the finished prepare mount');
-  assert.strictEqual(indexerFanouts, 1, 'a stale 60s search cache must not force another indexer fan-out');
+  assert.strictEqual(indexerFanouts, warmedHits, 'a stale 60s search cache must not force another indexer fan-out');
   assert.ok(pipeline.metricsSnapshot().prepare.inflightJoins > joinsBefore,
     'Play should count a ready-mount join after prepare has already finished');
   assert.strictEqual(pipeline.metricsSnapshot().mount.successes, 1, 'Play must not remount a prepared episode');
@@ -2116,7 +2146,7 @@ test('pipeline: Play with catalog ids joins a title-only in-flight prepare', asy
   ]);
 
   assert.strictEqual(play.vf.id, prepared.vf.id, 'IMDb Play should reuse the title-only prepare mount');
-  assert.strictEqual(indexerFanouts, 1, 'id Play should join the title-only search already in flight');
+  assert.strictEqual(indexerFanouts, expectedIndexerHits('Movie 2024'), 'id Play should join the title-only search already in flight');
   assert.strictEqual(pipeline.metricsSnapshot().mount.successes, 1);
   assert.ok(pipeline.metricsSnapshot().prepare.inflightJoins >= 1);
 
@@ -2162,7 +2192,7 @@ test('pipeline: detail prepare skips a bad top source and warms the next playabl
   assert.match(prepared.attempts[0].fail, /missing: first article unavailable/);
   assert.strictEqual(prepared.candidate.name, 'Movie.2024.1080p.WEBRip.x264-GalaxyRG');
   assert.strictEqual(play.vf.id, prepared.vf.id, 'Play should reuse the warmed fallback source');
-  assert.strictEqual(indexerFanouts, 1, 'prepare and Play should still share one warmed search');
+  assert.strictEqual(indexerFanouts, expectedIndexerHits('Movie 2024'), 'prepare and Play should still share one warmed search');
   assert.strictEqual(pipeline.metricsSnapshot().mount.successes, 1, 'the fallback source should mount once');
 
   pool.close(); await mock.close(); server.close(); store.close();

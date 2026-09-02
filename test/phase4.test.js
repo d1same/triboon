@@ -465,6 +465,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Sources D-pad navigation should move across sort buttons, down into rows, and activate sorting');
   assert.match(ui, /const autoKey = cands\[0\] && cands\[0\]\.pickKey;[\s\S]+const isAuto = c\.pickKey === autoKey;[\s\S]+isAuto \? '<span class="chip auto">Auto pick<\/span>'/,
     'Sources sorting should not move the Auto pick badge onto the largest row');
+  assert.match(ui, /if \(has4k && hasLower && \(S\.qualityPref === 3 \|\| S\.qualityPref === 4\)\)[\s\S]+cands = S\.qualityPref === 4 \? cands\.filter\(\(c\) => rk\(c\) === 4\)[\s\S]+showing 4K\. None of these are playable yet/,
+    '4K Sources lists only 4K rows and says so when they are all unplayable');
   assert.ok([
     'const displayReleaseName = (name) => {',
     ".replace(/[._]+/g, ' ')",
@@ -1727,6 +1729,17 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     'Next must appear ~70s before the file ends, even when the seek bar is padded to TMDB 60');
   assert.equal(upNextWindowReady(hourSlot, 2300, 3600), false,
     '3+ minutes left on that same 42-minute file is still too early');
+  const halfHourCut = {
+    item: { type: 'episode', runtime: 60 },
+    _reportedFileDuration: 1800,
+    duration: 3600,
+    _lastKnownDuration: 3600,
+  };
+  assert.equal(upNextLeadSeconds(halfHourCut, 1800), 50, 'a 30-minute BBC cut uses last 2.8% of the file');
+  assert.equal(upNextWindowReady(halfHourCut, 1750, 3600), true,
+    'Next must appear before a 30-minute file ends, not wait for a 60-minute TMDB slot');
+  assert.equal(upNextWindowReady(halfHourCut, 1600, 3600), false,
+    '3+ minutes left on that 30-minute file is still too early');
 
   const eofStart = ui.indexOf('function isGenuineEpisodeEof(p, pos, dur)');
   const eofEnd = ui.indexOf('function handleVodPlaybackEnded(pos, dur)', eofStart);

@@ -133,6 +133,14 @@ async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
   if (params.season != null) u.searchParams.set('season', params.season);
   if (params.ep != null) u.searchParams.set('ep', params.ep);
   if (params.cat) u.searchParams.set('cat', params.cat);
+  // Recency is the Newznab default, so page 1 of an old title is often today's
+  // small WEB encodes. A parallel size-desc search surfaces the remux/BluRay.
+  // Newznab's sort direction is `order`, not `dir`. Sending `dir` made NZBPlanet /
+  // Althub / NinjaCentral return code 201 and drop that extra page.
+  if (params.sort) u.searchParams.set('sort', params.sort);
+  const order = params.order || params.dir;
+  if (order) u.searchParams.set('order', order);
+  if (params.offset) u.searchParams.set('offset', String(params.offset));
   // 100 (most indexers' max): the default sort is recency, so a tight limit silently
   // drops older releases — every big BluRay remux of a 15-year-old film, for instance.
   u.searchParams.set('limit', params.limit || 100);

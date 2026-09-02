@@ -6,7 +6,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const {
-  Pipeline, aliasSearchQueries, yearlessSearchQuery, parseWantedTitle, releaseMatches,
+  Pipeline, aliasSearchQueries, yearlessSearchQuery, qualitySearchQuery, seasonPackSearchQuery,
+  widenSearchQueries, parseWantedTitle, releaseMatches,
 } = require('../server/pipeline');
 
 function rssFor(items) {
@@ -23,6 +24,7 @@ const CASES = [
     params: { q: 'Mutiny 2026', imdbid: 'tt32918441', aliases: ['The Mutiny'] },
     byQuery: {
       'Mutiny 2026': [
+        { name: 'Mutiny.2026.WEB-DL.1080p.x264.ENG.5.1-STARCKFILMES', url: 'http://x/stark', size: 3e9 },
         { name: 'Mutiny.on.the.Bounty.1962.1080p.BluRay-x', url: 'http://x/bounty', size: 8e9 },
         { name: 'Mutiny.2019.1080p.WEB-DL-x', url: 'http://x/2019', size: 4e9 },
       ],
@@ -35,10 +37,30 @@ const CASES = [
         { name: 'Mutiny.2026.1080p.WEB-DL-NTb', url: 'http://x/yl-1080', size: 4e9 },
         { name: 'Mutiny.on.the.Bounty.1962.1080p.BluRay-x', url: 'http://x/bounty2', size: 8e9 },
       ],
+      'Mutiny 1080p': [
+        { name: 'Mutiny.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb', url: 'http://x/hd-ntb', size: 6e9 },
+      ],
+      'Mutiny remux': [
+        { name: 'Mutiny.2026.1080p.BluRay.REMUX.AVC.DTS-HD.MA-FGT', url: 'http://x/remux', size: 22e9 },
+      ],
+      'Mutiny bluray': [
+        { name: 'Mutiny.2026.1080p.BluRay-SPARKS', url: 'http://x/bluray', size: 10e9 },
+      ],
+      'Mutiny 2160p': [
+        { name: 'Mutiny.2026.2160p.WEB-DL.H.265-FLUX', url: 'http://x/uhd-flux', size: 14e9 },
+      ],
+      'Mutiny 2026 2160p': [
+        { name: 'Mutiny.2026.2160p.AMZN.WEB-DL.DDP5.1.H.264.HUNSUB-BBM', url: 'http://x/hunsub', size: 12e9 },
+      ],
     },
     mustIncludeAfter: [
       'The.Mutiny.2026.2160p.WEB-DL.H.265-FLUX',
       'The.Mutiny.2026.1080p.WEB-DL-NTb',
+      'Mutiny.2026.2160p.WEB-DL.H.265-FLUX',
+      'Mutiny.2026.1080p.WEB-DL-NTb',
+      'Mutiny.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb',
+      'Mutiny.2026.1080p.BluRay.REMUX.AVC.DTS-HD.MA-FGT',
+      'Mutiny.2026.1080p.BluRay-SPARKS',
     ],
     mustReject: [
       'Mutiny.on.the.Bounty.1962.1080p.BluRay-x',
@@ -52,12 +74,28 @@ const CASES = [
       'From S01E01': [
         { name: 'FROM.S01E01.Long.Days.Journey.Into.Night.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX', url: 'http://x/from', size: 3e9 },
       ],
+      'From S01E01 1080p': [
+        { name: 'FROM.S01E01.1080p.WEB-DL-NTb', url: 'http://x/from-hd', size: 2.4e9 },
+      ],
+      'From S01': [
+        { name: 'FROM.S01.1080p.WEB-DL-NTb', url: 'http://x/from-pack', size: 18e9 },
+      ],
       'Tales From S01E01': [
         { name: 'Stranger.Things.Tales.From.85.S01E01.2160p.WEBRip-x', url: 'http://x/st', size: 6e9 },
+      ],
+      'From S01E01 remux': [
+        { name: 'FROM.S01E01.1080p.BluRay.REMUX.AVC.DTS-HD.MA-NTb', url: 'http://x/from-remux', size: 12e9 },
+      ],
+      'From S01E01 bluray': [
+        { name: 'FROM.S01E01.1080p.BluRay-SPARKS', url: 'http://x/from-bd', size: 8e9 },
       ],
     },
     mustIncludeAfter: [
       'FROM.S01E01.Long.Days.Journey.Into.Night.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX',
+      'FROM.S01E01.1080p.WEB-DL-NTb',
+      'FROM.S01.1080p.WEB-DL-NTb',
+      'FROM.S01E01.1080p.BluRay.REMUX.AVC.DTS-HD.MA-NTb',
+      'FROM.S01E01.1080p.BluRay-SPARKS',
     ],
     mustReject: [
       'Stranger.Things.Tales.From.85.S01E01.2160p.WEBRip-x',
@@ -109,6 +147,12 @@ const CASES = [
       'Lioness S01E01': [
         { name: 'Lioness.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb', url: 'http://x/ntb', size: 4.7e9 },
       ],
+      'Lioness S01E01 1080p': [
+        { name: 'Lioness.S01E01.1080p.WEB-DL.H.264-NTb', url: 'http://x/lioness-hd', size: 3.8e9 },
+      ],
+      'Lioness S01': [
+        { name: 'Lioness.S01.1080p.AMZN.WEB-DL-NTb', url: 'http://x/lioness-pack', size: 40e9 },
+      ],
       'Special Ops Lioness S01E01': [
         { name: 'Special.Ops.Lioness.S01E01.1080p.WEB-DL.H.264-GRP', url: 'http://x/special', size: 3e9 },
       ],
@@ -119,6 +163,8 @@ const CASES = [
     mustIncludeAfter: [
       'Lioness.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb',
       'Special.Ops.Lioness.S01E01.1080p.WEB-DL.H.264-GRP',
+      'Lioness.S01E01.1080p.WEB-DL.H.264-NTb',
+      'Lioness.S01.1080p.AMZN.WEB-DL-NTb',
     ],
     mustReject: [
       'The.Lion.King.S01E01.1080p.WEB-DL.H.264-GRP',
@@ -135,10 +181,18 @@ const CASES = [
         { name: 'The.Batman.2022.1080p.WEB-DL-NTb', url: 'http://x/aka', size: 6e9 },
         { name: 'The.Batman.S01E01.1080p.WEB-DL-x', url: 'http://x/tv', size: 2e9 },
       ],
+      'The Batman remux': [
+        { name: 'The.Batman.2022.2160p.UHD.BluRay.REMUX.HEVC.TrueHD-FraMeSToR', url: 'http://x/bat-remux', size: 66e9 },
+      ],
+      'The Batman bluray': [
+        { name: 'The.Batman.2022.1080p.BluRay-SPARKS', url: 'http://x/bat-bd', size: 14e9 },
+      ],
     },
     mustIncludeAfter: [
       'The.Batman.2022.2160p.WEB-DL-NTb',
       'The.Batman.2022.1080p.WEB-DL-NTb',
+      'The.Batman.2022.2160p.UHD.BluRay.REMUX.HEVC.TrueHD-FraMeSToR',
+      'The.Batman.2022.1080p.BluRay-SPARKS',
     ],
     mustReject: [
       'The.Batman.S01E01.1080p.WEB-DL-x',
@@ -154,9 +208,17 @@ const CASES = [
         { name: 'It.Chapter.Two.2019.2160p.UHD.BluRay.x265-TERMiNAL', url: 'http://x/ch2', size: 15e9 },
         { name: 'Power.Rangers.2017.2160p.UHD.BDRip-x', url: 'http://x/pr', size: 10e9 },
       ],
+      'It remux': [
+        { name: 'It.2017.2160p.UHD.BluRay.REMUX.HEVC.TrueHD-FraMeSToR', url: 'http://x/it-4k', size: 55e9 },
+      ],
+      'It bluray': [
+        { name: 'It.2017.1080p.BluRay-SPARKS', url: 'http://x/it-bd', size: 12e9 },
+      ],
     },
     mustIncludeAfter: [
       'It.2017.1080p.BluRay.REMUX.AVC.DTS-HD.MA-FGT',
+      'It.2017.2160p.UHD.BluRay.REMUX.HEVC.TrueHD-FraMeSToR',
+      'It.2017.1080p.BluRay-SPARKS',
     ],
     mustReject: [
       'It.Chapter.Two.2019.2160p.UHD.BluRay.x265-TERMiNAL',
@@ -209,6 +271,23 @@ test('aliasSearchQueries keeps year/episode on the aka query and skips dupes', (
   );
   assert.strictEqual(yearlessSearchQuery('Mutiny 2026', movie), 'Mutiny');
   assert.strictEqual(yearlessSearchQuery('From S01E01', parseWantedTitle('From S01E01')), '');
+  assert.strictEqual(qualitySearchQuery('Mutiny 2026', movie, '1080p'), 'Mutiny 1080p');
+  assert.strictEqual(qualitySearchQuery('Mutiny 2026', movie, '2160p'), 'Mutiny 2160p');
+  assert.strictEqual(qualitySearchQuery('From S01E01', parseWantedTitle('From S01E01'), '1080p'), 'From S01E01 1080p');
+  assert.strictEqual(seasonPackSearchQuery('From S01E01', parseWantedTitle('From S01E01')), 'From S01');
+  assert.strictEqual(seasonPackSearchQuery('Mutiny 2026', movie), '');
+  assert.deepStrictEqual(
+    widenSearchQueries('Mutiny 2026', movie, { wantUhd: false, aliases: ['The Mutiny'] }),
+    ['Mutiny', 'Mutiny 1080p', 'Mutiny remux', 'Mutiny bluray', 'The Mutiny 2026']
+  );
+  assert.deepStrictEqual(
+    widenSearchQueries('Mutiny 2026', movie, { wantUhd: true, aliases: ['The Mutiny'] }),
+    ['Mutiny 2026 2160p', 'Mutiny', 'Mutiny 2160p', 'Mutiny remux', 'Mutiny bluray', 'The Mutiny 2026']
+  );
+  assert.deepStrictEqual(
+    widenSearchQueries('From S01E01', parseWantedTitle('From S01E01'), { wantUhd: false, aliases: ['Tales From'] }),
+    ['From S01E01 1080p', 'From S01', 'From S01E01 remux', 'From S01E01 bluray', 'Tales From S01E01']
+  );
 });
 
 test('leading The on a scene name still matches a catalog title that dropped it', () => {
@@ -245,4 +324,22 @@ test('Play search widen: before vs after on several titles, no wrong files', asy
   for (const r of rows) {
     console.log(`  ${r.id}: verified ${r.beforeVerified}→${r.afterVerified}  playable ${r.beforePlayable}→${r.afterPlayable}  top=${r.topAfter || '(none)'}`);
   }
+});
+
+test('yearless NTb/FLUX still merge when titled search already found a small encode', async () => {
+  const c = CASES.find((x) => x.id === 'mutiny-2026');
+  const hd = await searchCase({ ...c, policy: { preferResolutionRank: 3, maxResolutionRank: 3 } }, {
+    widenSearch: true, withAliases: true,
+  });
+  assert.ok(hd.names.includes('Mutiny.2026.1080p.WEB-DL-NTb'), 'yearless 1080p NTb');
+  assert.ok(hd.names.includes('Mutiny.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb'), 'quality 1080p NTb');
+  assert.ok(hd.names.includes('The.Mutiny.2026.1080p.WEB-DL-NTb'), 'aka 1080p NTb');
+  assert.ok(!hd.names.includes('Mutiny.on.the.Bounty.1962.1080p.BluRay-x'));
+
+  const uhd = await searchCase({ ...c, policy: { preferResolutionRank: 4, maxResolutionRank: 4 } }, {
+    widenSearch: true, withAliases: true,
+  });
+  assert.ok(uhd.names.includes('Mutiny.2026.2160p.WEB-DL.H.265-FLUX'), 'yearless 4K FLUX');
+  assert.ok(uhd.names.includes('The.Mutiny.2026.2160p.WEB-DL.H.265-FLUX'), 'aka 4K FLUX');
+  assert.ok(uhd.names.includes('Mutiny.2026.2160p.AMZN.WEB-DL.DDP5.1.H.264.HUNSUB-BBM'), 'titled 4K still listed');
 });

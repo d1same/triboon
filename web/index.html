@@ -9178,7 +9178,10 @@ async function openSources(it) {
     const hasLower = cands.some((c) => rk(c) !== 4);
     if (has4k && hasLower && (S.qualityPref === 3 || S.qualityPref === 4)) {
       cands = S.qualityPref === 4 ? cands.filter((c) => rk(c) === 4) : cands.filter((c) => rk(c) !== 4);
-      $('drawerSub').textContent = `${it.title} — showing ${S.qualityPref === 4 ? '4K' : 'up to 1080p'} releases. Auto-pick plays the top one.`;
+      const playable4k = S.qualityPref === 4 && cands.some((c) => (Number(c.score) || 0) > -5000);
+      $('drawerSub').textContent = S.qualityPref === 4 && !playable4k
+        ? `${it.title} — showing 4K. None of these are playable yet.`
+        : `${it.title} — showing ${S.qualityPref === 4 ? '4K' : 'up to 1080p'} releases. Auto-pick plays the top one.`;
     }
     const fmtAttr = (v) => {
       if (!v || v === 'unknown') return '';
@@ -13595,6 +13598,25 @@ function playingFileSeconds(p, dur) {
   if (unpadded.length) return Math.max(player, ...unpadded);
   return Math.max(player, ...candidates);
 }
+// Remux reports duration ≈ playhead while the header is still filling. That is not credits.
+// A shorter real cut (30-min BBC in a 60-min TMDB slot) has a stable file clock — show Next.
+function remuxDurationIsPlayhead(p, t, d) {
+  const catalog = catalogRuntimeSeconds(p && p.item);
+  if (!catalog || catalog < 8 * 60) return false;
+  if (d >= catalog * 0.65) return false;
+  if ((d - t) < 20) return true;
+  const grewAt = Number(p && p._fileDurationGrewAt) || 0;
+  if (!grewAt) return false;
+  const now = (typeof appMs === 'function' ? appMs() : Date.now());
+  return (now - grewAt) < 4000;
+}
+function playingFileLooksComplete(p, t, d) {
+  const catalog = catalogRuntimeSeconds(p && p.item);
+  if (!catalog || catalog < 8 * 60) return true;
+  if (d >= catalog * 0.65) return true;
+  if (remuxDurationIsPlayhead(p, t, d)) return false;
+  return d >= 15 * 60;
+}
 function knownPlaybackSeconds(p, dur) {
   return Math.max(
     0,
@@ -14883,9 +14905,7 @@ function maybePrepareNextEpisode(t, d) {
   const fileD = playingFileSeconds(p, d);
   if (!fileD || !S.nextEp || S.nextEpPrepared || (fileD - t) > NEXT_EP_PREP_LEAD_SECONDS || (fileD - t) <= 0) return;
   if (p && (p._sourceAdvancePending || p._reMounting)) return;
-  const catalogSec = catalogRuntimeSeconds(p && p.item);
-  const fileLooksComplete = !catalogSec || catalogSec < 8 * 60 || fileD >= catalogSec * 0.65;
-  if (!fileLooksComplete) return;
+  if (!playingFileLooksComplete(p, t, fileD)) return;
   const item = S.nextEp.item; if (!item) return;
   S.nextEpPrepared = true; // one shot; play()/autoplay reuses the live mount via the server's mountByUrl
   const qRank = qualityRankForItem(item);
@@ -14976,8 +14996,7 @@ function upNextWindowReady(p, pos, dur) {
   const d = playingFileSeconds(p, dur);
   const t = Math.max(0, Number(pos) || Number(p.nativePos) || 0);
   if (d <= 0 || (d - t) <= 0) return false;
-  const catalog = catalogRuntimeSeconds(p.item);
-  const fileLooksComplete = !catalog || catalog < 8 * 60 || d >= catalog * 0.65;
+  const fileLooksComplete = playingFileLooksComplete(p, t, d);
   if (!fileLooksComplete) return false;
   return (d - t) <= upNextLeadSeconds(p, d) + 1;
 }
