@@ -19,6 +19,27 @@ const IDLE_RECYCLE_MS = 30000;     // idle sockets are presumed NAT-dropped — 
 // so background/health/read-ahead never double-fetch.
 const HEDGE_MS_DEFAULT = 3000;
 const HEDGE_PRIORITIES = new Set(['startup', 'seek', 'playback']);
+// InfiniDysk model (github.com/infinidysk/infinidysk #913 / #916): a 502 means
+// "this account is full", not "make Play wait". Learn the real cap, shrink the
+// gate with ~10% teardown headroom, keep every live socket working, and spill
+// the next article to another provider immediately. Never snap back to the
+// typed plan — that AUTH burst is what bans the account.
+const CAP_HIT_COOLDOWN_MS = 120000;
+const CONNECT_BURST = 4;
+
+function learnedConnectionLimit(e) {
+  const m = /connection limit\s*\((\d+)\)/i.exec(String((e && e.message) || e || ''));
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function shrinkSizeFromLive(live, learned) {
+  const cap = learned != null ? learned : live;
+  if (!(cap > 0)) return 0;
+  const headroom = Math.max(1, Math.floor(cap / 10));
+  return Math.max(1, cap - headroom);
+}
 
 const MAX_NNTP_BODY_BYTES = 64 * 1024 * 1024; // one yEnc article should never be remotely this large
 
@@ -47,7 +68,7 @@ function providerPickScore(p, needSlots = 0) {
   const cap = Math.max(1, Number(p.size) || 1);
   const used = ((p.busy && p.busy.size) || 0) + (Number(p.connecting) || 0) + ((p.queue && p.queue.length) || 0);
   let load = used / cap;
-  if (p.capHitAt && Date.now() - p.capHitAt < 60000) load = Math.max(load, 0.99);
+  if (p.capHitAt && Date.now() - p.capHitAt < CAP_HIT_COOLDOWN_MS) load = Math.max(load, 0.99);
   const headroom = cap - used;
   if (needSlots > 0 && headroom < needSlots) load += 10;
   else if (load >= 0.85) load += 1;
@@ -330,38 +351,47 @@ class ProviderPool {
     this._ensure(Math.min(n, this.size));
   }
 
+  _markCapHit(err) {
+    this.capHitAt = Date.now();
+    this.lastProbeAt = Date.now();
+    const next = shrinkSizeFromLive(this.conns.length, learnedConnectionLimit(err));
+    if (next < this.size) this.size = next;
+  }
+
+  _admitConn(c) {
+    if (this.closed || this.conns.length >= this.size) {
+      try { c.close(); } catch {}
+      return false;
+    }
+    this.conns.push(c);
+    return true;
+  }
+
   _ensure(target = this.size) {
     if (this.closed) return;
-    if (this.capHitAt && Date.now() - this.capHitAt > 60000) {
-      this.size = this.configuredSize;
-      this.capHitAt = 0;
-    }
-    if (this.down()) {
-      // Half-open probe: the circuit breaker is open, but allow ONE throttled reconnect so a
-      // provider that has actually recovered rejoins in seconds instead of waiting out the full
-      // backoff. A live connection clears down(); a failed probe refreshes lastConnectFailAt and
-      // keeps it open. Throttled so we never hammer a genuinely-dead host.
+    const fullyDark = this.down() || (this.capHitAt && this.conns.length === 0);
+    if (fullyDark) {
+      // Half-open probe only when this provider has ZERO live sockets. Play already
+      // spilled to the next account — this is recovery, not a user wait.
       const probeMs = this.opts.reconnectProbeMs || 8000;
       if (this.connecting > 0 || Date.now() - (this.lastProbeAt || 0) < probeMs) return;
       this.lastProbeAt = Date.now();
       target = 1;
+      if (this.size < 1) this.size = 1;
     }
-    while (!this.closed && this.conns.length + this.connecting < target) {
+    const want = Math.min(target, this.size);
+    while (!this.closed && this.conns.length + this.connecting < want && this.connecting < CONNECT_BURST) {
       this.connecting++;
       const c = new NntpConnection(this.opts);
       c.connect().then(() => {
         this.connecting--;
-        if (this.closed) { c.close(); return; }
-        this.conns.push(c);
-        this._pump();
+        if (this._admitConn(c)) this._pump();
       }, (e) => {
         this.connecting--;
         this.lastErr = e;
         this.lastConnectFailAt = Date.now();
-        if (isTooManyConnections(e) && this.conns.length > 0) {
-          this.size = this.conns.length;
-          this.capHitAt = Date.now();
-        }
+        try { c.close(); } catch {}
+        if (isTooManyConnections(e)) this._markCapHit(e);
         // If every attempt failed and nothing is live, queued work can never run — fail it.
         if (this.connecting === 0 && this.conns.length === 0 && this.queue.length) {
           const q = this.queue; this.queue = [];
@@ -764,4 +794,5 @@ class NntpPool {
 module.exports = {
   NntpConnection, NntpPool, ProviderPool, ArticleMissCache, isTooManyConnections,
   providerPickScore, providerHeadroom, streamStartupNeedSlots,
+  learnedConnectionLimit, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS, CONNECT_BURST,
 };

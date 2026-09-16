@@ -1361,6 +1361,16 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local-owned titles should not warm online source searches behind the detail page');
   assert.match(ui, /function queryFor\(it\) \{[\s\S]+if \(it\.type === 'episode' && q\) return q;[\s\S]+if \(it\.tmdbId && \(it\.type === 'movie' \|\| it\.type === 'tv'\) && exact\) return exact;[\s\S]+return q \|\| exact;/,
     'movies/shows search by title+year; episode tiles must use the clean SxxExx query, not the pretty card title');
+  assert.match(ui, /\$\('dMeta'\)\.innerHTML = metaLineHtml\(it\);/,
+    'hash-restored details must not paint ★ undefined when rating/year are still empty');
+  assert.doesNotMatch(ui, /\$\('dMeta'\)\.innerHTML = `<span class="rating">★ \$\{it\.rating\}<\/span>`/,
+    'the old stub that printed the word undefined is gone');
+  assert.match(ui, /async function ensurePlayQuery\(it\) \{[\s\S]+if \(!it \|\| queryFor\(it\)\) return it;[\s\S]+api\(`\/api\/tmdb\/\$\{type\}\/\$\{it\.tmdbId\}`\)/,
+    'Play on a title-less hash restore must hydrate the TMDB name before /api/play (q is required)');
+  assert.match(ui, /it = await ensurePlayQuery\(it\);[\s\S]+if \(!queryFor\(it\)\) \{/,
+    'Play bails with a retry toast instead of posting an empty q');
+  assert.match(ui, /try \{ d = await api\(`\/api\/tmdb\/\$\{it\.type\}\/\$\{it\.tmdbId\}`\); break; \} catch \{ throw e; \}/,
+    'a failed fat TMDB append still falls back to the bare title so Play has a query');
   assert.match(ui, /append_to_response=\$\{append\}/,
     'detail pages should fetch external IDs before source lookup so old/franchise titles can search by catalog identity');
   assert.match(ui, /credits,aggregate_credits,videos,content_ratings,release_dates,external_ids/,
@@ -3391,8 +3401,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // NNTP failover batch (owner-approved, touches the streaming-perf contract): circuit-breaker
   // half-open probe + hedged multi-provider failover for active-player BODY work.
   const nntpSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'nntp.js'), 'utf8');
-  assert.match(nntpSrc, /if \(this\.down\(\)\) \{[\s\S]+reconnectProbeMs[\s\S]+this\.lastProbeAt = Date\.now\(\);\s*\n\s*target = 1;/,
-    'a circuit-broken provider allows one throttled half-open reconnect probe instead of staying dark for the whole backoff');
+  assert.match(nntpSrc, /const fullyDark = this\.down\(\) \|\| \(this\.capHitAt && this\.conns\.length === 0\);[\s\S]+reconnectProbeMs[\s\S]+this\.lastProbeAt = Date\.now\(\);\s*\n\s*target = 1;/,
+    'a dark / 502-capped provider allows one throttled half-open probe only when it has zero live sockets — Play already spilled');
   assert.match(nntpSrc, /const HEDGE_PRIORITIES = new Set\(\['startup', 'seek', 'playback'\]\);/,
     'only active-player priorities hedge, so background/health/read-ahead never double-fetch');
   assert.match(nntpSrc, /_hedgedBody\(ordered, msgId, priority, opts\)[\s\S]+setTimeout\(\(\) => \{ hedgeTimer = null; startNext\(\); \}, hedgeMs\)/,
@@ -4857,8 +4867,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // abandoning cleanly when a newer detail supersedes it; 401/403/404 still fail fast.
   assert.match(ui, /for \(let attempt = 0; ; attempt\+\+\) \{\s*\n\s*try \{[\s\S]+d = await api\(`\/api\/tmdb\/\$\{it\.type\}\/\$\{it\.tmdbId\}\?append_to_response=\$\{append\}`\)/,
     'the detail fetch retries transient failures instead of leaving the page half-empty');
-  assert.match(ui, /if \(attempt >= 2 \|\| \[401, 403, 404\]\.includes\(e\.status\)\) throw e;/,
-    'detail retries are bounded and never mask auth/not-found failures');
+  assert.match(ui, /if \(\[401, 403, 404\]\.includes\(e\.status\)\) throw e;[\s\S]+if \(attempt >= 2\) \{[\s\S]+api\(`\/api\/tmdb\/\$\{it\.type\}\/\$\{it\.tmdbId\}`\)/,
+    'detail retries are bounded, never mask auth/not-found, and fall back to a bare title after 3 fat-append failures');
   // ---- 2026-08-07 owner batch (backdrop-per-row, taller detail art, tighter sections, preload) ----
   // The scroll-fade is a DETAIL-page behavior only. Wired to #rows/#grid it killed the backdrop
   // after ONE row on TV (grid scrolls ~326px per row vs the 360px ramp) — "backdrop only shows on

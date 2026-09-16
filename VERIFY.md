@@ -126,6 +126,30 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-16, v3.1.27 ship — InfiniDysk 502 cap, title Play q, TMDB fallback:
+
+- Version contract: `package.json` 3.1.27; Android `versionName` 3.1.27 /
+  `versionCode` 372; Windows client package/Tauri/Cargo 3.1.27.
+- NNTP 502 Too many connections now learns the provider cap, keeps a 10%
+  headroom, and spills Play to the next account. Dark probe only when that
+  provider has zero live sockets. Indexers 429/503/500/501 cool down 60s.
+- Hash-restored title pages no longer paint `★ undefined`. Play waits for a
+  real `q` (TMDB title) instead of dying with `q required`. Fat TMDB append
+  falls back to a bare title after 3 failures; 429 retries once.
+- Example: refresh `#/title/movie/27205` and hit Play. It starts. House 3.1.26
+  still died on that path until this build.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). Node suite **694/694**.
+  Isolated `/api/server` 3.1.27.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 7452ms SLOW, 1stByte 636ms; FROM ready 6249ms SLOW, 1stByte 266ms).
+  IPTV web+native retune PASS (8236 channels). Overlapping Play PASS (9ms/16ms).
+  Android lint/unit/debug build PASS. Android ExoPlayer stress on
+  `emulator-5554` PASS (`android-tv-stress-20260916-192015.json`). Windows
+  GPU not instrumented.
+- Extra live Play+skip on house 7777 (stock 3.1.26) earlier today: ~11 movies
+  and ~10 shows started, including 4K. No 502 toast on that pass.
+
 2026-09-01, v3.1.26 ship — wider source search, 2-at-a-time extras, 4K-only drawer:
 
 - Version contract: `package.json` 3.1.26; Android `versionName` 3.1.26 /

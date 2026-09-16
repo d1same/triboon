@@ -12,6 +12,7 @@ const debug = require('./debug');
 // os.totalmem() was being re-read on every rebalance. ~20% is the cross-stream buffer budget.
 const TOTAL_MEM_MB = Math.floor(os.totalmem() / (1024 * 1024));
 const { fanout, fetchUrl, normTitle } = require('./newznab');
+const { CAP_HIT_COOLDOWN_MS } = require('./nntp');
 
 // ---- title verification ----
 // Split a search query into title words + structured parts (year, SxxEyy).
@@ -791,7 +792,7 @@ function householdConnPressure(providers, now = Date.now()) {
   });
   const list = live.length ? live : providers.filter(Boolean);
   if (!list.length) return 1;
-  const allCapped = list.every((p) => p.capHitAt && now - p.capHitAt < 60000);
+  const allCapped = list.every((p) => p.capHitAt && now - p.capHitAt < CAP_HIT_COOLDOWN_MS);
   return allCapped ? 0.5 : 1;
 }
 

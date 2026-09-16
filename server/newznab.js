@@ -6,6 +6,31 @@
 const http = require('http');
 const https = require('https');
 
+const INDEXER_LIMIT_COOLDOWN_MS = 60000;
+const indexerCooldownUntil = new Map();
+
+function clearIndexerCooldowns() {
+  indexerCooldownUntil.clear();
+}
+
+function indexerIsCooling(name) {
+  const key = String(name || '');
+  const until = indexerCooldownUntil.get(key) || 0;
+  if (until <= Date.now()) {
+    if (until) indexerCooldownUntil.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function markIndexerLimited(name) {
+  indexerCooldownUntil.set(String(name || ''), Date.now() + INDEXER_LIMIT_COOLDOWN_MS);
+}
+
+function isIndexerRateLimitedMessage(text) {
+  return /\b429\b|too many request|rate.?limit|code 50[01]\b/i.test(String(text || ''));
+}
+
 // timeoutMs = idle timeout; deadlineMs = HARD total budget (a steadily-trickling download
 // never idles, so without a deadline a 30MB NZB can stall the pipeline for half a minute).
 // The deadline and hop budget are SHARED across redirects so a redirect chain can't reset the
@@ -120,6 +145,9 @@ function parseNewznabRss(xml, indexerName) {
 
 // One indexer search. params: { q, imdbid, tvdbid, season, ep, cat, limit }
 async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
+  if (indexerIsCooling(indexer.name)) {
+    throw new Error(`${indexer.name}: cooling down after a rate limit`);
+  }
   const base = indexer.url.replace(/\/+$/, '');
   const u = new URL(base.endsWith('/api') ? base : `${base}/api`);
   u.searchParams.set('apikey', indexer.apikey || '');
@@ -145,6 +173,10 @@ async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
   // drops older releases — every big BluRay remux of a 15-year-old film, for instance.
   u.searchParams.set('limit', params.limit || 100);
   const r = await fetchUrl(u.href, { timeoutMs, deadlineMs: timeoutMs }); // hard per-indexer budget
+  if (r.status === 429 || r.status === 503) {
+    markIndexerLimited(indexer.name);
+    throw new Error(`${indexer.name}: HTTP ${r.status}`);
+  }
   if (r.status !== 200) throw new Error(`${indexer.name}: HTTP ${r.status}`);
   const body = r.body.toString('utf8');
   // Newznab reports auth/limit problems as HTTP 200 + an <error> document (code 100 = wrong API
@@ -154,7 +186,9 @@ async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
   if (/<error\b/i.test(body) && !/<item>/i.test(body)) {
     const code = (/<error\b[^>]*\bcode="(\d+)"/i.exec(body) || [])[1] || '';
     const desc = decodeEntities(((/<error\b[^>]*\bdescription="([^"]*)"/i.exec(body) || [])[1] || 'indexer returned an error'));
-    throw new Error(`${indexer.name}: ${desc}${code ? ` (code ${code})` : ''}`);
+    const msg = `${indexer.name}: ${desc}${code ? ` (code ${code})` : ''}`;
+    if (code === '500' || code === '501' || isIndexerRateLimitedMessage(msg)) markIndexerLimited(indexer.name);
+    throw new Error(msg);
   }
   return parseNewznabRss(body, indexer.name);
 }
@@ -212,4 +246,7 @@ async function fanout(indexers, params, { timeoutMs = 2000, concurrency } = {}) 
   return { results: dedupe(merged), errors };
 }
 
-module.exports = { searchIndexer, fanout, dedupe, parseNewznabRss, fetchUrl, normTitle };
+module.exports = {
+  searchIndexer, fanout, dedupe, parseNewznabRss, fetchUrl, normTitle,
+  clearIndexerCooldowns, indexerIsCooling, INDEXER_LIMIT_COOLDOWN_MS,
+};

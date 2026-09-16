@@ -173,6 +173,19 @@ test('tmdb: a single transient 5xx is retried and served; 4xx fails fast without
     up.srv.on('request', (req, res) => { calls++; res.writeHead(404); res.end('{}'); });
     await assert.rejects(() => tmdb.get('/movie/404404'), /tmdb upstream 404/, '4xx surfaces as-is');
     assert.strictEqual(calls, 1, '4xx is never retried');
+
+    // 429 is a brief cap, not a missing title — one retry, then the healthy body.
+    calls = 0;
+    up.srv.removeAllListeners('request');
+    up.srv.on('request', (req, res) => {
+      calls++;
+      if (calls === 1) { res.writeHead(429); return res.end('{}'); }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ id: 27205, title: 'Inception' }));
+    });
+    const limited = await tmdb.get('/movie/27205');
+    assert.strictEqual(limited.title, 'Inception', '429 then 200 still delivers the title');
+    assert.strictEqual(calls, 2, 'exactly one retry after 429');
   } finally {
     await up.close();
   }

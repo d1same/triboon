@@ -190,9 +190,14 @@ for pause/seek on a live session. After stop, either evict the mount or park it
 as prepared-only (Back on details): zero playback touch, no 4K read-ahead, no
 active-viewer share. A same-title quality change also drops the other quality's
 warm mount. Without this, leftover 4K sockets 502 the next 1080 Play and cut
-Sources fan-out in half. A live provider `502 too many connections` also shrinks
-the pool to the sockets that actually opened and halves per-stream windows for
-60s instead of opening more.
+Sources fan-out in half. A live provider `502 too many connections` follows the
+InfiniDysk model: Play does not wait. The pool learns the real cap, shrinks
+with ~10% teardown headroom, keeps every live socket working, and the next
+article spills to another provider immediately. It does not snap back to the
+typed plan or AUTH-spam. In-flight extras that complete after the 502 are
+closed. Parallel connects stay at 4. Indexers that return HTTP 429/503 or
+Newznab limit codes 500/501 are skipped for 60s — the other indexers still
+answer so search does not stall.
 
 **Abort drain (connection preservation on pause/skip).** NNTP has no command
 cancel: the only true abort of an in-flight BODY is destroying the connection,

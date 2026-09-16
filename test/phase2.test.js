@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { parseRelease, scoreRelease, rankReleases, isCamCandidate, camScoringEnabled, DEFAULT_SCORING_KEYWORDS } = require('../server/scoring');
-const { parseNewznabRss, dedupe, fanout, searchIndexer, normTitle } = require('../server/newznab');
+const { parseNewznabRss, dedupe, fanout, searchIndexer, normTitle, clearIndexerCooldowns } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
 const {
   Pipeline, GATE_MS, nzbVerdictKey, releaseFingerprint, summarizeAttempts, stubFeatureReason, mountHasActivePlayback, mountNeedsUsenetShare,
@@ -1569,6 +1569,30 @@ test('newznab: an HTTP-200 <error> document (wrong API key) fails the search ins
     assert.strictEqual(errors.length, 1, 'the mis-keyed indexer is attributed in errors');
     assert.match(errors[0].error, /Incorrect user credentials/);
   } finally { await new Promise((r) => srv2.close(r)); }
+});
+
+test('newznab: limit/429 cools the indexer so the next search does not hammer it', async () => {
+  clearIndexerCooldowns();
+  let hits = 0;
+  const srv = http.createServer((req, res) => {
+    hits++;
+    res.writeHead(200, { 'content-type': 'application/xml' });
+    res.end('<?xml version="1.0"?><error code="500" description="Download limit reached"/>');
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    await assert.rejects(
+      searchIndexer({ name: 'limited', url: base, apikey: 'k' }, { q: 'test' }, { timeoutMs: 2000 }),
+      /Download limit reached \(code 500\)/);
+    await assert.rejects(
+      searchIndexer({ name: 'limited', url: base, apikey: 'k' }, { q: 'test' }, { timeoutMs: 2000 }),
+      /cooling down after a rate limit/);
+    assert.strictEqual(hits, 1, 'the second search must not hit the indexer during cooldown');
+  } finally {
+    clearIndexerCooldowns();
+    await new Promise((r) => srv.close(r));
+  }
 });
 
 test('newznab: parses RSS, dedupes by title + size window', () => {

@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const http = require('http');
 const { encodePart, decode, crc32 } = require('../server/yenc');
 const { parseNzb, pickPrimaryFile } = require('../server/nzb');
-const { NntpPool, ProviderPool } = require('../server/nntp');
+const { NntpPool, ProviderPool, NntpConnection, CONNECT_BURST, shrinkSizeFromLive } = require('../server/nntp');
 const { VirtualFile, SharedCacheBudget } = require('../server/vfs');
 const { createMockNntp } = require('./mock-nntp');
 
@@ -796,7 +796,6 @@ test('nntp: a draining transfer that outlives its grace is still killed — drai
 // (startup/seek/playback/health) keep the one-command-per-connection contract.
 
 test('nntp: 502 too many connections stops opening more sockets', async () => {
-  const { NntpConnection } = require('../server/nntp');
   const orig = NntpConnection.prototype.connect;
   NntpConnection.prototype.connect = async () => { throw new Error('502 too many connections'); };
   try {
@@ -809,6 +808,57 @@ test('nntp: 502 too many connections stops opening more sockets', async () => {
   } finally {
     NntpConnection.prototype.connect = orig;
   }
+});
+
+test('nntp: 502 with zero live sockets still freezes the plan', async () => {
+  const orig = NntpConnection.prototype.connect;
+  let attempts = 0;
+  NntpConnection.prototype.connect = async () => {
+    attempts++;
+    throw new Error('NNTP auth failed: 502 Too many connections');
+  };
+  try {
+    const pool = new ProviderPool({ host: 'x', reconnectProbeMs: 60_000 }, 20);
+    pool._ensure(20);
+    await new Promise((r) => setTimeout(r, 40));
+    const firstWave = attempts;
+    assert.ok(pool.capHitAt > 0, 'empty-pool 502 must still set capHitAt');
+    assert.ok(firstWave <= CONNECT_BURST, 'do not AUTH the whole plan when the account is already full');
+    pool._ensure(20);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(attempts, firstWave, 'a second _ensure during cooldown must not open more sockets');
+  } finally {
+    NntpConnection.prototype.connect = orig;
+  }
+});
+
+test('nntp: after a 502, keep live sockets and never snap back to the typed plan', () => {
+  const orig = NntpConnection.prototype.connect;
+  NntpConnection.prototype.connect = () => new Promise(() => {});
+  try {
+    const pool = new ProviderPool({ host: 'x' }, 20);
+    for (let i = 0; i < 10; i++) pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });
+    pool.size = 20;
+    pool._markCapHit(new Error('502 Too many connections'));
+    assert.strictEqual(pool.size, shrinkSizeFromLive(10, null), 'shrink with headroom, keep the 10 live sockets');
+    assert.strictEqual(pool.conns.length, 10, 'Play keeps using the sockets already open');
+    pool._ensure(20);
+    assert.strictEqual(pool.size, shrinkSizeFromLive(10, null), 'do not refill the leftover 10 and AUTH-spam');
+  } finally {
+    NntpConnection.prototype.connect = orig;
+  }
+});
+
+test('nntp: late AUTH after a 502 is closed instead of joining the pool', () => {
+  const pool = new ProviderPool({ host: 'x' }, 8);
+  pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });
+  pool.size = 1;
+  pool.capHitAt = Date.now();
+  let closed = 0;
+  const extra = { close() { closed++; } };
+  assert.strictEqual(pool._admitConn(extra), false);
+  assert.strictEqual(pool.conns.length, 1);
+  assert.strictEqual(closed, 1, 'the extra socket must be closed, not kept');
 });
 
 test('nntp pipelining: OFF by default — a second low-lane task waits for a free connection', async () => {

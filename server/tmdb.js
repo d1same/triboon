@@ -53,16 +53,18 @@ class TmdbProxy {
     if (hit && ttl > 0 && Date.now() - hit.at < ttl && !this._externalIdsEmpty(path, hit.data)) return hit.data;
 
     const sep = path.includes('?') ? '&' : '?';
-    // ONE retry on transient upstream failure (timeout / 5xx / reset). A single TMDB hiccup used to
-    // 500 straight through to the client, and the detail page renders its whole body (cast, crew,
-    // seasons, related) from one big append_to_response call — so the owner saw "cast and rest
-    // don't load, go back and try again" (2026-08-08). 4xx (bad key, missing title, rate-limit
-    // status) still fails fast: retrying can't fix those.
+    // ONE retry on transient upstream failure (timeout / 5xx / 429 / reset). A single TMDB hiccup
+    // used to 500 straight through to the client, and the detail page renders its whole body
+    // (cast, crew, seasons, related) from one big append_to_response call — so the owner saw
+    // "cast and rest don't load, go back and try again" (2026-08-08). Real 4xx (bad key, missing
+    // title) still fails fast. 429 is transient — fail-fast used to turn a brief cap into a blank
+    // detail page and a Play that died with "q required" because the title never arrived.
     let r;
     for (let attempt = 0; ; attempt++) {
       try {
         r = await fetchUrl(`${this.baseUrl}${path}${sep}api_key=${key}`, { timeoutMs: 8000 });
-        if (r.status === 200 || (r.status >= 400 && r.status < 500)) break;
+        if (r.status === 200) break;
+        if (r.status >= 400 && r.status < 500 && r.status !== 429) break;
         throw new Error(`tmdb upstream ${r.status}`);
       } catch (e) {
         if (attempt >= 1) { const err = new Error(e.message || 'tmdb upstream failed'); err.status = 502; throw err; }
