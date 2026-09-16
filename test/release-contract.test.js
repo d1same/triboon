@@ -297,6 +297,12 @@ test('release contract: tag artifacts publish only after provenance and native g
   const windowsPackage = read('clients/windows-px8/scripts/build-package.ps1');
   assert.match(nativeClient, /\$buildParams = @\{[\s\S]+CacheDirectory = Join-Path \$env:RUNNER_TEMP 'triboon-libmpv'[\s\S]+ArtifactDirectory = 'dist'[\s\S]+\$buildParams\.Tag = \$env:TAG[\s\S]+\.\\clients\\windows-px8\\scripts\\build-package\.ps1 @buildParams/,
     'CI calls the same checked-in Windows package recipe with named parameters used locally');
+  const setupAndroidUses = [...workflow.matchAll(/android-actions\/setup-android@[0-9a-f]{40}[^\n]*\s+with:\s+packages:\s*([^\s#]+)/g)];
+  assert.equal(setupAndroidUses.length, 2, 'android and release-apk both pin setup-android packages');
+  for (const match of setupAndroidUses) {
+    assert.equal(match[1].replace(/['"]/g, ''), 'platform-tools',
+      'Android SDK setup must not install the removed legacy tools package');
+  }
   assert.match(windowsPackage, /\$libMpvArchiveUrl = 'https:\/\/github\.com\/zhongfly\/mpv-winbuild\/releases\/download\/[^']+\/mpv-dev-lgpl-x86_64-[^']+\.7z'/,
     'the production libmpv bundle uses an immutable LGPL release URL');
   assert.match(windowsPackage, /\$libMpvArchiveSha256 = '[0-9a-f]{64}'/,

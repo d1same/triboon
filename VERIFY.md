@@ -147,8 +147,15 @@ fails to produce a playable stream. Budgets default to feels-local targets
   Android lint/unit/debug build PASS. Android ExoPlayer stress on
   `emulator-5554` PASS (`android-tv-stress-20260916-192015.json`). Windows
   GPU not instrumented.
-- Extra live Play+skip on house 7777 (stock 3.1.26) earlier today: ~11 movies
+-   Extra live Play+skip on house 7777 (stock 3.1.26) earlier today: ~11 movies
   and ~10 shows started, including 4K. No 502 toast on that pass.
+- First `v3.1.27` tag CI failed: zhongfly dropped the Aug 12 LGPL archive
+  (30-day retention) and `setup-android` still asked for the removed SDK
+  `tools` package. Lock now targets live `2026-09-16-0b7ed670f7` LGPL x86-64
+  (`cd369d2e502e140d442f9689bc312f8ec0a4d3d1b6bda7836834035085938e57` /
+  DLL `5c6ac9a72fefdcd5de885e9f99528e1e9b2f5fc4682725291ff44f685750dbaf`).
+  Android CI installs `platform-tools` only. No published release existed,
+  so the same `v3.1.27` tag is moved onto this CI-fix commit.
 
 2026-09-01, v3.1.26 ship — wider source search, 2-at-a-time extras, 4K-only drawer:
 
