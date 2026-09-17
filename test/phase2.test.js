@@ -23,7 +23,7 @@ const {
 function expectedIndexerHits(q, extra = {}) {
   return 1 + widenSearchJobs(q, parseWantedTitle(q), extra).length;
 }
-const { NntpPool, ProviderPool, streamStartupNeedSlots } = require('../server/nntp');
+const { NntpPool, ProviderPool, TransferMeter, streamStartupNeedSlots } = require('../server/nntp');
 const { NzbFileStream } = require('../server/vfs');
 const { createMockNntp } = require('./mock-nntp');
 const { encodePart } = require('../server/yenc');
@@ -2804,7 +2804,7 @@ test('pipeline e2e: ranks, skips dead + unstreamable candidates, plays the good 
   // Playback read-ahead boost: streamable mounts leave the conservative default behind, while
   // decoded segment retention stays byte-capped so large 4K posts cannot balloon memory.
   for (const v of (vf.vols || [vf])) {
-    assert.strictEqual(v.readAhead, 10, 'playback mount starts at the Auto 10-connection window');
+    assert.strictEqual(v.readAhead, 4, 'playback mount starts at the need-based Auto window');
     assert.strictEqual(v.cacheMax, 36, 'playback mount cache window boosted without retaining too many decoded segments');
     assert.strictEqual(v.cacheMaxBytes, 96 * 1024 * 1024, 'playback mount cache byte budget set');
   }
@@ -3317,8 +3317,8 @@ test('pipeline: active mount rebalance shrinks read-ahead when another stream st
   const first = mk('first');
   mounts.set(first.id, first);
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1);
-  assert.strictEqual(first.readAhead, 10, 'single Auto stream starts at 10 and leaves spare for the next Play');
-  assert.strictEqual(first.maxReadAhead, 10, 'a healthy Auto stream does not boost past the bandwidth cap');
+  assert.strictEqual(first.readAhead, 4, 'single Auto stream starts at the 1080p need and leaves spare for the next Play');
+  assert.strictEqual(first.maxReadAhead, 4, 'a healthy Auto stream does not boost past the bandwidth cap');
   assert.strictEqual(first.cacheMaxBytes, 96 * 1024 * 1024, 'single stream gets the full 1080p cache budget');
   first._warmedResumeFrac = 0.5;
   first._warmedResumeRange = { start: 100, end: 200, at: now };
@@ -3326,10 +3326,10 @@ test('pipeline: active mount rebalance shrinks read-ahead when another stream st
   const second = mk('second');
   mounts.set(second.id, second);
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 2);
-  assert.strictEqual(first.readAhead, 8, 'existing stream shrinks to the fair connection share');
-  assert.strictEqual(second.readAhead, 8, 'new stream receives the same fair connection share');
-  assert.strictEqual(first.maxReadAhead, 9, 'existing stream may only borrow bounded spare reserve');
-  assert.strictEqual(second.maxReadAhead, 9, 'new stream boost ceiling matches the fair reserve model');
+  assert.strictEqual(first.readAhead, 4, 'existing stream stays on the 1080p need when a neighbor joins');
+  assert.strictEqual(second.readAhead, 4, 'new stream gets the same 1080p need, not leftover spare');
+  assert.strictEqual(first.maxReadAhead, 4, 'existing stream does not borrow spare just because a second Play started');
+  assert.strictEqual(second.maxReadAhead, 4, 'new stream boost ceiling stays on the need');
   assert.strictEqual(first.cacheMaxBytes, 48 * 1024 * 1024, 'existing stream cache budget shrinks with concurrency');
   assert.strictEqual(second.cacheMaxBytes, 48 * 1024 * 1024, 'new stream cache budget matches concurrency');
   assert.strictEqual(first._warmedResumeRange, null, 'an active fair-share cache shrink invalidates stale resume coverage');
@@ -3365,23 +3365,22 @@ test('pipeline: auto grow/give-away uses playhead coverage, not tail cache or a 
     perf,
     { viewerChanged: true, now, holdMs: 8000 },
   );
-  assert.deepStrictEqual([...even], [8, 8], 'unknown coverage stays on even fair-share');
+  assert.deepStrictEqual([...even], [4, 4], 'unknown coverage stays on the need-based share');
 
   const join = allocateStreamConnections(
     [held('fat', 200e6), held('starve', 0)],
     perf,
     { viewerChanged: true, now, holdMs: 8000, lastStealAt: 0 },
   );
-  assert.deepStrictEqual([...join], [8, 8], 'a new Play must not dump a healthy stream to the floor');
+  assert.deepStrictEqual([...join], [4, 4], 'a new Play must not dump a healthy stream below the floor');
 
   const steal = allocateStreamConnections(
     [held('fat', 200e6), held('starve', 0)],
     perf,
     { viewerChanged: false, now, holdMs: 8000, lastStealAt: 0 },
   );
-  assert.ok(steal[1] > steal[0], 'a held starve takes read-ahead sockets from a held fat stream');
+  assert.ok(steal[1] > steal[0], 'a held starve grows from leftover spare or a fat stream');
   assert.ok(steal[0] >= 4, 'give-away never steals the playback-head floor');
-  assert.ok(steal.stole, 'a real give-away is reported so the cooldown can arm');
 
   const custom = allocateStreamConnections(
     [held('fat', 200e6), held('starve', 0)],
@@ -3438,7 +3437,7 @@ test('pipeline: auto grow/give-away uses playhead coverage, not tail cache or a 
     perf,
     { viewerChanged: false, now, holdMs: 0, lastStealAt: 0, growFrozen: true },
   );
-  assert.deepStrictEqual([...frozen], [8, 8], 'a recent 502 freezes grow and give-away');
+  assert.deepStrictEqual([...frozen], [4, 4], 'a recent 502 freezes grow and give-away');
 
   const cached = allocateStreamConnections(
     [
@@ -3469,10 +3468,10 @@ test('pipeline: auto grow/give-away uses playhead coverage, not tail cache or a 
     perf,
     { viewerChanged: false, now },
   );
-  assert.strictEqual(freshCached[0], 10, 'a fresh Play starts at 10 even if the small file is already in RAM');
+  assert.strictEqual(freshCached[0], 4, 'a fresh small Play starts at the need, not leftover spare');
 });
 
-test('pipeline: Auto starts at 10, grows only when behind, and sizes cache by RAM need', () => {
+test('pipeline: Auto sizes sockets from bitrate, grows only when behind, and sizes cache by RAM need', () => {
   const now = 2_000_000;
   const perf = { usableConnections: 24, reserveConnections: 4, connectionMode: 'auto' };
   const alone = allocateStreamConnections(
@@ -3480,7 +3479,7 @@ test('pipeline: Auto starts at 10, grows only when behind, and sizes cache by RA
     perf,
     { viewerChanged: false, now },
   );
-  assert.deepStrictEqual([...alone], [10], 'a healthy Play starts at 10 and does not lock leftover sockets');
+  assert.deepStrictEqual([...alone], [4], 'a healthy 1080p Play uses the need, not leftover sockets');
 
   const behind = allocateStreamConnections(
     [{
@@ -3502,7 +3501,7 @@ test('pipeline: Auto starts at 10, grows only when behind, and sizes cache by RA
     perf,
     { viewerChanged: false, now, holdMs: 0 },
   );
-  assert.deepStrictEqual([...fat], [10], 'a fat Play stays at 10 so spare is ready for someone else');
+  assert.deepStrictEqual([...fat], [4], 'a fat 1080p Play stays at the need so spare is ready for someone else');
 
   assert.ok(autoStreamCap({ size: 8e9, _tracks: { duration: 700 } }, perf, { starving: true })
     > autoStreamCap({ size: 2e9 }, perf),
@@ -3623,7 +3622,67 @@ test('pipeline: two fresh Plays split leftover sockets instead of the first one 
     { usableConnections: 28, reserveConnections: 4, connectionMode: 'auto' },
     { viewerChanged: false, now },
   );
-  assert.deepStrictEqual([...assigned], [12, 12], 'leftover sockets rotate so the second Play is not stuck at 10');
+  assert.deepStrictEqual([...assigned], [12, 12], 'two 4K Plays share the pipe instead of each taking 15');
+});
+
+test('pipeline: Auto uses fewer sockets when each one is fast, more when evening is slow, and freezes on a full home pipe', () => {
+  const now = 2_000_000;
+  const uhd = {
+    size: 8e9, _tracks: { duration: 700 },
+    _activeStreamReads: 1, _playbackTouched: now - 60_000,
+  };
+  const hd = {
+    size: 2e9,
+    _activeStreamReads: 1, _playbackTouched: now - 60_000,
+  };
+  const fast = allocateStreamConnections(
+    [uhd, hd],
+    {
+      usableConnections: 40, reserveConnections: 4, connectionMode: 'auto',
+      serverDownloadMbps: 800, measuredMbpsPerConn: 28,
+    },
+    { viewerChanged: false, now },
+  );
+  assert.ok(fast[0] >= fast[1], '4K still gets at least as many sockets as 1080p');
+  assert.ok(fast[0] <= 6, 'a 28 Mbps socket feeds 4K without opening a pile of them');
+  assert.ok(fast.reduce((s, n) => s + n, 0) * 28 < 800 * 0.8, 'fast sockets stay under the 800 Mbps safe pipe');
+
+  const evening = allocateStreamConnections(
+    [{
+      ...uhd, aheadCacheBytes: 0,
+      _allocKind: 'starve', _allocKindSince: now - 15_000,
+    }],
+    {
+      usableConnections: 40, reserveConnections: 4, connectionMode: 'auto',
+      serverDownloadMbps: 800, liveMbpsPerConn: 8,
+    },
+    { viewerChanged: false, now, holdMs: 0 },
+  );
+  assert.ok(evening[0] > fast[0], 'evening-slow sockets add more so the 4K still fills');
+
+  const fullPipe = allocateStreamConnections(
+    [{
+      ...uhd, aheadCacheBytes: 0,
+      _allocKind: 'starve', _allocKindSince: now - 15_000,
+    }],
+    {
+      usableConnections: 40, reserveConnections: 4, connectionMode: 'auto',
+      serverDownloadMbps: 800, liveMbpsPerConn: 8, liveHouseMbps: 520,
+    },
+    { viewerChanged: false, now, holdMs: 0 },
+  );
+  assert.ok(fullPipe[0] < evening[0], 'a full home pipe does not add more sockets on top of congestion');
+});
+
+test('nntp: TransferMeter reports house fill and per-connection speed from real article bytes', () => {
+  const meter = new TransferMeter(8000);
+  const t0 = Date.now();
+  meter.note(2_500_000, 2);
+  meter.note(2_500_000, 2);
+  const snap = meter.snapshot(t0 + 1000);
+  assert.ok(snap.houseMbps > 20, 'two 2.5MB hits in a second are tens of Mbps');
+  assert.ok(snap.mbpsPerConn > 10 && snap.mbpsPerConn < snap.houseMbps, 'per-connection is house fill divided by busy sockets');
+  assert.strictEqual(snap.samples, 2);
 });
 
 test('pipeline: prepared-only mounts keep a bounded speculative window without consuming a viewer share', () => {
@@ -3670,15 +3729,15 @@ test('pipeline: prepared-only mounts keep a bounded speculative window without c
     'identical prepared-window reapplication preserves fresh resume coverage');
 
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1, 'only the mount with a real player read consumes a viewer share');
-  assert.strictEqual(playing.readAhead, 10, 'focused/prepared cards do not shrink the live Auto window');
+  assert.strictEqual(playing.readAhead, 4, 'focused/prepared cards do not shrink the live Auto window');
   assert.strictEqual(playing.cacheMaxBytes, 96 * 1024 * 1024, 'focused/prepared cards do not shrink the live stream cache window');
   assert.strictEqual(prepared.cacheMaxBytes, 384 * 1024 * 1024, 'rebalance leaves the wide details peek intact while the house has room');
 
   prepared._preparedOnly = false;
   prepared._playbackTouched = now;
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 2, 'promotion by a real player read joins fair-share accounting');
-  assert.strictEqual(playing.readAhead, 8);
-  assert.strictEqual(prepared.readAhead, 8);
+  assert.strictEqual(playing.readAhead, 4);
+  assert.ok(prepared.readAhead >= 4 && prepared.readAhead > playing.readAhead, 'a promoted 4K prepare takes a larger need-based share than the live 1080p');
 });
 
 test('pipeline: a local library Play does not steal usenet sockets', () => {

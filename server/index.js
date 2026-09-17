@@ -411,6 +411,15 @@ function totalProviderConnections(provs = providerList()) {
 
 const lastMeasuredProviderSpeed = { mbpsPerConn: 0, connCap: 0, at: 0 };
 
+function livePipeSnapshot() {
+  try {
+    if (!pool || !pool.meter) return { houseMbps: 0, mbpsPerConn: 0, at: 0, samples: 0 };
+    return pool.meter.snapshot();
+  } catch {
+    return { houseMbps: 0, mbpsPerConn: 0, at: 0, samples: 0 };
+  }
+}
+
 function streamingRuntimeProfile() {
   const perf = normalizeStreamingPerformance(settings.get().streamingPerformance || {});
   const totalConnections = totalProviderConnections();
@@ -418,13 +427,25 @@ function streamingRuntimeProfile() {
   const reserveConnections = usableConnections
     ? Math.max(2, Math.ceil(usableConnections * perf.startupReservePct / 100))
     : 0;
-  const measuredMbpsPerConn = Number(perf.measuredMbpsPerConn) > 0
+  const live = livePipeSnapshot();
+  const liveFresh = live.at > 0 && (Date.now() - live.at) < 15000 && live.mbpsPerConn > 0;
+  const savedMbps = Number(perf.measuredMbpsPerConn) > 0
     ? Number(perf.measuredMbpsPerConn)
     : (Number(lastMeasuredProviderSpeed.mbpsPerConn) || 0);
+  const measuredMbpsPerConn = liveFresh ? live.mbpsPerConn : savedMbps;
   const measuredConnCap = Number(perf.measuredConnCap) > 0
     ? Number(perf.measuredConnCap)
     : (Number(lastMeasuredProviderSpeed.connCap) || 0);
-  return { ...perf, totalConnections, usableConnections, reserveConnections, measuredMbpsPerConn, measuredConnCap };
+  return {
+    ...perf,
+    totalConnections,
+    usableConnections,
+    reserveConnections,
+    measuredMbpsPerConn,
+    measuredConnCap,
+    liveHouseMbps: live.houseMbps || 0,
+    liveMbpsPerConn: live.mbpsPerConn || 0,
+  };
 }
 
 // Throttle the per-Range rebalance: the stream handler fired pipeline.rebalancePlaybackWindows() on
@@ -563,6 +584,8 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
       deliverableMbps: Math.round(deliverableMbps) || 0,
       measuredMbpsPerConn: measuredPerConn || 0,
       measuredConnCap: measuredCap || 0,
+      liveHouseMbps: livePipeSnapshot().houseMbps || 0,
+      liveMbpsPerConn: livePipeSnapshot().mbpsPerConn || 0,
     },
     warnings,
   };

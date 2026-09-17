@@ -75,6 +75,42 @@ function providerPickScore(p, needSlots = 0) {
   return load;
 }
 
+// Rolling download sample from real article bodies. Play uses this instead of a
+// second speed-test so evening slowness shows up without fighting the movie for
+// sockets. houseMbps = home pipe fill; mbpsPerConn = fill / busy sockets.
+class TransferMeter {
+  constructor(windowMs = 8000) {
+    this.windowMs = windowMs;
+    this.events = [];
+  }
+  note(bytes, busy = 1) {
+    const n = Number(bytes) || 0;
+    if (!(n > 0)) return;
+    this.events.push({ t: Date.now(), bytes: n, busy: Math.max(1, Number(busy) || 1) });
+    this._trim();
+  }
+  _trim(now = Date.now()) {
+    const cut = now - this.windowMs;
+    while (this.events.length && this.events[0].t < cut) this.events.shift();
+  }
+  snapshot(now = Date.now()) {
+    this._trim(now);
+    if (!this.events.length) return { houseMbps: 0, mbpsPerConn: 0, at: 0, samples: 0 };
+    const bytes = this.events.reduce((s, e) => s + e.bytes, 0);
+    const t0 = this.events[0].t;
+    const secs = Math.max(0.25, (now - t0) / 1000);
+    const houseMbps = (bytes * 8) / 1e6 / secs;
+    const busyAvg = this.events.reduce((s, e) => s + e.busy, 0) / this.events.length;
+    const mbpsPerConn = houseMbps / Math.max(1, busyAvg);
+    return {
+      houseMbps: Number(houseMbps.toFixed(2)),
+      mbpsPerConn: Number(mbpsPerConn.toFixed(2)),
+      at: now,
+      samples: this.events.length,
+    };
+  }
+}
+
 function streamStartupNeedSlots(size, priority, name) {
   if (priority !== 'startup' && priority !== 'seek') return 0;
   const bytes = Number(size) || 0;
@@ -600,7 +636,13 @@ class ProviderPool {
   }
 
   stat(msgId, priority = 'health', opts = {}) { return this.run((c) => c.stat(msgId, opts), priority, opts); }
-  body(msgId, priority = 'playback', opts = {}) { return this.run((c) => c.body(msgId, opts), priority, opts); }
+  body(msgId, priority = 'playback', opts = {}) {
+    return this.run(async (c) => {
+      const buf = await c.body(msgId, opts);
+      if (this.meter) this.meter.note(buf && buf.length, this.busy.size);
+      return buf;
+    }, priority, opts);
+  }
   // Circuit breaker: a provider with zero live connections and a connect failure in the last
   // 60s is "down" — multi-provider routing deprioritizes it instead of paying the failure on
   // EVERY article. It self-heals: after 60s (or one successful connect) it's back in rotation.
@@ -635,8 +677,12 @@ class NntpPool {
     this.opts = list[0];
     this.size = size;
     this.missCache = new ArticleMissCache();
+    this.meter = new TransferMeter();
     const preferPeerFailover = this.providers.length > 1;
-    for (const p of this.providers) p.preferPeerFailover = preferPeerFailover;
+    for (const p of this.providers) {
+      p.preferPeerFailover = preferPeerFailover;
+      p.meter = this.meter;
+    }
   }
 
   // Warm every provider (combined mode uses them all) — primary a bit deeper than the rest.
@@ -786,13 +832,14 @@ class NntpPool {
       open: providers.reduce((n, p) => n + p.open, 0),
       size: providers.reduce((n, p) => n + p.size, 0),
       queued: providers.reduce((n, p) => n + p.queued, 0),
+      throughput: this.meter ? this.meter.snapshot() : { houseMbps: 0, mbpsPerConn: 0, at: 0, samples: 0 },
     };
   }
   close() { for (const p of this.providers) p.close(); }
 }
 
 module.exports = {
-  NntpConnection, NntpPool, ProviderPool, ArticleMissCache, isTooManyConnections,
+  NntpConnection, NntpPool, ProviderPool, ArticleMissCache, TransferMeter, isTooManyConnections,
   providerPickScore, providerHeadroom, streamStartupNeedSlots,
   learnedConnectionLimit, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS, CONNECT_BURST,
 };

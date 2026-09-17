@@ -634,18 +634,20 @@ function mountNeedsUsenetShare(mount, now = Date.now()) {
   return !!(mount && !mount._local && mountHasActivePlayback(mount, now));
 }
 
-// Live connection allocator. Fair-share is the default. Auto mode may grow a starving
-// playhead and take extra read-ahead sockets from a fat one. Custom mode stays on even
-// split. Coverage is bytes AHEAD of the last player read — tail warmup must not look fat.
+// Live connection allocator. Auto sizes sockets from movie bitrate ÷ live (or
+// measured) Mbps/connection, then freezes grow when the home download pipe is
+// already full. Custom mode stays on even split. Coverage is bytes AHEAD of the
+// last player read — tail warmup must not look fat.
 const ALLOC_STARVE_SEC = 20;
 const ALLOC_FAT_SEC = 75;
 const ALLOC_STEAL_STEP = 2;
 const ALLOC_STARTUP_MS = 8000;
 const ALLOC_HOLD_MS = 8000;
 const ALLOC_STEAL_COOLDOWN_MS = 5000;
-const AUTO_BASE_CONNS = 10;
+const AUTO_BASE_CONNS = 4;
 const AUTO_HARD_MAX = 24;
 const DEFAULT_MBPS_PER_CONN = 8;
+const PIPE_FULL_RATIO = 0.75;
 const UHD_SIZE_BYTES = 4e9;
 const UHD_AVG_MBPS = 20;
 
@@ -747,17 +749,29 @@ function heldAllocKind(vf, raw, now, holdMs) {
 // A 502 is one account saying it is full. With several providers that is not a
 // household-wide cap — only squeeze Auto grow when every usable provider is at 502.
 function mbpsPerConnection(perf = {}) {
+  const live = Number(perf && perf.liveMbpsPerConn);
+  if (Number.isFinite(live) && live > 0) return Math.max(2, Math.min(40, live));
   const measured = Number(perf && perf.measuredMbpsPerConn);
   if (Number.isFinite(measured) && measured > 0) return Math.max(2, Math.min(40, measured));
   return DEFAULT_MBPS_PER_CONN;
 }
 
+function needSocketsFor(needMbps, perConn) {
+  const p = Number(perConn) > 0 ? Number(perConn) : DEFAULT_MBPS_PER_CONN;
+  const n = Math.ceil((Number(needMbps) || 0) / p);
+  return Math.max(AUTO_BASE_CONNS, Math.min(AUTO_HARD_MAX, Number.isFinite(n) && n > 0 ? n : AUTO_BASE_CONNS));
+}
+
+function pipeIsSaturated(perf = {}) {
+  const downMbps = Number(perf.serverDownloadMbps) > 0 ? Number(perf.serverDownloadMbps) * 0.8 : 0;
+  const live = Number(perf.liveHouseMbps);
+  return downMbps > 0 && Number.isFinite(live) && live > 0 && live >= downMbps * PIPE_FULL_RATIO;
+}
+
 function autoStreamCap(vf, perf = {}, { starving = false } = {}) {
-  const need = streamNeedMbps(vf);
-  const fromBw = Math.ceil(need / mbpsPerConnection(perf));
-  const want = Math.max(AUTO_BASE_CONNS, Number.isFinite(fromBw) ? fromBw : AUTO_BASE_CONNS);
-  const room = starving ? Math.ceil(want * 1.6) : want;
-  return Math.max(4, Math.min(AUTO_HARD_MAX, room));
+  const base = needSocketsFor(streamNeedMbps(vf), mbpsPerConnection(perf));
+  const room = starving ? Math.ceil(base * 1.6) : base;
+  return Math.max(AUTO_BASE_CONNS, Math.min(AUTO_HARD_MAX, room));
 }
 
 function playbackRamFraction(totalMemMb = TOTAL_MEM_MB) {
@@ -832,7 +846,7 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
   const measuredPerConn = Number(perf.measuredMbpsPerConn) > 0 ? Number(perf.measuredMbpsPerConn) : 0;
   const viewerChanged = opts.viewerChanged === true;
   const custom = perf.connectionMode === 'custom' || opts.connectionMode === 'custom';
-  const growFrozen = opts.growFrozen === true;
+  const growFrozen = opts.growFrozen === true || (!custom && pipeIsSaturated(perf));
   const now = Number.isFinite(opts.now) ? opts.now : Date.now();
   const holdMs = Number.isFinite(opts.holdMs) ? Math.max(0, opts.holdMs) : ALLOC_HOLD_MS;
   const lastStealAt = Number(opts.lastStealAt) || 0;
@@ -871,26 +885,42 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
   }
 
   const noBudget = !(usable > 0);
-  const fair = assignable > 0 ? Math.max(4, Math.floor(assignable / n)) : 4;
+  const evenFair = assignable > 0 ? Math.max(4, Math.floor(assignable / n)) : 4;
   const assigned = meta.map((m) => {
-    // No streaming-profile budget (tests / unset house): Auto still starts at 10.
-    const start = custom
-      ? (noBudget ? m.cap : fair)
-      : (noBudget ? AUTO_BASE_CONNS : Math.min(AUTO_BASE_CONNS, fair));
-    return Math.min(m.cap, Math.max(m.floor, start));
+    if (custom) {
+      const start = noBudget ? m.cap : evenFair;
+      return Math.min(m.cap, Math.max(m.floor, start));
+    }
+    const needSock = needSocketsFor(m.needMbps, perConn);
+    const share = (totalNeed > 0 && assignable > 0)
+      ? Math.max(m.floor, Math.floor(assignable * (m.needMbps / totalNeed)))
+      : evenFair;
+    const start = Math.min(m.cap, Math.max(m.floor, Math.min(needSock, share || evenFair)));
+    return start;
   });
-    if (!custom) {
+  let packed = assigned.reduce((sum, v) => sum + v, 0);
+  while (packed > assignable && packed > n * 4) {
+    let idx = -1;
+    let extra = 0;
+    assigned.forEach((v, i) => {
+      const over = v - meta[i].floor;
+      if (over > extra) { extra = over; idx = i; }
+    });
+    if (idx < 0) break;
+    assigned[idx]--;
+    packed--;
+  }
+  if (!custom) {
     meta.forEach((m, i) => {
-      // A brand-new Play still starts at 10 even if the first articles already
-      // filled a small file. Drip to the floor only after that startup window.
+      const needSock = needSocketsFor(m.needMbps, perConn);
       if (fileIsFullyAhead(m.vf) && !isStartupViewer(m.vf, now)) assigned[i] = m.floor;
-      else if (m.kind === 'fat' && assigned[i] > AUTO_BASE_CONNS) assigned[i] = AUTO_BASE_CONNS;
+      else if (m.kind === 'fat' && assigned[i] > needSock) assigned[i] = needSock;
     });
   }
   let spare = Math.max(0, assignable - assigned.reduce((sum, v) => sum + v, 0));
   const growCeiling = (growFrozen || bandwidthBound)
-    ? fair
-    : (custom || !(downMbps > 0) ? fair + 2 : Infinity);
+    ? evenFair
+    : (custom || !(downMbps > 0) ? evenFair + 2 : Infinity);
 
   const starve = [];
   const fat = [];
@@ -917,13 +947,14 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
       }
     }
   };
-  if (!growFrozen && !custom) {
+  if (!growFrozen && !custom && !viewerChanged) {
     const starting = [];
     meta.forEach((m, i) => {
       if (isStartupViewer(m.vf, now)) starting.push(i);
     });
     // Take turns. Filling the first Play to its cap left a 1080p seek waiting
-    // while a 4K next to it vacuumed leftover sockets.
+    // while a 4K next to it vacuumed leftover sockets. A brand-new viewer
+    // first sits on the need-based share so it cannot dump a neighbor.
     growRoundRobin(starting);
     growRoundRobin(starve);
   }
@@ -945,7 +976,7 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
     }
   }
 
-  if (spare > 0 && !growFrozen && !custom) {
+  if (spare > 0 && !growFrozen && !custom && !viewerChanged) {
     growRoundRobin(starve);
   }
   return Object.assign(assigned, { stole });
@@ -3300,6 +3331,7 @@ module.exports = {
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
   isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, mountNeedsUsenetShare, ACTIVE_PLAYBACK_GRACE_MS,
   allocateStreamConnections, classifyStreamNeed, streamNeedMbps, streamIsUhd, mountAheadBytes, fileIsFullyAhead,
+  needSocketsFor, pipeIsSaturated, mbpsPerConnection,
   householdConnPressure, preparedHouseHasRoom, preparedPeekSockets, autoStreamCap, cacheNeedWeight,
   playbackRamFraction, playbackCacheCapMb,
   AUTO_BASE_CONNS,

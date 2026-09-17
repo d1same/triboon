@@ -126,6 +126,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-17, v3.1.29 ship — need-based Auto sockets, 4K tap plays 4K, poster overlay:
+
+- Version contract: `package.json` 3.1.29; Android `versionName` 3.1.29 /
+  `versionCode` 374; Windows client package/Tauri/Cargo 3.1.29.
+- Auto connections now size from the movie bitrate ÷ live Usenet Mbps/conn
+  (floor 4, cap 24). Evening-slow sockets add more; a full home download pipe
+  freezes grow. Status can show live Mbps/conn.
+- Tapping 4K on a title plays 4K even in Chrome. A global “usually 4K” default
+  still caps the browser at 1080p unless web 4K is on. 1080p tap stays 1080p.
+- Watched ✓ and the ⋯ menu no longer stack on the same corner. Continue
+  Watching parks ⋯ on the left of ✓ / ✕.
+- Start / resume / Continue Watching: Play still joins prepare; resume warms
+  the deep byte window; CW pins the last file that worked and drops the pin
+  when you switch 4K ↔ 1080p.
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). `npm.cmd test` **705/705**.
+  Isolated `/api/server` 3.1.29.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 5647ms SLOW, 1stByte 558ms, resume 21ms; FROM ready 6608ms SLOW,
+  1stByte 193ms, resume 10ms). IPTV web+native retune PASS (8236 channels;
+  ABC 1392ms/1075ms, ESPN 2839ms/5ms). Overlapping Play PASS (9ms/27ms ready,
+  3ms/4ms 1stByte). Android lint/unit/debug build PASS. Android ExoPlayer
+  stress on `emulator-5554` PASS (`android-tv-stress-20260917-175334.json`).
+  Windows GPU not instrumented.
+
 2026-09-16, v3.1.28 ship — remux/size-desc find, walkable 4K tap, CW pin last file:
 
 - Version contract: `package.json` 3.1.28; Android `versionName` 3.1.28 /

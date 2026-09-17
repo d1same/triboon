@@ -187,7 +187,14 @@ test('browser playback cap does not overwrite a durable 4K Continue Watching pre
   assert.strictEqual(quality.preferredQualityRankForItem(movie), 4,
     'the cross-device preference stays 4K');
   assert.strictEqual(quality.qualityRankForItem(movie), 3,
-    'the current browser request still receives its safe 1080p cap');
+    'a global 4K default still receives the safe browser 1080p cap');
+  const titled = new Function('S', 'normalizeQualityRank', 'qualityTitleKey', 'savedQualityPref',
+    'globalQualityPref', 'userCanPlay4k', 'isWebBrowserClient', 'allow4kInBrowser',
+    `${ui.slice(qualityStart, qualityEnd)}\nreturn { preferredQualityRankForItem, qualityRankForItem };`)(
+      S, normalizeQualityRank, (it) => it && it.key, () => 4, () => 4,
+      () => true, () => true, () => false);
+  assert.strictEqual(titled.qualityRankForItem(movie), 4,
+    'an explicit per-title 4K tap plays 4K even in a browser');
 
   const metaStart = ui.indexOf('function wlMeta(it)');
   const metaEnd = ui.indexOf('// Restricted profiles:', metaStart);
@@ -403,8 +410,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'qualityRankForItem must clamp a global-default 4K down to 1080p for titles known to have no 4K');
   // Browsers can't decode 4K HEVC → 4K forces a heavy live transcode that buffers; cap browser
   // playback at 1080p by default (opt-in 4K in Preferences). The TV app (native ExoPlayer) is exempt.
-  assert.match(ui, /if \(isWebBrowserClient\(\) && !allow4kInBrowser\(\)\) q = Math\.min\(q \|\| 3, 3\);/,
-    'qualityRankForItem must cap browser playback at 1080p unless 4K-in-browser is opted in');
+  assert.match(ui, /if \(isWebBrowserClient\(\) && !allow4kInBrowser\(\)\) \{[\s\S]+if \(titlePref !== 4\) q = Math\.min\(q \|\| 3, 3\);/,
+    'qualityRankForItem caps a global 4K default in the browser, but an explicit title 4K tap still plays 4K');
   assert.match(ui, /function isWebBrowserClient\(\) \{ return !nativePlaybackCaps\(\); \}/,
     'a plain browser (no native ExoPlayer bridge) is the client that gets the 1080p cap');
   assert.match(ui, /if \(it\._nextEp\) \{[\s\S]{0,400}return resumeContinueWatching\(it\);/,
@@ -2742,6 +2749,12 @@ test('local library title match modal keeps manual, folder-info, and automatic a
     'details Use library info stays wired after the page was opened from a library cover');
   assert.match(ui, /body:not\(\.tv\)\.libGrid \.pcard \.cardMenuBtn\{opacity:\.92\}/,
     'library covers keep the 3-dot visible so the already-wrong poster is not hover-only');
+  assert.match(ui, /\.pcard \.art:has\(\.wbadge\) \.cardMenuBtn,[\s\S]+\.seasonCard:has\(\.wbadge\) \.cardMenuBtn[\s\S]+right:42px/,
+    'watched ✓ and ⋯ sit side by side — never stacked on the same corner');
+  assert.match(ui, /\.card:has\(\.cwAct\) \.cardMenuBtn\{left:8px;right:auto\}/,
+    'Continue Watching ⋯ sits on the left so it does not cover ✓ / ✕');
+  assert.doesNotMatch(ui, /\.pcard:hover \.wbadge/,
+    'the watched check stays visible instead of fading under the ⋯ button');
   assert.match(ui, /function localLibraryCover\(x\) \{[\s\S]+x\.matchOverride === 'none' \|\| !x\.tmdbId[\s\S]+poster: \(x && x\.artUrl\) \|\| \(x && x\.thumbUrl\)[\s\S]+backdrop: \(x && x\.thumbUrl\) \|\| \(x && x\.artUrl\)[\s\S]+A TMDB match is supposed to change the cover[\s\S]+tmdbPoster \|\| \(x && x\.artUrl\)/,
     'folder-info covers ignore leftover TMDB art, layer a video frame under missing poster.jpg, and a new TMDB match paints the TMDB poster');
   assert.match(ui, /async function searchLibrary\(q\) \{[\s\S]+\/api\/libraries\/search\?q=[\s\S]+function hydrateSearchLibrary\(tmdbItems, libItems\) \{[\s\S]+it\._local = hit\._local/,

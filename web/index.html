@@ -2431,10 +2431,8 @@ body.iosPhone #volSlider{display:none}
 
 /* Watched check-mark badge on covers + episode thumbnails. */
 .wbadge{position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:50%;background:#2bbb6a;
-  display:grid;place-items:center;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.5);z-index:2;transition:opacity .15s ease}
+  display:grid;place-items:center;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.5);z-index:2}
 .wbadge svg{width:15px;height:15px}
-/* The hover ⋯ menu appears in the same corner — the watched ✓ steps aside while it is up. */
-.pcard:hover .wbadge,.seasonCard:hover .wbadge,.epCard:hover .wbadge{opacity:0}
 .pcard .art,.card,.epCard .still{position:relative}
 
 /* Related / "More like this" row reuses .cards. */
@@ -2492,6 +2490,14 @@ body.tv .calItem{flex-basis:calc(var(--poster) * 0.85)}
 .cardMenuBtn svg{width:17px;height:17px;display:block}
 .cardMenuBtn:hover{background:rgba(11,8,18,.94);transform:scale(1.08)}
 .pcard .art .cardMenuBtn{right:8px;top:8px}
+/* Watched ✓ owns top-right. ⋯ sits to its left so library always-on dots never cover it. */
+.pcard .art:has(.wbadge) .cardMenuBtn,
+.seasonCard:has(.wbadge) .cardMenuBtn,
+.epCard:has(.wbadge) .epMenuBtn,
+.epCard:has(.wdot) .epMenuBtn,
+.playerEpCard:has(.wbadge) .cardMenuBtn{right:42px}
+/* Continue Watching already has ✓ / ✕ on the right — park ⋯ on the left. */
+.card:has(.cwAct) .cardMenuBtn{left:8px;right:auto}
 .pcard:hover .cardMenuBtn,.pcard.focus .cardMenuBtn,
 .card:hover .cardMenuBtn,.card.focus .cardMenuBtn,
 .abCard:hover .cardMenuBtn,.abCard.focus .cardMenuBtn,
@@ -4951,7 +4957,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <div class="settingsRow">
         <label class="settingsControl"><span>Start/seek reserve</span><input id="perfReserve" type="number" min="10" max="50" inputmode="numeric" placeholder="% of connections"></label>
       </div>
-      <p class="hint" id="perfConnHint">Auto starts each Play at 10, adds sockets if that playhead falls behind, and gives them back when someone else needs them. Cache stays inside about 20% of this box's RAM.</p>
+      <p class="hint" id="perfConnHint">Auto uses only as many sockets as the movie needs for the current Usenet speed. Slow evening sockets add more; a full home download pipe does not. Cache stays inside about 20% of this box's RAM.</p>
     </div>
     <div class="settingsActions">
       <button class="btn primary" id="perfTest">Calculate recommendation</button>
@@ -8884,10 +8890,13 @@ function preferredQualityRankForItem(it) {
 }
 function qualityRankForItem(it) {
   let q = preferredQualityRankForItem(it);
-  // Browser cap: a plain browser can't decode 4K HEVC, so 4K there means a CPU-bound live transcode
-  // that buffers. Default browser playback to 1080p (direct-playable H.264) unless the viewer opted
-  // into 4K-on-web. The Android app uses native ExoPlayer (real 4K decode), so it's never capped.
-  if (isWebBrowserClient() && !allow4kInBrowser()) q = Math.min(q || 3, 3);
+  // Browser default is 1080p (4K HEVC remux/transcode stutters in Chrome). An explicit
+  // per-title 4K tap — saved on this title — still plays 4K. A global "I usually watch 4K"
+  // default does not silently force 4K in the browser. Native Android/Windows stay uncapped.
+  if (isWebBrowserClient() && !allow4kInBrowser()) {
+    const titlePref = normalizeQualityRank(it && it.qualityRank) || savedQualityPref(it);
+    if (titlePref !== 4) q = Math.min(q || 3, 3);
+  }
   return q || null;
 }
 function sourceSearchQuery(it, opts = {}) {
@@ -9737,7 +9746,7 @@ async function openDetail(it, push = true, opts = {}) {
   // when this title actually has BOTH a 4K and a sub-4K version to choose between.
   $('qToggle').style.display = 'none';
   S.qualityPref = null;
-  paintQualityToggle(normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || 3);
+  paintQualityToggle(qualityRankForItem(it) || normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || 3);
   const reqId = (S.detailReq = (S.detailReq || 0) + 1); // rapid clicks: only the LAST request may render
   // Ask TMDB immediately. Waiting on local episode pages first left cast/related/episodes
   // blank for 10–30s on library-backed titles (The Office, long shows).
@@ -10595,12 +10604,12 @@ async function checkAvailability(it) {
       $('dSources').style.display = offer ? '' : 'none';
       $('qToggle').style.display = offer ? '' : 'none';
       S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || globalQualityPref() || 3) : null;
-      if (offer) paintQualityToggle(S.qualityPref);
+      if (offer) paintQualityToggle(qualityRankForItem(it) || S.qualityPref);
       return;
     }
     $('qToggle').style.display = offer ? '' : 'none';
     S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || globalQualityPref() || 3) : null;
-    if (offer) paintQualityToggle(S.qualityPref);
+    if (offer) paintQualityToggle(qualityRankForItem(it) || S.qualityPref);
     // An id-less pass on a TMDB title is only the FIRST of two checks — never let it condemn a
     // title whose imdb/tvdb ids (and the sources they find) are still on the way.
     if (!playable && (hadStrongIds || !searchItem.tmdbId)) {
@@ -26074,7 +26083,7 @@ function syncConnModeUi() {
   if (!hint) return;
   hint.textContent = ($('perfConnMode') && $('perfConnMode').value === 'custom')
     ? 'Custom splits connections evenly using the numbers you type. A 502 still lowers the window so the provider is not flooded.'
-    : 'Auto starts each Play at 10, adds sockets if that playhead falls behind, and gives them back when someone else needs them. The Max 1080/4K numbers are ceilings — Auto will not go above them. Cache stays inside about 20% of this box\'s RAM.';
+    : 'Auto uses only as many sockets as the movie needs for the current Usenet speed. Slow evening sockets add more; a full home download pipe does not. The Max 1080/4K numbers are ceilings. Cache stays inside about 20% of this box\'s RAM.';
 }
 function perfNum(v, suffix = '') {
   const n = Number(v) || 0;
@@ -26106,7 +26115,8 @@ function renderPerfResult(r, saved) {
   const warn = (r.warnings || []).map((w) => `<span>${esc(w)}</span>`).join('');
   const viewers = (c.maxSimultaneous4k || c.maxSimultaneous1080)
     ? `<div class="perfStatusLine">Supports about <strong>${esc(c.maxSimultaneous1080 || 0)}</strong> simultaneous 1080p or <strong>${esc(c.maxSimultaneous4k || 0)}</strong> 4K viewers` +
-      (c.measuredMbpsPerConn ? ` · measured ${esc(c.measuredMbpsPerConn)} Mbps/connection${c.measuredConnCap ? `, cap ${esc(c.measuredConnCap)} connections` : ''}` : '') + '.</div>'
+      (c.measuredMbpsPerConn ? ` · ${c.liveMbpsPerConn ? 'live' : 'measured'} ${esc(c.liveMbpsPerConn || c.measuredMbpsPerConn)} Mbps/connection${c.measuredConnCap ? `, cap ${esc(c.measuredConnCap)} connections` : ''}` : '') +
+      (c.liveHouseMbps ? ` · house filling ${esc(c.liveHouseMbps)} Mbps` : '') + '.</div>'
     : '';
   $('perfStatus').innerHTML =
     `<div class="perfStatusLine">${headline}: ${esc(perfProfileLabel(rec.profile))} - ` +
