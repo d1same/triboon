@@ -169,6 +169,7 @@ async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
   const order = params.order || params.dir;
   if (order) u.searchParams.set('order', order);
   if (params.offset) u.searchParams.set('offset', String(params.offset));
+  if (params.minsize) u.searchParams.set('minsize', String(Math.floor(Number(params.minsize) || 0)));
   // 100 (most indexers' max): the default sort is recency, so a tight limit silently
   // drops older releases — every big BluRay remux of a 15-year-old film, for instance.
   u.searchParams.set('limit', params.limit || 100);

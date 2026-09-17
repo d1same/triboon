@@ -100,11 +100,14 @@ flowchart LR
 
 ## Resume Source Recovery
 
-- A resume replays its pinned source flagged as `pinnedResume`: the pin plays
-  first only while the scorer still calls it playable. A pin that rotted since
-  the last session is skipped instantly and the ranked list plays with the
-  normal parallel race — resume start must never be slower than a fresh play
-  because of a dead pin.
+- A resume replays its pinned source flagged as `pinnedResume`: the pin is the
+  last file that actually played, including an over-size-cap remux the viewer
+  already chose. A pin that rotted (blocked, missing, ISO) is skipped instantly
+  and the ranked list plays with the normal parallel race — resume start must
+  never be slower than a fresh play because of a dead pin.
+- A Sources drawer tap pins that exact file on the first watch save. Continue
+  Watching must not join a Home/Details warmup of a different auto-ranked
+  file (color-broken HDR coming back after you already switched).
 - Web and native playback re-check the live mount after opening. A confirmed
   blocked source advances immediately to the next ranked release.
 - Startup without a real first frame uses the bounded player fallback ladder.
@@ -154,4 +157,6 @@ When changing Continue Watching, verify:
    after backgrounding or closing the app.
 10. Resume an episode whose saved source is now blocked: playback advances to a
     healthy release at the same episode and timestamp without visiting details.
-11. `npm.cmd test` passes after behavior changes.
+11. Pick a different Sources file (color/wrong encode), leave to Home, then
+    Continue Watching — resume must open that same file, not the old auto pick.
+12. `npm.cmd test` passes after behavior changes.

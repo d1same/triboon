@@ -126,6 +126,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-16, v3.1.28 ship — remux/size-desc find, walkable 4K tap, CW pin last file:
+
+- Version contract: `package.json` 3.1.28; Android `versionName` 3.1.28 /
+  `versionCode` 373; Windows client package/Tauri/Cargo 3.1.28.
+- Search extras now lead with remux + minsize, then silent size-desc, then the
+  old yearless/quality/aka jobs (3 at a time). Sources lists over-size-cap
+  remuxes with a chip. Auto still refuses them.
+- Largest/Smallest/Best walk other streamable 4K rows before relaxing to 1080p.
+  Example: Mayday 4K Largest no longer jumps to the 16GB 1080p while a 4K
+  remux is still walkable.
+- Continue Watching / resume pins the last file that worked, including an
+  over-cap remux. A working pin is not auto-upgraded. Dead pin walks Auto.
+  A Sources tap pins immediately and Play will not join a mismatched prepare.
+- P14 connections unchanged (auto hard-cap 24 sockets/stream, startup reserve).
+- `npm.cmd run verify:full` against this repo on `http://127.0.0.1:7799`
+  and emulator `emulator-5554` (not the Shield). First pass: Node **702/703**
+  (security daily-limit still expected 6 hits). After the limit test used
+  `widenSearchJobs`, `npm.cmd test` **703/703**. Isolated `/api/server` 3.1.28.
+- Household VOD Mario 4K + FROM S01E01 play/seek/resume/CC PASS (Mario
+  ready 6086ms SLOW, 1stByte 453ms; FROM ready 3252ms SLOW, 1stByte 256ms).
+  IPTV web+native retune PASS (8236 channels). Overlapping Play PASS
+  (10ms/19ms ready, 3ms/4ms 1stByte). Android lint/unit/debug build PASS.
+  Android ExoPlayer stress on `emulator-5554` PASS
+  (`android-tv-stress-20260916-224212.json`). Windows GPU not instrumented.
+
 2026-09-16, v3.1.27 ship — InfiniDysk 502 cap, title Play q, TMDB fallback:
 
 - Version contract: `package.json` 3.1.27; Android `versionName` 3.1.27 /

@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const { httpJson, httpRaw, httpBinary, bootServer, setupAdmin } = require('./helpers');
 const { totpCode } = require('../server/auth');
+const { parseWantedTitle, widenSearchJobs } = require('../server/pipeline');
 const { createMockNntp } = require('./mock-nntp');
 const { encodePart } = require('../server/yenc');
 const { seededPayload, writeRar4Store } = require('./archive-fixtures');
@@ -1766,8 +1767,12 @@ test('settings: max release size — manual caps hide oversized sources; off res
   assert.deepStrictEqual(stg.effectiveSizeCaps, { maxSizeGb4k: 40, maxSizeGb1080: 20 }, 'effective caps reported to the UI');
 
   const capped = (await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Cap Test 2024'), null, admin)).json;
-  assert.deepStrictEqual(capped.candidates.map((c) => c.name), ['Cap.Test.2024.1080p.WEB-DL.H.264-NTb'],
-    '60GB remux above the 20GB cap is hidden from Sources entirely');
+  const remux = capped.candidates.find((c) => /REMUX/.test(c.name));
+  assert.ok(capped.candidates.some((c) => /WEB-DL/.test(c.name)), 'WEB-DL under the cap stays listed');
+  assert.ok(remux, '60GB remux still appears in Sources so Largest can reach it');
+  assert.ok(remux.score < -5000, 'over-cap remux stays out of Auto Play');
+  assert.ok((remux.reasons || []).some((r) => String(r).startsWith('over-size-cap')),
+    'Sources chips the over-size-cap reason');
 
   await httpJson(srv.port, 'POST', '/api/settings', { sizeCapMode: 'off' }, admin);
   const open = (await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Cap Test 2024'), null, admin)).json;
@@ -1837,8 +1842,9 @@ test('search: Sources includes largest allowed releases beyond the best-score wi
   const names = r.candidates.map((c) => c.name);
   assert.ok(names.includes('Big.Visible.2024.1080p.BluRay.REMUX.AVC-FraMeSToR'),
     '49GB release under the 50GB cap stays visible in Sources even if size shaping ranks it low');
-  assert.ok(!names.includes('Big.Visible.2024.1080p.BluRay.REMUX.AVC-EbP'),
-    '51GB release over the 50GB cap is still hidden');
+  const over = r.candidates.find((c) => c.name.includes('BluRay.REMUX.AVC-EbP'));
+  assert.ok(over, '51GB remux stays visible in Sources so Largest can reach it');
+  assert.ok(over.score < -5000, 'over-cap remux stays out of Auto Play');
   assert.ok(r.candidates.length > 250, 'Sources response includes largest allowed rows in addition to the best rows');
 
   await httpJson(srv.port, 'POST', '/api/settings', { sizeCapMode: 'auto', indexers: prevIx }, admin);
@@ -1899,21 +1905,23 @@ test('admin: connection tests for saved providers/indexers; daily API limit gate
 
   if (ixServer) ixServer.close(); // teardown only closes the LAST one — don't leak the first
   const ixPort = await startIndexer();
+  const searchQ = 'Sec Test 2024';
+  const searchHits = 1 + widenSearchJobs(searchQ, parseWantedTitle(searchQ)).length;
+  const apiDayLimit = 1 + searchHits;
   await httpJson(srv.port, 'POST', '/api/settings', {
-    indexers: [{ name: 'limited', url: `http://127.0.0.1:${ixPort}`, apikey: 'k', apiDayLimit: 6, grabDayLimit: 50 }],
+    indexers: [{ name: 'limited', url: `http://127.0.0.1:${ixPort}`, apikey: 'k', apiDayLimit, grabDayLimit: 50 }],
   }, admin);
 
-  // Indexer test performs a real 1-query search (counted: 1/6).
+  // Indexer test performs a real 1-query search, then Play search runs main + extras.
   const okI = (await httpJson(srv.port, 'POST', '/api/test/indexer', { index: 0 }, admin)).json;
   assert.strictEqual(okI.ok, true, JSON.stringify(okI));
   assert.strictEqual(okI.items, 1, 'test search parsed the indexer response');
 
-  // A real search also runs yearless/quality/remux extras (5 more → 6/6).
-  const s1 = await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Sec Test 2024'), null, admin);
+  const s1 = await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent(searchQ), null, admin);
   assert.strictEqual(s1.status, 200);
   const stg = (await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json;
-  assert.strictEqual(stg.indexers[0].usage.api, 6, 'test + widened search both counted');
-  assert.strictEqual(stg.indexers[0].apiDayLimit, 6);
+  assert.strictEqual(stg.indexers[0].usage.api, apiDayLimit, 'test + widened search both counted');
+  assert.strictEqual(stg.indexers[0].apiDayLimit, apiDayLimit);
 
   // Limit reached → the indexer drops out; with no indexer left the API says WHY.
   const s2 = await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Sec Test 2024 encore'), null, admin);

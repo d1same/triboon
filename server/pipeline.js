@@ -295,6 +295,31 @@ function widenSearchQueries(paramsQ, wanted, { wantUhd, aliases } = {}) {
   return out;
 }
 
+// Same extras as widenSearchQueries, plus a size-desc pass on the yearless/episode title.
+// Recency page-1 is today's small WEB. Size-desc + remux first is how older proper files appear.
+function widenSearchJobs(paramsQ, wanted, opts = {}) {
+  const qs = widenSearchQueries(paramsQ, wanted, opts);
+  const yearless = yearlessSearchQuery(paramsQ, wanted);
+  const remuxBase = yearless || (wanted && wanted.s != null ? String(paramsQ || '').trim() : '');
+  const remuxQ = remuxBase ? `${remuxBase} remux` : '';
+  const minsize = wanted && wanted.s != null ? 300e6 : 1500e6;
+  const jobs = [];
+  const seen = new Set();
+  const add = (job) => {
+    const q = String(job && job.q || '').trim();
+    if (!q) return;
+    const key = `${q.toLowerCase()}|${job.sort || ''}|${job.order || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    jobs.push({ ...job, q });
+  };
+  if (remuxQ) add({ q: remuxQ, minsize });
+  // Some indexers still 201 on sort=size. Keep the pass; do not surface those errors.
+  if (remuxBase) add({ q: remuxBase, sort: 'size', order: 'desc', minsize, silentErrors: true });
+  for (const q of qs) add({ q });
+  return jobs;
+}
+
 function mergeQualifiedResults(results, extraResults, qualifies) {
   const verified = (extraResults || []).filter(qualifies);
   if (!verified.length) return results;
@@ -446,7 +471,7 @@ function catalogIdentityMatches(result, params) {
 function releaseQualifies(result, wanted, params) {
   return catalogIdentityMatches(result, params) && releaseMatches(result && result.name, wanted);
 }
-const { rankReleases, parseRelease, rankAudiobooks } = require('./scoring');
+const { rankReleases, parseRelease, rankAudiobooks, unstreamableContainer } = require('./scoring');
 const { mountNzb, orderVolumes } = require('./archive');
 
 // ---- audiobook title verification ----
@@ -1079,8 +1104,11 @@ function cachedStreamClass(v) {
 }
 
 function skipTitleVerdict(verdict, detail = {}) {
-  return verdict === 'unstreamable'
-    && (detail.streamClass === 'unmappable' || (detail.tags || []).includes('unmappable'));
+  if (verdict !== 'unstreamable') return false;
+  const cls = detail.streamClass || '';
+  // These describe THIS file (extents / disc / 7z), not every copy of the title.
+  if (cls === 'unmappable' || cls === 'iso' || cls === 'bdmv' || cls === '7z' || cls === 'full-disc') return true;
+  return (detail.tags || []).includes('unmappable');
 }
 
 function firstProbeTarget(nzbXml, mountOpts = {}, candidateName = '') {
@@ -2007,20 +2035,23 @@ class Pipeline {
     }
     // Yearless + quality + aka run in parallel with the titled search. Waiting until the
     // titled page is empty skipped every proper Mutiny NTb/FLUX file once a small encode hit.
-    const extraQs = opts.widenSearch === false
-      ? (opts.wantUhd && params.q && !/\b(2160p|4k|uhd)\b/i.test(params.q) ? [`${params.q} 2160p`] : [])
-      : widenSearchQueries(params.q, wanted, { wantUhd: opts.wantUhd, aliases: params.aliases });
-    // Extra queries stay, but only 2 fan-outs at a time. Firing yearless + 1080p + remux +
-    // bluray + pack + page-2 against every indexer at once froze the local Node process
-    // (Chrome still connected, /api/server timed out).
-    const extraFns = extraQs.map((q) => async () => {
+    const extraJobs = opts.widenSearch === false
+      ? (opts.wantUhd && params.q && !/\b(2160p|4k|uhd)\b/i.test(params.q) ? [{ q: `${params.q} 2160p` }] : [])
+      : widenSearchJobs(params.q, wanted, { wantUhd: opts.wantUhd, aliases: params.aliases });
+    // Remux + size-desc + yearless first (3 at a time). Firing every extra against every
+    // indexer at once froze the local Node process; three bounded workers keep Play moving.
+    const extraFns = extraJobs.map((job) => async () => {
       ixs.forEach((ix) => this.usage.onSearch(ix.name));
-      const extraParams = { q };
-      if (episodeSearch && /\b(2160p|1080p)\b/i.test(q) && /\be\d{1,3}\b/i.test(q)) {
+      const extraParams = { q: job.q };
+      if (job.sort) extraParams.sort = job.sort;
+      if (job.order) extraParams.order = job.order;
+      if (job.minsize) extraParams.minsize = job.minsize;
+      if (episodeSearch && /\b(2160p|1080p)\b/i.test(job.q) && /\be\d{1,3}\b/i.test(job.q)) {
         extraParams.season = season;
         extraParams.ep = ep;
       }
-      return this._fanoutMeasured(ixs, extraParams, { timeoutMs });
+      const hit = await this._fanoutMeasured(ixs, extraParams, { timeoutMs });
+      return { ...hit, silentErrors: !!job.silentErrors };
     });
     let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });
     // TITLE VERIFICATION — indexers return loosely-related releases; a release only
@@ -2033,10 +2064,10 @@ class Pipeline {
       results = mergeQualifiedResults(results, retry.results, qualifies);
       if (retry.errors && retry.errors.length) errors = errors.concat(retry.errors);
     }
+    const extras = [];
     if (extraFns.length) {
-      const extras = [];
       let ei = 0;
-      const extraLimit = Math.min(2, extraFns.length);
+      const extraLimit = Math.min(3, extraFns.length);
       const extraWorker = async () => {
         while (ei < extraFns.length) {
           const fn = extraFns[ei++];
@@ -2046,7 +2077,7 @@ class Pipeline {
       await Promise.all(Array.from({ length: extraLimit }, () => extraWorker()));
       for (const extra of extras) {
         results = mergeQualifiedResults(results, extra.results, qualifies);
-        if (extra.errors && extra.errors.length) errors = errors.concat(extra.errors);
+        if (extra.errors && extra.errors.length && !extra.silentErrors) errors = errors.concat(extra.errors);
       }
     }
     // Fallback: long branded titles ("Brand Name Subtitle SxxEyy") often index under the
@@ -2076,7 +2107,12 @@ class Pipeline {
       const verified = retry.results.filter(qualifies);
       if (verified.length) { results = verified; errors = retry.errors; }
     }
-    return { at: Date.now(), results, errors };
+    // A thin titled page plus failed remux/size-desc extras must not cache for 60s —
+    // the next Play would replay "no sources" while the indexer is already healthy.
+    const extraFailed = extras.length
+      && extras.every((e) => !(e.results && e.results.length) && (e.errors && e.errors.length));
+    const skipCache = extraFailed && results.length < 4;
+    return { at: Date.now(), results, errors, skipCache };
   }
 
   // Search + rank only (powers the Sources drawer). Applies cached verdict adjustments.
@@ -2126,8 +2162,9 @@ class Pipeline {
     const extraQueries = widenSearch === false
       ? []
       : widenSearchQueries(params.q, wanted, { wantUhd, aliases: params.aliases });
-    const key = this._searchCacheKey(params, { wantUhd, akaQueries: extraQueries, widenSearch });
-    const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true, wantUhd, akaQueries: extraQueries, widenSearch });
+    const akaQueries = extraQueries.length ? extraQueries.concat(['size-desc']) : extraQueries;
+    const key = this._searchCacheKey(params, { wantUhd, akaQueries, widenSearch });
+    const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true, wantUhd, akaQueries, widenSearch });
     const maxAgeMs = allowStale ? Number.POSITIVE_INFINITY : 60000;
     let hit = this._getFreshSearchHit(key, maxAgeMs);
     if (!hit && (params.imdbid || params.tvdbid)) {
@@ -2148,8 +2185,10 @@ class Pipeline {
       if (!pending) {
         pending = this._fetchSearchHit(ixs, params, wanted, timeoutMs, { wantUhd, widenSearch })
           .then((fresh) => {
-            this._rememberSearchHit(key, fresh);
-            this._rememberSearchHit(titleKey, fresh);
+            if (!fresh.skipCache) {
+              this._rememberSearchHit(key, fresh);
+              this._rememberSearchHit(titleKey, fresh);
+            }
             return fresh;
           })
           .finally(() => this.searchInflight.delete(key));
@@ -2411,6 +2450,11 @@ class Pipeline {
   }
 
   async _runCandidateFresh(candidate, mountOpts = {}) {
+    const namedDead = unstreamableContainer(candidate.name);
+    if (namedDead) {
+      this._recordVerdict(candidate, 'unstreamable', { streamClass: namedDead });
+      return { fail: `unstreamable: ${namedDead}` };
+    }
     const selectionEpisodeScoped = isEpisodeCollectionName(candidate.name, mountOpts.wantedEpisode);
     const recordSelectionVerdict = (verdict, detail = {}) => {
       // Post-mount judgments describe the selected pack member. They must not blacklist every
@@ -2678,8 +2722,8 @@ class Pipeline {
 
   // Full play: returns { session, vf, candidate, attempts } or throws with detail.
   // params.pickKey front-loads the exact user-chosen source from the Sources drawer; the old
-  // release-name pick stays as a fallback for older clients. Auto-advance still walks the
-  // ranked list behind that explicit choice.
+  // release-name pick stays as a fallback for older clients. The pick leads; if it is dead
+  // (ISO / 7z / missing), auto-advance walks the remaining playable list in sourceSort order.
   async play(params, policy = {}, mountOpts = {}) {
     const _we = wantedEpisodeOf(params);
     if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we }; // so a season pack mounts the wanted episode
@@ -2689,8 +2733,14 @@ class Pipeline {
     if (params.imdbid || params.tvdbid) {
       this.prepareFailUntil.delete(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }));
     }
-    const ready = !((params.pickKey || params.pick) && !params.pinnedResume)
-      && this._findTitlePreparedReady(params, policy);
+    let ready = this._findTitlePreparedReady(params, policy);
+    // A Sources pick or a saved resume pin must not join a Details/CW warmup of a
+    // different file. That is how a color-broken auto source came back from Home.
+    if (ready && (params.pickKey || params.pick)) {
+      const sameKey = params.pickKey && ready.candidate && ready.candidate.pickKey === params.pickKey;
+      const sameName = !params.pickKey && params.pick && ready.candidate && ready.candidate.name === params.pick;
+      if (!sameKey && !sameName) ready = null;
+    }
     if (ready) {
       this.metrics.titlePrepareJoins++;
       console.log('[play] joined prepared ' + (ready.candidate && ready.candidate.name || ''));
@@ -2774,8 +2824,9 @@ class Pipeline {
       // non-4K below the playable cut — so the lower-res tier was never in the first walk. Relax
       // that lock (NOT the maxResolutionRank hard cap) and walk only the releases we hadn't been
       // allowed to try yet. Re-search is a cache hit (raw results re-scored under the relaxed
-      // policy), so this costs no network. Explicit Sources picks keep their own fallback chain.
-      if (policy.exactResolutionRank != null && ((!params.pickKey && !params.pick) || params.pinnedResume)) {
+      // policy), so this costs no network. A dead 4K Sources tap walks remaining 4K first, then
+      // this same lower-res relax if every 4K release is also dead.
+      if (policy.exactResolutionRank != null) {
         const relaxed = { ...policy };
         delete relaxed.exactResolutionRank;
         const retry = await this.search(params, relaxed);
@@ -2816,23 +2867,64 @@ class Pipeline {
   }
 
   _playableCandidates(candidates, params = {}) {
-    const autoPlayable = candidates.filter((c) => c.score > -5000);
+    const autoPlayable = (candidates || []).filter((c) => c.score > -5000);
     if (!params.pickKey && !params.pick) return autoPlayable;
-    const picked = candidates.find((c) => params.pickKey && c.pickKey === params.pickKey)
-      || candidates.find((c) => params.pick && c.name === params.pick);
-    if (!picked) return [];
+    const picked = (candidates || []).find((c) => params.pickKey && c.pickKey === params.pickKey)
+      || (candidates || []).find((c) => params.pick && c.name === params.pick);
     // A pinned resume is the source we HAPPENED to be playing, not a choice the user is owed.
     // Front it only while the scorer still calls it playable — a pin that rotted since the last
     // session is skipped outright, and the ranked list plays without the manual-pick size-window
     // detour (that heuristic models a deliberate human override, which this is not).
     if (params.pinnedResume) {
-      if (!autoPlayable.some((c) => c.pickKey === picked.pickKey)) return autoPlayable;
+      // Last watched file is owed even when Auto would skip it (over-size-cap remux).
+      // Only a dead pin (blocked / missing / ISO) falls back to the ranked race.
+      const pinOk = picked && !this._hardDeadCandidate(picked)
+        && (this._manualWalkable(picked) || autoPlayable.some((c) => c.pickKey === picked.pickKey));
+      if (!pinOk) return autoPlayable;
       return [picked, ...autoPlayable.filter((c) => c.pickKey !== picked.pickKey)];
     }
-    // A manual Sources pick is the file they tapped. Do not substitute a smaller WEB-DL when
-    // the 41GB remux they chose is slow, over-cap, or missing from the re-search — fail instead
-    // so the drawer choice is honest.
-    return [picked];
+    // Manual Sources tap. Over-size-cap / soft-unplayable 4K siblings stay in the walk —
+    // otherwise Largest taps the 38GB row, that file hiccups, and Play jumps to a 16GB 1080p.
+    // Hard-dead files (ISO / 7z / encrypted / sample / wrong title) stay out.
+    const walkable = (candidates || []).filter((c) => this._manualWalkable(c));
+    const rest = this._orderPlayableFallbacks(
+      walkable.filter((c) => !picked || c.pickKey !== picked.pickKey),
+      params,
+    );
+    if (!picked) return rest.length ? rest : autoPlayable;
+    if (this._hardDeadCandidate(picked)) return rest.length ? rest : autoPlayable;
+    return [picked, ...rest];
+  }
+
+  _hardDeadCandidate(c) {
+    if (!c) return true;
+    if (unstreamableContainer(c.name)) return true;
+    if (c.health === 'blocked' || c.health === 'missing' || c.health === 'mount-failed') return true;
+    if (c.streamClass && /unsupported/.test(c.streamClass)) return true;
+    const reasons = (c.reasons || []).map((r) => String(r));
+    return reasons.some((r) => /^(encrypted|missing|blocked|sample-or-stub|stub|not-the-movie|unstreamable-container)/i.test(r));
+  }
+
+  _manualWalkable(c) {
+    if (this._hardDeadCandidate(c)) return false;
+    const reasons = (c.reasons || []).map((r) => String(r));
+    // 1080p stays out of a 4K tap walk. Size-cap is Auto-only — the tap overrides it.
+    if (reasons.some((r) => /^(over-cap |not-requested-resolution)/i.test(r))) return false;
+    if (reasons.some((r) => r.startsWith('over-size-cap'))) return true;
+    return (Number(c.score) || 0) > -50000;
+  }
+
+  _orderPlayableFallbacks(list, params = {}) {
+    const sort = String(params.sourceSort || '').toLowerCase();
+    const sizeOf = (c) => Number(c.sizeBytes) || 0;
+    const arr = [...list];
+    if (sort === 'largest') {
+      return arr.sort((a, b) => (sizeOf(b) - sizeOf(a)) || ((Number(b.score) || 0) - (Number(a.score) || 0)));
+    }
+    if (sort === 'smallest') {
+      return arr.sort((a, b) => ((sizeOf(a) || Infinity) - (sizeOf(b) || Infinity)) || ((Number(b.score) || 0) - (Number(a.score) || 0)));
+    }
+    return arr.sort((a, b) => ((Number(b.score) || 0) - (Number(a.score) || 0)) || (sizeOf(b) - sizeOf(a)));
   }
 
   // 1080 toggle: Play searches without the extra 2160p fan-out, so a title we JUST had in 4K
@@ -3202,7 +3294,7 @@ class Pipeline {
 module.exports = {
   Pipeline, GATE_MS, STARTUP_SLOTS, PLAY_RACE_WIDTH, StartupGate,
   parseWantedTitle, releaseMatches, catalogIdentityMatches, releaseQualifies, shortTitleQuery,
-  aliasSearchQueries, yearlessSearchQuery, qualitySearchQuery, seasonPackSearchQuery, widenSearchQueries,
+  aliasSearchQueries, yearlessSearchQuery, qualitySearchQuery, seasonPackSearchQuery, widenSearchQueries, widenSearchJobs,
   candidateKey, nzbVerdictKey,
   releaseFingerprint, applyNzbFingerprintFields,
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,

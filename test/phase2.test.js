@@ -8,20 +8,20 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { parseRelease, scoreRelease, rankReleases, isCamCandidate, camScoringEnabled, DEFAULT_SCORING_KEYWORDS } = require('../server/scoring');
+const { parseRelease, scoreRelease, rankReleases, isCamCandidate, camScoringEnabled, DEFAULT_SCORING_KEYWORDS, sourceDrawerCandidates } = require('../server/scoring');
 const { parseNewznabRss, dedupe, fanout, searchIndexer, normTitle, clearIndexerCooldowns } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
 const {
   Pipeline, GATE_MS, nzbVerdictKey, releaseFingerprint, summarizeAttempts, stubFeatureReason, mountHasActivePlayback, mountNeedsUsenetShare,
   ACTIVE_PLAYBACK_GRACE_MS, allocateStreamConnections, classifyStreamNeed,
   streamNeedMbps, streamIsUhd, autoStreamCap, cacheNeedWeight, playbackRamFraction, playbackCacheCapMb, preparedPeekSockets,
-  parseWantedTitle, widenSearchQueries,
+  parseWantedTitle, widenSearchQueries, widenSearchJobs,
 } = require('../server/pipeline');
 
-// One search job now also runs yearless/quality/remux extras. Play must still join that
+// One search job now also runs remux/size-desc/yearless extras. Play must still join that
 // job — the hit count is 1 + extras, not 1, and a second Play must not add more.
 function expectedIndexerHits(q, extra = {}) {
-  return 1 + widenSearchQueries(q, parseWantedTitle(q), extra).length;
+  return 1 + widenSearchJobs(q, parseWantedTitle(q), extra).length;
 }
 const { NntpPool, ProviderPool, streamStartupNeedSlots } = require('../server/nntp');
 const { NzbFileStream } = require('../server/vfs');
@@ -156,10 +156,19 @@ test('scoring: soundtracks, bonus discs and bare audio rips are disqualified out
     if (isJunk) assert.ok(c.score < -5000, `${c.name} below the playability cutoff (got ${c.score})`);
     else assert.ok(c.score > -5000, `${c.name} stays playable (got ${c.score})`);
   }
-  const { notTheMovie } = require('../server/scoring');
+  const { notTheMovie, unstreamableContainer, scoreRelease } = require('../server/scoring');
   assert.strictEqual(notTheMovie('Movie.2160p.REMUX.FLAC.7.1.x265-G'), null, 'FLAC audio in a remux is fine');
   assert.strictEqual(notTheMovie('Artist - Album (2024) FLAC'), 'audio-only');
   assert.strictEqual(notTheMovie('Show.S01.Extras.Only.720p.WEB'), 'extras-disc');
+  assert.strictEqual(unstreamableContainer('Mayday.2026.2160p.COMPLETE.UHD.BLURAY-GROUP'), 'full-disc',
+    'largest complete discs are named before we waste a mount');
+  assert.strictEqual(unstreamableContainer('Mayday.2026.2160p.UHD.BluRay.ISO-GROUP'), 'iso');
+  assert.strictEqual(unstreamableContainer('Mayday.2026.2160p.UHD.BluRay.REMUX.MKV-GROUP'), null,
+    'a remux is streamable even when the name also says BluRay');
+  assert.ok(scoreRelease({ name: 'Mayday.2026.2160p.UHD.BluRay.ISO-GROUP', sizeBytes: 70e9 }).score < -5000,
+    'an ISO is below the auto-play cutoff');
+  assert.strictEqual(unstreamableContainer('The.Boys.S02.COMPLETE.1080p.BluRay.x264-FLUX'), null,
+    'a COMPLETE season encode is not a disc image');
 });
 
 test('title verification: short titles match only releases that ARE that title', () => {
@@ -436,6 +445,52 @@ test('pipeline: loose-pack probe and mount selection require one exact requested
     releaseName: 'Show.S02E05.1080p.WEB-DL',
   }), (e) => e && e.code === 'EPISODE_SELECTION',
     'Part1/Part2 still reject even when the release already names the episode');
+});
+
+test('pipeline: a dead largest Sources pick advances to the next playable file', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  const iso = { name: 'Mayday.2026.2160p.UHD.BluRay.ISO-GROUP', pickKey: 'iso', sizeBytes: 70e9, nzbUrl: 'https://indexer.test/iso.nzb' };
+  const mkv = { name: 'Mayday.2026.2160p.UHD.BluRay.REMUX-GROUP', pickKey: 'mkv', sizeBytes: 45e9, nzbUrl: 'https://indexer.test/mkv.nzb' };
+  pipeline._tryCandidate = async (candidate) => candidate === iso
+    ? { fail: 'unstreamable: iso' }
+    : { vf: { id: 'mayday-mkv', streamable: true, size: 45e9, name: mkv.name } };
+  const session = { id: 'mayday', query: {}, cursor: 0, history: [], candidates: [iso, mkv] };
+  const result = await pipeline._advance(session, {}, { width: 1 });
+  assert.strictEqual(result.candidate, mkv, 'Play skips the dead disc and starts the next file');
+  assert.match(result.attempts[0].fail, /unstreamable: iso/);
+});
+
+test('pipeline: a named ISO verdict does not poison other copies of the title', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({ pool: () => null, verdicts, mounts: new Map(), indexers: () => [] });
+  const iso = { name: 'Mayday.2026.2160p.UHD.BluRay.ISO-GROUP', nzbUrl: 'https://indexer.test/iso.nzb' };
+  pipeline._recordVerdict(iso, 'unstreamable', { streamClass: 'iso' });
+  assert.ok(verdicts.get(nzbVerdictKey(iso.nzbUrl)), 'this ISO NZB is remembered as unstreamable');
+  assert.ok(!verdicts.get('t:' + normTitle(iso.name)),
+    'an ISO fail must not mark every Mayday 2026 release unstreamable');
+  store.close();
+});
+
+test('pipeline: named disc/ISO sources fail before an NZB grab', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  let grabbed = 0;
+  pipeline._startNzbFetch = async () => { grabbed += 1; return '<nzb/>'; };
+  const r = await pipeline._runCandidateFresh({
+    name: 'Mayday.2026.2160p.ISO-GROUP',
+    nzbUrl: 'https://indexer.test/iso.nzb',
+  });
+  assert.match(r.fail, /unstreamable: iso/);
+  assert.strictEqual(grabbed, 0, 'do not spend an indexer grab on a named ISO');
 });
 
 test('pipeline: an unsafe episode pack advances without poisoning release-wide health', async () => {
@@ -730,6 +785,28 @@ test('newznab: TV episodes use tvsearch even when an IMDb id is also present', a
   }
 });
 
+test('scoring: Sources lists over-size-cap remuxes so Largest can reach them', () => {
+  const web = { name: 'Cap.Test.2024.1080p.WEB-DL.H.264-NTb', sizeBytes: 5e9, score: 200, nzbUrl: 'http://x/web' };
+  const remux = {
+    name: 'Cap.Test.2024.1080p.BluRay.REMUX.AVC-EbP', sizeBytes: 60e9, score: -100000,
+    nzbUrl: 'http://x/remux', reasons: ['over-size-cap 60.0GB>20GB'],
+  };
+  const cam = { name: 'Cap.Test.2024.1080p.HDCAM.x264-DKS', sizeBytes: 2e9, score: -8000, nzbUrl: 'http://x/cam' };
+  const visible = sourceDrawerCandidates([web, remux, cam], { hideCam: true });
+  assert.ok(visible.some((c) => c.name.includes('WEB-DL')));
+  assert.ok(visible.some((c) => c.name.includes('REMUX')), 'over-cap remux stays in Sources');
+  assert.ok(!visible.some((c) => /HDCAM/.test(c.name)), 'default CAM rule still hides theater rips');
+  assert.ok(visible.find((c) => c.name.includes('REMUX')).score < -5000, 'Auto Play still skips the remux');
+});
+
+test('scoring: PROPER/REPACK outrank the same release without the tag', () => {
+  const plain = scoreRelease({ name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', sizeBytes: 6e9 });
+  const proper = scoreRelease({ name: 'Movie.2024.1080p.WEB-DL.PROPER.H.264-NTb', sizeBytes: 6e9 });
+  const repack = scoreRelease({ name: 'Movie.2024.1080p.WEB-DL.REPACK.H.264-NTb', sizeBytes: 6e9 });
+  assert.ok(proper.score > plain.score, 'PROPER should beat the unfixed sibling');
+  assert.ok(repack.score > plain.score, 'REPACK should beat the unfixed sibling');
+});
+
 test('newznab: size-desc uses order, not dir', async () => {
   let seen;
   const srv = http.createServer((req, res) => {
@@ -747,6 +824,26 @@ test('newznab: size-desc uses order, not dir', async () => {
     assert.strictEqual(seen.searchParams.get('sort'), 'size');
     assert.strictEqual(seen.searchParams.get('order'), 'desc');
     assert.strictEqual(seen.searchParams.get('dir'), null);
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
+test('newznab: minsize is forwarded so remux extras skip tiny encodes', async () => {
+  let seen;
+  const srv = http.createServer((req, res) => {
+    seen = new URL(req.url, 'http://127.0.0.1');
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(rssFor([{ name: 'It.2017.1080p.BluRay.REMUX-FGT', url: 'http://x/it.nzb', size: 20e9 }]));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    await searchIndexer(
+      { name: 'ix', url: `http://127.0.0.1:${srv.address().port}`, apikey: 'secret' },
+      { q: 'It remux', minsize: 1500e6 },
+      { timeoutMs: 1000 }
+    );
+    assert.strictEqual(seen.searchParams.get('minsize'), '1500000000');
   } finally {
     await new Promise((r) => srv.close(r));
   }
@@ -4038,25 +4135,50 @@ test('pipeline: resume warmup supersession and mount cleanup abort only tracked 
   assert.strictEqual(evicted._playbackWarmupJobs.size, 0, 'cancelled jobs are removed from mount state');
 });
 
-test('pipeline: a manual Sources pick is the only candidate — no silent smaller substitute', () => {
+test('pipeline: a manual Sources pick leads, then walks remaining playable files', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
   const store = new Store(dir);
   const pipeline = new Pipeline({ pool: () => null, verdicts: new VerdictCache(store), mounts: new Map(), indexers: () => [] });
   const cands = [
-    { pickKey: 'e', sizeBytes: 40e9, score: -6000 }, // bigger than the pick → never a fallback
+    { pickKey: 'e', sizeBytes: 40e9, score: -6000 }, // bigger than the pick — not auto-playable
     { pickKey: 'p', sizeBytes: 38e9, score: -6000 }, // over-cap manual pick (auto-scorer would reject it)
     { pickKey: 'b', sizeBytes: 30e9, score: -6000 },
     { pickKey: 'c', sizeBytes: 15e9, score: 200 },    // best auto-ranked (within cap)
     { pickKey: 'd', sizeBytes: 12e9, score: 100 },
   ];
   const order = pipeline._playableCandidates(cands, { pickKey: 'p' }).map((c) => c.pickKey);
-  assert.deepStrictEqual(order, ['p'],
-    'manual pick is the only walk item — a 41GB IMAX tap must not mount a 15GB WEB-DL');
-  const missing = pipeline._playableCandidates(cands, { pickKey: 'nope' }).map((c) => c.pickKey);
-  assert.deepStrictEqual(missing, [],
-    'an unknown pickKey does not silently fall back to auto-pick');
+  assert.deepStrictEqual(order, ['p', 'c', 'd', 'e', 'b'],
+    'manual pick leads; if it dies the walk continues to other streamable files, not only Auto-ranked');
+  const largest = pipeline._playableCandidates(cands, { pickKey: 'p', sourceSort: 'largest' }).map((c) => c.pickKey);
+  assert.deepStrictEqual(largest, ['p', 'e', 'b', 'c', 'd'],
+    'Largest sort keeps the tap first, then the next biggest streamable file');
+  const missing = pipeline._playableCandidates(cands, { pickKey: 'nope', sourceSort: 'largest' }).map((c) => c.pickKey);
+  assert.deepStrictEqual(missing, ['e', 'p', 'b', 'c', 'd'],
+    'a vanished pickKey on Largest still walks the big 4K rows instead of jumping to a small Auto file');
   const auto = pipeline._playableCandidates(cands, {}).map((c) => c.pickKey);
   assert.deepStrictEqual(auto, ['c', 'd'], 'with no manual pick, only within-cap auto-ranked releases are playable');
+  store.close();
+});
+
+test('pipeline: a Largest 4K tap walks other over-cap 4K files before a 16GB 1080p', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({ pool: () => null, verdicts: new VerdictCache(store), mounts: new Map(), indexers: () => [] });
+  const cands = [
+    { pickKey: '4k-38', name: 'Mayday.2026.2160p.WEB-DL-AOC', sizeBytes: 38.5e9, score: -100000, reasons: ['over-size-cap 38.5GB>25GB'] },
+    { pickKey: '4k-35', name: 'Mayday.2026.2160p.WEB-DL-NTb', sizeBytes: 35.5e9, score: -100000, reasons: ['over-size-cap 35.5GB>25GB'] },
+    { pickKey: '4k-26', name: 'Mayday.2026.2160p.WEB-DL-FLUX', sizeBytes: 26e9, score: -100000, reasons: ['over-size-cap 26.0GB>25GB'] },
+    { pickKey: 'hd-16', name: 'Mayday.2026.1080p.WEB-DL-NTb', sizeBytes: 16e9, score: 200, reasons: ['not-requested-resolution 1080p'] },
+  ];
+  const largest = pipeline._playableCandidates(cands, { pickKey: '4k-38', sourceSort: 'largest' }).map((c) => c.pickKey);
+  assert.deepStrictEqual(largest, ['4k-38', '4k-35', '4k-26'],
+    'Largest 4K tap must not jump to the 16GB 1080p while other 4K files remain');
+  const smallest = pipeline._playableCandidates(cands, { pickKey: '4k-26', sourceSort: 'smallest' }).map((c) => c.pickKey);
+  assert.deepStrictEqual(smallest, ['4k-26', '4k-35', '4k-38'],
+    'Smallest 4K tap walks the next smallest 4K files before the 16GB 1080p');
+  const best = pipeline._playableCandidates(cands, { pickKey: '4k-35' }).map((c) => c.pickKey);
+  assert.deepStrictEqual(best, ['4k-35', '4k-38', '4k-26'],
+    'Best tap still walks the other 4K files instead of the locked-out 1080p');
   store.close();
 });
 
@@ -4066,23 +4188,34 @@ test('pipeline: a pinned resume source leads only while playable, and never turn
   const pipeline = new Pipeline({ pool: () => null, verdicts: new VerdictCache(store), mounts: new Map(), indexers: () => [] });
   const cands = [
     { pickKey: 'e', sizeBytes: 40e9, score: -6000 },
+    { pickKey: 'dead', sizeBytes: 41e9, score: -100000, reasons: ['missing'], health: 'missing' },
     { pickKey: 'p', sizeBytes: 20e9, score: 150 },   // the pinned source, still healthy
     { pickKey: 'b', sizeBytes: 18e9, score: -6000 }, // next-smaller by size — must NOT be fronted for a pin
     { pickKey: 'c', sizeBytes: 15e9, score: 200 },   // top-ranked auto
     { pickKey: 'd', sizeBytes: 12e9, score: 100 },
+    { pickKey: 'big', sizeBytes: 38e9, score: -100000, reasons: ['over-size-cap 38.0GB>25GB'] },
   ];
   const healthy = pipeline._playableCandidates(cands, { pickKey: 'p', pinnedResume: true }).map((c) => c.pickKey);
   assert.deepStrictEqual(healthy, ['p', 'c', 'd'],
     'healthy pin resumes the same source first, then the ranked list — no manual-pick size-window detour');
-  const rotted = pipeline._playableCandidates(cands, { pickKey: 'e', pinnedResume: true }).map((c) => c.pickKey);
+  const lastBig = pipeline._playableCandidates(cands, { pickKey: 'big', pinnedResume: true }).map((c) => c.pickKey);
+  assert.deepStrictEqual(lastBig, ['big', 'p', 'c', 'd'],
+    'Continue Watching resumes the last over-size-cap file the viewer actually watched');
+  const rotted = pipeline._playableCandidates(cands, { pickKey: 'dead', pinnedResume: true }).map((c) => c.pickKey);
   assert.deepStrictEqual(rotted, ['p', 'c', 'd'],
-    'a pin the scorer rejects (rotted since last session) is skipped outright — resume behaves like auto-pick');
+    'a pin that is now missing/blocked is skipped outright — resume behaves like auto-pick');
   const manual = pipeline._playableCandidates(cands, { pickKey: 'e' }).map((c) => c.pickKey);
-  assert.deepStrictEqual(manual, ['e'], 'a MANUAL pick is the only walk item even when the auto-scorer rejects it');
+  assert.deepStrictEqual(manual, ['e', 'c', 'p', 'd', 'b', 'big'],
+    'a MANUAL pick still leads even when the auto-scorer rejects it, then the ranked backups');
+  const manualLargest = pipeline._playableCandidates(cands, { pickKey: 'e', sourceSort: 'largest' }).map((c) => c.pickKey);
+  assert.deepStrictEqual(manualLargest, ['e', 'big', 'p', 'b', 'c', 'd'],
+    'Largest sort after a dead tap continues to the next biggest streamable file');
   store.close();
   // Race-width contract: a pinned resume must keep the hedged parallel walk; only explicit human
   // picks (Sources drawer) collapse the race to a direct width-1 mount.
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(src, /let ready = this\._findTitlePreparedReady\(params, policy\);[\s\S]+if \(ready && \(params\.pickKey \|\| params\.pick\)\) \{[\s\S]+ready\.candidate\.pickKey === params\.pickKey/,
+    'Play must not join a prepared auto mount when the resume pin or Sources pick is a different file');
   assert.match(src, /const explicitPick = \(params\.pickKey \|\| params\.pick\) && !params\.pinnedResume;[\s\S]+const width = explicitPick \? 1 : \(joiningPrepare \? 2 : PLAY_RACE_WIDTH\);/,
     'play() keeps PLAY_RACE_WIDTH for pinned resumes, width 1 only for explicit picks, and a 2-wide join when Details prepare is already in flight');
 });

@@ -8226,6 +8226,7 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   }
   const body = { q: queryFor(it) || queryFor(S.detailItem) || queryFor(S.playing && S.playing.item), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
   if (pinnedResume) body.pinnedResume = true;
+  if (S.sourceSort === 'largest' || S.sourceSort === 'smallest') body.sourceSort = S.sourceSort;
   if (ids.imdbid) body.imdbid = ids.imdbid;
   if (ids.tvdbid) body.tvdbid = ids.tvdbid;
   if (ids.season != null) body.season = ids.season;
@@ -9087,7 +9088,10 @@ async function play(it, pick, opts = {}) {
     if (S.view !== 'player') return; // user backed out of the loading screen
     // If the chosen/auto-pick release is dead, the pipeline already swapped to the next
     // healthy file. Do not toast that — playback started, and the banner looked like an error.
-    await openPlayer(it, r, { nativeFirst, playTicket });
+    await openPlayer(it, r, {
+      nativeFirst, playTicket,
+      userPicked: !!(picked && (picked.name || picked.pickKey)),
+    });
   } catch (e) {
     // A superseded/cancelled request may reject after a newer title is already loading or
     // playing. Its failure belongs to the old ticket and must not tear down the new player.
@@ -9296,6 +9300,8 @@ async function openSources(it) {
           a.resolution && a.resolution !== 'unknown' ? `<span class="chip">${esc(a.resolution)}</span>` : '',
           `<span class="chip">${esc(gb)}</span>`,
           c.streamClass === 'compressed' ? '<span class="chip warn">Compressed</span>' : '',
+          /\b(iso|bdmv)\b|\.7z\b/i.test(c.name || '') ? '<span class="chip warn">Can\'t stream</span>' : '',
+          (c.reasons || []).some((r) => String(r).startsWith('over-size-cap')) ? '<span class="chip warn">Over size cap</span>' : '',
           c.health === 'verified' ? '<span class="chip ok">Verified</span>' : '',
           c.health === 'blocked' || c.health === 'mount-failed' ? '<span class="chip warn">' + esc(c.health) + '</span>' : '',
         ].join('');
@@ -12763,6 +12769,8 @@ async function openPlayer(it, mount, opts = {}) {
     tracksUrl: mount.tracksUrl, subtitleBase: mount.subtitleBase, streamToken: mount.streamToken,
     item: it, name: sourceName, fileName: mount.name, sourceAttributes: mount.candidate && mount.candidate.attributes,
     sourcePickKey: (mount.candidate && mount.candidate.pickKey) || null,
+    _userPickedSource: !!opts.userPicked,
+    _resumeSourceOk: !!opts.userPicked,
     size: mount.size || (mount.candidate && mount.candidate.sizeBytes) || 0,
     bufferGoalSec: mount.bufferGoalSec || 0, // server-side read-ahead goal → native player buffer depth
     usingRemux: false, usingTranscode: false, startOffset: 0,
@@ -15524,10 +15532,10 @@ async function saveWatch(final, opts = {}) {
     if (!final) return;
     pos = resumeAt;
   }
-  // Pin the PLAYING source for resume once this session has really played ~30s past its start
-  // point — resume used to re-run auto-pick, which forgot a manual Sources choice (back to the
-  // "original" source) and happily re-served a source that had failed. A source that dies
-  // instantly never earns the pin; a recovery replacement re-earns it (see the advance path).
+  // Pin the PLAYING source for resume. A Sources drawer tap is a human choice — save it on
+  // the first checkpoint, do not wait 30s. Auto-pick still waits ~30s past resume so a
+  // source that dies instantly never stays pinned. Recovery resets the 30s clock.
+  if (p._userPickedSource) p._resumeSourceOk = true;
   if (!p._resumeSourceOk && (pos - (Number(p.item.resume) || 0)) >= 30) p._resumeSourceOk = true;
   if (p._resumeSourceOk && (p.name || p.sourcePickKey)) {
     meta.source = { name: p.name || undefined, pickKey: p.sourcePickKey || undefined };

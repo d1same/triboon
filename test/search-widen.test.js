@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const {
   Pipeline, aliasSearchQueries, yearlessSearchQuery, qualitySearchQuery, seasonPackSearchQuery,
-  widenSearchQueries, parseWantedTitle, releaseMatches,
+  widenSearchQueries, widenSearchJobs, parseWantedTitle, releaseMatches,
 } = require('../server/pipeline');
 
 function rssFor(items) {
@@ -46,6 +46,9 @@ const CASES = [
       'Mutiny bluray': [
         { name: 'Mutiny.2026.1080p.BluRay-SPARKS', url: 'http://x/bluray', size: 10e9 },
       ],
+      'Mutiny|size': [
+        { name: 'Mutiny.2026.1080p.PROPER.BluRay.REMUX.AVC-FGT', url: 'http://x/size', size: 28e9 },
+      ],
       'Mutiny 2160p': [
         { name: 'Mutiny.2026.2160p.WEB-DL.H.265-FLUX', url: 'http://x/uhd-flux', size: 14e9 },
       ],
@@ -61,6 +64,7 @@ const CASES = [
       'Mutiny.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb',
       'Mutiny.2026.1080p.BluRay.REMUX.AVC.DTS-HD.MA-FGT',
       'Mutiny.2026.1080p.BluRay-SPARKS',
+      'Mutiny.2026.1080p.PROPER.BluRay.REMUX.AVC-FGT',
     ],
     mustReject: [
       'Mutiny.on.the.Bounty.1962.1080p.BluRay-x',
@@ -240,6 +244,7 @@ async function searchCase(c, { widenSearch, withAliases }) {
     let items = [];
     if (u.searchParams.get('tvdbid') && c.extraForTvdb) items = items.concat(c.extraForTvdb);
     items = items.concat(c.byQuery[q] || []);
+    if (u.searchParams.get('sort') === 'size') items = items.concat(c.byQuery[`${q}|size`] || []);
     if (c.id === 'lioness' && !u.searchParams.get('tvdbid') && /lion king/i.test(q)) {
       items = items.concat([{ name: 'The.Lion.King.S01E01.1080p.WEB-DL.H.264-GRP', url: 'http://x/wrong-show', size: 2e9 }]);
     }
@@ -288,6 +293,24 @@ test('aliasSearchQueries keeps year/episode on the aka query and skips dupes', (
     widenSearchQueries('From S01E01', parseWantedTitle('From S01E01'), { wantUhd: false, aliases: ['Tales From'] }),
     ['From S01E01 1080p', 'From S01', 'From S01E01 remux', 'From S01E01 bluray', 'Tales From S01E01']
   );
+});
+
+test('widenSearchJobs puts remux and size-desc first and keeps the old extras', () => {
+  const movie = parseWantedTitle('Mutiny 2026');
+  const jobs = widenSearchJobs('Mutiny 2026', movie, { wantUhd: false, aliases: ['The Mutiny'] });
+  assert.deepStrictEqual(jobs.slice(0, 2).map((j) => ({ q: j.q, sort: j.sort || '', order: j.order || '' })), [
+    { q: 'Mutiny remux', sort: '', order: '' },
+    { q: 'Mutiny', sort: 'size', order: 'desc' },
+  ]);
+  assert.strictEqual(jobs[0].minsize, 1500e6);
+  assert.strictEqual(jobs[1].silentErrors, true);
+  assert.ok(jobs.some((j) => j.q === 'Mutiny 1080p'));
+  assert.ok(jobs.some((j) => j.q === 'Mutiny bluray'));
+  assert.ok(jobs.some((j) => j.q === 'The Mutiny 2026'));
+  const ep = widenSearchJobs('From S01E01', parseWantedTitle('From S01E01'), { wantUhd: false });
+  assert.strictEqual(ep[0].q, 'From S01E01 remux');
+  assert.strictEqual(ep[0].minsize, 300e6);
+  assert.deepStrictEqual({ q: ep[1].q, sort: ep[1].sort, order: ep[1].order }, { q: 'From S01E01', sort: 'size', order: 'desc' });
 });
 
 test('leading The on a scene name still matches a catalog title that dropped it', () => {
@@ -342,4 +365,33 @@ test('yearless NTb/FLUX still merge when titled search already found a small enc
   assert.ok(uhd.names.includes('Mutiny.2026.2160p.WEB-DL.H.265-FLUX'), 'yearless 4K FLUX');
   assert.ok(uhd.names.includes('The.Mutiny.2026.2160p.WEB-DL.H.265-FLUX'), 'aka 4K FLUX');
   assert.ok(uhd.names.includes('Mutiny.2026.2160p.AMZN.WEB-DL.DDP5.1.H.264.HUNSUB-BBM'), 'titled 4K still listed');
+});
+
+test('thin search plus failed extras does not cache a miss for 60s', async () => {
+  let hits = 0;
+  const server = http.createServer((req, res) => {
+    hits += 1;
+    const u = new URL(req.url, 'http://x');
+    const q = u.searchParams.get('q') || '';
+    if (q !== 'Thin Film 2024') {
+      res.writeHead(500);
+      return res.end('nope');
+    }
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(rssFor([{ name: 'Thin.Film.2024.720p.WEB-DL-x', url: 'http://x/thin', size: 1.2e9 }]));
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const first = await pipeline.search({ q: 'Thin Film 2024' }, {}, { widenSearch: true });
+    const firstHits = hits;
+    assert.ok(first.candidates.some((c) => c.name.includes('Thin.Film.2024')));
+    await pipeline.search({ q: 'Thin Film 2024' }, {}, { widenSearch: true });
+    assert.ok(hits > firstHits, 'failed extras must not freeze a thin page');
+  } finally {
+    server.close();
+  }
 });

@@ -388,6 +388,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'manual source selection should pass the picked source quality into the shared request builder');
   assert.match(ui, /function playbackRequestBody\(it, picked = null, qRank = qualityRankForItem\(it\)\) \{[\s\S]+if \(qRank !== null\) \{[\s\S]+body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
     'manual source selection should prefer the picked source quality while normal Play uses the current 1080p/4K toggle');
+  assert.match(ui, /if \(S\.sourceSort === 'largest' \|\| S\.sourceSort === 'smallest'\) body\.sourceSort = S\.sourceSort;/,
+    'Largest/Smallest Sources sort must ride with Play so a dead tap continues to the next file in that order');
   assert.match(ui, /function preferredQualityRankForItem\(it\) \{[\s\S]+if \(it\._local && !it\.tmdbId\) return null;/,
     'matched local movies and episodes should still inherit saved 1080p/4K preferences');
   // 4K startup fix: a user's quality choice is remembered per-profile so the NEXT title pre-mounts
@@ -3950,7 +3952,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android movies, episodes, and local library files should require the ExoPlayer VOD bridge');
   assert.match(ui, /async function playLocal\(it, opts = \{\}\) \{[\s\S]+const transition = beginPlaybackTransition\(it, opts\);[\s\S]+nativeFirst = transition\.nativeFirst;[\s\S]+openPlayer\(it, \{ \.\.\.mount,[\s\S]+\}, \{ nativeFirst, playTicket \}\);/,
     'added-library movie and episode playback should use the same ExoPlayer handoff as catalog playback');
-  assert.match(ui, /if \(S\.view !== 'player'\) return;[\s\S]+openPlayer\(it, r, \{ nativeFirst, playTicket \}\)/,
+  assert.match(ui, /if \(S\.view !== 'player'\) return;[\s\S]+openPlayer\(it, r, \{\s*nativeFirst, playTicket,/,
     'native-first playback should still honor Back/cancel while the loading screen is open');
   assert.match(ui, /const sourceName = mount\.candidate \? mount\.candidate\.name : mount\.name;[\s\S]+item: it, name: sourceName, fileName: mount\.name/,
     'native quality/source labels should use the selected release name, not only the mounted inner filename');
@@ -6377,8 +6379,10 @@ test('Android native player: direct source and native chrome stay out of the web
   // meta and replayed as a pick on resume — resume used to re-run auto-pick, which forgot a manual
   // Sources choice and re-served sources the player had abandoned. A recovery replacement resets
   // the 30s clock so a dying source never stays pinned; Start Over (resume 0) never pins.
-  assert.match(ui, /if \(!p\._resumeSourceOk && \(pos - \(Number\(p\.item\.resume\) \|\| 0\)\) >= 30\) p\._resumeSourceOk = true;[\s\S]{0,200}meta\.source = \{ name: p\.name \|\| undefined, pickKey: p\.sourcePickKey \|\| undefined \};/,
-    'saveWatch pins the playing source into watch meta only after ~30s of real playback');
+  assert.match(ui, /if \(p\._userPickedSource\) p\._resumeSourceOk = true;[\s\S]+if \(!p\._resumeSourceOk && \(pos - \(Number\(p\.item\.resume\) \|\| 0\)\) >= 30\) p\._resumeSourceOk = true;[\s\S]{0,200}meta\.source = \{ name: p\.name \|\| undefined, pickKey: p\.sourcePickKey \|\| undefined \};/,
+    'a Sources tap pins immediately; auto-pick still waits ~30s of real playback');
+  assert.match(ui, /userPicked: !!\(picked && \(picked\.name \|\| picked\.pickKey\)\)/,
+    'openPlayer records a human Sources choice so the first checkpoint can save that file');
   assert.match(ui, /if \(!picked && it && it\.key && Number\(it\.resume\) > 0\) \{[\s\S]{0,220}const src = w && w\.meta && w\.meta\.source;[\s\S]{0,220}sourceFitsQualityPref\(src, qRank\)[\s\S]{0,80}picked = \{ name: src\.name, pickKey: src\.pickKey \};/,
     'a resume play replays the pinned source as a pick (explicit Sources picks still win)');
   assert.match(ui, /function sourceFitsQualityPref\(src, qRank\) \{[\s\S]+if \(qRank >= 4\) return rank >= 4;[\s\S]+return rank < 4 && rank <= qRank;/,
@@ -6389,6 +6393,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'a quality hop that still reports 0:00 must keep the shared title clock, not write a second resume point');
   assert.match(ui, /pinnedResume = true;[\s\S]{0,400}if \(pinnedResume\) body\.pinnedResume = true;/,
     'a replayed pin is FLAGGED as a pinned resume so the server may skip a rotted pin and keep the parallel race (a manual Sources pick stays unflagged)');
+  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(it, null, qRank\) \}/,
+    'Home/Details prepare uses the same body as Play, so Continue Watching warms the pinned last source');
   assert.match(ui, /p\.sourcePickKey = \(r\.candidate && r\.candidate\.pickKey\) \|\| null; \/\/ resume must pin the REPLACEMENT, not the dead source[\s\S]{0,120}p\._resumeSourceOk = false;/,
     'recovery advance repoints the pin at the replacement source and makes it re-earn the 30s');
   // Native audio language: payload carries the user's saved preference + the probed source tracks

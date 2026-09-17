@@ -66,8 +66,8 @@ const FEATURE = [
   { key: 'truehd', score: 10, re: /\b(truehd)\b/i },
   { key: 'dts-hd', score: 9, re: /\b(dts-?hd|dts-?x|dtsma)\b/i },
   { key: 'ddp', score: 6, re: /\b(ddp|eac3|dd\+)\b/i },
-  { key: 'repack', score: 8, re: /\b(repack|rerip)\b/i },
-  { key: 'proper', score: 6, re: /\bproper\b/i },
+  { key: 'repack', score: 18, re: /\b(repack|rerip)\b/i },
+  { key: 'proper', score: 22, re: /\bproper\b/i },
   { key: 'imax', score: 6, re: /\b(imax)\b/i },
   // MULTI/dual is scored in the language block (English aboard vs dubbed-only). A flat
   // bonus here used to promote French/German scene packs over untagged English WEB-DLs.
@@ -122,6 +122,20 @@ const AUDIO_MARKER = /\b(flac|mp3|m4a|alac|24bit|16bit|44[.1]*khz|48khz|96khz|vi
 function notTheMovie(name) {
   for (const t of NOT_THE_MOVIE) if (t.re.test(name)) return t.key;
   if (AUDIO_MARKER.test(name) && !VIDEO_MARKER.test(name)) return 'audio-only';
+  return null;
+}
+
+// Whole-disc images and 7z posts cannot stream. Largest-first Sources sorts put these
+// on top (50–80GB COMPLETE.BLURAY / ISO). Name them here so Auto skips them and a
+// failed tap can walk the next file without a full NZB mount.
+function unstreamableContainer(name) {
+  const n = String(name || '');
+  if (/\.iso\b|\biso\b/i.test(n)) return 'iso';
+  if (/\bbdmv\b/i.test(n)) return 'bdmv';
+  if (/\.7z\b|\b7zip\b/i.test(n)) return '7z';
+  const encodeHint = /\b(remux|bdremux|web-?dl|webrip|hdtv|x26[45]|h\.?26[45]|hevc|avc|mkv)\b/i.test(n);
+  if (/\b(untouched|uhd[ ._-]?disc|full[ ._-]?disc|bd25|bd50|bd66|bd100)\b/i.test(n) && !encodeHint) return 'full-disc';
+  if (/\bcomplete[ ._-]?(uhd[ ._-]?)?(bluray|blu-?ray)\b/i.test(n) && !encodeHint) return 'full-disc';
   return null;
 }
 
@@ -354,6 +368,8 @@ function scoreRelease(candidate, policy = {}) {
   // Soundtracks / bonus discs / bare music rips are never what "press play on a movie" means.
   const ntm = notTheMovie(candidate.name);
   if (ntm) add(`not-the-movie:${ntm}`, -100000);
+  const badContainer = unstreamableContainer(candidate.name);
+  if (badContainer) add(`unstreamable-container:${badContainer}`, -100000);
   // Language shaping: English (or the owner's saved audio language) beats a higher-res
   // French/German dub. +400 preferred-4K used to outrun the old −150/−350 penalties.
   // VOSTFR is original audio + foreign subs, not a dub. Unlabeled MULTi is a mild hit so
@@ -430,7 +446,8 @@ function scoreRelease(candidate, policy = {}) {
   // Penalty ramps hard past 2× the target so the Sources drawer still offers it to remux fans.
   if (candidate.sizeBytes) {
     const gb = candidate.sizeBytes / 1e9;
-    // HARD size cap (admin "max release size"): over-cap releases are neither offered in the
+    // HARD size cap (admin "max release size"): over-cap releases lose Auto Play.
+    // Sources still lists them so a remux fan can tap the 60GB file.
     // Sources drawer nor auto-played. 4K has its own cap; everything else (incl. unknown res,
     // which COULD be a mislabeled monster) falls under the 1080p cap.
     const hardCap = a.resolutionRank >= 4 && a.resolution !== 'unknown' ? policy.maxSizeGb4k : policy.maxSizeGb1080;
@@ -577,9 +594,26 @@ function rankAudiobooks(candidates, policy = {}) {
     .map(({ _i, ...c }) => c);
 }
 
+// Sources is the override surface. Auto Play still refuses over-size-cap (score −100000).
+// Hide those remuxes here and Largest never sees the proper 60GB file.
+function sourceDrawerCandidates(candidates, { hideCam = true } = {}) {
+  const allowed = (candidates || []).filter((c) => !(hideCam && isCamCandidate(c)));
+  const out = new Map();
+  const keyOf = (c) => c.pickKey || c.nzbUrl || `${c.indexer || ''}:${c.name}:${c.sizeBytes || ''}`;
+  const add = (c) => {
+    const key = keyOf(c);
+    if (!out.has(key)) out.set(key, c);
+  };
+  allowed.slice(0, 250).forEach(add);
+  allowed.filter((c) => c.sizeBytes > 0)
+    .sort((a, b) => (b.sizeBytes - a.sizeBytes) || (b.score - a.score))
+    .slice(0, 80).forEach(add);
+  return [...out.values()].slice(0, 360);
+}
+
 module.exports = {
-  parseRelease, scoreRelease, rankReleases, isCamCandidate, isCamKeywordTerm, camScoringEnabled,
+  parseRelease, scoreRelease, rankReleases, isCamCandidate, isCamKeywordTerm, camScoringEnabled, sourceDrawerCandidates,
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
-  notTheMovie, normalizeLanguageCode, releaseLanguageTag, releaseLanguageTags, RES, SOURCE,
+  notTheMovie, unstreamableContainer, normalizeLanguageCode, releaseLanguageTag, releaseLanguageTags, RES, SOURCE,
   parseAudiobook, scoreAudiobook, rankAudiobooks, audiobookLanguage,
 };

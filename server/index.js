@@ -17,7 +17,7 @@ const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryIte
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline, mountHasActivePlayback, streamIsUhd } = require('./pipeline');
 const {
-  isCamCandidate, camScoringEnabled,
+  isCamCandidate, camScoringEnabled, sourceDrawerCandidates,
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
 } = require('./scoring');
 const { TmdbProxy } = require('./tmdb');
@@ -4048,25 +4048,8 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
 function showCamSources() {
   return !camScoringEnabled(scoringPrefs().customScoring);
 }
-function sourceDrawerCandidates(candidates) {
-  const hideCam = !showCamSources();
-  const allowed = candidates.filter((c) => {
-    if (hideCam && isCamCandidate(c)) return false;
-    return !(c.reasons || []).some((r) => r.startsWith('over-size-cap'));
-  });
-  const out = new Map();
-  const keyOf = (c) => c.pickKey || c.nzbUrl || `${c.indexer || ''}:${c.name}:${c.sizeBytes || ''}`;
-  const add = (c) => {
-    const key = keyOf(c);
-    if (!out.has(key)) out.set(key, c);
-  };
-  // Best keeps the default press-play order. Largest makes high-quality remuxes visible
-  // when they are still under the admin cap, even if size shaping pushed them below row 250.
-  allowed.slice(0, 250).forEach(add);
-  allowed.filter((c) => c.sizeBytes > 0)
-    .sort((a, b) => (b.sizeBytes - a.sizeBytes) || (b.score - a.score))
-    .slice(0, 80).forEach(add);
-  return [...out.values()].slice(0, 360);
+function visibleSourceDrawerCandidates(candidates) {
+  return sourceDrawerCandidates(candidates, { hideCam: !showCamSources() });
 }
 function mountPayload(vf, uid, extra = {}) {
   const st = auth.streamToken(uid, vf.id);
@@ -5379,7 +5362,7 @@ const H = {
         caps: parseCapsQuery(ctx.url.searchParams.get('caps')),
       })
     );
-    const visible = sourceDrawerCandidates(candidates);
+    const visible = visibleSourceDrawerCandidates(candidates);
     send(ctx.res, 200, {
       errors,
       // Sources is an override surface, not the auto-pick queue. Keep the best-ranked rows,
@@ -5420,6 +5403,8 @@ const H = {
           ...playSearchParams(body),
           pick: body.pick, pickKey: body.pickKey,
           pinnedResume: !!body.pinnedResume,
+          sourceSort: /^(largest|smallest|best)$/i.test(String(body.sourceSort || ''))
+            ? String(body.sourceSort).toLowerCase() : undefined,
           resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)),
         },
         policy
