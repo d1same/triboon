@@ -119,13 +119,33 @@ function decodeEntities(s) {
     .replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d)).replace(/&amp;/g, '&');
 }
 
+// Some indexers hand back the raw usenet SUBJECT instead of a release name: a posting counter
+// and quotes in front (`[1 10] 'Slow.Horses.S04E01…-FLUX.mkv'`, `[01/26] "…"`), or a site tag
+// (`www.UIndex.org.-.Alien.Earth.S01E01…-Kitsune`, `[www.site.tld] …`). The anchored title
+// verifier then saw junk where the title must start and dropped perfectly good FLUX/Kitsune
+// copies; dedupe/verdict keys and the Sources drawer saw a different "name" for the same post.
+// Strip only that leading wrapper, once, at the indexer boundary. Bare title words that happen
+// to look like a domain (Dot.Com.2024) are left alone.
+function stripSubjectWrapper(name) {
+  let s = String(name || '').trim();
+  for (let i = 0; i < 4; i++) {
+    const before = s;
+    s = s.replace(/^(?:\[\s*\d{1,4}\s*[/ ]\s*\d{1,4}\s*\]\s*)+/, '');
+    s = s.replace(/^\[?\s*(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:org|com|net|info|to|cc|xyz|eu|me|tv)\s*\]?[\s.\-_]*(?=\S)/i,
+      (m) => (/^\[|www\./i.test(m) ? '' : m));
+    s = s.replace(/^['"“”‘’]+/, '').replace(/['"“”‘’]+$/, '').trim();
+    if (s === before) break;
+  }
+  return s || String(name || '').trim();
+}
+
 function parseNewznabRss(xml, indexerName) {
   const items = [];
   const re = /<item>([\s\S]*?)<\/item>/g;
   let m;
   while ((m = re.exec(xml))) {
     const b = m[1];
-    const title = decodeEntities(((/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/.exec(b) || [])[1] || '').trim());
+    const title = stripSubjectWrapper(decodeEntities(((/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/.exec(b) || [])[1] || '').trim()));
     // url= and length= regexes both allow attributes in any order via [^>]*, so enclosure
     // attribute ordering doesn't matter.
     let url = (/<enclosure[^>]*url="([^"]+)"/.exec(b) || [])[1] || (/<link>([^<]+)<\/link>/.exec(b) || [])[1];
@@ -248,6 +268,6 @@ async function fanout(indexers, params, { timeoutMs = 2000, concurrency } = {}) 
 }
 
 module.exports = {
-  searchIndexer, fanout, dedupe, parseNewznabRss, fetchUrl, normTitle,
+  searchIndexer, fanout, dedupe, parseNewznabRss, fetchUrl, normTitle, stripSubjectWrapper,
   clearIndexerCooldowns, indexerIsCooling, INDEXER_LIMIT_COOLDOWN_MS,
 };

@@ -195,6 +195,19 @@ test('browser playback cap does not overwrite a durable 4K Continue Watching pre
       () => true, () => true, () => false);
   assert.strictEqual(titled.qualityRankForItem(movie), 4,
     'an explicit per-title 4K tap plays 4K even in a browser');
+  // An episode item inherits qualityRank: 4 from its show — that is the durable default, not a tap.
+  assert.strictEqual(quality.qualityRankForItem({ ...movie, key: 'tmdb:tv:9:s1e1', type: 'episode', qualityRank: 4 }), 3,
+    'an inherited qualityRank never lifts the browser cap (Neagley S01E01 must not play 2160p under a 1080p toggle)');
+  // Detail page: S.qualityPref stays DURABLE (cross-device 4K), while the toggle paint and the
+  // Sources drawer filter both use the EFFECTIVE rank Play will request.
+  assert.match(ui, /function effectiveDetailQualityPref\(it\) \{\s*return qualityRankForItem\(it\) \|\| normalizeQualityRank\(S\.qualityPref\)/,
+    'the detail page derives one effective quality rank from the Play request builder');
+  assert.match(ui, /S\.qualityPref = offer \? \(normalizeQualityRank\(it\.qualityRank\) \|\| savedQualityPref\(it\) \|\| globalQualityPref\(\) \|\| 3\) : null;\s*if \(offer\) paintQualityToggle\(effectiveDetailQualityPref\(it\)\);\s*return;/,
+    'local-title branch: durable pref kept, toggle painted from the effective rank');
+  assert.match(ui, /\$\('qToggle'\)\.style\.display = offer \? '' : 'none';\s*S\.qualityPref = offer \? \(normalizeQualityRank\(it\.qualityRank\) \|\| savedQualityPref\(it\) \|\| globalQualityPref\(\) \|\| 3\) : null;\s*if \(offer\) paintQualityToggle\(effectiveDetailQualityPref\(it\)\);/,
+    'usenet-title branch: durable pref kept, toggle painted from the effective rank');
+  assert.match(ui, /const shownRank = \(S\.qualityPref === 3 \|\| S\.qualityPref === 4\) \? effectiveDetailQualityPref\(it\) : null;[\s\S]{0,200}cands = shownRank === 4 \? cands\.filter/,
+    'the Sources drawer filters on the effective rank, so a 1080p toggle never shows "4K — none playable"');
 
   const metaStart = ui.indexOf('function wlMeta(it)');
   const metaEnd = ui.indexOf('// Restricted profiles:', metaStart);
@@ -355,8 +368,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.ok(serverForPolicy.includes('function parseCapsQuery(raw) {')
     && serverForPolicy.includes("caps: parseCapsQuery(ctx.url.searchParams.get('caps'))"),
     'Sources search should parse native device caps into the server scoring policy');
-  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.wantedYear[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
-    'Server playback policy should preserve language/year/device hints for the scorer');
+  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.akaTitles = [\s\S]+policy\.otherYears = [\s\S]+policy\.mediaType = mediaType[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.wantedYear[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
+    'Server playback policy should preserve media-type/language/year/aka/device hints for the scorer and verifier');
+  // The restored-page year gap + same-title films: search/play/prepare pull catalog facts (year,
+  // alternative titles, other same-title years) from TMDB before building the policy, so a
+  // year-less `q=Mayday` still verifies as the 2026 film and Nosferatu 2023 cannot pass for 2024.
+  assert.ok(serverForPolicy.includes('async function catalogFactsFor(year, tmdbId, mediaType)'), 'server derives catalog facts from TMDB');
+  assert.match(serverForPolicy, /\.\.\.\(await catalogFactsFor\(ctx\.url\.searchParams\.get\('year'\), ctx\.url\.searchParams\.get\('tmdbId'\), ctx\.url\.searchParams\.get\('mediaType'\)\)\)/, 'Sources search carries the facts');
+  assert.strictEqual((serverForPolicy.match(/Object\.assign\(body, await catalogFactsFor\(body\.year, body\.tmdbId, body\.mediaType\)\);/g) || []).length, 2, 'play and prepare carry the facts');
   assert.match(serverForPolicy, /policy\.preferredAudioLanguage = preferredAudio \|\| 'en'/,
     'Play defaults to English audio unless the owner saved a different language');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /if \(preferRank === 4\) policy\.exactResolutionRank = 4;/,
@@ -371,8 +390,19 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Sources, play warmup, and availability should share one query builder while allowing unfiltered quality discovery');
   assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+it\.type === 'tv' && !episodeKeyParts\(it\)[\s\S]+const qRank = qualityRankForItem\(it\);[\s\S]+localTitleHasPlayback\(it\) && localPlaybackFitsQuality\(it, qRank\)[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)/,
     'source warmup should skip matching local files and bare TV shows, but still warm online 4K when local playback is lower quality');
-  assert.match(ui, /function updateDetailPlayLabel\(\{ label, target \}\) \{[\s\S]+detailPlayTarget = target;[\s\S]+prefetchSources\(target, 0\);[\s\S]+preparePlaybackSource\(target, 0\);[\s\S]+\}/,
-    'movie/show details should warm and immediately prepare the exact current Play target, including TV episodes');
+  assert.match(ui, /function updateDetailPlayLabel\(\{ label, target \}\) \{[\s\S]+detailPlayTarget = target;[\s\S]+prefetchSources\(target, DETAIL_WARM_DELAY_MS\);[\s\S]+preparePlaybackSource\(target, DETAIL_WARM_DELAY_MS\);[\s\S]+\}/,
+    'movie/show details should warm and prepare the exact current Play target, including TV episodes, a beat after the TMDB burst');
+  // Browser connection budget: the slow warm-ups (search fan-out, prepare) wait ~350ms so cast /
+  // related / seasons requests take the ~6 per-host slots first, and a title-less warm-up never
+  // fires a guaranteed-400 `q=` request that would burn a slot.
+  const warmDelay = Number((/const DETAIL_WARM_DELAY_MS = (\d+);/.exec(ui) || [])[1]);
+  assert.ok(warmDelay >= 200 && warmDelay <= 800, `detail warm-ups wait a short beat (${warmDelay}ms)`);
+  assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]{0,200}if \(!queryFor\(it\)\) return;/,
+    'source warm-up needs a title');
+  assert.match(ui, /function preparePlaybackSource\(it, delay = 900\) \{[\s\S]{0,400}if \(!queryFor\(it\)\) return;/,
+    'prepare warm-up needs a title');
+  assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]{0,1600}if \(!queryFor\(searchItem\)\) return;/,
+    'availability check needs a title');
   assert.match(ui, /applyExternalIds\(it, d\);[\s\S]+if \(it\.imdbId \|\| it\.tvdbId\) \{[\s\S]+checkAvailability\(it\);[\s\S]+prefetchSources\(detailPlayTarget, 0\);[\s\S]+preparePlaybackSource\(detailPlayTarget, 0\);[\s\S]+\}/,
     'movie/show details should refresh prepare when exact IMDb/TVDB identity arrives');
   assert.match(ui, /pickKey: picked && picked\.pickKey/,
@@ -410,8 +440,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'qualityRankForItem must clamp a global-default 4K down to 1080p for titles known to have no 4K');
   // Browsers can't decode 4K HEVC → 4K forces a heavy live transcode that buffers; cap browser
   // playback at 1080p by default (opt-in 4K in Preferences). The TV app (native ExoPlayer) is exempt.
-  assert.match(ui, /if \(isWebBrowserClient\(\) && !allow4kInBrowser\(\)\) \{[\s\S]+if \(titlePref !== 4\) q = Math\.min\(q \|\| 3, 3\);/,
-    'qualityRankForItem caps a global 4K default in the browser, but an explicit title 4K tap still plays 4K');
+  assert.match(ui, /if \(isWebBrowserClient\(\) && !allow4kInBrowser\(\)\) \{\s*if \(savedQualityPref\(it\) !== 4\) q = Math\.min\(q \|\| 3, 3\);/,
+    'qualityRankForItem caps a global 4K default in the browser; only the per-title saved tap lifts the cap (it.qualityRank is inherited, not a tap)');
   assert.match(ui, /function isWebBrowserClient\(\) \{ return !nativePlaybackCaps\(\); \}/,
     'a plain browser (no native ExoPlayer bridge) is the client that gets the 1080p cap');
   assert.match(ui, /if \(it\._nextEp\) \{[\s\S]{0,400}return resumeContinueWatching\(it\);/,
@@ -474,7 +504,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Sources D-pad navigation should move across sort buttons, down into rows, and activate sorting');
   assert.match(ui, /const autoKey = cands\[0\] && cands\[0\]\.pickKey;[\s\S]+const isAuto = c\.pickKey === autoKey;[\s\S]+isAuto \? '<span class="chip auto">Auto pick<\/span>'/,
     'Sources sorting should not move the Auto pick badge onto the largest row');
-  assert.match(ui, /if \(has4k && hasLower && \(S\.qualityPref === 3 \|\| S\.qualityPref === 4\)\)[\s\S]+cands = S\.qualityPref === 4 \? cands\.filter\(\(c\) => rk\(c\) === 4\)[\s\S]+showing 4K\. None of these are playable yet/,
+  assert.match(ui, /if \(has4k && hasLower && \(shownRank === 3 \|\| shownRank === 4\)\)[\s\S]+cands = shownRank === 4 \? cands\.filter\(\(c\) => rk\(c\) === 4\)[\s\S]+showing 4K\. None of these are playable yet/,
     '4K Sources lists only 4K rows and says so when they are all unplayable');
   assert.ok([
     'const displayReleaseName = (name) => {',
@@ -4858,8 +4888,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'the collapsed TV rail rules must not set a background SHORTHAND (transparent/opaque slabs both rejected; background-color in the perf rule is fine)');
   assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{\s*\n\s*-webkit-backdrop-filter:none;backdrop-filter:none;\s*\n\s*background-color:transparent\}/,
     'the compact TV rail drops live blur and the ink slab so the curved divider shows like desktop');
-  assert.match(ui, /#rail::after\{content:"";position:absolute;top:16px;bottom:16px;right:0;width:12px;[\s\S]+border-radius:0 16px 16px 0/,
-    'desktop rail uses a curved right hairline instead of a frosted slab');
+  assert.match(ui, /#rail::after\{content:"";position:absolute;top:16px;bottom:16px;right:0;width:12px;\s*box-shadow:inset -1px 0 0 rgba\(255,255,255,\.14\);border-radius:0 16px 16px 0/,
+    'desktop rail uses a curved right hairline (inset shadow, not border-right — the border left a stub where the arc ends on the Shield WebView)');
   assert.doesNotMatch(ui, /body\.tv[\s\S]{0,120}#rail::after\{[^}]*display:\s*none/,
     'compact TV must keep the curved right divider — hiding it left a filled slab with no edge');
   // The perf-profile comment must stay WELL-FORMED: in v2.8.7/v2.8.8 it closed a paragraph early,

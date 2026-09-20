@@ -11,10 +11,24 @@ const debug = require('./debug');
 // read-ahead window sizing below (_playbackWindowFor) runs on the hot streaming path, and
 // os.totalmem() was being re-read on every rebalance. ~20% is the cross-stream buffer budget.
 const TOTAL_MEM_MB = Math.floor(os.totalmem() / (1024 * 1024));
-const { fanout, fetchUrl, normTitle } = require('./newznab');
+const { fanout, fetchUrl, normTitle, stripSubjectWrapper } = require('./newznab');
 const { CAP_HIT_COOLDOWN_MS } = require('./nntp');
 
 // ---- title verification ----
+// Catalog titles carry accents (Shōgun, Amélie, Léon); scene names never do (Shogun, Amelie). The
+// old `[a-z0-9]+` tokenizer split "shōgun" into sh + gun, so every plain Shogun.2024.S01E01 release
+// was rejected and only the 15 rows that happened to keep the macron survived. Fold both sides.
+const DIACRITIC_MAP = new Map([
+  ['ß', 'ss'], ['ø', 'o'], ['æ', 'ae'], ['œ', 'oe'], ['ð', 'd'], ['þ', 'th'], ['ł', 'l'], ['đ', 'd'],
+  ['ı', 'i'], ['ſ', 's'],
+]);
+function foldDiacritics(s) {
+  const str = String(s || '');
+  if (!/[^\x00-\x7f]/.test(str)) return str;
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[ßøæœðþłđıſ]/gi, (ch) => { const lc = ch.toLowerCase(); const m = DIACRITIC_MAP.get(lc) || ch; return ch === lc ? m : m.toUpperCase(); });
+}
+
 // Split a search query into title words + structured parts (year, SxxEyy).
 function tokenizeWanted(q) {
   const out = { words: [], year: null, s: null, e: null };
@@ -22,7 +36,7 @@ function tokenizeWanted(q) {
   // produced NO token, so `law, order` could never consecutively match `law, and, order` and whole
   // franchises were unfindable. Convert to the word; releaseMatches treats "and" as skippable, so
   // releases that DROP it (Law.Order.…) still match too.
-  const toks = String(q || '').toLowerCase().replace(/&/g, ' and ').split(/\s+/).filter(Boolean);
+  const toks = foldDiacritics(String(q || '')).toLowerCase().replace(/&/g, ' and ').replace(/\bu\.s\b\.?/g, 'us').split(/\s+/).filter(Boolean);
   // The movie query is "title … year", so ONLY the TRAILING year-shaped token is the release year; a
   // year-shaped token earlier in the string is part of the TITLE ("1917", "2012", "2001 A Space Odyssey",
   // "Blade Runner 2049"). Without this, a bare-year title was swallowed as the year → ZERO title words →
@@ -168,6 +182,16 @@ const STRUCTURAL_AFTER_TITLE = new RegExp('^(' + [
 // must not play The.Office.AU. Untagged The.Office.S01E01 still matches. "The Office UK" still
 // matches The.Office.UK because the wanted words include uk.
 const COUNTRY_EDITION = new Set(['au', 'uk', 'nz', 'ca']);
+// Words that legitimately follow a film's year before the quality tags (edition / cut / part
+// labels). They end the "plain words after the year" count in releaseMatches.
+const MOVIE_EDITION_WORDS = new Set([
+  'ultimate', 'collectors', 'collector', 'special', 'final', 'open', 'matte', 'fan', 'edit', 'version',
+  'remaster', 'restored', 'restoration', 'part', 'one', 'two', 'three', 'chapter', 'volume', 'alternate',
+  'alternative', 'ending', 'despecialized', 'despecialised', 'unaltered', 'original', 'trilogy', 'duology',
+  'black', 'white', 'silent', 'color', 'colour', 'noir', 'recut', 'reissue', 'rerelease', 'the', 'and', 'of', 'a',
+  'director', 'directors', 'producers', 'international', 'japanese', 'korean', 'hindi', 'tamil', 'telugu',
+  'dubbed', 'subbed', 'dual', 'multi', 'true', 'hybrid', 'repack', 'proper', 'internal', 'real', 'retail',
+]);
 const TITLE_WORD_EQUIV = new Map([
   ['sorcerers', 'philosophers'],
   ['philosophers', 'sorcerers'],
@@ -176,8 +200,17 @@ const TITLE_WORD_EQUIV = new Map([
 // ("Law.and.Order" / "Law.Order") — skippable keeps both findable without loosening the anchored/
 // consecutive/structural-boundary rules that guard against wrong titles.
 const OPTIONAL_TITLE_ARTICLES = new Set(['the', 'a', 'an', 'and']);
+// "Part One" / "Part 1" / "Part I" are the same title word (Wicked.Part.I, Dune.Part.1 for the
+// TMDB alias "Dune: Part One"). Both sides canonicalize, so I.Robot ↔ 1.Robot is symmetric too.
+const NUMERAL_WORDS = new Map([
+  ['one', '1'], ['two', '2'], ['three', '3'], ['four', '4'], ['five', '5'], ['six', '6'], ['seven', '7'],
+  ['eight', '8'], ['nine', '9'], ['ten', '10'],
+  ['i', '1'], ['ii', '2'], ['iii', '3'], ['iv', '4'], ['v', '5'], ['vi', '6'], ['vii', '7'], ['viii', '8'], ['ix', '9'], ['x', '10'],
+]);
+const canonNumeral = (w) => NUMERAL_WORDS.get(w) || w;
 function titleWordMatches(wantedWord, releaseWord) {
-  return wantedWord === releaseWord || TITLE_WORD_EQUIV.get(wantedWord) === releaseWord;
+  return wantedWord === releaseWord || TITLE_WORD_EQUIV.get(wantedWord) === releaseWord
+    || canonNumeral(wantedWord) === canonNumeral(releaseWord);
 }
 
 function titleCoreWords(words) {
@@ -199,7 +232,7 @@ function shortTitleQuery(paramsQ, wanted) {
 }
 
 function sanitizeIndexerQuery(q) {
-  return String(q || '').replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return foldDiacritics(String(q || '')).replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function queryTailTokens(paramsQ) {
@@ -331,10 +364,12 @@ function mergeQualifiedResults(results, extraResults, qualifies) {
   return results;
 }
 
-function titleWordsMatchFromStart(toks, words) {
+function titleWordsMatchFromStart(toks, words, { allowLeadingArticle = true } = {}) {
   let ti = 0;
   // Scene names keep a leading "The" the catalog dropped ("The.Mutiny.2026" for Mutiny 2026).
-  while (ti < toks.length && OPTIONAL_TITLE_ARTICLES.has(toks[ti])
+  // MOVIES only: for an episode request the same tolerance made "The.Dark.S01E01" (a different
+  // show) match "Dark", and TMDB's original-title alias already covers a real dropped article.
+  while (allowLeadingArticle && ti < toks.length && OPTIONAL_TITLE_ARTICLES.has(toks[ti])
     && words[0] && !titleWordMatches(words[0], toks[ti])) {
     ti++;
   }
@@ -369,7 +404,12 @@ function titleWordsMatchFromStart(toks, words) {
 //     never enough on its own, so Two Towers cannot play for Fellowship and Dragon cannot play
 //     for House of the Dragon.
 function releaseMatches(name, wanted) {
-  const norm = ' ' + String(name || '').toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ') + ' ';
+  // Indexer rows are already unwrapped by newznab.parseNewznabRss; strip again here so cached
+  // rows, tests, and direct callers with raw subjects get the same anchored check.
+  // "U.S." spells as one token like the catalog's "US" (The.Office.U.S.S01E01, Shameless.U.S.),
+  // and accents fold the same way the wanted title does (Shōgun → Shogun).
+  const norm = ' ' + foldDiacritics(stripSubjectWrapper(name)).toLowerCase().replace(/\bu\.s\b/g, 'us')
+    .replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ') + ' ';
   const toks = norm.trim().split(' ');
   if (wanted.words.length) {
     const variants = [wanted.words];
@@ -382,8 +422,9 @@ function releaseMatches(name, wanted) {
       }
     }
     let matched = false;
+    const matchOpts = { allowLeadingArticle: wanted.s === null };
     for (const words of variants) {
-      const ti = titleWordsMatchFromStart(toks, words);
+      const ti = titleWordsMatchFromStart(toks, words, matchOpts);
       if (ti < 0) continue;
       const after = toks[ti];
       if (after !== undefined && COUNTRY_EDITION.has(after) && !words.includes(after)) continue;
@@ -425,21 +466,66 @@ function releaseMatches(name, wanted) {
         // long-running show whose catalog year is first-air (1989). Only a remake-style
         // year BETWEEN title and episode (The.Office.2024.S01E01) is a hard reject —
         // and only on early seasons, where that year is the remake, not the air year.
-        const beforeEp = String(norm.split(/\b(?:s\d{1,2}\s?e\d{1,3}|\d{1,2}x\d{1,3})\b/)[0] || '');
+        const split = norm.split(/\b(?:s\d{1,2}\s?e\d{1,3}|\d{1,2}x\d{1,3})\b/);
+        const beforeEp = String(split[0] || '');
         const remakeYears = [...beforeEp.matchAll(/\b(19|20)\d{2}\b/g)].map((m) => +m[0]);
         if (remakeYears.length && !remakeYears.some((y) => Math.abs(y - wanted.year) <= 1)) {
-          const looksLikeAirYear = wanted.s >= 3 && remakeYears.every((y) => y >= wanted.year);
+          // A season's own air year (The.Last.of.Us.2025.S02E01 for the 2023 show) is fine when it
+          // fits the season number; The.Office.2024.S01E01 for the 2005 show is a remake and is not.
+          const looksLikeAirYear = wanted.s >= 2
+            && remakeYears.every((y) => y >= wanted.year && y <= wanted.year + 2 * wanted.s + 1);
           if (!looksLikeAirYear) return false;
+        }
+        // Air year AFTER the episode must be plausible for that season. Doctor.Who.S01E01.2024 is
+        // the 2023 revival, not season 1 of the 2005 show (which aired 2005): a first season airs in
+        // the first-air year (+1 for a split run), and no season airs before the show began.
+        const afterYears = [...String(split.slice(1).join(' ') || '').matchAll(/\b(19|20)\d{2}\b/g)].map((m) => +m[0]);
+        if (afterYears.length) {
+          if (wanted.s === 1 && afterYears.some((y) => y > wanted.year + 1)) return false;
+          if (afterYears.some((y) => y < wanted.year - 1)) return false;
         }
       } else if (!years.some((y) => Math.abs(y - wanted.year) <= 1)) {
         return false;
+      } else if (wanted.otherYears && wanted.otherYears.length) {
+        // Another film with this exact title exists at a neighbouring year (Nosferatu 2023 vs
+        // 2024, Odyssey 2025 vs The Odyssey 2026). The ±1 drift tolerance must not pick it.
+        if (!years.includes(wanted.year) && years.some((y) => wanted.otherYears.includes(y))) return false;
+      }
+    } else if (wanted.s === null && wanted.otherYears && wanted.otherYears.length) {
+      // Several films share this title (Nosferatu 1922/1979/2024): a year-less release name
+      // (Nosferatu.1080p.BluRay.REMUX) cannot be told apart, so it is not proof of THIS film.
+      return false;
+    }
+    // Title.Year.<many plain words> is a broadcast named by year, not a film: 55 rows of
+    // F1.2026.Grosser.Preis.von.Spanien.Vorberichte.Rennen… sat in the F1 (2025) drawer. Editions
+    // stay: Alien.1979.Directors.Cut, Star.Wars.1977.Despecialized.Edition, Dune.2021.Part.One.
+    if (wanted.s === null && years.length) {
+      const yi = toks.findIndex((t) => /^(19|20)\d{2}$/.test(t) && Math.abs(+t - wanted.year) <= 1);
+      if (yi >= 0) {
+        let plain = 0;
+        for (let i = yi + 1; i < toks.length; i++) {
+          const t = toks[i];
+          if (STRUCTURAL_AFTER_TITLE.test(t) || MOVIE_EDITION_WORDS.has(t)) break;
+          if (/^[a-z]{3,}$/.test(t)) plain++;
+          if (plain >= 4) return false;
+        }
       }
     }
   }
   // A movie query (year, no episode) must not play a TV series with the same short name.
   // The.Batman.S01E01 has no year token, so the ±1 year check would let it through for The Batman 2022.
-  if (wanted.year && wanted.s === null
-      && /(?:^|[^a-z0-9])(?:s\d{1,2}[ ._-]?e\d{1,3}|\d{1,2}x\d{1,3})(?=$|[^a-z0-9])/i.test(String(name || ''))) {
+  // `wanted.movie` is the catalog saying "this is a film" (mediaType=movie) — a year-less
+  // Sources/Play from a restored page still rejects Mayday.S26E10 for the 2026 film Mayday.
+  // Season PACKS too: Mayday.S11.1080p.AMZN.WEB-DL (no episode token) sat in the film's Sources.
+  if ((wanted.year || wanted.movie) && wanted.s === null
+      && /(?:^|[^a-z0-9])(?:s\d{1,2}(?:[ ._-]?e\d{1,3})?|\d{1,2}x\d{1,3}|season[ ._-]?\d{1,2}|complete[ ._-]series)(?=$|[^a-z0-9])/i.test(String(name || ''))) {
+    return false;
+  }
+  // Scene MUSIC rows ("Mayday 2026-Klaudia Gawlas Live-STREAM-04-30-2026-CiN INT") carry a dashed
+  // US date and no video token at all. They passed the title + year checks and listed a 246 MB
+  // MP3 in a film's Sources. Video releases never spell a date MM-DD-YYYY (dailies use YYYY.MM.DD).
+  if (/\b(?:0?[1-9]|1[0-2])-(?:0?[1-9]|[12]\d|3[01])-(?:19|20)\d{2}\b/.test(String(name || ''))
+      && !/\b(?:2160p|1080p|720p|576p|480p|4k|uhd|x26[45]|h\.?26[45]|hevc|avc|av1|xvid|web-?dl|webrip|web|bluray|blu-ray|bdrip|brrip|remux|hdtv|dvdrip|mkv|mp4)\b/i.test(String(name || ''))) {
     return false;
   }
   return true;
@@ -511,11 +597,12 @@ function bookMatches(name, wanted) {
 // which is very different from a slow connection (timeouts) the user can act on differently.
 function summarizeAttempts(attempts = []) {
   if (!attempts.length) return 'No sources were available to try for this title.';
-    const cats = { connection: 0, missing: 0, encrypted: 0, stub: 0, unsupported: 0, timeout: 0, blocked: 0, episode: 0, other: 0 };
+    const cats = { connection: 0, missing: 0, encrypted: 0, stub: 0, unsupported: 0, timeout: 0, blocked: 0, episode: 0, pending: 0, other: 0 };
   for (const a of attempts) {
     const f = String((a && a.fail) || '').toLowerCase();
     // Connection FIRST — an unreachable provider must never be mislabeled as a removed article.
     if (/unreachable|econnrefused|econnreset|etimedout|ehostunreach|enotfound|getaddrinfo|socket hang|\bauthinfo\b|too many connection|\b502\b|fetch-failed/.test(f)) cats.connection++;
+    else if (/^pending:/.test(f)) cats.pending++;
     else if (/^episode:|requested episode/.test(f)) cats.episode++;
     else if (/\b430\b|no such article|missing/.test(f)) cats.missing++;
     else if (/encrypt/.test(f)) cats.encrypted++;
@@ -535,11 +622,15 @@ function summarizeAttempts(attempts = []) {
   if (cats.timeout) parts.push(`${cats.timeout} timed out`);
   if (cats.blocked) parts.push(`${cats.blocked} failed health`);
   if (cats.episode) parts.push(`${cats.episode} didn't contain that episode`);
+  if (cats.pending) parts.push(`${cats.pending} still loading when time ran out`);
   if (cats.other) parts.push(`${cats.other} other`);
   const deadSource = cats.missing + cats.encrypted + cats.stub + cats.unsupported;
   const half = Math.ceil(n / 2);
   let head, tail = ' Try again later, pick another release in Sources, or add more indexers.';
-  if (cats.connection >= half) {
+  if (cats.pending >= half) {
+    head = 'The server was still opening sources when the start budget ran out — it is busy or the provider is slow right now';
+    tail = ' Press Play again; the work already done is kept and the next try usually starts at once.';
+  } else if (cats.connection >= half) {
     head = "Couldn't reach your usenet provider(s) — this is a connection problem, not a missing release";
     tail = ' Check that the server can reach your providers (VPN on? ports/credentials right in Settings → Providers), then retry.';
   } else if (cats.timeout >= half) {
@@ -1007,6 +1098,10 @@ const RACE_HEDGE_MS = 800;
 const RACE_COMMIT_GRACE_MS = 250;
 
 // Fair startup limiter: Play front-runners beat hedges, hedges beat prepare.
+// A Play that finds every slot busy also PREEMPTS one speculative prepare holder: browsing three
+// detail pages used to park three background prepares on the gate for up to 45s each (15s NZB
+// fetch + 30s mount deadline), and the next real Play then waited out its whole budget and died
+// with "all candidates failed" — nothing tried. Prepares are guesses; a pressed Play is not.
 class StartupGate {
   constructor(max = STARTUP_SLOTS) {
     this.max = max;
@@ -1015,23 +1110,38 @@ class StartupGate {
     this.playWait = [];
     this.hedgeWait = [];
     this.prepWait = [];
+    this.holders = new Set(); // live tickets: { priority, preempt }
+    this.preemptions = 0;
   }
   _queue(priority) {
     if (priority === 'prepare') return this.prepWait;
     if (priority === 'hedge') return this.hedgeWait;
     return this.playWait;
   }
-  acquire({ signal, priority = 'play' } = {}) {
+  _preemptOnePrepare() {
+    for (const h of this.holders) {
+      if (h.priority === 'prepare' && typeof h.preempt === 'function' && !h.preempted) {
+        h.preempted = true;
+        this.preemptions++;
+        try { h.preempt(); } catch {}
+        return true;
+      }
+    }
+    return false;
+  }
+  acquire({ signal, priority = 'play', preempt = null } = {}) {
     const abortErr = () => Object.assign(new Error('request aborted'), { code: 'ABORT_ERR' });
     const ticket = () => {
       let released = false;
-      return {
-        release: () => {
-          if (released) return;
-          released = true;
-          this.release();
-        },
+      const t = { priority, preempt, preempted: false };
+      this.holders.add(t);
+      t.release = () => {
+        if (released) return;
+        released = true;
+        this.holders.delete(t);
+        this.release();
       };
+      return t;
     };
     if (signal && signal.aborted) return Promise.reject(abortErr());
     if (this.active < this.max) {
@@ -1039,6 +1149,7 @@ class StartupGate {
       this.peak = Math.max(this.peak, this.active);
       return Promise.resolve(ticket());
     }
+    if (priority === 'play') this._preemptOnePrepare();
     return new Promise((resolve, reject) => {
       const q = this._queue(priority);
       const rec = { resolve, reject, settled: false };
@@ -1177,7 +1288,7 @@ async function probeFirstArticle(pool, msgId) {
   let timer;
   try {
     return await Promise.race([
-      pool.stat(msgId, 'startup', { signal: ac.signal, throwIfUnreachable: true })
+      pool.stat(msgId, 'startup', { signal: ac.signal, throwIfUnreachable: true, parallel: true })
         .then((ok) => ok ? 'present' : 'missing')
         .catch((e) => {
           if (e && e.code === 'ABORT_ERR') return 'timeout';
@@ -2153,7 +2264,7 @@ class Pipeline {
     // Scene names never carry punctuation — "Tom Clancy's Jack Ryan: Ghost War" must reach
     // the indexer as "Tom Clancys Jack Ryan Ghost War" or it finds nothing. Hyphens split into
     // spaces too: "Spider-Noir" found nothing while "Spider Noir" matched 30 releases.
-    const sanitize = (q) => String(q || '').replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const sanitize = (q) => foldDiacritics(String(q || '')).replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
     // The indexer query and the title verifier are DELIBERATELY derived from different strings.
     // sanitize() strips "&" (scene names never carry it) for the cleanest indexer query, but the
     // verifier needs "&" turned into the skippable word "and" (His & Hers → his/and/hers) so real
@@ -2174,10 +2285,24 @@ class Pipeline {
     // Episode Play sends year=2005 on the body, not in q ("The Office S01E01"). Without this
     // copy, The.Office.2024 still matches the title+episode and can outrank the US original.
     if (wanted && !wanted.year && policy.wantedYear) wanted.year = policy.wantedYear;
+    // Catalog media type: a film request never matches SxxEyy releases, year or not.
+    if (wanted && wanted.s === null && policy.mediaType === 'movie') wanted.movie = true;
     if (widenSearch !== false && params.aliases && params.aliases.length) {
       wanted.akaWords = params.aliases
         .map((a) => parseWantedTitle(a).words)
         .filter((words) => words && words.length);
+    }
+    // Server-side catalog facts (index.js catalogFactsFor): TMDB alternative titles that START with
+    // the catalog title (Dune: Part One, F1: The Movie, Star Wars: Episode IV - A New Hope) verify
+    // releases the plain title rejected on the structural boundary; other same-title films' years
+    // stop the ±1 drift tolerance from picking Nosferatu 2023 for Nosferatu 2024. Verify-only: no
+    // extra indexer queries are spent on them.
+    if (wanted && Array.isArray(policy.akaTitles) && policy.akaTitles.length) {
+      const extra = policy.akaTitles.map((a) => parseWantedTitle(a).words).filter((w) => w && w.length);
+      if (extra.length) wanted.akaWords = (wanted.akaWords || []).concat(extra);
+    }
+    if (wanted && wanted.s === null && Array.isArray(policy.otherYears) && policy.otherYears.length) {
+      wanted.otherYears = policy.otherYears.map(Number).filter((y) => Number.isInteger(y) && y !== wanted.year);
     }
     // TV episode context for scoring: a whole-season PACK must not be size-cap-disqualified — only ONE
     // episode streams from it (it's still size-SHAPED, so it stays a low-ranked fallback below singles).
@@ -2411,8 +2536,14 @@ class Pipeline {
     }
     if (!record) {
       const controller = new AbortController();
-      record = { controller, consumers: 0, settled: false, promise: null };
-      const runOpts = { ...mountOpts, signal: controller.signal };
+      record = { controller, consumers: 0, settled: false, promise: null, preemptible: mountOpts.startupPriority === 'prepare' };
+      // A Play stuck behind a full startup gate may cancel this run — but only while every caller
+      // still attached is a background prepare. Once a real Play joins the record it is protected.
+      const runOpts = {
+        ...mountOpts,
+        signal: controller.signal,
+        preempt: () => { if (record.preemptible && !record.settled) controller.abort(); },
+      };
       record.promise = Promise.resolve()
         .then(() => this._tryCandidateFresh(candidate, runOpts))
         .then((result) => {
@@ -2431,6 +2562,7 @@ class Pipeline {
     // releases startup-priority NNTP work without breaking a concurrent play that joined the same
     // prepared mount.
     record.consumers++;
+    if (mountOpts.startupPriority !== 'prepare') record.preemptible = false;
     let released = false;
     let removeAbort = () => {};
     const release = () => {
@@ -2466,6 +2598,7 @@ class Pipeline {
       ticket = await this._startupGate.acquire({
         signal: mountOpts && mountOpts.signal,
         priority: (mountOpts && mountOpts.startupPriority) || 'play',
+        preempt: (mountOpts && mountOpts.preempt) || null,
       });
     } catch (e) {
       if ((e && e.code === 'ABORT_ERR') || (mountOpts && mountOpts.signal && mountOpts.signal.aborted)) {
@@ -3117,13 +3250,40 @@ class Pipeline {
     }
   }
 
+  // The ranked list was built BEFORE this walk started. Once a copy of a release dies mid-walk
+  // (first article gone, 7z, ISO), its title verdict is release-wide — so the next indexer's copy
+  // of the SAME name is skipped for free instead of burning one of MAX_ATTEMPTS plus an NZB grab
+  // on a post we already know is dead. Lucky S01E01 spent 18 attempts on ~6 distinct releases
+  // this way (ETHEL ×2, PSA ×4, ELiTE ×4, MeGusta ×7) and never reached the 50 healthy ones below.
+  // Per-NZB verdicts (unmappable) stay per-copy: another indexer's NZB of that name may be fine.
+  _walkSkipReason(candidate) {
+    if (!candidate || !candidate.name) return null;
+    const v = this.verdicts.get('t:' + normTitle(candidate.name));
+    if (!v) return null;
+    if (DEAD_RELEASE_VERDICTS.has(v.verdict) || v.verdict === 'unstreamable') {
+      return `${v.verdict}: same release already failed (skipped)`;
+    }
+    return null;
+  }
+
+  _nextWalkCandidate(session) {
+    while (session.cursor < session.candidates.length) {
+      const candidate = session.candidates[session.cursor++];
+      const skip = this._walkSkipReason(candidate);
+      if (!skip) return candidate;
+      session.history.push({ name: candidate.name, outcome: skip });
+    }
+    return null;
+  }
+
   async _advanceBody(session, mountOpts = {}, { width = 1 } = {}) {
     const attempts = [];
     const started = Date.now();
     const budgetLeft = () => Date.now() - started < MAX_ADVANCE_MS;
     if (width <= 1) {
       while (session.cursor < session.candidates.length && attempts.length < MAX_ATTEMPTS && budgetLeft()) {
-        const candidate = session.candidates[session.cursor++];
+        const candidate = this._nextWalkCandidate(session);
+        if (!candidate) break;
         const res = await this._tryCandidate(candidate, mountOpts);
         if (res.vf && !res.fail) return this._commitMount(session, candidate, res.vf, attempts, mountOpts);
         session.history.push({ name: candidate.name, outcome: res.fail });
@@ -3141,7 +3301,8 @@ class Pipeline {
       let committed = 0;           // next rank index still to decide
       const launchOne = (kind = 'hedge') => {
         if (session.cursor >= session.candidates.length || results.length >= MAX_ATTEMPTS) return false;
-        const candidate = session.candidates[session.cursor++];
+        const candidate = this._nextWalkCandidate(session);
+        if (!candidate) return false;
         const k = results.length;
         const controller = new AbortController();
         const parentSignal = mountOpts && mountOpts.signal;
@@ -3275,10 +3436,23 @@ class Pipeline {
         inflight.delete(w);
       }
       cancelLosers();
+      // Budget ran out with sources still in flight: say so per source. "all candidates failed"
+      // with an EMPTY attempts list hid a 48s FROM S01E01 failure whose five hedges never finished
+      // (waiting on the startup gate / a slow NZB fetch / a 30s mount deadline).
+      const gate = this._startupGate || {};
+      const pendingNote = `pending: walk budget (${Math.round(MAX_ADVANCE_MS / 1000)}s) ran out first`
+        + ` — startup gate ${gate.active || 0}/${gate.max || STARTUP_SLOTS} busy,`
+        + ` ${(gate.playWait || []).length + (gate.hedgeWait || []).length + (gate.prepWait || []).length} waiting`;
+      for (const r of results) {
+        if (r.state !== 'pending') continue;
+        session.history.push({ name: r.candidate.name, outcome: pendingNote });
+        attempts.push({ name: r.candidate.name, fail: pendingNote });
+      }
     }
     const err = new Error('all candidates failed');
     err.attempts = attempts;
     err.summary = summarizeAttempts(attempts);
+    debug.log('play', `walk failed attempts=${attempts.length} ms=${Date.now() - started} gate=${(this._startupGate && this._startupGate.active) || 0}/${STARTUP_SLOTS}`);
     throw err;
   }
 
@@ -3324,7 +3498,7 @@ class Pipeline {
 
 module.exports = {
   Pipeline, GATE_MS, STARTUP_SLOTS, PLAY_RACE_WIDTH, StartupGate,
-  parseWantedTitle, releaseMatches, catalogIdentityMatches, releaseQualifies, shortTitleQuery,
+  parseWantedTitle, releaseMatches, catalogIdentityMatches, releaseQualifies, shortTitleQuery, foldDiacritics,
   aliasSearchQueries, yearlessSearchQuery, qualitySearchQuery, seasonPackSearchQuery, widenSearchQueries, widenSearchJobs,
   candidateKey, nzbVerdictKey,
   releaseFingerprint, applyNzbFingerprintFields,

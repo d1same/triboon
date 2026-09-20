@@ -2247,8 +2247,78 @@ test('iptv: a live-stream retry/timeout never crashes the whole server', () => {
     'the old crash pattern (remove error listener then destroy WITH an error) must not return');
   // Blast-radius net: a stray stream/socket error must not take down every user. Production-only
   // (inside require.main) so tests still surface real errors.
-  assert.match(src, /if \(require\.main === module\) \{[\s\S]{0,600}?process\.on\('uncaughtException',[\s\S]{0,200}?process\.on\('unhandledRejection',/,
+  assert.match(src, /if \(require\.main === module\) \{[\s\S]{0,2600}?process\.on\('uncaughtException',[\s\S]{0,200}?process\.on\('unhandledRejection',/,
     'the running server must install uncaughtException/unhandledRejection nets so one stream error cannot 502 everyone');
+  // The net must not be able to hang itself: a dead log pipe (EPIPE on stderr) once looped
+  // uncaughtException → console.error → EPIPE → uncaughtException at 100% CPU, starving every POST.
+  assert.match(src, /for \(const stream of \[process\.stdout, process\.stderr\]\) \{\s*if \(stream && typeof stream\.on === 'function'\) stream\.on\('error', \(\) => \{\}\);/,
+    'stdout/stderr write errors (EPIPE) are swallowed so a lost log pipe cannot become an uncaught exception');
+  assert.match(src, /const guardLog = \(\(\) => \{[\s\S]+if \(inLog\) return;[\s\S]+if \(\+\+count > 20\) return;[\s\S]+try \{ console\.error\(tag, \(e && e\.stack\) \|\| e\); \} catch \{\} finally \{ inLog = false; \}/,
+    'the crash-guard logger is re-entrancy safe and flood-limited');
+  assert.match(src, /process\.on\('uncaughtException', \(e\) => guardLog\('\[uncaught\]', e\)\);\s*process\.on\('unhandledRejection', \(e\) => guardLog\('\[unhandledRejection\]', e\)\);/,
+    'both nets log through the guarded logger, never a bare console.error');
+});
+
+test('server: a dead stderr pipe cannot spin the process (EPIPE loop regression)', async () => {
+  // Boot the real entry point as a child with stderr piped, close our end of the pipe so the
+  // child's writes fail with EPIPE, then provoke an uncaught exception path via a request that
+  // logs. A healthy server keeps answering POSTs quickly; the old code spun at 100% CPU and every
+  // POST body starved past the 10s body timer.
+  const { spawn } = require('child_process');
+  const http = require('http');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-epipe-'));
+  const port = 17600 + Math.floor(Math.random() * 400);
+  const child = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], {
+    env: { ...process.env, PORT: String(port), TRIBOON_DATA: dataDir, TRIBOON_SECRET: 'epipe-test' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  const request = (method, p, body, token) => new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    const data = body == null ? null : Buffer.from(JSON.stringify(body));
+    const headers = data ? { 'content-type': 'application/json', 'content-length': data.length } : {};
+    if (token) headers.authorization = `Bearer ${token}`;
+    const req = http.request({ host: '127.0.0.1', port, path: p, method, headers }, (res) => {
+      const chunks = []; res.on('data', (c) => chunks.push(c));
+      res.on('end', () => { let json = null; try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {} resolve({ status: res.statusCode, json, ms: Date.now() - t0 }); });
+    });
+    req.setTimeout(8000, () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+    req.end(data);
+  });
+  try {
+    const deadline = Date.now() + 25000;
+    let up = false;
+    while (Date.now() < deadline) {
+      try { if ((await request('GET', '/api/server')).status === 200) { up = true; break; } } catch {}
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    assert.ok(up, 'server boots');
+    const setup = await request('POST', '/api/setup', { name: 'owner', password: 'hunter22' });
+    assert.strictEqual(setup.status, 200);
+    const token = setup.json.token;
+    // Kill the log pipes from OUR side: the child's next console.* write gets EPIPE.
+    child.stdout.destroy(); child.stderr.destroy();
+    // A Play with no indexers configured fails and logs "[play] fail …" unconditionally — that
+    // console.log now hits the dead pipe. The old code turned that into the uncaughtException →
+    // console.error → EPIPE loop; the process spun and every later POST body starved.
+    for (let i = 0; i < 4; i++) await request('POST', '/api/play', { q: `Nothing ${i} 2024` }, token).catch(() => {});
+    await new Promise((r) => setTimeout(r, 1500));
+    const t0 = Date.now();
+    const r = await request('POST', '/api/login', { name: 'nobody', password: 'x' });
+    assert.ok([401, 429].includes(r.status), `POST still answers after the log pipe died (got ${r.status})`);
+    assert.ok(Date.now() - t0 < 3000, `POST answers promptly, not at the 10s body timer (${Date.now() - t0}ms)`);
+    const again = await request('POST', '/api/play', { q: 'Nothing again 2024' }, token);
+    assert.ok([502, 409].includes(again.status), `Play still gets a real answer with a dead logger (got ${again.status})`);
+  } finally {
+    await new Promise((resolve) => {
+      if (child.exitCode !== null) return resolve();
+      child.once('exit', resolve);
+      try { child.kill(); } catch { resolve(); }
+      setTimeout(resolve, 3000).unref();
+    });
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {} // Windows may still hold the store file briefly
+  }
 });
 
 test('iptv: stale Xtream stream ids refresh and retry native playback', async () => {

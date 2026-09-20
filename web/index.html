@@ -250,9 +250,12 @@ body.tv{transition:none}
    slightly, is the only edge — same quiet spine as the Settings tab list. */
 #rail{background:none;-webkit-backdrop-filter:none;backdrop-filter:none;
   border-right:0;border-radius:0;box-shadow:none}
+/* Drawn with an INSET shadow, not border-right: a 1px border on a box whose corner radius (16)
+   exceeds its width (12) left the Shield WebView painting a straight stub where the arc ends —
+   "a second line where the curve of the divider ends" (owner, 2026-09-20). The inset shadow
+   follows the rounded shape and tapers to nothing at the corners on every Blink/Skia. */
 #rail::after{content:"";position:absolute;top:16px;bottom:16px;right:0;width:12px;
-  border-right:1px solid rgba(255,255,255,.14);border-radius:0 16px 16px 0;pointer-events:none}
-#rail.show{display:flex}
+  box-shadow:inset -1px 0 0 rgba(255,255,255,.14);border-radius:0 16px 16px 0;pointer-events:none}#rail.show{display:flex}
 #railMain{min-height:0;flex:1 1 auto;display:flex;flex-direction:column;align-items:stretch;gap:6px;overflow-x:hidden;overflow-y:auto;padding-bottom:4px;scroll-padding-bottom:10px;scrollbar-width:none}
 #railMain::-webkit-scrollbar{width:0;height:0}
 /* Expanded = a real overlay (collapsed is --rail; that var must stay in sync with #rail width).
@@ -8192,9 +8195,17 @@ function renderRows(opts = {}) {
   signalTvReadyOnce('home-render');
 }
 let prefetchTimer = null;
+// Browsers allow ~6 connections per host and the server closes every socket after one request.
+// The detail page fires a burst (TMDB detail/credits/similar/seasons + watch + search + prepare);
+// the two SLOW ones (search fan-out 2-3s, prepare up to several s) must not go out ahead of the
+// fast TMDB ones or cast / related / seasons sit in the browser queue looking "not loaded" —
+// measured 3.4s late. Warm-ups therefore wait a beat, and never fire without a title (a bare
+// `q=` is a guaranteed 400 that still burns a slot).
+const DETAIL_WARM_DELAY_MS = 350;
 function prefetchSources(it, delay = 700) {
   if (!it || it.type === 'live') return;
   if (it.type === 'tv' && !episodeKeyParts(it)) return;
+  if (!queryFor(it)) return;
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
   // The Stremio trick: search/triage warms server-side while the user reads the title,
@@ -8324,6 +8335,7 @@ function preparePlaybackSource(it, delay = 900) {
   if (!it || it.type === 'live') return;
   it = resolvePlaybackResume(it);
   if (it.type === 'tv' && !episodeKeyParts(it)) return;
+  if (!queryFor(it)) return; // title not known yet — /api/prepare would 400 and waste a connection slot
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
   startLocalPlaybackLookup(it);
@@ -8891,11 +8903,13 @@ function preferredQualityRankForItem(it) {
 function qualityRankForItem(it) {
   let q = preferredQualityRankForItem(it);
   // Browser default is 1080p (4K HEVC remux/transcode stutters in Chrome). An explicit
-  // per-title 4K tap — saved on this title — still plays 4K. A global "I usually watch 4K"
-  // default does not silently force 4K in the browser. Native Android/Windows stay uncapped.
+  // per-title 4K tap — the ONLY writer of savedQualityPref is the detail-page toggle — still
+  // plays 4K. A global "I usually watch 4K" default does not silently force 4K in the browser.
+  // it.qualityRank is NOT a tap signal: episode items and Continue Watching cards inherit the
+  // durable show/profile rank into it (a 1080p toggle once played Neagley S01E01 in 2160p).
+  // Native Android/Windows stay uncapped.
   if (isWebBrowserClient() && !allow4kInBrowser()) {
-    const titlePref = normalizeQualityRank(it && it.qualityRank) || savedQualityPref(it);
-    if (titlePref !== 4) q = Math.min(q || 3, 3);
+    if (savedQualityPref(it) !== 4) q = Math.min(q || 3, 3);
   }
   return q || null;
 }
@@ -8974,6 +8988,16 @@ function localPlaybackFitsQuality(it, qRank) {
 function paintQualityToggle(rank) {
   const q = normalizeQualityRank(rank) || 3;
   [...$('qToggle').children].forEach((x) => x.classList.toggle('qon', normalizeQualityRank(x.dataset.q) === q));
+}
+// The visible toggle state, the Sources drawer filter, and the Play request must all mean the
+// same file class. S.qualityPref stays the DURABLE preference (a browser's 1080p cap must never
+// overwrite the 4K Android resumes with — see the cross-device Continue Watching contract), so
+// the toggle and the drawer paint/filter on this EFFECTIVE rank instead: a remembered GLOBAL 4K
+// default is capped to 1080p in a plain browser, an explicit 4K tap on this title stays 4K.
+// (Owner report: toggle said 1080p while Sources said "showing 4K — none playable".)
+function effectiveDetailQualityPref(it) {
+  return qualityRankForItem(it) || normalizeQualityRank(S.qualityPref) || normalizeQualityRank(it && it.qualityRank)
+    || savedQualityPref(it) || globalQualityPref() || 3;
 }
 function resolvePlaybackResume(it) {
   if (!it || it.type === 'live') return it;
@@ -9241,12 +9265,15 @@ async function openSources(it) {
     const rk = (c) => RES_RANK[(c.attributes || {}).resolution]; // undefined = unknown res
     const has4k = cands.some((c) => rk(c) === 4);
     const hasLower = cands.some((c) => rk(c) !== 4);
-    if (has4k && hasLower && (S.qualityPref === 3 || S.qualityPref === 4)) {
-      cands = S.qualityPref === 4 ? cands.filter((c) => rk(c) === 4) : cands.filter((c) => rk(c) !== 4);
-      const playable4k = S.qualityPref === 4 && cands.some((c) => (Number(c.score) || 0) > -5000);
-      $('drawerSub').textContent = S.qualityPref === 4 && !playable4k
+    // Filter on the EFFECTIVE rank (what Play will actually request), not the raw durable pref —
+    // a browser capped to 1080p must not list 4K rows under a "1080p" toggle.
+    const shownRank = (S.qualityPref === 3 || S.qualityPref === 4) ? effectiveDetailQualityPref(it) : null;
+    if (has4k && hasLower && (shownRank === 3 || shownRank === 4)) {
+      cands = shownRank === 4 ? cands.filter((c) => rk(c) === 4) : cands.filter((c) => rk(c) !== 4);
+      const playable4k = shownRank === 4 && cands.some((c) => (Number(c.score) || 0) > -5000);
+      $('drawerSub').textContent = shownRank === 4 && !playable4k
         ? `${it.title} — showing 4K. None of these are playable yet.`
-        : `${it.title} — showing ${S.qualityPref === 4 ? '4K' : 'up to 1080p'} releases. Auto-pick plays the top one.`;
+        : `${it.title} — showing ${shownRank === 4 ? '4K' : 'up to 1080p'} releases. Auto-pick plays the top one.`;
     }
     const fmtAttr = (v) => {
       if (!v || v === 'unknown') return '';
@@ -9746,7 +9773,7 @@ async function openDetail(it, push = true, opts = {}) {
   // when this title actually has BOTH a 4K and a sub-4K version to choose between.
   $('qToggle').style.display = 'none';
   S.qualityPref = null;
-  paintQualityToggle(qualityRankForItem(it) || normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || 3);
+  paintQualityToggle(effectiveDetailQualityPref(it));
   const reqId = (S.detailReq = (S.detailReq || 0) + 1); // rapid clicks: only the LAST request may render
   // Ask TMDB immediately. Waiting on local episode pages first left cast/related/episodes
   // blank for 10–30s on library-backed titles (The Office, long shows).
@@ -9790,21 +9817,35 @@ async function openDetail(it, push = true, opts = {}) {
     if (!d || reqId !== S.detailReq) return; // a newer detail page superseded this fetch
     S.detailData = d;
     applyExternalIds(it, d);
+    // Route-restored pages (`#/title/movie/123`, Continue Watching) start without a year, and a
+    // year-less `q=Mayday` let the 2021 film and Mayday.S26E10 into Sources. Fill it before the
+    // warm-ups below fire so every search/prepare/play carries `Mayday 2026` + year.
+    if (!it.year) {
+      const y = String(d.release_date || d.first_air_date || '').slice(0, 4);
+      if (/^(19|20)\d{2}$/.test(y)) {
+        it.year = y;
+        if (detailPlayTarget && detailPlayTarget !== it && !detailPlayTarget.year && detailPlayTarget.tmdbId === it.tmdbId) detailPlayTarget.year = y;
+      }
+    }
+    // Title BEFORE the warm-ups: with the year filled first, a restored page used to fire its
+    // first search as `q=2026` (year, no title) until the title landed a few lines later.
+    const restoredTitle = !it.title;
+    if (restoredTitle) { // route-restored page (refresh/back) — fill from TMDB
+      it.title = d.title || d.name || '';
+      setTitleText($('dTitle'), it.title);
+      applyTitleLogo($('dTitle'), it);
+      if (d.overview) $('dOverview').textContent = d.overview;
+    }
     if (it.imdbId || it.tvdbId) {
       checkAvailability(it);
       if (detailPlayTarget) {
         prefetchSources(detailPlayTarget, 0);
         preparePlaybackSource(detailPlayTarget, 0);
       }
-    }
-    bootReady(); // a hash-restored detail page is a boot landing
-    if (!it.title) { // route-restored page (refresh/back) — fill from TMDB
-      it.title = d.title || d.name || '';
-      setTitleText($('dTitle'), it.title);
-      applyTitleLogo($('dTitle'), it);
-      if (d.overview) $('dOverview').textContent = d.overview;
+    } else if (restoredTitle) {
       checkAvailability(it); // the early call ran with an empty title — redo with the real one
     }
+    bootReady(); // a hash-restored detail page is a boot landing
     // Details always takes live TMDB art. The library grid used to keep the old poster because
     // only a title-less restore path wrote these fields back onto the card.
     if (d.backdrop_path) { it.backdrop = img(d.backdrop_path); setBackdrop(it.backdrop || it.poster); }
@@ -10520,8 +10561,8 @@ function updateDetailPlayLabel({ label, target }) {
   detailPlayTarget = target;
   $('dPlayLabel').textContent = detailPlayButtonLabel(label, target);
   syncDetailSourcesTitle(target);
-  prefetchSources(target, 0);
-  preparePlaybackSource(target, 0);
+  prefetchSources(target, DETAIL_WARM_DELAY_MS);
+  preparePlaybackSource(target, DETAIL_WARM_DELAY_MS);
 }
 function localEpisodesForShow(show) {
   if (!show || !show.tmdbId || !S.localMap) return [];
@@ -10564,6 +10605,7 @@ async function checkAvailability(it) {
   // Skip only when TMDB is KNOWN to be unconfigured — on a route-restored refresh this runs
   // before /api/server returns, and bailing there left the toggle/Unavailable state unset.
   if (S.serverInfo && !S.serverInfo.tmdb) return;
+  if (!queryFor(searchItem)) return; // no title yet → a bare `q=` search is a guaranteed 400; the id pass re-runs us
   try {
     const ids = sourceIdentityFor(searchItem);
     const hadStrongIds = !!(ids.imdbid || ids.tvdbid);
@@ -10604,12 +10646,12 @@ async function checkAvailability(it) {
       $('dSources').style.display = offer ? '' : 'none';
       $('qToggle').style.display = offer ? '' : 'none';
       S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || globalQualityPref() || 3) : null;
-      if (offer) paintQualityToggle(qualityRankForItem(it) || S.qualityPref);
+      if (offer) paintQualityToggle(effectiveDetailQualityPref(it));
       return;
     }
     $('qToggle').style.display = offer ? '' : 'none';
     S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || globalQualityPref() || 3) : null;
-    if (offer) paintQualityToggle(qualityRankForItem(it) || S.qualityPref);
+    if (offer) paintQualityToggle(effectiveDetailQualityPref(it));
     // An id-less pass on a TMDB title is only the FIRST of two checks — never let it condemn a
     // title whose imdb/tvdb ids (and the sources they find) are still on the way.
     if (!playable && (hadStrongIds || !searchItem.tmdbId)) {
@@ -11070,7 +11112,10 @@ function cleanupLiveMse(slot = 'main') {
   if (!st) return;
   S[key] = null;
   try { st.abort && st.abort.abort(); } catch {}
-  try { st.reader && st.reader.cancel(); } catch {}
+  // reader.cancel() returns a promise; once the fetch body was aborted it REJECTS with
+  // "AbortError: BodyStreamBuffer was aborted" — an unhandled rejection in the console on every
+  // Live TV close. Expected on teardown; swallow it.
+  try { const c = st.reader && st.reader.cancel(); if (c && typeof c.catch === 'function') c.catch(() => {}); } catch {}
   if (st.objectUrl) {
     setTimeout(() => { try { URL.revokeObjectURL(st.objectUrl); } catch {} }, 0);
   }
@@ -26322,8 +26367,10 @@ function connRowHtml(p = {}) {
   const inUsePct = size ? Math.min(100, (inUse / size) * 100) : 0;
   const openPct = size ? Math.min(100 - inUsePct, (Math.max(0, open - inUse) / size) * 100) : 0;
   const q = (+p.queued || 0) > 0 ? `<span class="connQ">${esc(p.queued)} queued</span>` : '';
-  const status = p.down ? '<span class="connQ" style="color:var(--danger)">offline</span>' : q;
-  return `<div class="connRow${p.down ? ' down' : ''}">
+  const status = p.down ? '<span class="connQ" style="color:var(--danger)">offline</span>'
+    : p.authBroken ? '<span class="connQ" style="color:var(--danger)" title="The provider accepts the login, then answers 480 to every article. Usually an exhausted block account, too many sessions, or a suspended plan. Other providers take over.">login rejected</span>'
+    : q;
+  return `<div class="connRow${p.down || p.authBroken ? ' down' : ''}">
     <b>${esc(p.label || 'Provider')}</b>
     <div class="connNums">${esc(inUse)} / ${esc(size)} <small>in use · ${esc(open)} open</small> ${status}</div>
     <div class="connBar"><i class="inUse" style="width:${inUsePct}%"></i><i class="open" style="width:${openPct}%"></i></div>

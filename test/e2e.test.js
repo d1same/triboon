@@ -849,6 +849,110 @@ test('nntp: after a 502, keep live sockets and never snap back to the typed plan
   }
 });
 
+test('nntp: a connection that lost its login (480) is destroyed and the article retries on a fresh AUTH', async () => {
+  const { articles } = makeRelease('Auth.Lost.mkv', 64 * 1024, 64 * 1024);
+  const id = [...articles.keys()][0];
+  const mock = createMockNntp({ articles, requireAuth: true });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, user: 'u', pass: 'p' }, 1);
+  try {
+    const first = await pool.body(id, 'playback');
+    assert.ok(first.length > 0, 'warm-up BODY works on the authenticated socket');
+    const before = mock.connCount();
+    // Provider forgets the session: the live socket now answers 480 to everything.
+    mock.deauthSockets();
+    const again = await pool.body(id, 'playback');
+    assert.ok(again.equals(first), 'the SAME article is served after the 480, not an error and not a "missing"');
+    assert.strictEqual(mock.connCount(), before + 1, 'exactly one fresh (re-authenticated) connection was opened');
+    mock.deauthSockets();
+    assert.strictEqual(await pool.stat(id, 'startup'), true,
+      'a STAT hitting 480 must not read as "article missing" — it reconnects and answers truthfully');
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('nntp: an account that answers 480 on fresh logins trips a breaker — other providers take the article without paying its handshakes', async () => {
+  const { articles } = makeRelease('Auth.Broken.mkv', 64 * 1024, 64 * 1024);
+  const id = [...articles.keys()][0];
+  // Provider A: logs in fine, then 480s every command (exhausted block / over its session cap).
+  const bad = createMockNntp({ articles, requireAuth: true, authThenReject: true });
+  const badPort = await bad.listen();
+  const good = createMockNntp({ articles });
+  const goodPort = await good.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: badPort, tls: false, user: 'u', pass: 'p', connections: 4 },
+    { host: '127.0.0.1', port: goodPort, tls: false, connections: 4 },
+  ], 4);
+  const badProvider = pool.providers[0];
+  try {
+    for (let i = 0; i < 3; i++) {
+      const body = await pool.body(id, 'readAhead'); // non-hedged path: sequential failover
+      assert.ok(body.length > 0, `article ${i} still served via the healthy provider`);
+    }
+    assert.strictEqual(badProvider.authBroken(), true, 'two fresh-login 480s inside the window trip the breaker');
+    assert.strictEqual(badProvider.stats().authBroken, true, 'Status can show "login rejected"');
+    const connsBefore = bad.connCount();
+    await pool.body(id, 'readAhead');
+    await pool.body(id, 'readAhead');
+    assert.strictEqual(bad.connCount(), connsBefore, 'while broken, the bad account is not even dialed');
+    assert.strictEqual(pool._ordered()[0], pool.providers[1]);
+    assert.strictEqual(pool._ordered().length, 1, 'the broken provider is left out of the rotation, not merely sorted last');
+  } finally {
+    pool.close();
+    await bad.close();
+    await good.close();
+  }
+});
+
+test('nntp: the startup probe STATs every provider at once — one round trip decides, losers are not aborted', async () => {
+  const { articles } = makeRelease('Probe.Fast.mkv', 64 * 1024, 64 * 1024);
+  const id = [...articles.keys()][0];
+  // Three providers: two slow misses (430 after 400ms), one fast hit.
+  const slowA = createMockNntp({ articles: new Map(), latencyMs: 400 });
+  const slowB = createMockNntp({ articles: new Map(), latencyMs: 400 });
+  const fast = createMockNntp({ articles });
+  const [pa, pb, pf] = await Promise.all([slowA.listen(), slowB.listen(), fast.listen()]);
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: pa, tls: false, connections: 2 },
+    { host: '127.0.0.1', port: pb, tls: false, connections: 2 },
+    { host: '127.0.0.1', port: pf, tls: false, connections: 2 },
+  ], 2);
+  try {
+    const t0 = Date.now();
+    const seq = await pool.stat(id, 'startup');
+    const seqMs = Date.now() - t0;
+    assert.strictEqual(seq, true);
+    assert.ok(seqMs >= 700, `sequential walk pays every slow miss first (${seqMs}ms)`);
+    const t1 = Date.now();
+    const par = await pool.stat(id, 'startup', { parallel: true });
+    const parMs = Date.now() - t1;
+    assert.strictEqual(par, true);
+    assert.ok(parMs < 350, `parallel probe settles on the fast hit (${parMs}ms)`);
+    // Losers finish on their own and land in the miss cache; no connection was torn down for them.
+    await new Promise((r) => setTimeout(r, 600));
+    assert.ok(pool.missCache.has(pool.providers[0], id) && pool.missCache.has(pool.providers[1], id),
+      'late 430s still feed the per-provider miss cache');
+    assert.ok(pool.providers[0].conns.every((c) => c.alive), 'slow providers keep their sockets');
+    // All-miss: every provider answered → false, not "unreachable".
+    assert.strictEqual(await pool.stat('nobody@nowhere', 'startup', { parallel: true, throwIfUnreachable: true }), false);
+  } finally {
+    pool.close();
+    await Promise.all([slowA.close(), slowB.close(), fast.close()]);
+  }
+});
+
+test('nntp: STAT treats only 430/423 as missing — a 5xx server fault is an error, never a dead-source verdict', async () => {
+  const c = new NntpConnection({});
+  c._cmd = async () => ({ status: '503 backend fault', body: null });
+  await assert.rejects(() => c.stat('x@y'), (e) => e.code === '503');
+  c._cmd = async () => ({ status: '430 no such article', body: null });
+  assert.strictEqual(await c.stat('x@y'), false);
+  c._cmd = async () => ({ status: '223 0 <x@y>', body: null });
+  assert.strictEqual(await c.stat('x@y'), true);
+});
+
 test('nntp: late AUTH after a 502 is closed instead of joining the pool', () => {
   const pool = new ProviderPool({ host: 'x' }, 8);
   pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });

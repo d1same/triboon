@@ -217,8 +217,18 @@ class VerdictCache {
   _scrubUnsafeKeys() {
     const all = this.store.read('verdicts', {});
     let changed = false;
-    for (const k of Object.keys(all)) {
+    for (const [k, v] of Object.entries(all)) {
       if (/^https?:\/\//i.test(k) || /[?&](apikey|api_key|key|token|access_token|auth|password)=/i.test(k)) {
+        delete all[k];
+        changed = true;
+        continue;
+      }
+      // "unmappable" used to be the verdict for every per-volume-obfuscated repost (each slice its
+      // own random name). Those releases mount fine now that the par2/RAR5 headers restore the
+      // volume order, so a cached copy of that verdict would only hide good sources for up to 6h
+      // after the upgrade. Forget them once at boot; genuinely broken NZBs re-earn it on next play.
+      const tags = (v && v.detail && v.detail.tags) || [];
+      if (v && v.verdict === 'unstreamable' && ((v.detail && v.detail.streamClass === 'unmappable') || tags.includes('unmappable'))) {
         delete all[k];
         changed = true;
       }

@@ -290,6 +290,127 @@ them when the table is reorganized:
   `NzbFileStream._fetchSegment`. Verification: the understudy, rank-grace,
   loser-cleanup, deadline/probe-cleanup, post-abort-join, and shared-consumer
   tests in `test/phase2.test.js`.
+- **P6 - obfuscated volume sets mount.** Reposts commonly give every RAR slice
+  its own random name (`h9yS….part01.rar`, `ORuE….part02.rar`, or no extension),
+  or number `hash.10/.11/…` slices in an order that is not the volume order.
+  Grouping by base name then maps one 52 MB slice of a 4 GB file and the release
+  was tagged `unmappable` although it is healthy. `mountNzb` now proves the order
+  before the RAR walk: the post's own `.par2` FileDesc packets (real name + MD5 of
+  the first 16 KB, matched against each slice's head) or, without a par2, the
+  RAR5 main-header volume number. A plain `.partNN.rar` / `.rNN` set never pays
+  for this; an unproven set falls back to the old behavior. Boot forgets cached
+  `unmappable` verdicts once so healthy reposts are retried right after an
+  upgrade. Code: `server/par2.js`; `server/rar.js` `rar5VolumeInfo`;
+  `server/archive.js` `deobfuscateVolumes`, `numericSliceSet`;
+  `server/store.js` `VerdictCache._scrubUnsafeKeys`. Verification: the par2,
+  obfuscated RAR4/RAR5, and lying-`hash.NN` tests in `test/archive.test.js`;
+  the verdict-scrub test in `test/phase2.test.js`.
+- **P6 - raw-subject wrappers are not part of the title.** Some indexers return
+  the usenet subject instead of a release name: a posting counter and quotes
+  (`[1 10] 'Slow.Horses.S04E01…-FLUX.mkv'`) or a site tag
+  (`www.UIndex.org.-.Alien.Earth.S01E01…-Kitsune`). The anchored verifier saw
+  junk where the title must start and dropped those good copies. The wrapper is
+  stripped once at the indexer boundary (`newznab.stripSubjectWrapper`, applied
+  in `parseNewznabRss`, re-applied in `releaseMatches`), so verification, dedupe,
+  verdict keys and the Sources drawer all see the real name. Bare domain-looking
+  title words (`Dot.Com.2024`) are left alone. Measured: Slow Horses S04E01
+  199→202 kept rows, Alien Earth S01E01 245→246. Verification: the wrapped-name
+  cases in `test/phase2.test.js` (title verification + newznab parse tests).
+- **P6 - a film request never lists the same-name TV show, packs, or music.**
+  Owner saw `Mayday.S26E10…` (Air Crash Investigation), `Mayday.S11` packs and a
+  `…Live-STREAM-04-30-2026-CiN` MP3 in Sources for the 2026 film. Root causes:
+  (1) a detail page restored from a link / Continue Watching has no year yet,
+  so `q=Mayday` went out year-less and the verifier accepted every "Mayday";
+  (2) the movie-vs-TV rule only fired with a year and only on `SxxEyy`, not
+  bare `S11` / `Season 12` packs; (3) scene music passed title+year. Fixes:
+  the client fills `it.year` (and the title) from TMDB before the warm-ups fire;
+  the server fills a missing year from the proxy-cached TMDB title
+  (`catalogYearFor`, fail-open) and passes `mediaType` into the policy so
+  `wanted.movie` rejects `SxxEyy` / `NxMM` / `Sxx` / `Season N` /
+  `Complete Series` with or without a year; a dashed US date (`MM-DD-YYYY`)
+  with no video token is rejected as music (YYYY-MM-DD dailies untouched).
+  Measured on `:7799`: year-less 4K request 257 → 132 rows, all the 2026 film;
+  free-text search with no catalog hint stays permissive by design.
+  Verification: `test/phase2.test.js` (title verification + "year-less film
+  request (restored page)").
+- **P6 - wide title audit (35 films, 28 shows; 2026-09-20).** Fixes, each with
+  a `test/phase2.test.js` assertion:
+  - Accents fold on both sides (`foldDiacritics`): "Shōgun" was tokenized as
+    sh+gun and rejected every plain `Shogun.…` release (15 → 222 rows).
+    Indexer queries fold too.
+  - `U.S.` spells as the catalog's `US` (The.Office.U.S., Shameless.U.S.).
+  - An extra leading article on an EPISODE is a different show (`The.Dark`
+    for "Dark"); movies keep the tolerance (TMDB alias covers real cases).
+  - Air year after the episode must fit the season: `Doctor.Who.S01E01.2024`
+    is the 2023 revival, not S01 of the 2005 show (it was the top 3 picks).
+    A season's own air year before the episode (`The.Last.of.Us.2025.S02E01`)
+    is allowed when it fits the season number; remake years are not.
+  - Server catalog facts (`index.js catalogFactsFor`, memo + 24h proxy cache;
+    search/play/prepare all carry them): TMDB alternative titles that START
+    with the catalog title become verify-only akas (`Dune: Part One`, `F1: The
+    Movie`, `Star Wars: Episode IV - A New Hope`, `It: Chapter One`,
+    `Superman: Legacy`, `Wicked Part 1`) — Star Wars 33 → 168 rows, Dune 2021
+    215 → 325, F1 138 → 209; other films with the exact same title (plain +
+    ±1-year searches on the core title) become `otherYears`, so the ±1 drift
+    tolerance cannot pick `Odyssey.2025` for The Odyssey 2026 and a year-less
+    name is rejected when the title is shared (`Nosferatu.1080p.BluRay.REMUX`).
+  - Numerals are one word: Part One / Part 1 / Part I.
+  - `Title.Year.` followed by ≥4 plain words is a broadcast named by year
+    (55 `F1.2026.Grosser.Preis.von.Spanien…` rows in the F1 film), not an
+    edition; edition/cut words stop the count.
+  - Scoring: a whole-season pack requested for one episode carries -80 so an
+    equal-quality single episode starts instead (Adolescence and Task
+    auto-picked the Vyndros S01 pack).
+  Known open: same title, same year, no IMDb tag on the indexer rows (three
+  "The Odyssey" 2026 films) — only a runtime check at mount can separate them.
+- **P6 - dead sibling copies are skipped mid-walk.** The ranked list is built
+  before the walk; once one indexer's copy of a release dies with a release-wide
+  verdict (first article gone, 7z/ISO), every other indexer's copy of that same
+  name is skipped for free instead of spending one of `MAX_ATTEMPTS` plus an NZB
+  grab. Per-NZB verdicts (`unmappable`) stay per copy. Code: `server/pipeline.js`
+  `_walkSkipReason`, `_nextWalkCandidate`. Verification: the sibling-skip test in
+  `test/phase2.test.js`.
+- **P14 - lost login is a socket fault, not a missing article.** A `480/481/482`
+  on an open connection means the provider forgot our AUTHINFO. That socket is
+  destroyed and the task retries once on a fresh, re-authenticated connection;
+  `STAT` treats only `430/423` as missing so a poisoned socket can never write a
+  `missing` verdict. A provider that answers 480 on two FRESH logins inside 60s
+  trips an account breaker: it leaves the rotation (no more connect+TLS+AUTH per
+  article) until the window passes, and Status shows `login rejected`. Code:
+  `server/nntp.js` `isAuthLostStatus`, `NntpConnection._authLost`,
+  `ProviderPool.noteAuthLost`/`authBroken`, `NntpPool._ordered`;
+  `web/index.html` `connRowHtml`. Verification: the 480 rebuild, breaker, and
+  STAT-status tests in `test/e2e.test.js`.
+- **P14 - the first-article probe asks every account at once.** The 800ms
+  press-play STAT used to walk providers one 430 at a time (~4 round trips on a
+  four-account box), so most dead copies timed out the probe and fell through to
+  the slower BODY mount chain. `pool.stat(..., { parallel: true })` fires the
+  STAT to every usable provider, settles on the first 223, and never hard-aborts
+  the losers (their late 430s still feed the miss cache; no socket is torn down).
+  Health triage keeps the sequential walk. Code: `server/nntp.js`
+  `NntpPool._parallelStat`; `server/pipeline.js` `probeFirstArticle`.
+  Verification: the parallel-probe test in `test/e2e.test.js`.
+- **P14 - Play preempts background prepare at the startup gate.** The gate has
+  `STARTUP_SLOTS` (3) slots and a holder keeps its slot for the whole candidate
+  (up to 15s NZB fetch + 30s mount deadline). Browsing three detail pages could
+  park three speculative prepares there, and the next real Play waited out its
+  45s budget and failed with an EMPTY attempts list. Now a `play`-priority
+  acquire that finds the gate full asks one `prepare` holder to stand down
+  (`record.controller.abort()`); a record stops being preemptible the moment a
+  real Play joins it, hedges never preempt, and Plays never preempt Plays. A walk
+  that still runs out of budget reports every pending source as
+  `pending: walk budget ran out first — startup gate x/3 busy` and the owner sees
+  "server was still opening sources… press Play again" instead of "removed".
+  Code: `server/pipeline.js` `StartupGate._preemptOnePrepare`, `_tryCandidate`
+  `preemptible`, `_advanceBody` pending report, `summarizeAttempts`.
+  Verification: the gate preemption and pending-summary tests in
+  `test/phase2.test.js`.
+- **P14 - Play outlives its own source walk.** `server.timeout` is 30s of socket
+  silence; a walk may take `MAX_ADVANCE_MS` (45s). `/api/play` and
+  `/api/play/:id/advance` extend their socket to 75s so a hard title returns a
+  real answer instead of "socket hang up" while the server finishes the mount.
+  Code: `server/index.js` `extendPlayRouteTimeout`. Verification: the route
+  budget assertions in `test/security.test.js`.
 - **P14 - abort drain preserves connections.** NNTP has no command cancel, so a
   hard abort of an on-wire BODY destroys its connection (TCP+TLS+AUTH to
   rebuild). Segment fetches opt in to a bounded drain (`drainMs` /

@@ -191,11 +191,98 @@ test('title verification: short titles match only releases that ARE that title',
     'From.Hong.Kong.to.Beijing.2023.S01E01.1080p.WEB-DL.H.264-UBWEB',
   ]) assert.ok(!releaseMatches(bad, from), `rejects ${bad}`);
 
+  // Raw-subject wrappers (posting counter + quotes, site tags) sit in front of real releases on
+  // some indexers; the anchored check used to throw those good FLUX/Kitsune copies away.
+  const slow = parseWantedTitle('slow horses s04e01');
+  for (const wrapped of [
+    "[1 10] 'Slow.Horses.S04E01.Identity.Theft.1080p.ATVP.WEB-DL.DDP5.1.Atmos.H.264-FLUX.mkv'",
+    '[01/26] "Slow.Horses.S04E01.Identity.Theft.1080p.ATVP.WEB-DL.DDP5.1.Atmos.H.264-GP-TV-NLsubs.par2"',
+    'www.UIndex.org.-.Slow.Horses.S04E01.Identity.Theft.2160p.ATVP.WEB-DL.DDP5.1.DV.HDR.H.265-Kitsune',
+    '[www.some-site.net] Slow.Horses.S04E01.1080p.WEB.H264-NTb',
+  ]) assert.ok(releaseMatches(wrapped, slow), `accepts wrapped ${wrapped}`);
+  // …but the wrapper strip must not loosen the anchor for genuinely different titles.
+  assert.ok(!releaseMatches('[1 10] "Fast.Horses.S04E01.1080p.WEB-NTb"', slow));
+  assert.ok(!releaseMatches('Dot.Com.2024.1080p.WEB-DL-GRP', parseWantedTitle('com 2024')), 'a title-looking domain word without www./brackets is left alone');
+
   // The year disambiguates one-word movie titles ("It").
   const it = parseWantedTitle('it 2017');
   assert.ok(releaseMatches('It.2017.1080p.BluRay.REMUX.AVC.DTS-HD.MA.TrueHD.7.1.Atmos-FGT', it));
   assert.ok(!releaseMatches('It.Chapter.Two.2019.2160p.UHD.BluRay.x265-TERMiNAL', it), 'sequel: wrong year + plain word after title');
   assert.ok(!releaseMatches('Power.Rangers.2017.2160p.UHD.BDRip.HEVC-MUSHR00M', it), 'same year, different film');
+
+  // Real incident: a detail page restored from a link had no year yet, so Sources for the 2026 film
+  // "Mayday" listed Mayday.S26E10 (the TV show) at score 735. The catalog media type alone must
+  // keep SxxEyy releases out of a film request, year or not.
+  const mayday = parseWantedTitle('mayday');
+  assert.ok(releaseMatches('Mayday.S26E10.Mixed.Measures.2160p.CRAV.WEB-DL.DDP5.1.H.265-Kitsune', mayday), 'a bare title-only query is still permissive');
+  mayday.movie = true;
+  assert.ok(!releaseMatches('Mayday.S26E10.Mixed.Measures.2160p.CRAV.WEB-DL.DDP5.1.H.265-Kitsune', mayday), 'movie request rejects an episode');
+  assert.ok(!releaseMatches('Mayday.26x10.720p.HDTV-GRP', mayday), 'movie request rejects NxMM too');
+  assert.ok(releaseMatches('Mayday.2026.2160p.ATVP.WEB-DL.DDPA.5.1.DV.HDR.H.265-PiRaTeS', mayday), 'the film still matches');
+  // Season packs (no episode token) and scene-music streams were the last stragglers in the drawer.
+  const mayday26 = parseWantedTitle('mayday 2026');
+  assert.ok(!releaseMatches('Mayday.S11.1080p.AMZN.WEB-DL.DD+2.0.H.264-playWEB', mayday26), 'season pack rejected for a film');
+  assert.ok(!releaseMatches('Mayday.Season.12.1080p.WEB-DL-GRP', mayday26), 'spelled season pack rejected for a film');
+  assert.ok(!releaseMatches('Mayday 2026-Klaudia Gawlas Live-STREAM-04-30-2026-CiN INT', mayday26), 'dashed US date + no video token = music');
+  assert.ok(!releaseMatches('Mayday 2025-Klaudia Gawlas Live (Poland)-STREAM-11-10-2025-CiN INT', mayday26), 'year ±1 music stream rejected too');
+  assert.ok(releaseMatches('Mayday.2026.1080p.BluRay.x264.AAC5.1-LAMA', mayday26));
+  assert.ok(releaseMatches('The.Daily.Show.2026-04-30.1080p.WEB.h264-EDITH', parseWantedTitle('the daily show 2026')), 'YYYY-MM-DD dailies are video, untouched');
+  assert.ok(releaseMatches('S1m0ne.2002.1080p.BluRay.x264-GRP', parseWantedTitle('s1m0ne 2002')), 'a title with an s+digit inside a word is not a season token');
+
+  // Wide audit (2026-09-20) findings, one assertion each:
+  // Accents: "Shōgun" tokenized as sh+gun and rejected every plain Shogun release.
+  const shogun = parseWantedTitle('Shōgun s01e01');
+  assert.deepStrictEqual(shogun.words, ['shogun']);
+  assert.ok(releaseMatches('Shogun.2024.S01E01.Anjin.2160p.DSNP.WEB-DL.DDP5.1.HDR.H.265-NTb', shogun));
+  assert.ok(releaseMatches('Shōgun.2024.S01E01.Anjin.1080p.WEB.h264-EDITH', shogun), 'macron in the release still matches');
+  assert.ok(releaseMatches('Amelie.2001.1080p.BluRay.x264-GRP', parseWantedTitle('Amélie 2001')));
+  // "U.S." spelled with dots is the catalog's US edition, not two stray letters.
+  assert.ok(releaseMatches('The.Office.U.S.S01E01.Pilot.720p.NF.WEB-DL.AAC5.1.H.264-NINJACENTRAL', parseWantedTitle('the office us s01e01')));
+  assert.ok(releaseMatches('Shameless.U.S.S01E01.Pilot.1080p.NF.WEB-DL.DDP.5.1.H.264-CHDWEB', parseWantedTitle('shameless us s01e01')));
+  // An EXTRA leading article on an episode is a different show ("The Dark" ≠ "Dark"); movies keep
+  // the tolerance (The.Mutiny.2026 for Mutiny) because scene names add "The" to films.
+  assert.ok(!releaseMatches('The.Dark.S01E01.1080p.AMZN.WEB-DL.DDP2.0.H.264-RAWR', parseWantedTitle('dark s01e01')));
+  assert.ok(releaseMatches('Dark.S01E01.Secrets.2160p.NF.WEB-DL.DUAL.DDP5.1.Atmos.H.265-Kitsune', parseWantedTitle('dark s01e01')));
+  assert.ok(releaseMatches('The.Mutiny.2026.1080p.WEB-DL-NTb', parseWantedTitle('mutiny 2026')));
+  // Air year after the episode must fit the season: S01E01.2024 is the 2023 revival, not the 2005 show.
+  const who = parseWantedTitle('doctor who s01e01'); who.year = 2005;
+  assert.ok(!releaseMatches('Doctor.Who.S01E01.2024.2160p.DSNP.WEB-DL.HEVC.HDR10.DDP.5.1-DBTV', who));
+  assert.ok(releaseMatches('Doctor.Who.2005.S01E01.Rose.1080p.BluRay.x264-SHORTBREHD', who));
+  assert.ok(releaseMatches('Doctor.Who.S01E01.2005.1080p.BluRay.x264-GRP', who), 'first-air year after the episode is fine');
+  const simpsons = parseWantedTitle('the simpsons s35e05'); simpsons.year = 1989;
+  assert.ok(releaseMatches('The.Simpsons.S35E05.2024.1080p.WEB.h264-GRP', simpsons), 'later seasons air later');
+  assert.ok(!releaseMatches('The.Simpsons.S35E05.1985.1080p.WEB.h264-GRP', simpsons), 'no season airs before the show began');
+  // Other same-title films (TMDB facts) close the ±1 drift hole and the year-less hole.
+  const nos = parseWantedTitle('nosferatu 2024'); nos.otherYears = [1922, 1979, 2023];
+  assert.ok(!releaseMatches('Nosferatu.2023.1080p.WEBRip.x264.AAC-LAMA', nos), 'the 2023 film is not the 2024 film');
+  assert.ok(!releaseMatches('Nosferatu.1080p.BluRay.REMUX.AVC.DTS-HD-MA.5.1-UnKn0wn', nos), 'year-less name is ambiguous across three Nosferatus');
+  assert.ok(releaseMatches('Nosferatu.2024.Extended.Cut.2160p.UHD.BluRay.x265.DV.HDR.DDP.7.1-HONE', nos));
+  assert.ok(releaseMatches('Avatar.The.Way.of.Water.2023.2160p.BDRip.x265-MarkII', parseWantedTitle('avatar the way of water 2022')), 'drift stays allowed when no other film shares the title');
+  assert.ok(releaseMatches('The.Batman.2160p.PLAY.WEB-DL.TrueHD.7.1.Atmos.VP9-DRX', parseWantedTitle('the batman 2022')), 'year-less stays allowed for a unique title');
+  // Broadcasts named by year (F1.2026.Grosser.Preis.von.Spanien…) are not the film F1.
+  const f1 = parseWantedTitle('f1 2025');
+  assert.ok(!releaseMatches('F1.2026.Grosser.Preis.von.Spanien.Vorberichte.Rennen.Analysen.in.Madrid.German.1080p.HDTV.x264-F1ANA', f1));
+  assert.ok(releaseMatches('F1.2025.UHD.BluRay.2160p.DDP.Atmos.5.1.DV.HDR10Plus.x265-hallowed', f1));
+  assert.ok(releaseMatches('Alien.1979.Directors.Cut.UHD.BluRay.2160p.DDP.5.1-hallowed', parseWantedTitle('alien 1979')), 'editions after the year stay');
+  assert.ok(releaseMatches('Star.Wars.1977.Despecialized.Edition.v2.7.1080p.x264-Harmy', parseWantedTitle('star wars 1977')));
+  assert.ok(releaseMatches('Harry.Potter.and.the.Half-Blood.Prince.2009.Ultimate.Extended.Edition.1080p.BluRay-GRP', parseWantedTitle('harry potter and the half-blood prince 2009')));
+  // TMDB alternative titles (server facts) verify the copies the plain title rejected.
+  const dune = parseWantedTitle('dune 2021'); dune.akaWords = [parseWantedTitle('Dune: Part One').words];
+  assert.ok(releaseMatches('Dune.Part.One.2021.2160p.UHD.BDRip.HEVC.10bit.DV.HDR.TrueHD.7.1.Atmos-MUSHR00M', dune));
+  assert.ok(!releaseMatches('Dune.Part.Two.2024.2160p.WEB-DL-FLUX', dune), 'an aka never loosens the anchor for a different film');
+  const sw = parseWantedTitle('star wars 1977'); sw.akaWords = [parseWantedTitle('Star Wars: Episode IV - A New Hope').words];
+  assert.ok(releaseMatches('Star.Wars.Episode.IV.A.New.Hope.1977.1080p.ITV.WEB-DL.AAC.2.0.H.264-PiRaTeS', sw));
+  // Numerals: Part One / Part 1 / Part I are one word.
+  const wicked = parseWantedTitle('wicked 2024'); wicked.akaWords = [parseWantedTitle('Wicked Part 1').words];
+  assert.ok(releaseMatches('Wicked.Part.I.2024.2160p.UHD.Remux.HEVC.DoVi.TrueHD.Atmos.7.1-playBD', wicked));
+  assert.ok(releaseMatches('Wicked.Part.One.2024.1080p.BluRay-GRP', wicked));
+  assert.ok(releaseMatches('Dune.Part.1.2021.2160p.Opus.AV1', dune));
+  assert.ok(!releaseMatches('Wicked.Part.II.2025.1080p.WEB-DL-GRP', wicked), 'Part II is not Part 1');
+  // A season's own air year before the episode fits the season; a remake year does not.
+  const tlou = parseWantedTitle('the last of us s02e01'); tlou.year = 2023;
+  assert.ok(releaseMatches('The.Last.of.Us.2025.S02E01.MULTi.VFi.2160p.UHD.BluRay.REMUx.HEVC-GRP', tlou));
+  const office = parseWantedTitle('the office s02e01'); office.year = 2005;
+  assert.ok(!releaseMatches('The.Office.2024.S02E01.1080p.AMZN.WEB-DL-GRP', office), '2024 cannot be season 2 of a 2005 show');
 
   // Spin-off trap: the structural-boundary rule keeps longer-titled shows out.
   const twd = parseWantedTitle('the walking dead s01e01');
@@ -533,6 +620,16 @@ test('scoring: a season pack requested for one episode escapes the size cap, but
   const verboseEp = { name: 'The.Boys.S02.Episode.7.1080p.WEB-DL.H.264-FLUX', sizeBytes: 40e9 };
   assert.ok(scoreRelease(verboseEp, { ...capPolicy, wantedEpisode: { s: 2, e: 5 } }).score < -5000,
     'a verbose single episode is not treated as a pack for the cap exemption');
+  // Startup speed: for ONE requested episode an equal-quality single must outrank the whole-season
+  // pack (bigger NZB, file hunt inside it before the first byte). Adolescence/Task auto-picked the
+  // Vyndros S01 pack over the identical single until the pack carried its own penalty.
+  const ep = { name: 'The.Boys.S02E05.1080p.WEB-DL.H.264-FLUX', sizeBytes: 3e9 };
+  const smallPack = { name: 'The.Boys.S02.1080p.WEB-DL.H.264-FLUX', sizeBytes: 3e9 };
+  const epPolicy = { maxResolutionRank: 4, wantedEpisode: { s: 2, e: 5 } };
+  const packScore = scoreRelease(smallPack, epPolicy);
+  assert.ok(packScore.reasons.some((r) => /season pack for one episode/.test(r)), 'pack carries the reason');
+  assert.ok(scoreRelease(ep, epPolicy).score > packScore.score, 'single episode outranks the pack at equal quality');
+  assert.ok(!scoreRelease(smallPack, { maxResolutionRank: 4 }).reasons.some((r) => /season pack/.test(r)), 'no episode requested: no pack penalty');
 });
 
 test('pipeline: title verification holds for year-titled movies and detached episode markers (never the wrong item)', () => {
@@ -1703,6 +1800,21 @@ test('newznab: parses RSS, dedupes by title + size window', () => {
   const dd = dedupe(parsed);
   assert.strictEqual(dd.length, 2, 'cross-indexer duplicate collapsed');
   assert.strictEqual(dd[0].sizeBytes, 4000000000);
+
+  // Raw-subject wrappers are stripped ONCE at the indexer boundary, so verification, dedupe,
+  // verdict keys and the Sources drawer all see the real release name.
+  const { stripSubjectWrapper } = require('../server/newznab');
+  const wrapped = rssFor([
+    { name: `[1 10] &apos;Slow.Horses.S04E01.Identity.Theft.1080p.ATVP.WEB-DL.DDP5.1.Atmos.H.264-FLUX.mkv&apos;`, url: 'http://x/3', size: 3500000000 },
+    { name: 'Slow.Horses.S04E01.Identity.Theft.1080p.ATVP.WEB-DL.DDP5.1.Atmos.H.264-FLUX', url: 'http://y/3', size: 3520000000 },
+    { name: 'www.UIndex.org.-.Alien.Earth.S01E01.Neverland.2160p.DSNP.WEB-DL.DDP5.1.DV.H.265-Kitsune', url: 'http://x/4', size: 9000000000 },
+  ]);
+  const pw = parseNewznabRss(wrapped, 'ix');
+  assert.strictEqual(pw[0].name, 'Slow.Horses.S04E01.Identity.Theft.1080p.ATVP.WEB-DL.DDP5.1.Atmos.H.264-FLUX.mkv');
+  assert.strictEqual(pw[2].name, 'Alien.Earth.S01E01.Neverland.2160p.DSNP.WEB-DL.DDP5.1.DV.H.265-Kitsune');
+  assert.strictEqual(stripSubjectWrapper('[www.some-site.net] Show.S01E01.1080p.WEB-NTb'), 'Show.S01E01.1080p.WEB-NTb');
+  assert.strictEqual(stripSubjectWrapper('Dot.Com.2024.1080p.WEB-DL-GRP'), 'Dot.Com.2024.1080p.WEB-DL-GRP', 'a bare domain-looking title word is not a wrapper');
+  assert.strictEqual(stripSubjectWrapper('[01/26] "Some.Movie.2024.1080p-GRP.par2"'), 'Some.Movie.2024.1080p-GRP.par2');
 });
 
 test('newznab: dedupe stays near-linear on large unique result sets', () => {
@@ -2565,6 +2677,40 @@ test('pipeline: catalog identity drops a tagged remake from a title-only warmup'
     );
     const names = play.candidates.map((c) => c.name);
     assert.deepStrictEqual(names, ['The.Office.S01E01.1080p.WEB-DL-NTb']);
+  } finally {
+    server.close();
+  }
+});
+
+test('pipeline: a year-less film request (restored page) keeps the same-name TV show out of Sources', async () => {
+  // Owner saw Mayday.S26E10 (Air Crash Investigation) next to the 2026 film in Sources: the
+  // page was restored from a link, so `q=Mayday` went out with no year. mediaType=movie on the
+  // policy must reject SxxEyy rows, and the cached hit is re-filtered per request (a later TV
+  // query for the show must still see its episodes).
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(rssFor([
+      { name: 'Mayday.2026.2160p.ATVP.WEB-DL.DDPA.5.1.DV.HDR.H.265-PiRaTeS', url: 'http://x/film', size: 12e9 },
+      { name: 'Mayday.S26E10.Mixed.Measures.2160p.CRAV.WEB-DL.DDP5.1.H.265-Kitsune', url: 'http://x/ep', size: 4e9 },
+      { name: 'Mayday.2021.1080p.WEB-DL.DDP5.1.H.264-CMRG', url: 'http://x/other-film', size: 5e9 },
+    ]));
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const loose = await pipeline.search({ q: 'Mayday' }, {});
+    assert.ok(loose.candidates.some((c) => /S26E10/.test(c.name)), 'no catalog hint at all: still permissive');
+    const film = await pipeline.search({ q: 'Mayday' }, { mediaType: 'movie' });
+    assert.ok(!film.candidates.some((c) => /S26E10/.test(c.name)), 'mediaType=movie drops the episode');
+    assert.ok(film.candidates.some((c) => /PiRaTeS/.test(c.name)));
+    const filmYear = await pipeline.search({ q: 'Mayday' }, { mediaType: 'movie', wantedYear: 2026 });
+    assert.deepStrictEqual(filmYear.candidates.map((c) => c.name), ['Mayday.2026.2160p.ATVP.WEB-DL.DDPA.5.1.DV.HDR.H.265-PiRaTeS'],
+      'server-filled year also drops the 2021 film');
+    const show = await pipeline.search({ q: 'Mayday', season: 26, ep: 10 }, { mediaType: 'tv' });
+    assert.deepStrictEqual(show.candidates.map((c) => c.name), ['Mayday.S26E10.Mixed.Measures.2160p.CRAV.WEB-DL.DDP5.1.H.265-Kitsune']);
   } finally {
     server.close();
   }
@@ -4279,6 +4425,50 @@ test('pipeline: a pinned resume source leads only while playable, and never turn
     'play() keeps PLAY_RACE_WIDTH for pinned resumes, width 1 only for explicit picks, and a 2-wide join when Details prepare is already in flight');
 });
 
+test('pipeline: a source walk skips sibling-indexer copies of a release that already died this walk, without spending attempts', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({ pool: () => null, verdicts, mounts: new Map(), indexers: () => [] });
+  const c = (name, indexer) => ({ name, indexer, nzbUrl: `https://${indexer}.test/nzb/${encodeURIComponent(name)}`, sizeBytes: 1e9 });
+  const session = {
+    cursor: 0,
+    history: [],
+    candidates: [
+      c('Lucky.2026.S01E01.1080p.WEB.h264-ETHEL', 'geek'),
+      c('Lucky.2026.S01E01.1080p.WEB.h264-ETHEL', 'planet'),   // same name, other indexer
+      c('Lucky 2026 S01E01 1080p WEB h264-ETHEL', 'ninja'),    // same name, spaced
+      c('Lucky.2026.S01E01.1080p.x265-ELiTE', 'geek'),
+      c('Lucky.2026.S01E01.1080p.x265-ELiTE', 'planet'),
+      c('Lucky.2026.S01E01.1080p.10bit.WEBRip.6CH.x265.HEVC-PSA', 'geek'),
+    ],
+  };
+  const first = pipeline._nextWalkCandidate(session);
+  assert.strictEqual(first.indexer, 'geek');
+  // The first copy dies with a release-wide verdict (first article gone) …
+  pipeline._recordVerdict(first, 'missing', { stage: 'first-article' });
+  const next = pipeline._nextWalkCandidate(session);
+  assert.strictEqual(next.name, 'Lucky.2026.S01E01.1080p.x265-ELiTE', '… so both sibling copies are skipped, not mounted');
+  assert.deepStrictEqual(session.history.map((h) => h.outcome), [
+    'missing: same release already failed (skipped)',
+    'missing: same release already failed (skipped)',
+  ]);
+  // 7z is release-wide too (every copy of that name is the same 7z post).
+  pipeline._recordVerdict(next, 'unstreamable', { streamClass: 'unsupported', tags: ['unsupported-container'] });
+  assert.strictEqual(pipeline._nextWalkCandidate(session).name, 'Lucky.2026.S01E01.1080p.10bit.WEBRip.6CH.x265.HEVC-PSA');
+  // "unmappable" describes ONE NZB's extents; another indexer's copy may be fine and must still be tried.
+  const um = c('Some.Movie.2026.1080p.WEB-DL-GRP', 'geek');
+  pipeline._recordVerdict(um, 'unstreamable', { streamClass: 'unmappable', tags: ['unmappable'] });
+  assert.strictEqual(pipeline._walkSkipReason(c('Some.Movie.2026.1080p.WEB-DL-GRP', 'planet')), null);
+  assert.strictEqual(pipeline._nextWalkCandidate(session), null, 'exhausted list ends the walk');
+  store.close();
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(src, /while \(session\.cursor < session\.candidates\.length && attempts\.length < MAX_ATTEMPTS && budgetLeft\(\)\) \{\s*const candidate = this\._nextWalkCandidate\(session\);/,
+    'the one-at-a-time walk pulls through the skip filter');
+  assert.match(src, /const launchOne = \(kind = 'hedge'\) => \{[\s\S]{0,200}const candidate = this\._nextWalkCandidate\(session\);/,
+    'the hedged parallel walk pulls through the skip filter');
+});
+
 test('scoring: the exact year outranks a ±1 twin, and only when the query carries a year', () => {
   const twinA = { name: 'Some.Movie.2023.1080p.WEB-DL.DDP5.1.H.264-NTb', sizeBytes: 8e9 };
   const twinB = { name: 'Some.Movie.2024.1080p.WEB-DL.DDP5.1.H.264-NTb', sizeBytes: 8e9 };
@@ -4684,6 +4874,48 @@ test('startup gate: a second Play is served before the first Play\'s extra hedge
   assert.equal(g.active, 0);
 });
 
+test('startup gate: a Play stuck behind three background prepares preempts one of them, never a Play', async () => {
+  const { StartupGate } = require('../server/pipeline');
+  const g = new StartupGate(3);
+  let preempted = 0;
+  const prep = () => g.acquire({ priority: 'prepare', preempt: () => { preempted++; } });
+  const p1 = await prep();
+  const p2 = await prep();
+  const p3 = await prep();
+  let served = false;
+  const play = g.acquire({ priority: 'play' }).then((t) => { served = true; return t; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(preempted, 1, 'exactly one prepare holder is asked to stand down');
+  assert.equal(g.preemptions, 1);
+  assert.equal(served, false, 'the slot is only free once the prepare actually releases');
+  // A second waiting hedge must NOT preempt anything (hedges are speculative too).
+  const hedge = g.acquire({ priority: 'hedge' });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(preempted, 1, 'hedges do not preempt');
+  p1.release(); // the preempted prepare unwinds
+  const t = await play;
+  assert.equal(served, true, 'the Play takes the freed slot');
+  t.release(); p2.release();
+  (await hedge).release();
+  p3.release();
+  assert.equal(g.active, 0);
+  // Plays holding slots are never preemption targets.
+  const g2 = new StartupGate(1);
+  let badPreempt = 0;
+  const held = await g2.acquire({ priority: 'play', preempt: () => { badPreempt++; } });
+  const waiter = g2.acquire({ priority: 'play' });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(badPreempt, 0, 'a Play never preempts another Play');
+  held.release(); (await waiter).release();
+  // Contract: the record shared by play/prepare stops being preemptible once a real Play joins it.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(src, /preemptible: mountOpts\.startupPriority === 'prepare'/, 'only prepare-started records are preemptible');
+  assert.match(src, /record\.consumers\+\+;\s*if \(mountOpts\.startupPriority !== 'prepare'\) record\.preemptible = false;/,
+    'a joined Play protects the shared prepare record from preemption');
+  assert.match(src, /preempt: \(\) => \{ if \(record\.preemptible && !record\.settled\) controller\.abort\(\); \}/,
+    'preemption aborts the record controller so NNTP startup work stops too');
+});
+
 test('pipeline: three concurrent Plays all become ready without serializing', async () => {
   const { STARTUP_SLOTS } = require('../server/pipeline');
   const STREAMS = 3;
@@ -5051,6 +5283,19 @@ test('pipeline: summarizeAttempts turns raw fail reasons into one actionable sen
   ]);
   assert.match(packs, /2 didn't contain that episode/);
   assert.doesNotMatch(packs, /\bother\b/);
+
+  // Budget exhaustion with sources still in flight must not read as "removed" or "other".
+  const pending = summarizeAttempts([
+    { fail: 'pending: walk budget (45s) ran out first — startup gate 3/3 busy, 4 waiting' },
+    { fail: 'pending: walk budget (45s) ran out first — startup gate 3/3 busy, 4 waiting' },
+    { fail: 'mount: BODY x@y: 430 No Such Article' },
+  ]);
+  assert.match(pending, /still opening sources when the start budget ran out/);
+  assert.match(pending, /2 still loading when time ran out/);
+  assert.match(pending, /Press Play again/);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(src, /for \(const r of results\) \{\s*if \(r\.state !== 'pending'\) continue;[\s\S]{0,200}attempts\.push\(\{ name: r\.candidate\.name, fail: pendingNote \}\);/,
+    'a hedged walk that runs out of budget reports every still-pending source instead of an empty attempts list');
 });
 
 test('nntp: ProviderPool never opens more than its configured size, even under heavy concurrent load', async () => {
@@ -5413,6 +5658,8 @@ test('verdict cache: NZB keys are sanitized hashes and legacy secret URLs are sc
   store.write('verdicts', {
     'https://api.nzbgeek.info/api?t=get&id=abc&apikey=secret-one': { verdict: 'missing', checkedAt: Date.now() },
     'nzb:already-safe': { verdict: 'verified', checkedAt: Date.now() },
+    'nzb:old-unmappable': { verdict: 'unstreamable', detail: { streamClass: 'unmappable', tags: ['unmappable'] }, checkedAt: Date.now() },
+    'nzb:still-7z': { verdict: 'unstreamable', detail: { streamClass: 'unsupported', tags: ['unsupported-container'] }, checkedAt: Date.now() },
   });
   store.flush();
   const verdicts = new VerdictCache(store);
@@ -5420,6 +5667,9 @@ test('verdict cache: NZB keys are sanitized hashes and legacy secret URLs are sc
   const raw = JSON.stringify(store.read('verdicts', {}));
   assert.ok(!raw.includes('secret-one'), 'legacy URL key with API key is removed');
   assert.strictEqual(verdicts.get('nzb:already-safe').verdict, 'verified', 'safe key survives scrub');
+  assert.strictEqual(verdicts.get('nzb:old-unmappable'), null,
+    'pre-deobfuscation "unmappable" verdicts are forgotten at boot so healthy reposts are retried immediately');
+  assert.strictEqual(verdicts.get('nzb:still-7z').verdict, 'unstreamable', 'a 7z verdict is still true and stays');
   store.close();
 });
 

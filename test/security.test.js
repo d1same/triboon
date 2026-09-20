@@ -2626,6 +2626,17 @@ test('http server hardening: aborted request bodies and stale sockets are bounde
     'stream responses closed before a clean end should not leave server sockets in CloseWait');
   assert.match(src, /server\.requestTimeout = 30000;[\s\S]+server\.headersTimeout = 10000;[\s\S]+server\.keepAliveTimeout = 5000;[\s\S]+server\.maxRequestsPerSocket = 1;[\s\S]+server\.on\('clientError', \(err, socket\) => \{[\s\S]+socket\.destroy\(\)/,
     'HTTP sockets should have explicit server-level timeouts and client-error cleanup');
+  // A hard title walks up to MAX_ADVANCE_MS (45s) in silence; the 30s socket idle timeout used to
+  // destroy the Play socket mid-walk ("socket hang up" in the browser, server mounts anyway).
+  assert.match(src, /const PLAY_ROUTE_TIMEOUT_MS = 75000;[\s\S]+function extendPlayRouteTimeout\(ctx\) \{[\s\S]+ctx\.req\.setTimeout\(PLAY_ROUTE_TIMEOUT_MS\)[\s\S]+ctx\.res\.setTimeout\(PLAY_ROUTE_TIMEOUT_MS\)[\s\S]+s\.setTimeout\(PLAY_ROUTE_TIMEOUT_MS\)/,
+    'long source walks get a socket budget above MAX_ADVANCE_MS');
+  assert.match(src, /play: async \(ctx\) => \{[\s\S]{0,400}extendPlayRouteTimeout\(ctx\);/,
+    '/api/play must outlive a 45s source walk');
+  assert.match(src, /advance: async \(ctx\) => \{[\s\S]{0,200}extendPlayRouteTimeout\(ctx\);/,
+    '/api/play/:id/advance must outlive a recovery walk');
+  const pipelineSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  const maxAdvance = Number((/const MAX_ADVANCE_MS = (\d+);/.exec(pipelineSrc) || [])[1]);
+  assert.ok(maxAdvance > 0 && maxAdvance < 75000, 'the route budget stays above the pipeline walk budget');
 });
 
 test('login: trailing whitespace from Windows paste still authenticates', async () => {

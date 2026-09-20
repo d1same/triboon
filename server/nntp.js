@@ -12,6 +12,9 @@ const COMMAND_TIMEOUT_MS = 8000;   // healthy responses are ~60-250ms (bench/RES
 const MISS_CACHE_TTL_MS = 5 * 60 * 1000; // remember a definitive 430/451 per provider; timeouts never land here
 const MISS_CACHE_MAX = 4000;
 const IDLE_RECYCLE_MS = 30000;     // idle sockets are presumed NAT-dropped — reconnect (~150ms)
+const AUTH_LOST_FRESH_MS = 15000;  // a 480 this soon after a successful AUTH is the account, not the socket
+const AUTH_BROKEN_WINDOW_MS = 60000;
+const AUTH_BROKEN_TRIPS = 2;
 // Hedged multi-provider failover (see docs-streaming-performance.md): if an active-player BODY
 // hasn't answered within this window (queued behind other work, or a provider went slow AFTER the
 // load-sort), speculatively start the NEXT provider too and take the first success — so one slow
@@ -65,6 +68,7 @@ function providerHeadroom(p) {
 
 function providerPickScore(p, needSlots = 0) {
   if (!p || (typeof p.down === 'function' && p.down())) return Infinity;
+  if (typeof p.authBroken === 'function' && p.authBroken()) return Infinity;
   const cap = Math.max(1, Number(p.size) || 1);
   const used = ((p.busy && p.busy.size) || 0) + (Number(p.connecting) || 0) + ((p.queue && p.queue.length) || 0);
   let load = used / cap;
@@ -135,6 +139,11 @@ function addAbortListener(signal, fn) {
 function isDefinitiveMiss(e) {
   const code = String(e && e.code || '');
   return code === '430' || code === '451';
+}
+
+// 480 = authentication required, 481/482 = authentication rejected/out of sequence (RFC 4643).
+function isAuthLostStatus(status) {
+  return /^48[012]\b/.test(String(status || ''));
 }
 
 function stallError(cmdName) {
@@ -214,6 +223,7 @@ class NntpConnection {
       clearTimeout(this._connectTimer);
       this.alive = true;
       this.lastUsed = Date.now();
+      this.connectedAt = Date.now();
       return this;
     }).catch((e) => { clearTimeout(this._connectTimer); throw e; });
   }
@@ -345,14 +355,35 @@ class NntpConnection {
     });
   }
 
+  // 480/481/482 on an OPEN connection means the provider forgot our AUTHINFO (session expiry,
+  // idle reset, backend failover). The socket is useless from here on: every later STAT reads
+  // as "missing" and every BODY fails, and the pool would keep handing it out. Destroy it so
+  // the next task rebuilds a fresh, re-authenticated connection. Owner-visible symptom this
+  // fixes: one title "all candidates failed" 18/18 with `480 Authentication Required` while a
+  // server restart made the same releases play at once.
+  _authLost(cmd, status) {
+    const err = new Error(`${cmd}: ${status} (connection lost its login; reconnecting)`);
+    err.code = 'NNTP_AUTH_LOST';
+    this._fail(err);
+    return err;
+  }
+
   async stat(msgId, opts = {}) {
     const r = await this._cmd(`STAT <${msgId.replace(/[<>]/g, '')}>`, false, opts);
-    return r.status.startsWith('223');
+    if (r.status.startsWith('223')) return true;
+    if (isAuthLostStatus(r.status)) throw this._authLost('STAT', r.status);
+    // Only "no such article" is a real "missing". Any other reply (500 command unknown, 503
+    // fault, 400 shutting down) is the SERVER'S problem and must not be cached as a dead source.
+    if (r.status.startsWith('430') || r.status.startsWith('423')) return false;
+    const err = new Error(`STAT ${msgId}: ${r.status}`);
+    err.code = r.status.slice(0, 3);
+    throw err;
   }
 
   async body(msgId, opts = {}) {
     const r = await this._cmd(`BODY <${msgId.replace(/[<>]/g, '')}>`, true, opts);
     if (!r.status.startsWith('222')) {
+      if (isAuthLostStatus(r.status)) throw this._authLost('BODY', r.status);
       const err = new Error(`BODY ${msgId}: ${r.status}`);
       err.code = r.status.slice(0, 3);
       throw err;
@@ -376,6 +407,27 @@ class ProviderPool {
     this.connecting = 0;   // in-flight connection attempts
     this.lastErr = null;   // most recent connect failure
     this.closed = false;
+    this.authLostAt = [];  // recent 480-on-a-FRESH-login timestamps (account-level fault signal)
+  }
+
+  // A socket that logged in fine (281) and then got 480 on its first commands is not a stale
+  // session — the ACCOUNT is refusing work (exhausted block, over its session cap, suspended).
+  // Two such fresh failures inside the window trip the breaker: the pool stops routing to this
+  // provider (others take the article at once) instead of paying connect+TLS+AUTH twice per
+  // article, and Status shows "login rejected". Self-heals when the window passes.
+  noteAuthLost(conn) {
+    const now = Date.now();
+    const fresh = conn && conn.connectedAt && now - conn.connectedAt < AUTH_LOST_FRESH_MS;
+    if (!fresh) return;
+    this.authLostAt = this.authLostAt.filter((t) => now - t < AUTH_BROKEN_WINDOW_MS);
+    this.authLostAt.push(now);
+    if (this.authLostAt.length > 20) this.authLostAt.shift();
+  }
+  authBroken() {
+    const now = Date.now();
+    let n = 0;
+    for (const t of this.authLostAt) if (now - t < AUTH_BROKEN_WINDOW_MS) n++;
+    return n >= AUTH_BROKEN_TRIPS;
   }
 
   // Open all missing connections IN PARALLEL (non-blocking). Each becomes available to the
@@ -600,10 +652,14 @@ class ProviderPool {
         // An NNTP status reply (e.code = '430' etc.) is a real answer — pass it through.
         // A connection-level failure (timeout/closed/reset) gets ONE retry on a fresh
         // connection so a single dead socket can't sink a whole mount.
+        if (e && e.code === 'NNTP_AUTH_LOST') this.noteAuthLost(c);
         if (!isAbortError(e) && !task.retried && !/^\d{3}$/.test(String(e && e.code || ''))) {
           // One dead socket must not sink a solo-provider mount. With a second provider ready,
           // leave immediately so the stall window is paid once, on the next host — not twice here.
           if (e && e.code === 'NNTP_STALL' && this.preferPeerFailover) task.reject(e);
+          // Account refusing work: a retry here would only buy another rejected login. Hand the
+          // article to the next provider now.
+          else if (e && e.code === 'NNTP_AUTH_LOST' && this.authBroken() && this.preferPeerFailover) task.reject(e);
           else { task.retried = true; this.queue.push(task); }
         } else task.reject(e);
       })
@@ -661,6 +717,7 @@ class ProviderPool {
       size: this.size,
       queued: this.queue.length,
       down: this.down(),
+      authBroken: this.authBroken(),
     };
   }
   close() { this.closed = true; for (const c of this.conns) c.close(); this.conns = []; }
@@ -697,7 +754,12 @@ class NntpPool {
   _ordered(needSlots = 0) {
     if (this.providers.length === 1) return this.providers;
     const need = Math.max(0, Number(needSlots) || 0);
-    return [...this.providers].sort((a, b) => {
+    // An account that rejects logins (480 on fresh sockets) is skipped outright while any other
+    // provider is usable: trying it "last" would still cost connect+TLS+AUTH on every article the
+    // healthy accounts do not have. It rejoins by itself when its breaker window passes.
+    const usable = this.providers.filter((p) => !(typeof p.authBroken === 'function' && p.authBroken()));
+    const list = usable.length ? usable : this.providers;
+    return [...list].sort((a, b) => {
       const ha = providerHeadroom(a);
       const hb = providerHeadroom(b);
       const aFit = need <= 0 || ha >= need;
@@ -712,7 +774,12 @@ class NntpPool {
   }
 
   // True if ANY provider has the article.
+  // opts.parallel: ask every usable provider at once and settle on the first 223. The press-play
+  // first-article probe has an 800ms budget; walking four accounts one 430 at a time (~4 RTT) blew
+  // it on most dead copies, so those fell through to the far slower BODY mount chain instead of
+  // being skipped in one round trip. Health triage keeps the sequential, load-friendly walk.
   async stat(msgId, priority = 'health', opts = {}) {
+    if (opts.parallel && this.providers.length > 1) return this._parallelStat(msgId, priority, opts);
     let reachedAny = false; // did at least one provider actually ANSWER (vs. all connections failing)?
     for (const p of this._ordered(opts.needSlots)) {
       if (this.missCache.has(p, msgId)) continue;
@@ -734,6 +801,45 @@ class NntpPool {
       throw e;
     }
     return false;
+  }
+
+  _parallelStat(msgId, priority, opts = {}) {
+    const providers = this._ordered(opts.needSlots).filter((p) => !this.missCache.has(p, msgId));
+    if (!providers.length) return Promise.resolve(false);
+    // The caller's abort only stops WAITING. The STATs themselves run to completion: a STAT
+    // answers in one round trip, hard-aborting the losers would destroy their connections
+    // (TCP+TLS+AUTH to rebuild) on every successful probe, and a late 430 still feeds the miss
+    // cache for the BODY chain that follows.
+    const { signal, ...rest } = opts;
+    return new Promise((resolve, reject) => {
+      let pending = providers.length;
+      let reachedAny = false;
+      let settled = false;
+      const extCleanup = addAbortListener(signal, () => { if (!settled) { settled = true; reject(abortError()); } });
+      const finish = (fn) => { if (settled) return; settled = true; extCleanup(); fn(); };
+      if (signalAborted(signal)) return finish(() => reject(abortError()));
+      for (const p of providers) {
+        p.stat(msgId, priority, rest).then(
+          (ok) => {
+            if (ok) return finish(() => resolve(true));
+            reachedAny = true;
+            this.missCache.mark(p, msgId);
+            if (--pending === 0) finish(() => resolve(false));
+          },
+          (e) => {
+            if (/^\d{3}$/.test(String(e && e.code || ''))) reachedAny = true; // a real NNTP answer, just not 223/430
+            if (--pending === 0) {
+              if (!reachedAny && rest.throwIfUnreachable) {
+                const err = new Error('no usenet provider reachable');
+                err.code = 'NO_PROVIDER';
+                return finish(() => reject(err));
+              }
+              finish(() => resolve(false));
+            }
+          },
+        );
+      }
+    });
   }
 
   async body(msgId, priority = 'playback', opts = {}) {

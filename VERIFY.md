@@ -126,6 +126,142 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-20, v3.1.30 ship — source finding: obfuscated volumes, 480 breaker,
+walk skip, parallel probe, Play timeout, verifier audit (wrappers, movie vs TV,
+accents, alt titles, same-title years), EPIPE guard, detail warm-up order,
+Shield rail divider:
+
+- Version contract: `package.json` 3.1.30; Android `versionName` 3.1.30 /
+  `versionCode` 375; Windows client package/Tauri/Cargo(.lock) 3.1.30.
+- Gate: `npm.cmd test` 718/718. `npm.cmd run verify:full` against
+  `http://127.0.0.1:7799` (repo code) + `emulator-5554` (never the Shield):
+  whitespace, JS syntax, inline script parse, IPTV/P9, fast VOD/P14, CC/P11,
+  full suite, isolated `/api/server`, household VOD play/seek/resume/CC,
+  household IPTV first-byte + retune, household overlapping Play, Android
+  lint + unit tests + debug build all PASS. The Android ExoPlayer stress gate
+  failed once on its own 5s `/api/server` preflight ping while Gradle was
+  still hogging the box (the server answered <60 ms on 20 probes right
+  after); re-run of that gate alone with the identical arguments passed —
+  `bench/stress-results/android-tv-stress-20260920-134140.json`, `ok: true`,
+  failures `[]` (1 page loop, 20 live zaps, 2 PiP loops, 10 VOD seeks).
+- Everything in the two dated entries below shipped in this version.
+
+2026-09-19, source-finding review + full first-time-user walkthrough (shipped
+as v3.1.30 on 2026-09-20):
+
+- Findings from a 10-title cold audit on the repo server (`/api/search` +
+  `/api/play` + resume), before fixes: 2/10 titles failed outright with 18/18
+  dead attempts (Mayday 2026, Lucky S01E01) although 70-100 playable rows
+  existed; NTb/ELiTE/ETHEL 4K/1080p copies were "unmappable"; one process had
+  a poisoned NNTP socket answering `480 Authentication Required` that the code
+  read as "article missing" (a restart made the same releases play).
+- Fixes, all covered by new tests:
+  - `server/par2.js` + `archive.js` `deobfuscateVolumes`: per-volume
+    obfuscated RAR sets (random name per slice, no extension, or shuffled
+    `hash.NN` numbering) get their real names/order from the par2 FileDesc 16k
+    hashes or the RAR5 volume number. Offline proof on real NZBs: ETHEL 3.8 GB,
+    ELiTE 0.9 GB (61 volumes, `part01…part61`, Matroska head, ffprobe HEVC
+    1920x802, 42 MB cross-volume window decodes clean), LAMA 2.0 GB, NTb
+    Severance 9.2 GB (69 shuffled slices reordered `part01…part69`). Boot
+    forgets cached `unmappable` verdicts once.
+  - `nntp.js`: 480/481/482 destroys the socket and retries on a fresh login;
+    STAT treats only 430/423 as missing; two fresh-login 480s in 60s trip a
+    per-account breaker (skipped from rotation, Status shows `login rejected`).
+  - `pipeline.js`: mid-walk skip of sibling-indexer copies whose title already
+    died (Lucky S01E01 burned 18 attempts on ~6 releases); parallel first-article
+    STAT across providers (13/16 probes had been timing out at 800ms); Play
+    preempts background prepare at the startup gate; a walk that runs out of
+    budget reports pending sources instead of an empty attempts list.
+  - `index.js`: `/api/play` and `/advance` extend the socket to 75s (a 45s walk
+    used to die at the 30s server idle timeout as "socket hang up").
+  - `web/index.html`: toggle, Sources drawer and Play share one effective
+    quality rank (toggle said 1080p while Sources said "showing 4K — none
+    playable"); an inherited `qualityRank` no longer lifts the browser 1080p cap
+    (Neagley S01E01 played 2160p under a 1080p toggle); Live TV close no longer
+    throws an unhandled `AbortError`.
+- After fixes, same cold audit: 10/10 play. Mayday 3.6s / 0 failed attempts
+  (was 14.2s fail); Severance S02E04 4K 10.3s; Slow Horses S04E01 15.5s after
+  walking 15 real takedowns; The Studio 4K 4.5s; Andor 3.3s; Sinners 13.9s;
+  The Last of Us 4K 6.8s. Resume re-Play 7-150ms.
+- First-time-user browser walkthrough on `http://127.0.0.1:7797` (final code,
+  Cursor browser, JS error collector installed, zero errors at the end):
+  Quick Connect sign-in from a code approved by the admin; profile picker;
+  Home (Continue Watching with ⋯ left / ✓ ✕ right, Live TV row, Trending);
+  Movies grid + genre/sort; Mayday detail (Resume, Start over, 1080p/4K,
+  Sources 83 rows "up to 1080p", cast, More like this); Play → 1.76s to first
+  frame, resumed at 1:30, real-time rate 4.01/4.01, pause/resume, +30 seek in
+  818ms, CC sheet → online English cue in 1.0s and rendered, Back → watch
+  saved at the exact position with the source pinned; TV Shows grid → Neagley
+  → Play S01E01 0.9s → Next episode 2.8s → Back → "Resume S01E02" → replay
+  resumed at 1:35 in a 1080p file; Home CW updated (Neagley first, progress
+  bars); CW ⋯ menu (Details / Resume / Mark watched / Watchlist / Remove);
+  Search "weapons" (Movies + TV rows); Live TV guide (Favorites + categories +
+  EPG) → A&E in 0.9s, PageUp/PageDown zaps 1.2s / 0.9s / 1.5s, in-player guide
+  opens (84 channels); Watchlist, Discover (107 items), Calendar (2 upcoming),
+  Music, Audiobooks, Kids all load; every Settings tab (Dashboard → Security)
+  renders with the active tab following; Providers panel lists 4 accounts;
+  watchlist / mark-played toggles round-trip with toasts. Earlier Animal
+  Planet "Live stream unavailable" was my probe scripts fighting the browser
+  for the provider's single connection; a clean run zaps A&E ↔ Animal Planet
+  four times without error.
+- 2026-09-20 follow-ups from the owner's own browser/TV testing on `:7799`:
+  - Continue Watching "failed" on a 15h-old test server: the process was at
+    100% CPU in an `uncaughtException → console.error → EPIPE` loop after its
+    log pipe died; GETs crawled, every POST body starved at the 10s body timer.
+    Fixed (`process.stdout/stderr` error listeners + re-entrancy-safe,
+    flood-limited guard logger) with a child-process regression test in
+    `test/iptv-cache.test.js`. Profiled live with the inspector before fixing.
+  - Detail page "cast / related / seasons don't load" after leaving the
+    player: Chrome's 6-per-host connection budget — the slow search/prepare
+    warm-ups (2–4s) and two title-less `q=` 400s went out ahead of the TMDB
+    requests, which then sat in the queue (cast measured 3.4s late). Warm-ups
+    now wait 350ms and never fire without a title; cold cast/seasons ~100ms,
+    related ~200ms.
+  - Android TV expanded menu showed a second line where the divider's curve
+    ends (Shield WebView stub on `border-right` + oversized radius). Divider
+    kept, redrawn with an inset shadow; emulator renders one bowed line.
+  - Source-finding verifier audit (10 titles, 434–1371 raw rows each): every
+    drop was a real mismatch except raw-subject wrappers (`[1 10] '…'`,
+    `www.UIndex.org.-.…`), now stripped at the indexer boundary; Slow Horses
+    S04E01 199→202 kept, Alien Earth 245→246.
+  - Mayday (2026 film) Sources listed the TV show (`Mayday.S26E10`, `S11`/`S12`
+    packs) and a scene-music MP3: the restored detail page sent `q=Mayday`
+    with no year. Client now fills year+title from TMDB before warm-ups
+    (requests verified: `q=Mayday 2026&year=2026&mediaType=movie`, no stray
+    `q=2026`); server fills a missing year from TMDB and `mediaType=movie`
+    rejects episode/pack rows year or not; dashed-US-date music rejected.
+    Live on `:7799`: year-less 4K request 257 → 132 rows, all 2026 film;
+    drawer 110 rows, no TV/music rows.
+  - Wide audit, 35 films + 28 shows with real client params (TMDB id, IMDb/
+    TVDB, year, mediaType, aliases), flagging wrong-looking kept rows and
+    right-looking dropped rows. Fixed: accent folding (Shōgun 15 → 222 kept,
+    FLUX 4K on top), `U.S.` spelling, extra-article TV mismatch ("The Dark"),
+    S01 air-year sanity (Doctor Who 2005 no longer tops with the 2024 show),
+    TMDB alternative titles as verify-only akas (Star Wars 33 → 168, Dune 2021
+    215 → 325 incl. 68 Part One copies, F1 138 → 209 with `F1.The.Movie`
+    remuxes), same-title neighbour years (`Odyssey.2025` gone from The
+    Odyssey), numerals (Part I / 1 / One), broadcasts-named-by-year (55 F1
+    race rows gone), season-pack -80 so singles auto-pick. Live on `:7799`
+    after restart: all of the above re-checked through `/api/search`.
+  - Known gap (not fixed, needs a design call): three TMDB films are named
+    "The Odyssey" (2026). Indexer rows carry no IMDb tag, so Nolan's page
+    (173 min, not on usenet yet) lists the 86-min knock-off. Name+year cannot
+    separate them; only a runtime check (TMDB runtime vs probed duration)
+    can, and Play does not ffprobe today (speed-first). Also
+    `Nosferatu.2023.1080p.WEBRip-LAMA` stays (TMDB has no exact-title 2023
+    film to learn from; scored 235, far below every 2024 copy).
+- `npm.cmd test` **718/718** (716 before the wrapper + Mayday movie/TV tests; wide-audit assertions were added inside existing tests). `npm.cmd run verify:full` against the final
+  code on `http://127.0.0.1:7796` + `emulator-5554` (never the Shield): all
+  gates PASS. Household VOD Mario 4K ready 5390ms SLOW / 1stByte 1349ms /
+  resume 24ms; FROM S01E01 ready 12506ms SLOW (walks several ATVP takedowns) /
+  1stByte 2038ms / resume 22ms; CC 200 both. IPTV ABC web 1281ms native
+  1312ms, ESPN web 2870ms native 5ms. Overlapping Play 13ms/30ms ready, 4ms/6ms
+  1stByte. Android lint/unit/debug build PASS; ExoPlayer stress PASS
+  (`android-tv-stress-20260919-191810.json`). A first `verify:full` pass on
+  `:7797` failed household VOD once: FROM S01E01 died after 48.8s with an empty
+  attempts list — that is the startup-gate starvation fixed above; the re-run
+  passed. Windows GPU not instrumented.
+
 2026-09-17, v3.1.29 ship — need-based Auto sockets, 4K tap plays 4K, poster overlay:
 
 - Version contract: `package.json` 3.1.29; Android `versionName` 3.1.29 /

@@ -467,6 +467,11 @@ function scoreRelease(candidate, policy = {}) {
       const rm = new RegExp(`\\bs0?${ws}[ ._-]?e0?(\\d{1,3})[ ._-]*e0?(\\d{1,3})\\b`, 'i').exec(candidate.name);
       const inRange = !!(rm && +rm[1] <= wep && wep <= +rm[2]);
       capExempt = pack || inRange;
+      // One episode was asked for. A whole-season pack means a bigger NZB to fetch and parse and a
+      // file to locate inside it before the first byte — slower start for the same picture. Keep the
+      // pack as a real fallback, but an equal-quality single episode must win (Adolescence and Task
+      // auto-picked the Vyndros S01 pack over the identical NF/AMZN single).
+      if (pack) add('season pack for one episode', -80);
     }
     if (hardCap && gb > hardCap && !capExempt) add(`over-size-cap ${gb.toFixed(1)}GB>${hardCap}GB`, -100000);
     // Targets sized for instant start (NZB fetch+parse time scales with release size):

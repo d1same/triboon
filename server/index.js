@@ -15,7 +15,7 @@ const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
 const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryItemMatchesTmdb, unboundLibraryItem } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
-const { Pipeline, mountHasActivePlayback, streamIsUhd } = require('./pipeline');
+const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics } = require('./pipeline');
 const {
   isCamCandidate, camScoringEnabled, sourceDrawerCandidates,
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
@@ -3734,6 +3734,18 @@ function throttleUserRoute(ctx, routeKey, opts) {
   const uid = (ctx.user && ctx.user.id) || (ctx.claims && ctx.claims.uid) || clientIp(ctx);
   return throttled(ctx, `route:${routeKey}:${uid}`, opts);
 }
+// A source walk is allowed MAX_ADVANCE_MS (45s) while nothing crosses the wire. server.timeout is
+// 30s of socket silence, so a hard title — many dead copies, a 30s mount deadline in the race —
+// had its Play socket destroyed at 30s: the browser saw "socket hang up" / "Failed to fetch" and
+// closed the player while the server finished mounting a second later. Give the long-walk routes
+// the room the pipeline already budgets for; the socket returns to the default when the response
+// ends (maxRequestsPerSocket=1 closes it anyway).
+const PLAY_ROUTE_TIMEOUT_MS = 75000;
+function extendPlayRouteTimeout(ctx) {
+  try { if (ctx.req && typeof ctx.req.setTimeout === 'function') ctx.req.setTimeout(PLAY_ROUTE_TIMEOUT_MS); } catch {}
+  try { if (ctx.res && typeof ctx.res.setTimeout === 'function') ctx.res.setTimeout(PLAY_ROUTE_TIMEOUT_MS); } catch {}
+  try { const s = ctx.req && ctx.req.socket; if (s && typeof s.setTimeout === 'function') s.setTimeout(PLAY_ROUTE_TIMEOUT_MS); } catch {}
+}
 // A stream-scope token must be bound to the resource it's used on. Session tokens pass.
 function streamScopeOk(ctx, resource) {
   if (ctx.claims.scope !== 'stream') return true;
@@ -4025,8 +4037,84 @@ function playSearchParams(src = {}) {
     aliases: aliases.length ? aliases : undefined,
   };
 }
-function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, caps: rawCaps } = {}) {
+// A detail page restored from a link/reload (and the Continue Watching card) knows the TMDB id
+// but not the year yet, so Sources/Play went out as `q=Mayday` with no year and the verifier
+// accepted every "Mayday" (2021 film, S26 of the TV show). Fill the year from the proxy-cached
+// TMDB title when the client did not send one. Fails open (no year) on any TMDB trouble.
+//
+// The same lookup also gives the verifier two facts the release NAME cannot: which TMDB
+// alternative titles start with the catalog title (Dune: Part One, F1: The Movie, Star Wars:
+// Episode IV - A New Hope — real copies the plain title rejected on the structural boundary), and
+// which OTHER films share the exact title (Nosferatu 1922/1979/2023 next to 2024) so the ±1-year
+// drift tolerance and year-less names cannot pick the wrong film. Movies only; per-process memo
+// on top of the 24h proxy cache so Play pays nothing after the detail page warmed it.
+const CATALOG_FACT_REGIONS = new Set(['US', 'GB', 'CA', 'AU', 'IE', 'NZ']);
+const catalogFactsCache = new Map();
+const normFactTitle = (s) => pipelineFoldDiacritics(String(s || '')).toLowerCase().replace(/['’`]/g, '').replace(/&/g, ' and ')
+  .replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter((w) => w && !['the', 'a', 'an'].includes(w)).join(' ');
+async function catalogFactsFor(year, tmdbId, mediaType) {
+  const out = { year: parseCatalogYear(year) ? year : undefined, akaTitles: [], otherYears: [] };
+  const id = parseInt(tmdbId, 10);
+  if (!id || !settings.get().tmdbKey) return out;
+  const type = mediaType === 'tv' ? 'tv' : 'movie';
+  const key = `${type}:${id}`;
+  let facts = catalogFactsCache.get(key);
+  if (!facts) {
+    facts = { year: null, akaTitles: [], otherYears: [] };
+    try {
+      const d = await tmdb.get(`/${type}/${id}${type === 'movie' ? '?append_to_response=alternative_titles' : ''}`);
+      facts.year = parseCatalogYear(String((d && (d.release_date || d.first_air_date)) || '').slice(0, 4));
+      if (type === 'movie' && d) {
+        const main = normFactTitle(d.title);
+        const orig = normFactTitle(d.original_title);
+        const alts = ((d.alternative_titles && d.alternative_titles.titles) || [])
+          .filter((t) => t && t.title && CATALOG_FACT_REGIONS.has(String(t.iso_3166_1 || '').toUpperCase()))
+          .map((t) => String(t.title).trim())
+          .filter((t) => {
+            const n = normFactTitle(t);
+            if (!n || n === main || n === orig) return false;
+            if (/\b(19|20)\d{2}\b|\b3d\b/i.test(t)) return false;
+            return n.startsWith(main + ' ') || (orig && n.startsWith(orig + ' '));
+          });
+        const seen = new Set();
+        for (const t of alts) { const n = normFactTitle(t); if (!seen.has(n)) { seen.add(n); facts.akaTitles.push(t); } if (facts.akaTitles.length >= 6) break; }
+        if (main && facts.year) {
+          // Plain search plus the two neighbouring years on the CORE title: TMDB's plain
+          // "The Odyssey" page never surfaced the 2025 film "Odyssey", which is exactly the
+          // ±1-drift neighbour the verifier must know about. Three cached calls per title.
+          const queries = [
+            `/search/movie?query=${encodeURIComponent(d.title)}`,
+            `/search/movie?query=${encodeURIComponent(main)}&year=${facts.year - 1}`,
+            `/search/movie?query=${encodeURIComponent(main)}&year=${facts.year + 1}`,
+          ];
+          const pages = await Promise.all(queries.map((q) => tmdb.get(q).catch(() => null)));
+          for (const s of pages) {
+            for (const r of (s && s.results) || []) {
+              if (!r || Number(r.id) === id) continue;
+              const y = parseCatalogYear(String(r.release_date || '').slice(0, 4));
+              if (!y || y === facts.year) continue;
+              if (normFactTitle(r.title) === main || normFactTitle(r.original_title) === main) facts.otherYears.push(y);
+            }
+          }
+          facts.otherYears = [...new Set(facts.otherYears)];
+        }
+      }
+    } catch {}
+    if (catalogFactsCache.size > 5000) catalogFactsCache.clear();
+    catalogFactsCache.set(key, facts);
+  }
+  if (!out.year && facts.year) out.year = facts.year;
+  out.akaTitles = facts.akaTitles;
+  out.otherYears = facts.otherYears;
+  return out;
+}
+function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, caps: rawCaps } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
+  if (Array.isArray(akaTitles) && akaTitles.length) policy.akaTitles = akaTitles.slice(0, 6).map(String);
+  if (Array.isArray(otherYears) && otherYears.length) policy.otherYears = otherYears.map(Number).filter((y) => Number.isInteger(y));
+  // Catalog media type lets the title verifier reject SxxEyy releases for a film even when the
+  // request carries no year (see catalogYearFor). Anything but the two known values is ignored.
+  if (mediaType === 'movie' || mediaType === 'tv') policy.mediaType = mediaType;
   const caps = parseCaps(rawCaps || {});
   const maxRank = parseResolutionRank(maxResolutionRank);
   if (maxRank !== null) {
@@ -5381,7 +5469,8 @@ const H = {
         preferResolutionRank: ctx.url.searchParams.get('preferResolutionRank'),
         originalLanguage: ctx.url.searchParams.get('originalLanguage'),
         preferredAudioLanguage: ctx.url.searchParams.get('preferredAudioLanguage'),
-        year: ctx.url.searchParams.get('year'),
+        ...(await catalogFactsFor(ctx.url.searchParams.get('year'), ctx.url.searchParams.get('tmdbId'), ctx.url.searchParams.get('mediaType'))),
+        mediaType: ctx.url.searchParams.get('mediaType'),
         caps: parseCapsQuery(ctx.url.searchParams.get('caps')),
       })
     );
@@ -5403,6 +5492,7 @@ const H = {
     const body = await readJson(ctx.req);
     if (!body.q) return send(ctx.res, 400, { error: 'q required' });
     if (throttleUserRoute(ctx, 'play', { max: 20, windowMs: 60000, lockMs: 60000 })) return;
+    extendPlayRouteTimeout(ctx);
     // Age restriction: a restricted profile cannot play a title above its maturity level, enforced
     // server-side (unbypassable) using the profile's stored level + the title's TMDB certification.
     // Run the cert lookup CONCURRENTLY with search+mount so its 300-600ms (on a TMDB cache miss)
@@ -5417,6 +5507,7 @@ const H = {
     debug.log('play', `request q=${body.q} tmdb=${body.tmdbId || '-'} s${body.season || '-'}e${body.ep || '-'}`);
     // HD/UHD toggle: a per-play resolution preference may tighten the cap DOWNWARD, never
     // above the admin-set cap (Plex semantics — user picks within their ceiling).
+    Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType));
     const policy = playbackPolicyFor(ctx.user, body);
     // Explicit resolution pick (4K toggle): boost matching releases — but only within the cap,
     // so a capped user can't smuggle UHD past their ceiling via the preference.
@@ -5489,6 +5580,7 @@ const H = {
       return maturityBlockedResponse(ctx);
     }
     const t0 = Date.now();
+    Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType));
     const policy = playbackPolicyFor(ctx.user, body);
     try {
       const { vf, candidate, attempts, prepared } = await pipeline.prepare(
@@ -5534,6 +5626,7 @@ const H = {
 
   advance: async (ctx) => {
     if (throttleUserRoute(ctx, 'advance', { max: 30, windowMs: 60000, lockMs: 60000 })) return;
+    extendPlayRouteTimeout(ctx);
     const t0 = Date.now();
     try {
       const existing = pipeline.sessions.get(ctx.m[1]);
@@ -6496,10 +6589,15 @@ const H = {
             ctx.res.once('drain', () => { try { if (!settled) ff.stdout.resume(); } catch {} });
           }
         });
-        ff.on('close', () => {
+        ff.on('close', (code) => {
           clearIdle();
           if (settled) return;
-          if (!wrote) return giveUp('ffmpeg exited before output');
+          // stdin-fed ffmpeg never sees the provider URL, so its stderr tail is safe to log and is
+          // the only way to tell a codec ffmpeg rejects from a TS that simply never carried video.
+          if (!wrote) {
+            const tail = errBuf.replace(/\r/g, '\n').split('\n').map((l) => l.trim()).filter(Boolean).slice(-2).join(' | ').slice(0, 240);
+            return giveUp(`ffmpeg exited before output (code ${code}${tail ? `: ${tail}` : ''})`);
+          }
           settled = true;
           leaveHub('ended');
           try { ctx.res.end(); } catch {}
@@ -10103,12 +10201,35 @@ const sweepTimer = setInterval(() => { try { sweep(); } catch (e) { console.erro
 sweepTimer.unref();
 
 if (require.main === module) {
+  // The log pipe is not sacred. When stdout/stderr disappear (service wrapper rotates or drops the
+  // pipe, `docker logs` detaches with a full buffer, the launching terminal closes) every console.*
+  // write throws EPIPE. Without these listeners that EPIPE is an 'error' event on process.stderr →
+  // an uncaughtException → the guard below logs it with console.error → EPIPE again → a hot loop at
+  // 100% CPU in which GETs still crawl through but every POST body starves and dies at the 10s body
+  // timer. Seen live: a 15h-old server took Continue Watching down with "Failed to fetch" while
+  // /api/server still answered. Swallow the pipe error; the app must never depend on its logger.
+  for (const stream of [process.stdout, process.stderr]) {
+    if (stream && typeof stream.on === 'function') stream.on('error', () => {});
+  }
   // Last-resort blast-radius guard (production only — tests import the module and must still surface
   // real errors). A single stray stream/socket 'error' event or rejected probe must NEVER crash the
   // whole process and 502 every other user's playback. Real fixes live at the source; this keeps the
-  // box serving and logs the full stack so genuine bugs stay visible.
-  process.on('uncaughtException', (e) => { console.error('[uncaught]', (e && e.stack) || e); });
-  process.on('unhandledRejection', (e) => { console.error('[unhandledRejection]', (e && e.stack) || e); });
+  // box serving and logs the full stack so genuine bugs stay visible. The logging itself is
+  // re-entrancy-safe and flood-limited so a broken logger or an error storm can never become the
+  // outage: at most 20 lines per 10s, and a failing console.error is ignored.
+  const guardLog = (() => {
+    let windowStart = 0, count = 0, inLog = false;
+    return (tag, e) => {
+      if (inLog) return; // console.error threw while we were logging — never recurse
+      const now = Date.now();
+      if (now - windowStart > 10000) { windowStart = now; count = 0; }
+      if (++count > 20) return;
+      inLog = true;
+      try { console.error(tag, (e && e.stack) || e); } catch {} finally { inLog = false; }
+    };
+  })();
+  process.on('uncaughtException', (e) => guardLog('[uncaught]', e));
+  process.on('unhandledRejection', (e) => guardLog('[unhandledRejection]', e));
   // A failed listen (almost always EADDRINUSE — another program or a second Triboon instance already
   // on this port) otherwise bubbles up as an *uncaught* error, drains the event loop, and exits
   // silently — which the Windows service wrapper reports as the cryptic "Error 1067: the process

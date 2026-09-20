@@ -11,8 +11,9 @@ const {
   releaseNamesExactEpisode, looksLikeSplitParts,
 } = require('./nzb');
 const { NzbFileStream, SharedCacheBudget } = require('./vfs');
-const { parseRarVolumes, RAR4_SIG, RAR5_SIG } = require('./rar');
+const { parseRarVolumes, rar5VolumeInfo, RAR4_SIG, RAR5_SIG } = require('./rar');
 const { parseZip } = require('./zip');
+const { parseFileDescs, headHash, HEAD_HASH_BYTES } = require('./par2');
 
 const SIG_7Z = Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]);
 const VIDEO_EXT = /\.(mkv|mp4|avi|m4v|ts|webm|mov)$/i;
@@ -124,6 +125,82 @@ function orderVolumes(files) {
   }
   if (!best) return [];
   return best.members.sort((a, b) => a.key - b.key).map((m) => m.f);
+}
+
+// Per-volume obfuscation: many reposts give EVERY slice its own random name
+// (h9yS….part01.rar, ORuE….part02.rar, or "zjb_D7hn" with no extension at all). orderVolumes
+// keys on the base name, so it sees N one-volume sets, keeps one, and 52 MB of a 4 GB file
+// maps → "unmappable" while the release is perfectly healthy. The post's own .par2 lists the
+// real file names with the MD5 of each file's first 16 KB (the SABnzbd rename trick); RAR5
+// slices also carry their volume number in the main header. Restore names/order from those,
+// then hand the already-mounted volume streams back so no article is fetched twice.
+// Returns ordered NzbFileStream[] (renamed) or null when nothing could be proven.
+const OBFUSCATED_SLICE_MIN_BYTES = 8 * 1024; // junk is excluded by extension; tiny strays cost one article
+const PAR2_READ_CAP = 8 * 1024 * 1024;
+function isPar2Name(name) { return /\.par2$/i.test(fileBaseName(name)); }
+// hash.NN / hash.NNN slices (no container suffix): the number is a posting index that reposters
+// shuffle, not a promise about order. .7z.001 / .rar.001 style keeps its suffix and is trusted.
+function numericSliceSet(vols) {
+  return vols.length >= 2 && vols.every((f) => /\.\d{2,3}$/.test(fileBaseName(f.name || ''))
+    && !/\.(rar|zip|7z)\.\d{2,4}$/i.test(fileBaseName(f.name || '')));
+}
+function obfuscatedSliceCandidates(candidates) {
+  return candidates.filter((f) => f && f.segments && f.segments.length
+    && (f.bytes || 0) >= OBFUSCATED_SLICE_MIN_BYTES
+    && !isPar2Name(f.name) && !JUNK_EXT.test(f.name) && !VIDEO_EXT.test(f.name));
+}
+async function deobfuscateVolumes(pool, candidates, opts = {}) {
+  const slices = obfuscatedSliceCandidates(candidates);
+  if (slices.length < 2) return null;
+  const streams = slices.map((f) => new NzbFileStream(pool, f, opts));
+  // First article of every slice: needed anyway by the RAR header walk that follows.
+  const heads = await Promise.all(streams.map((s) => s.readAt(0, HEAD_HASH_BYTES).catch(() => null)));
+
+  // 1) PAR2 FileDesc rename — exact names, verified by the 16 KB hash.
+  const par2Files = candidates.filter((f) => f && f.segments && f.segments.length && isPar2Name(f.name))
+    .sort((a, b) => (a.bytes || 0) - (b.bytes || 0)); // the main .par2 (no recovery blocks) is smallest
+  let descs = [];
+  for (const p of par2Files.slice(0, 3)) {
+    try {
+      const ps = new NzbFileStream(pool, p, opts);
+      await ps.mount();
+      const buf = await ps.readAt(0, Math.min(ps.size || PAR2_READ_CAP, PAR2_READ_CAP));
+      descs = parseFileDescs(buf);
+    } catch { descs = []; }
+    if (descs.length) break;
+  }
+  if (descs.length) {
+    const byHash = new Map(descs.map((d) => [d.hash16k, d]));
+    let renamed = 0;
+    const entries = streams.map((s, i) => {
+      const head = heads[i];
+      const d = head && byHash.get(headHash(head));
+      if (d && (!d.length || !s.size || d.length === s.size)) { renamed++; return { f: slices[i], name: d.name, stream: s }; }
+      return { f: slices[i], name: slices[i].name, stream: s };
+    });
+    if (renamed >= 2) {
+      const ordered = orderVolumes(entries.map((e) => ({ ...e.f, name: e.name, _entry: e })));
+      if (ordered.length >= 2) {
+        return ordered.map((f) => { f._entry.stream.name = f.name; return f._entry.stream; });
+      }
+    }
+  }
+
+  // 2) RAR5 volume numbers — the archive says where each slice belongs.
+  const infos = heads.map((h) => (h ? rar5VolumeInfo(h) : null));
+  if (infos.length >= 2 && infos.every((x) => x && x.volume)) {
+    const firsts = infos.filter((x) => x.number === 0).length;
+    const numbers = new Set(infos.map((x) => x.number));
+    if (firsts === 1 && numbers.size === infos.length) {
+      const order = infos.map((x, i) => ({ n: x.number, i })).sort((a, b) => a.n - b.n);
+      const base = (slices[order[0].i].name || 'volume').replace(/\.[^.]*$/, '') || 'volume';
+      return order.map(({ i }, k) => {
+        streams[i].name = `${base}.part${String(k + 1).padStart(3, '0')}.rar`;
+        return streams[i];
+      });
+    }
+  }
+  return null;
 }
 
 // Pick the playable inner file: video extension wins, then size; junk never wins. Sample
@@ -378,14 +455,20 @@ async function mountNzb(pool, nzbXml, opts = {}) {
   }));
 
   const volumeEntries = orderVolumes(candidates);
-  if (!volumeEntries.length) return mountFlat(pool, nzb, opts);
+  // Two obfuscation signatures: (a) one or zero named volumes next to several anonymous slices;
+  // (b) a hash.NN set whose NN is NOT the volume order (.10 was really part45). Both get the
+  // real order proven from the par2 / RAR5 headers before the RAR walk; a plain .partNN.rar set
+  // never pays for this.
+  let deobfuscated = null;
+  if (obfuscatedSliceCandidates(candidates).length >= 2
+      && (volumeEntries.length < 2 || numericSliceSet(volumeEntries))) {
+    deobfuscated = await deobfuscateVolumes(pool, candidates, opts);
+  }
+  if (!deobfuscated && !volumeEntries.length) return mountFlat(pool, nzb, opts);
 
   const sharedCacheBudget = new SharedCacheBudget(opts.cacheBytes);
-  const vols = volumeEntries.map((f) => {
-    const v = new NzbFileStream(pool, f, opts);
-    v.setSharedCacheBudget(sharedCacheBudget);
-    return v;
-  });
+  const vols = deobfuscated || volumeEntries.map((f) => new NzbFileStream(pool, f, opts));
+  for (const v of vols) v.setSharedCacheBudget(sharedCacheBudget);
   try {
     await Promise.all(vols.map((v) => v.mount()));
   } catch (e) {

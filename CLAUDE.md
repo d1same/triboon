@@ -109,8 +109,9 @@ in production; otherwise the app generates a secret into `./data`.
   combined multi-provider failover.
 - `server/vfs.js` - segment map, playback/read-ahead priority, `readAt`,
   triage.
-- `server/rar.js`, `server/zip.js`, `server/archive.js` - archive parsing,
-  volume ordering, seekable extents, verdict tags.
+- `server/rar.js`, `server/zip.js`, `server/archive.js`, `server/par2.js` -
+  archive parsing, volume ordering, obfuscated-volume rename/order from par2
+  FileDesc hashes and RAR5 volume numbers, seekable extents, verdict tags.
 - `server/newznab.js`, `server/scoring.js`, `server/pipeline.js` - indexer
   fan-out, ranking, title verification, health gate, auto-advance.
 - `server/transcode.js` - ffmpeg/ffprobe probe, remux, transcode, tracks.

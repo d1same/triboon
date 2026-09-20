@@ -153,6 +153,34 @@ async function walkRar5Volume(vol, volIdx) {
   return { entries, headersEncrypted };
 }
 
+// RAR5 volumes carry their own position: the main archive header (type 1) sets archive flag
+// 0x0001 for a volume and 0x0002 when a volume-number vint follows. The FIRST volume has no
+// number field. Returns { volume, number } from an already-read head buffer, or null when the
+// buffer is not a RAR5 main header. Used to order obfuscated slices that lost their names.
+function rar5VolumeInfo(head) {
+  if (!Buffer.isBuffer(head) || head.length < RAR5_SIG.length + 7) return null;
+  if (!head.subarray(0, RAR5_SIG.length).equals(RAR5_SIG)) return null;
+  try {
+    let off = RAR5_SIG.length;
+    const [hsize, sizeLen] = readVint(head, off + 4);
+    const bodyStart = off + 4 + sizeLen;
+    if (bodyStart + hsize > head.length) return null;
+    const body = head.subarray(bodyStart, bodyStart + hsize);
+    let c = 0;
+    const [type, tLen] = readVint(body, c); c += tLen;
+    if (type !== 1) return null;
+    const [hflags, fLen] = readVint(body, c); c += fLen;
+    if (hflags & 0x0001) { const [, n] = readVint(body, c); c += n; } // extra area size
+    if (hflags & 0x0002) { const [, n] = readVint(body, c); c += n; } // data size (never on main)
+    const [arcFlags, aLen] = readVint(body, c); c += aLen;
+    let number = 0;
+    if (arcFlags & 0x0002) { const [v] = readVint(body, c); number = v; }
+    return { volume: !!(arcFlags & 0x0001), number };
+  } catch {
+    return null;
+  }
+}
+
 // ---------------- volume merge ----------------
 // vols: ordered [{ name, size, readAt(offset, length) → Promise<Buffer> }]
 async function parseRarVolumes(vols) {
@@ -187,4 +215,4 @@ async function parseRarVolumes(vols) {
   return { version, headersEncrypted, files };
 }
 
-module.exports = { parseRarVolumes, RAR4_SIG, RAR5_SIG };
+module.exports = { parseRarVolumes, rar5VolumeInfo, RAR4_SIG, RAR5_SIG };

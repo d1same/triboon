@@ -10,7 +10,9 @@ function dotStuff(buf) {
   return Buffer.from(s.replace(/\r\n\./g, '\r\n..'), 'latin1');
 }
 
-function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
+// authThenReject: accept AUTHINFO (281) but keep answering 480 to every command — an exhausted
+// block account / over-cap session, as seen live as "480 Authentication Required*".
+function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThenReject = false } = {}) {
   // articles: Map<msgId, Buffer (article body, yEnc encoded)>
   const missing = new Set();
   const sockets = new Set();
@@ -23,6 +25,9 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
     sock.write('200 mock-nntp ready\r\n');
     let buf = '';
     let authed = !requireAuth;
+    // deauthSockets(): the provider forgot this session — next STAT/BODY answers 480 until the
+    // client sends AUTHINFO again (a fresh connection does; a reused one must not be trusted).
+    sock._deauth = () => { authed = false; };
     sock.on('data', (d) => {
       buf += d.toString('latin1');
       let nl;
@@ -38,7 +43,7 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
         if (C === 'AUTHINFO') {
           const kind = (rest[0] || '').toUpperCase();
           if (kind === 'USER') respond('381 password required\r\n');
-          else { authed = true; respond('281 auth accepted\r\n'); }
+          else { authed = !authThenReject; respond('281 auth accepted\r\n'); }
         } else if (C === 'QUIT') { respond('205 bye\r\n'); sock.end(); }
         else if (!authed) respond('480 auth required\r\n');
         else if ((C === 'STAT' || C === 'BODY') && state.stallNext > 0) {
@@ -87,6 +92,7 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
     trickleNext: (pieces, gapMs) => { state.trickle = { pieces, gapMs }; }, // next BODY dribbles in slowly-but-alive
     connCount: () => state.connCount,                    // total connections ever accepted
     dropConnections: () => { for (const s of sockets) s.destroy(); }, // provider idle-kill (FIN), server stays up
+    deauthSockets: () => { for (const s of sockets) if (s._deauth) s._deauth(); }, // live sockets now answer 480
     listen: () => new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port))),
     close: () => new Promise((r) => { for (const s of sockets) s.destroy(); server.close(r); }),
   };

@@ -16,6 +16,35 @@ const { detectContainer, orderVolumes, volumeKey, mountNzb, ArchiveVirtualFile }
 const { parseNzb, nzbPassword } = require('../server/nzb');
 const { NntpPool } = require('../server/nntp');
 const { createMockNntp } = require('./mock-nntp');
+const { parseFileDescs, headHash } = require('../server/par2');
+
+// Minimal PAR2 writer for tests: one FileDesc packet per file (+ a leading junk packet).
+function par2For(files, { junkFirst = true } = {}) {
+  const setId = crypto.createHash('md5').update('triboon-set').digest();
+  const packet = (type, body) => {
+    const typeBuf = Buffer.alloc(16); Buffer.from(type, 'latin1').copy(typeBuf);
+    const len = 64 + body.length;
+    const hash = crypto.createHash('md5').update(Buffer.concat([setId, typeBuf, body])).digest();
+    const head = Buffer.alloc(16);
+    Buffer.from('PAR2\0PKT', 'latin1').copy(head, 0);
+    head.writeBigUInt64LE(BigInt(len), 8);
+    return Buffer.concat([head, hash, setId, typeBuf, body]);
+  };
+  const parts = [];
+  if (junkFirst) parts.push(packet('PAR 2.0\0Main', Buffer.alloc(12)));
+  for (const f of files) {
+    const nameBuf = Buffer.from(f.name, 'utf8');
+    const padded = Buffer.alloc(Math.ceil(nameBuf.length / 4) * 4);
+    nameBuf.copy(padded);
+    const body = Buffer.alloc(56);
+    crypto.createHash('md5').update(f.name).digest().copy(body, 0); // file id
+    crypto.createHash('md5').update(f.data).digest().copy(body, 16); // full md5
+    Buffer.from(headHash(f.data), 'hex').copy(body, 32);            // 16k md5
+    body.writeBigUInt64LE(BigInt(f.data.length), 48);
+    parts.push(packet('PAR 2.0\0FileDesc', Buffer.concat([body, padded])));
+  }
+  return Buffer.concat(parts);
+}
 
 const PAYLOAD = seededPayload(300 * 1024);
 const loadFix = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', 'real', name));
@@ -91,6 +120,109 @@ test('archive: obfuscated hash.NN slices are one volume set, not competing files
   assert.match(vols[2].name, /\.12$/);
   assert.strictEqual(volumeKey('Lioness.2023'), null, 'a trailing year is not a volume number');
   assert.strictEqual(volumeKey('Movie.2023.mkv'), null);
+});
+
+test('par2: FileDesc packets yield real names, lengths, and 16k hashes; junk packets and tails are skipped', () => {
+  const a = { name: 'Show.S01E01.part01.rar', data: seededPayload(40 * 1024, 0x701) };
+  const b = { name: 'Show.S01E01.part02.rar', data: seededPayload(9 * 1024, 0x702) };
+  const buf = Buffer.concat([Buffer.from('leading junk'), par2For([a, b]), Buffer.from('PAR2\0PKT truncated')]);
+  const descs = parseFileDescs(buf);
+  assert.deepStrictEqual(descs.map((d) => d.name), [a.name, b.name]);
+  assert.strictEqual(descs[0].length, a.data.length);
+  assert.strictEqual(descs[0].hash16k, headHash(a.data));
+  assert.strictEqual(descs[1].hash16k, crypto.createHash('md5').update(b.data).digest('hex'),
+    'a file shorter than 16k hashes as a whole');
+  assert.deepStrictEqual(parseFileDescs(Buffer.from('PAR2')), []);
+});
+
+// Real-world repost style: EVERY volume carries its own random name (or no extension at all), so
+// the by-base-name grouper sees N one-volume sets and the mount is "unmappable". The post's par2
+// restores the real names; the mount must then be complete and byte-exact across boundaries.
+test('archive: per-volume obfuscated RAR4 set is renamed from the par2 and streams byte-exact', async () => {
+  const vols = writeRar4Store([{ name: 'Lucky.2026.S01E01.1080p.WEB.h264-ETHEL.mkv', data: PAYLOAD }],
+    { base: 'lucky.2026.s01e01.1080p.web.h264-ethel', naming: 'part', volSize: 60 * 1024 });
+  assert.ok(vols.length >= 4, 'fixture must split into several part volumes');
+  const obf = vols.map((v, i) => ({
+    ...v,
+    // half get a random base + real extension, half lose the extension entirely
+    name: i % 2 ? `${crypto.randomBytes(9).toString('base64url')}.part${String(i + 1).padStart(2, '0')}.rar` : crypto.randomBytes(10).toString('base64url'),
+  }));
+  const posted = [
+    { name: `${crypto.randomBytes(8).toString('base64url')}.par2`, data: par2For(vols) },
+    ...obf.slice().reverse(), // NZB order is not volume order either
+  ];
+  const { articles, nzb } = makeArchiveNzb(posted, 30000, { junk: false });
+  assert.strictEqual(orderVolumes(parseNzb(nzb).files.map((f) => ({ ...f, name: f.subject.match(/"([^"]+)"/)[1], bytes: 1e6 }))).length <= 1, true,
+    'precondition: the raw names alone cannot be grouped');
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 6);
+  try {
+    const vf = await mountNzb(pool, nzb, { wantedEpisode: { s: 1, e: 1 }, releaseName: 'Lucky.2026.S01E01.1080p.WEB.h264-ETHEL' });
+    assert.strictEqual(vf.streamable, true, `tags=${vf.tags.join(',')}`);
+    assert.strictEqual(vf.container, 'rar');
+    assert.strictEqual(vf.size, PAYLOAD.length);
+    assert.strictEqual(vf.vols.length, vols.length, 'every slice found its place');
+    assert.deepStrictEqual(vf.vols.map((v) => v.name), vols.map((v) => v.name), 'real names restored in order');
+    const full = await readAll(vf, 0, vf.size);
+    assert.strictEqual(sha(full), sha(PAYLOAD), 'byte-exact across every volume boundary');
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('archive: obfuscated RAR5 slices with no par2 are ordered by the volume number in the archive header', async () => {
+  const vols = writeRar5Store([{ name: 'Movie.2026.2160p.mkv', data: PAYLOAD }], { base: 'movie', volSize: 64 * 1024 });
+  assert.ok(vols.length >= 4);
+  const obf = vols.map((v) => ({ ...v, name: crypto.randomBytes(10).toString('base64url') })).reverse();
+  const { articles, nzb } = makeArchiveNzb(obf, 30000, { junk: false });
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 6);
+  try {
+    const vf = await mountNzb(pool, nzb, { releaseName: 'Movie.2026.2160p.WEB-DL' });
+    assert.strictEqual(vf.streamable, true, `tags=${vf.tags.join(',')}`);
+    assert.strictEqual(vf.size, PAYLOAD.length);
+    const win = await readAll(vf, 60 * 1024, 200 * 1024);
+    assert.ok(win.equals(PAYLOAD.subarray(60 * 1024, 200 * 1024)), 'middle volumes are in the right order');
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('archive: hash.NN slices whose numbers lie about the order are re-ordered from the par2', async () => {
+  const vols = writeRar4Store([{ name: 'Show.S02E02.2160p.mkv', data: PAYLOAD }], { base: 'show', naming: 'part', volSize: 50 * 1024 });
+  assert.ok(vols.length >= 5);
+  // Real repost shape: same hash base, .10/.11/.12… numbering that is a shuffle of the true order.
+  const shuffled = [3, 0, 4, 1, 2, 5, 6, 7, 8, 9].filter((i) => i < vols.length);
+  const obf = shuffled.map((src, i) => ({ ...vols[src], name: `12321a0ded25e7554f5650cd7e889ca4.${10 + i}` }));
+  const posted = [{ name: '12321a0ded25e7554f5650cd7e889ca4.par2', data: par2For(vols) }, ...obf];
+  const { articles, nzb } = makeArchiveNzb(posted, 30000, { junk: false });
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 6);
+  try {
+    const vf = await mountNzb(pool, nzb, { releaseName: 'Show.S02E02.2160p.WEB-DL' });
+    assert.strictEqual(vf.streamable, true, `tags=${vf.tags.join(',')}`);
+    assert.deepStrictEqual(vf.vols.map((v) => v.name), vols.map((v) => v.name), 'true part order restored');
+    const full = await readAll(vf, 0, vf.size);
+    assert.strictEqual(sha(full), sha(PAYLOAD), 'a shuffled set must never stream in .NN order');
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('archive: a normal named set never pays the deobfuscation path', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'archive.js'), 'utf8');
+  assert.match(src, /if \(obfuscatedSliceCandidates\(candidates\)\.length >= 2\s*&& \(volumeEntries\.length < 2 \|\| numericSliceSet\(volumeEntries\)\)\) \{\s*deobfuscated = await deobfuscateVolumes/,
+    'deobfuscation runs only for anonymous slices or lying hash.NN numbering — never for a real .partNN.rar set');
+  const { volumeKey: vk } = require('../server/archive');
+  assert.ok(vk('x.part01.rar') && vk('x.r00') && vk('x.7z.001'), 'named volumes keep their trusted grouping');
+  assert.match(src, /if \(renamed >= 2\) \{/, 'a par2 rename needs at least two proven slices before it is trusted');
+  assert.match(src, /firsts === 1 && numbers\.size === infos\.length/, 'RAR5 ordering needs exactly one first volume and unique numbers');
 });
 
 test('archive: obfuscated hash.NN raw MKV slices concatenate into one streamable video', async () => {
