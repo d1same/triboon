@@ -37,11 +37,12 @@ function fuzzLimit(len) {
   if (len <= 5) return 1;
   return 2;
 }
-function closeWord(a, b, singleToken) {
+function closeWord(a, b, singleToken, strict = false) {
   if (a === b || a + 's' === b || b + 's' === a) return true;
   const d = dist(a, b);
+  if (strict && d >= 2 && a[0] !== b[0]) return false;
   if (d <= fuzzLimit(a.length) && d <= fuzzLimit(b.length)) return true;
-  if (singleToken && a.length >= 6 && d <= 3 && Math.abs(a.length - b.length) <= 2) return true;
+  if (!strict && singleToken && a.length >= 6 && d <= 3 && Math.abs(a.length - b.length) <= 2) return true;
   return false;
 }
 function wordAffix(a, b) {
@@ -60,16 +61,16 @@ function closeTitle(query, title) {
   const single = need.length === 1;
   return need.every((w) => tw.some((t) => closeWord(w, t, single) || wordAffix(w, t)));
 }
-function wholeTitleClose(query, title) {
+function wholeTitleClose(query, title, strict = false) {
   const qw = words(query);
   const qk = qw.join('');
   if (qk.length < 4) return false;
   const single = contentWords(qw).length === 1;
-  if (closeWord(qk, words(title).join(''), single)) return true;
+  if (closeWord(qk, words(title).join(''), single, strict)) return true;
   const tw = words(title);
   const noArt = tw[0] && ['the', 'a', 'an'].includes(tw[0]) ? tw.slice(1) : tw;
-  if (noArt.length && closeWord(qk, noArt.join(''), single)) return true;
-  if (noArt.length >= 2 && noArt[0].length === 1 && closeWord(qk, noArt.slice(1).join(''), single)) return true;
+  if (noArt.length && closeWord(qk, noArt.join(''), single, strict)) return true;
+  if (noArt.length >= 2 && noArt[0].length === 1 && closeWord(qk, noArt.slice(1).join(''), single, strict)) return true;
   return false;
 }
 
@@ -103,9 +104,25 @@ test('search close-title: common typos still match the real name', () => {
     if (!need.length || !tw.length) return false;
     if (need.every((w) => tw.some((t) => t === w || t === w + 's' || w === t + 's'))) return true;
     const packed = tw.join('');
-    if (need.every((w) => w.length >= 4 && packed.includes(w))) return true;
-    return wholeTitleClose(query, title);
+    const starts = new Set();
+    for (let off = 0, i = 0; i < tw.length; i++) { starts.add(off); off += tw[i].length; }
+    const packedHit = (w) => { let at = packed.indexOf(w); while (at >= 0) { if (starts.has(at)) return true; at = packed.indexOf(w, at + 1); } return false; };
+    if (need.every((w) => w.length >= 4 && packedHit(w))) return true;
+    return wholeTitleClose(query, title, true);
   }
+  assert.ok(libraryTitle('spiderman', 'Spider Man'), 'packed words still match at a word start');
+  assert.ok(!libraryTitle('sever', 'Karbala Hussains Everlasting Stand'), 'a substring across a word boundary is not a match');
+  // Library rows render ABOVE the TMDB results, so they get the STRICT matcher (2026-09-20 live
+  // find: "utopia" listed Tooba and holia first, "patriot" Parisa/Pariya, "colombo" Kolombos).
+  assert.ok(!libraryTitle('utopia', 'Tooba'), 'Tooba is not Utopia');
+  assert.ok(!libraryTitle('utopia', 'holia'), 'holia is not Utopia');
+  assert.ok(!libraryTitle('patriot', 'Parisa'), 'Parisa is not Patriot');
+  assert.ok(!libraryTitle('patriot', 'Pariya'), 'Pariya is not Patriot');
+  assert.ok(!libraryTitle('colombo', 'Kolombos'), 'Kolombos is not Colombo');
+  assert.ok(!libraryTitle('colombo', 'Columbus'), 'Columbus is not Colombo');
+  assert.ok(libraryTitle('colombo', 'Columbo'), 'one mid-word letter still finds the folder');
+  assert.ok(libraryTitle('coherance', 'Coherence'), 'a real typo still finds the folder');
+  assert.ok(closeTitle('oddyse', 'Odyssey'), 'the loose matcher still powers Did you mean');
   assert.ok(libraryTitle('the office', 'The Office'), 'library keeps the real Office title');
   assert.ok(libraryTitle('the office', 'The Office Retrospective'), 'a real Office-titled extra still counts');
   assert.ok(libraryTitle('the ofice', 'The Office'), 'a close Office typo still finds the folder');
@@ -165,6 +182,13 @@ test('search close-title: UI shows a Did you mean chip and retries TMDB', () => 
   assert.match(ui, /setTimeout\(doSearch, 120\)/);
   assert.match(ui, /function searchSuggestRank\(q, title\)/);
   assert.match(ui, /function searchFuzzLimit\(len\)/);
+  assert.match(ui, /function searchCloseWord\(a, b, singleToken, strict = false\) \{[\s\S]+if \(strict && d >= 2 && a\[0\] !== b\[0\]\) return false;[\s\S]+if \(!strict && singleToken && a\.length >= 6 && d <= 3/,
+    'library/channel rows use the strict matcher; the Did-you-mean chip keeps the loose one');
+  assert.match(ui, /function searchLibraryTitleMatch\(query, title\) \{[\s\S]+if \(starts\.has\(at\)\) return true;[\s\S]+return searchWholeTitleClose\(query, title, true\);/, 'library matching is strict and packed matches start at a word boundary');
+  // Section order is decided on the raw TMDB rows (mapped cards drop popularity/votes → ties →
+  // Movies always led; "twilight zone" buried the 1959 show under thirteen obscure films).
+  assert.match(ui, /const movieLead = rawMovies\[0\] \? tmdbSearchRank\(rawMovies\[0\], q\) : -1;\s+const showLead = rawShows\[0\] \? tmdbSearchRank\(rawShows\[0\], q\) : -1;/);
+  assert.match(ui, /if \(\(Number\(x\.vote_count\) \|\| 0\) < 20\) score -= 3000;/, 'a vote-less exact-title entry ranks below the rated one');
   assert.match(ui, /if \(Math\.min\(a\.length, b\.length\) < 4\) return false;/);
   assert.match(ui, /'The Longest Yard'/);
   assert.match(idx, /'The Longest Yard'/);

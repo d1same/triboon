@@ -202,10 +202,19 @@ class VerdictCache {
     this._scrubUnsafeKeys();
   }
   _now() { return Date.now(); }
+  // Health verdicts (missing/blocked/mount-failed) forgive after the cache TTL because usenet
+  // heals and providers differ. A few verdicts describe the FILE ITSELF and never change — a
+  // release whose runtime says it is a different film is still that film tomorrow — so an entry
+  // may carry its own longer `ttlMs`. Never shorter than the cache default.
+  _expired(v, now = this._now()) {
+    if (!v || !v.checkedAt) return true;
+    const ttl = Math.max(this.ttl, Number(v.ttlMs) || 0);
+    return now - v.checkedAt > ttl;
+  }
   _prune(all) {
     const now = this._now();
     for (const [k, v] of Object.entries(all || {})) {
-      if (!v || !v.checkedAt || now - v.checkedAt > this.ttl) delete all[k];
+      if (this._expired(v, now)) delete all[k];
     }
     const keys = Object.keys(all || {});
     if (keys.length > this.maxEntries) {
@@ -239,10 +248,10 @@ class VerdictCache {
     const all = this.store.read('verdicts', {});
     const v = all[key];
     if (!v) return null;
-    if (this._now() - v.checkedAt > this.ttl) return null;
+    if (this._expired(v)) return null;
     return v;
   }
-  set(key, verdict, detail = {}) {
+  set(key, verdict, detail = {}, { ttlMs } = {}) {
     this.store.update('verdicts', {}, (all) => {
       // Prune LAZILY: a full Object.entries scan (+ sort when over cap) of a 20K-entry table on
       // EVERY write is pure hot-path waste — one hard press-play walk records ~2 verdicts per
@@ -252,6 +261,7 @@ class VerdictCache {
       this._sets = (this._sets || 0) + 1;
       if (this._sets % 50 === 0) all = this._prune(all);
       all[key] = { verdict, detail, checkedAt: this._now() };
+      if (Number.isFinite(ttlMs) && ttlMs > this.ttl) all[key].ttlMs = Math.min(ttlMs, 365 * 24 * 3600 * 1000);
       return all;
     });
   }

@@ -15,7 +15,7 @@ const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
 const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryItemMatchesTmdb, unboundLibraryItem } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
-const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics } = require('./pipeline');
+const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch } = require('./pipeline');
 const {
   isCamCandidate, camScoringEnabled, sourceDrawerCandidates,
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
@@ -4052,18 +4052,41 @@ const CATALOG_FACT_REGIONS = new Set(['US', 'GB', 'CA', 'AU', 'IE', 'NZ']);
 const catalogFactsCache = new Map();
 const normFactTitle = (s) => pipelineFoldDiacritics(String(s || '')).toLowerCase().replace(/['’`]/g, '').replace(/&/g, ' and ')
   .replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter((w) => w && !['the', 'a', 'an'].includes(w)).join(' ');
-async function catalogFactsFor(year, tmdbId, mediaType) {
-  const out = { year: parseCatalogYear(year) ? year : undefined, akaTitles: [], otherYears: [] };
+async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
+  const out = { year: parseCatalogYear(year) ? year : undefined, akaTitles: [], otherYears: [], runtimeMin: 0 };
   const id = parseInt(tmdbId, 10);
   if (!id || !settings.get().tmdbKey) return out;
   const type = mediaType === 'tv' ? 'tv' : 'movie';
   const key = `${type}:${id}`;
   let facts = catalogFactsCache.get(key);
   if (!facts) {
-    facts = { year: null, akaTitles: [], otherYears: [] };
+    facts = { year: null, akaTitles: [], otherYears: [], runtimeMin: 0 };
     try {
       const d = await tmdb.get(`/${type}/${id}${type === 'movie' ? '?append_to_response=alternative_titles' : ''}`);
       facts.year = parseCatalogYear(String((d && (d.release_date || d.first_air_date)) || '').slice(0, 4));
+      // Film runtime feeds the post-probe "is this even the same film" check (runtimeMismatch).
+      if (type === 'movie' && d && Number.isFinite(Number(d.runtime)) && Number(d.runtime) > 0) facts.runtimeMin = Number(d.runtime);
+      if (type === 'tv' && d && facts.year) {
+        // Same-name SHOWS at the neighbouring first-air year: Utopia (UK, 2013) vs Utopia (AU
+        // sitcom, 2014) vs Utopia (US, 2020). The ±1 remake-year slack let the AU show play on
+        // the UK page. Plain search plus the two neighbouring years, like films.
+        const main = normFactTitle(d.name);
+        const queries = [
+          `/search/tv?query=${encodeURIComponent(d.name)}`,
+          `/search/tv?query=${encodeURIComponent(main || d.name)}&first_air_date_year=${facts.year - 1}`,
+          `/search/tv?query=${encodeURIComponent(main || d.name)}&first_air_date_year=${facts.year + 1}`,
+        ];
+        const pages = await Promise.all(queries.map((q) => tmdb.get(q).catch(() => null)));
+        for (const s of pages) {
+          for (const r of (s && s.results) || []) {
+            if (!r || Number(r.id) === id) continue;
+            const y = parseCatalogYear(String(r.first_air_date || '').slice(0, 4));
+            if (!y || y === facts.year) continue;
+            if (normFactTitle(r.name) === main || normFactTitle(r.original_name) === main) facts.otherYears.push(y);
+          }
+        }
+        facts.otherYears = [...new Set(facts.otherYears)];
+      }
       if (type === 'movie' && d) {
         const main = normFactTitle(d.title);
         const orig = normFactTitle(d.original_title);
@@ -4106,12 +4129,59 @@ async function catalogFactsFor(year, tmdbId, mediaType) {
   if (!out.year && facts.year) out.year = facts.year;
   out.akaTitles = facts.akaTitles;
   out.otherYears = facts.otherYears;
+  out.runtimeMin = facts.runtimeMin || 0;
+  // Episodes: only TMDB's PER-EPISODE runtime is trusted for the probe check (a show-level
+  // average would flag every 80-minute pilot). Cached per episode; missing → no check.
+  const s = parseInt(season, 10), e = parseInt(ep, 10);
+  if (type === 'tv' && Number.isInteger(s) && s >= 0 && Number.isInteger(e) && e > 0) {
+    const ekey = `${key}:s${s}e${e}`;
+    if (!catalogFactsCache.has(ekey)) {
+      let rt = 0;
+      try { const epd = await tmdb.get(`/tv/${id}/season/${s}/episode/${e}`); rt = Number(epd && epd.runtime) || 0; } catch {}
+      catalogFactsCache.set(ekey, { runtimeMin: rt });
+    }
+    out.runtimeMin = (catalogFactsCache.get(ekey) || {}).runtimeMin || 0;
+  }
   return out;
 }
-function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, caps: rawCaps } = {}) {
+
+// After the track probe lands: does the file's duration fit the catalog film? Three "The Odyssey"
+// films share 2026 and the indexer rows carry no IMDb tag, so the 86-minute knock-off mounted on
+// Nolan's (173 min) page and even saved its progress there. Name and year cannot tell them apart;
+// the probed runtime can. Movies with a known runtime only; the result is remembered per title
+// (pipeline.recordRuntimeMismatch) so Auto never picks that release for this title again, and the
+// mount carries it so the player can say so. No mid-playback switch: for a title whose every copy
+// is the wrong film, flipping through them would be worse than one clear message.
+function noteRuntimeCheck(vf) {
+  const rc = vf && vf._runtimeCheck;
+  const dur = vf && vf._tracks && Number(vf._tracks.duration);
+  if (!rc || rc.done || !Number.isFinite(dur) || dur <= 0) return null;
+  rc.done = true;
+  const mismatch = pipelineRuntimeMismatch(dur, rc.runtimeMin);
+  if (!mismatch) return null;
+  vf._runtimeMismatch = { ...mismatch, title: rc.title || '' };
+  vf._tracks.runtimeMismatch = vf._runtimeMismatch;
+  pipeline.recordRuntimeMismatch(rc.candidate, rc.tmdbId, mismatch);
+  console.log(`[play] runtime mismatch: "${String(rc.candidate && rc.candidate.name || vf.name).slice(0, 90)}" runs ${mismatch.fileMin} min, ${rc.title || 'tmdb:' + rc.tmdbId} runs ${mismatch.titleMin} min — remembered as a different film for this title`);
+  return vf._runtimeMismatch;
+}
+function armRuntimeCheck(vf, policy, candidate, body) {
+  if (!vf || !policy || !candidate) return;
+  const runtimeMin = Number(policy.wantedRuntimeMin) || 0;
+  const tmdbId = parseInt(policy.catalogTmdbId, 10);
+  // Films use the TMDB film runtime; episodes only run when TMDB knows THIS episode's runtime
+  // (catalogFactsFor) — Utopia (AU sitcom, 26 min) played as Utopia (UK thriller, 50 min).
+  if (!runtimeMin || !tmdbId || !(policy.mediaType === 'movie' || policy.mediaType === 'tv')) return;
+  vf._runtimeCheck = { runtimeMin, tmdbId, title: String((body && body.q) || '').replace(/\s+(19|20)\d{2}$/, ''), candidate: { nzbUrl: candidate.nzbUrl, name: candidate.name }, done: false };
+  if (vf._tracks) noteRuntimeCheck(vf); // probe already landed (prepared mount reused)
+}
+function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, runtimeMin, tmdbId, caps: rawCaps } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
   if (Array.isArray(akaTitles) && akaTitles.length) policy.akaTitles = akaTitles.slice(0, 6).map(String);
   if (Array.isArray(otherYears) && otherYears.length) policy.otherYears = otherYears.map(Number).filter((y) => Number.isInteger(y));
+  // Catalog identity for title-scoped verdicts (wrong-runtime) and the film runtime for the probe check.
+  if (parseInt(tmdbId, 10) > 0) policy.catalogTmdbId = parseInt(tmdbId, 10);
+  if (Number(runtimeMin) > 0) policy.wantedRuntimeMin = Number(runtimeMin);
   // Catalog media type lets the title verifier reject SxxEyy releases for a film even when the
   // request carries no year (see catalogYearFor). Anything but the two known values is ignored.
   if (mediaType === 'movie' || mediaType === 'tv') policy.mediaType = mediaType;
@@ -5469,8 +5539,9 @@ const H = {
         preferResolutionRank: ctx.url.searchParams.get('preferResolutionRank'),
         originalLanguage: ctx.url.searchParams.get('originalLanguage'),
         preferredAudioLanguage: ctx.url.searchParams.get('preferredAudioLanguage'),
-        ...(await catalogFactsFor(ctx.url.searchParams.get('year'), ctx.url.searchParams.get('tmdbId'), ctx.url.searchParams.get('mediaType'))),
+        ...(await catalogFactsFor(ctx.url.searchParams.get('year'), ctx.url.searchParams.get('tmdbId'), ctx.url.searchParams.get('mediaType'), ctx.url.searchParams.get('season'), ctx.url.searchParams.get('ep'))),
         mediaType: ctx.url.searchParams.get('mediaType'),
+        tmdbId: ctx.url.searchParams.get('tmdbId'),
         caps: parseCapsQuery(ctx.url.searchParams.get('caps')),
       })
     );
@@ -5484,6 +5555,7 @@ const H = {
       candidates: visible.map((c) => ({
         name: c.name, pickKey: c.pickKey, sizeBytes: c.sizeBytes, indexer: c.indexer, score: c.score,
         reasons: c.reasons, attributes: c.attributes, streamClass: c.streamClass, health: c.health,
+        ...(c.runtimeMismatch ? { runtimeMismatch: c.runtimeMismatch } : {}),
       })),
     });
   },
@@ -5507,7 +5579,7 @@ const H = {
     debug.log('play', `request q=${body.q} tmdb=${body.tmdbId || '-'} s${body.season || '-'}e${body.ep || '-'}`);
     // HD/UHD toggle: a per-play resolution preference may tighten the cap DOWNWARD, never
     // above the admin-set cap (Plex semantics — user picks within their ceiling).
-    Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType));
+    Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType, body.season, body.ep));
     const policy = playbackPolicyFor(ctx.user, body);
     // Explicit resolution pick (4K toggle): boost matching releases — but only within the cap,
     // so a capped user can't smuggle UHD past their ceiling via the preference.
@@ -5530,6 +5602,7 @@ const H = {
       vf._q = body.q; // remembered for online subtitle search (release names match poorly)
       vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
       vf._caps = parseCaps(body.caps); session.caps = vf._caps; // hardware claims ride the session
+      armRuntimeCheck(vf, policy, candidate, body);
       rememberMountOwner(vf, ctx.user.id);
       trimUserMounts(ctx.user.id, vf.id);
       // Owner-facing read-ahead goal for THIS stream's resolution, so the native player can size
@@ -5580,7 +5653,7 @@ const H = {
       return maturityBlockedResponse(ctx);
     }
     const t0 = Date.now();
-    Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType));
+    Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType, body.season, body.ep));
     const policy = playbackPolicyFor(ctx.user, body);
     try {
       const { vf, candidate, attempts, prepared } = await pipeline.prepare(
@@ -5596,6 +5669,7 @@ const H = {
         vf._q = body.q;
         vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
         vf._caps = parseCaps(body.caps);
+        armRuntimeCheck(vf, policy, candidate, body);
         rememberMountOwner(vf, ctx.user.id);
         trimUserMounts(ctx.user.id, vf.id);
       }
@@ -8693,7 +8767,7 @@ Object.assign(H, {
     const transcodeAudio = forceAudioSafe || !audioCopyOk(aud, vf._caps);
     if (!vf._tracks && detectFfprobe() && !vf._probing) {
       vf._probing = true;
-      probeTracks(selfUrl).then((t) => { vf._tracks = { available: true, ...t }; }).catch(() => {}).finally(() => { vf._probing = false; });
+      probeTracks(selfUrl).then((t) => { vf._tracks = { available: true, ...t }; noteRuntimeCheck(vf); }).catch(() => {}).finally(() => { vf._probing = false; });
     }
     const ff = spawnRemux(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe });
     attachMountFfmpegPipe(vf, ff, ctx.claims && ctx.claims.uid);
@@ -8883,6 +8957,7 @@ Object.assign(H, {
       const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}&priority=background`;
       const t = await probeTracks(selfUrl);
       vf._tracks = { available: true, ...t, releaseSubs };
+      noteRuntimeCheck(vf);
       send(ctx.res, 200, vf._tracks);
       // The TV player is Wyzie-only for subtitles. Embedded subtitle extraction can require
       // scanning the whole media stream, so probing tracks must not quietly kick that off.
@@ -9381,21 +9456,21 @@ Object.assign(H, {
     const track = parseInt(ctx.m[2], 10) || 0;
     try {
       const mode = String(ctx.url.searchParams.get('mode') || '').toLowerCase();
-      if (mode !== 'prewarm') {
-        // No vf here on purpose: this is the per-REQUEST wait (flat ~120s floor). The extraction
-        // JOB gets the size-scaled budget (embeddedSubtitleTimeoutMs(mode, vf) in ensureSubtitleVtt)
-        // and survives disconnects, so a big file keeps extracting while clients poll.
-        const waitMs = mode === 'startup' ? embeddedSubtitleStartupWaitMs() : embeddedSubtitleTimeoutMs(mode);
-        extendSubtitleResponseTimeout(ctx, waitMs + 15000);
-      }
       if (mode === 'prewarm') {
         ensureSubtitleVtt(vf, track, ctx.claims.uid, { mode }).catch((e) => {
           console.error(`[subtitle ${vf.id}:${track}] prewarm failed: ${String(e && e.message || e).slice(0, 200)}`);
         });
         return send(ctx.res, 202, { ok: true, status: 'prewarming' });
       }
+      // No vf here on purpose: this is the per-REQUEST wait (flat ~120s floor for a manual pick,
+      // ~8s at startup). The extraction JOB has its own stall watchdog (ensureSubtitleVtt) and
+      // survives disconnects. Both modes answer 504 "still preparing" when the wait runs out while
+      // the job keeps running — a manual pick used to `await job` past its own socket budget, so a
+      // slow (not dead) extraction surfaced as a dropped connection instead of a pollable "not yet".
+      const waitMs = mode === 'startup' ? embeddedSubtitleStartupWaitMs() : embeddedSubtitleTimeoutMs(mode);
+      extendSubtitleResponseTimeout(ctx, waitMs + 15000);
       const job = ensureSubtitleVtt(vf, track, ctx.claims.uid, { mode });
-      const vtt = mode === 'startup' ? await waitForSubtitleStartup(job, embeddedSubtitleStartupWaitMs()) : await job;
+      const vtt = await waitForSubtitleStartup(job, waitMs);
       if (!ctx.res.writableEnded) send(ctx.res, 200, vtt, { 'content-type': 'text/vtt; charset=utf-8' });
     } catch (e) {
       if (e && e.code === 'SUBTITLE_PREPARING') {
@@ -9754,6 +9829,9 @@ function embeddedSubtitleTimeoutMs(mode = '', vf = null) {
   const size = vf && Number(vf.size) || 0;
   return Math.max(120000, Math.min(20 * 60000, Math.round(size / (25 * 1024 * 1024) * 1000)));
 }
+// How long the extraction may go without a single ffmpeg progress tick or cue before it is
+// declared dead. Background-priority reads behind a busy player are slow but never silent.
+const EMBEDDED_SUB_STALL_MS = 90000;
 function embeddedSubtitleStartupWaitMs() {
   const configured = parseInt(process.env.TRIBOON_EMBEDDED_SUB_STARTUP_WAIT_MS || '', 10);
   if (Number.isFinite(configured) && configured > 0) return Math.max(2000, Math.min(30000, configured));
@@ -9814,12 +9892,23 @@ function ensureSubtitleVtt(vf, track, uid, opts = {}) {
   if (vf._subJobs.has(track)) return vf._subJobs.get(track);
   const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
   const timeoutMs = embeddedSubtitleTimeoutMs(opts.mode, vf);
+  // The extraction reads the whole file at BACKGROUND NNTP priority — behind the active player's
+  // read-ahead it can legitimately take several minutes for a 2 GB episode, and a flat 120 s clock
+  // killed every such job (live find 2026-09-20: The Bear S03E04 NTb, 34 min, two English tracks,
+  // 100% timeouts while playing). So the clock now measures STALL, not wall time: ffmpeg's
+  // -progress heartbeat (or a cue) must arrive at least every EMBEDDED_SUB_STALL_MS, and the
+  // size-scaled budget only becomes a hard cap when it is genuinely large. An env-forced timeout
+  // is still honored as an absolute cap (the admin asked for exactly that).
+  const envForced = Number.isFinite(parseInt(process.env.TRIBOON_EMBEDDED_SUB_TIMEOUT_MS || '', 10));
+  const hardCapMs = envForced ? timeoutMs : Math.min(20 * 60000, Math.max(timeoutMs, 10 * 60000));
   const job = new Promise((resolve, reject) => {
     let ff; let done = false;
+    const startedAt = Date.now();
+    let lastActivity = startedAt;
     const finish = (fn, value) => {
       if (done) return;
       done = true;
-      clearTimeout(killer);
+      clearInterval(watchdog);
       fn(value);
     };
     const fail = (value) => {
@@ -9829,16 +9918,29 @@ function ensureSubtitleVtt(vf, track, uid, opts = {}) {
     };
     try { ff = spawnSubtitleExtract(selfUrl, track); } catch (e) { return fail(e); }
     const chunks = []; let err = '';
-    const killer = setTimeout(() => {
+    const watchdog = setInterval(() => {
+      const now = Date.now();
+      let reason = '';
+      if (now - lastActivity > EMBEDDED_SUB_STALL_MS) reason = `embedded subtitle extraction stalled (no progress for ${Math.round(EMBEDDED_SUB_STALL_MS / 1000)}s)`;
+      else if (now - startedAt > hardCapMs) reason = `embedded subtitle extraction timed out after ${Math.round(hardCapMs / 1000)}s`;
+      if (!reason) return;
       try { ff.kill('SIGKILL'); } catch {}
-      fail(new Error(`embedded subtitle extraction timed out after ${Math.round(timeoutMs / 1000)}s`));
-    }, timeoutMs);
+      fail(new Error(reason));
+    }, 5000);
     ff.on('error', (e) => fail(e));
-    ff.stdout.on('data', (d) => chunks.push(d));
-    ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; }); // cap: ffmpeg streams stderr for the whole playback
-    ff.on('close', (codeNum) => {
+    ff.stdout.on('data', (d) => { lastActivity = Date.now(); chunks.push(d); });
+    // stderr carries the -progress heartbeat plus any real error; keep the TAIL so a late error
+    // message is not pushed out by hundreds of progress lines.
+    ff.stderr.on('data', (d) => { lastActivity = Date.now(); err = (err + d).slice(-4000); });
+    ff.on('close', (codeNum, signal) => {
+      // A killed extraction (our own timeout SIGKILL, or an external kill) closes with code null
+      // and a signal. That used to read as "exit 0" and CACHED the partial VTT collected so far,
+      // so after one timeout the rest of the mount served captions that stopped mid-episode.
+      if (done || signal) return fail(new Error(signal ? `ffmpeg killed (${signal})` : 'embedded subtitle extraction aborted'));
       const vtt = Buffer.concat(chunks).toString('utf8');
-      if (codeNum || !vtt.startsWith('WEBVTT')) return fail(new Error(err.slice(0, 200) || `ffmpeg exit ${codeNum}`));
+      // Real ffmpeg errors sit among -progress key=value lines; surface only the error text.
+      const errText = err.split(/\r?\n/).filter((l) => l && !/^[a-z_]+=/.test(l)).join(' ').slice(0, 200);
+      if (codeNum || !vtt.startsWith('WEBVTT')) return fail(new Error(errText || `ffmpeg exit ${codeNum}`));
       if (!subtitleVttHasCues(vtt)) return fail(new Error('embedded subtitle extraction returned no text cues'));
       vf._subFailures.delete(track);
       if (vf._subCache.size < 8) vf._subCache.set(track, vtt);

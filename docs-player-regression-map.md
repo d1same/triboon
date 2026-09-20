@@ -276,6 +276,25 @@ them when the table is reorganized:
   `#subOverlay`, native subtitle payload; `MainActivity.java` native overlay;
   `SubtitleText.java`. Verification: `test/phase4.test.js` plus
   `SubtitleTextTest.java` through `testDebugUnitTest`.
+- **P11 - built-in extraction never serves a truncated file, and never dies
+  just for being slow.** Live find 2026-09-20 (The Bear S03E04 NTb, two
+  embedded English SubRip tracks, 34 min): the extraction job's 120 s clock
+  SIGKILLed ffmpeg, the `close` handler saw `code === null` (killed by signal),
+  read it as success and CACHED the partial VTT — the rest of the mount served
+  captions that stopped at 29:06 of 33:05. Fixes in `server/index.js`
+  `ensureSubtitleVtt`: a killed or already-failed job never caches; the clock
+  now measures STALL, not wall time — ffmpeg runs with `-progress pipe:2`
+  (`transcode.js spawnSubtitleExtract`) so a heartbeat arrives every ~0.5 s of
+  demuxed input, the job dies only after 90 s with no heartbeat/cue
+  (`EMBEDDED_SUB_STALL_MS`) or past an honest hard cap (≥10 min; an env-forced
+  timeout is still absolute); stderr keeps its tail so a late ffmpeg error is
+  not buried under progress lines. The route answers 504 "still preparing"
+  for BOTH startup and manual picks when the per-request wait runs out while
+  the job continues (a manual pick used to `await job` past its socket
+  budget and surface as a dropped connection). Measured on `:7799` while the
+  episode kept playing: 602 cues, last at 32:43, 167 s (background lane).
+  Client fallback to online subtitles on any built-in failure is unchanged.
+  Verification: `test/phase4.test.js` subtitle contracts.
 - **P14 - bounded cold-source hedge.** A pending top candidate gets one
   understudy after 800ms. Once a lower-ranked source is healthy, earlier ranks
   get 250ms final grace and no more candidates launch. Winner commit cancels
@@ -354,6 +373,13 @@ them when the table is reorganized:
     ±1-year searches on the core title) become `otherYears`, so the ±1 drift
     tolerance cannot pick `Odyssey.2025` for The Odyssey 2026 and a year-less
     name is rejected when the title is shared (`Nosferatu.1080p.BluRay.REMUX`).
+    Cost: ~220 ms once per title on a cold server (55 ms detail + 170 ms for
+    three parallel searches), then a per-process memo + the 24h proxy cache;
+    the detail page's `/api/search` warm-up pays it, so Play normally sees
+    0 ms. Tradeoff: TMDB duplicate/re-release entries can land in
+    `otherYears` (Nosferatu shows a 2025 entry), so a drift-year release loses
+    when the title is shared — exact-year copies are plentiful, wrong-film is
+    the costlier mistake.
   - Numerals are one word: Part One / Part 1 / Part I.
   - `Title.Year.` followed by ≥4 plain words is a broadcast named by year
     (55 `F1.2026.Grosser.Preis.von.Spanien…` rows in the F1 film), not an
@@ -361,8 +387,66 @@ them when the table is reorganized:
   - Scoring: a whole-season pack requested for one episode carries -80 so an
     equal-quality single episode starts instead (Adolescence and Task
     auto-picked the Vyndros S01 pack).
-  Known open: same title, same year, no IMDb tag on the indexer rows (three
-  "The Odyssey" 2026 films) — only a runtime check at mount can separate them.
+- **P6 - same title, same year: the probed runtime decides.** Three TMDB films
+  are called "The Odyssey" (2026) and the indexer rows carry no IMDb tag, so
+  the 86-minute knock-off mounted on Nolan's (173 min) page and saved its
+  progress there. `catalogFactsFor` now also carries the film's TMDB runtime;
+  `playbackPolicyFor` exposes `catalogTmdbId` + `wantedRuntimeMin`; play and
+  prepare arm `vf._runtimeCheck` (movies with a known runtime ≥40 min only);
+  both track-probe sites (`/api/remux` background probe and `/api/tracks`) run
+  `noteRuntimeCheck`. `pipeline.runtimeMismatch` flags a file under 70% or
+  over 160% of the catalog runtime (extended cuts ≤ ~135% pass). On a flag:
+  `recordRuntimeMismatch` writes a `wrong-runtime` verdict under
+  `<nzb>|tmdb:<id>` and `t:<title>|tmdb:<id>` keys (30-day per-entry TTL in
+  `VerdictCache`, title-scoped so the release stays valid on its own page);
+  scoring gives `wrong-runtime` -100000 (never auto-picked, a deliberate
+  Sources tap still works via `_manualWalkable`, a pinned resume of a wrong
+  film is dropped); `/api/tracks` and Sources rows carry `runtimeMismatch`;
+  the web player toasts once ("This file runs 86 min. The Odyssey runs 173 min
+  — it may be a different film. Open Sources to pick another.") and
+  `saveWatch` stops writing progress/watched/Trakt for that playback. No
+  mid-playback auto-switch: when every copy is the wrong film, flipping
+  through them is worse than one clear message.   Measured on `:7799`: Resume on
+  Nolan's page mounted `…NOT.The.Chris.Nolan.FILM…-BONE`, flagged 1.0 s after
+  start, both BONE copies then `wrong-runtime` in Sources. Episodes: the check
+  runs only when TMDB knows THIS episode's runtime
+  (`/tv/{id}/season/{s}/episode/{e}`, cached), never the show average, so an
+  80-minute pilot is not flagged. Same-name SHOWS at neighbouring first-air
+  years (`search/tv` plain + ±1) become `otherYears` too: Utopia (AU sitcom,
+  2014) played on Utopia (UK, 2013) through the ±1 remake-year slack until the
+  verifier learned the neighbour. Open: the Android
+  native player has no toast bridge, so on TV the guard/skip/chip apply but
+  the message is not shown during native playback. Verification:
+  `test/phase2.test.js` "probed runtime … remembered per title",
+  `test/phase4.test.js` wiring contract.
+- **P6 - same-name shows one year apart, and episode runtimes.** Live find
+  2026-09-20: Utopia (UK, 2013) played `Utopia (2014) S01E01 … NF` — the
+  Australian sitcom, one first-air year later, inside the ±1 remake-year slack.
+  `catalogFactsFor` now runs for TV too: same-name shows at the neighbouring
+  first-air years become `otherYears` (plain + ±1 `first_air_date_year`
+  searches), and `releaseMatches` rejects a pre-episode year that belongs to
+  another show unless the release also carries the wanted year. Year-less TV
+  names stay accepted (that is the scene norm). Episodes also get the runtime
+  check, but only from TMDB's PER-EPISODE runtime (`/tv/{id}/season/{s}/
+  episode/{e}`, cached) — a show-level average would flag every 80-minute
+  pilot. Residual: a year-less foreign-tagged copy of a same-length remake
+  (`Utopia.S01E01.A.nova.vida.2160p.AMZN…` = US 2020) still passes under a 4K
+  preference; nothing in the name or length separates it. Verification:
+  `test/phase2.test.js` (Utopia cases), `test/phase4.test.js` wiring.
+- **P4 - Search: section order, library fuzz, vote-less duplicates.** Live
+  find 2026-09-20 with typed searches for old/obscure titles: (1) the
+  TV-vs-Movies lead comparison ran on MAPPED cards that drop popularity/votes,
+  so it always tied and Movies always led — "twilight zone" buried the 1959
+  show under thirteen obscure films, "detectorists" the 2014 show under a
+  2026 placeholder; now compared on the raw TMDB rows. (2) Library/channel
+  rows render above everything and used the loose matcher: "utopia" listed
+  Tooba and holia, "patriot" Parisa/Pariya, "colombo" Kolombos/Columbus, and
+  "sever" matched "Hussain-s Ever-lasting" across a word boundary. Library
+  matching is now strict (≥2 edits keep the first letter, never 3 edits,
+  packed matches start at a word boundary); the "Did you mean" chip keeps the
+  loose matcher ("oddyse" → Odyssey). (3) An exact-title entry with <20 votes
+  (stale duplicate / placeholder) ranks 3000 below the rated one.
+  Verification: `test/search-close.test.js`, `test/phase4.test.js`.
 - **P6 - dead sibling copies are skipped mid-walk.** The ranked list is built
   before the walk; once one indexer's copy of a release dies with a release-wide
   verdict (first article gone, 7z/ISO), every other indexer's copy of that same

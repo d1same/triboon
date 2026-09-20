@@ -126,6 +126,95 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-20, v3.1.31 ship — built-in subtitle extraction (no truncated cache,
+stall-based watchdog), same-name/same-year film + episode runtime check,
+same-name shows at neighbouring years, search ranking (TV-vs-Movies lead,
+strict library matcher, vote-less duplicates, same-title tiebreaker):
+
+- Version contract: `package.json` 3.1.31; Android `versionName` 3.1.31 /
+  `versionCode` 376; Windows client package/Tauri/Cargo(.lock) 3.1.31.
+- Gate: `npm.cmd test` 719/719. `npm.cmd run verify:full` against
+  `http://127.0.0.1:7799` (repo code) + `emulator-5554` (never the Shield):
+  every gate PASS in one run — whitespace, JS syntax, inline script parse,
+  IPTV/P9, fast VOD/P14, CC/P11, full suite, isolated `/api/server`, household
+  VOD play/seek/resume/CC, household IPTV first-byte + retune, household
+  overlapping Play, Android lint + unit tests + debug build, Android ExoPlayer
+  stress smoke. "Automated verification passed."
+- Everything in the four "after v3.1.30" entries below shipped in this version.
+
+2026-09-20 (after v3.1.30), play session on `:7799`: 6 films + 6 shows, old and
+obscure, each measured for start, 20 s of playback, one seek:
+
+- All twelve played, zero stall events, seeks 0.75–1.5 s. Films: 12 Angry Men
+  1957 (hallowed BluRay, 5.1 s), Primer 2004 (OFT, 2.5 s), Coherence 2014
+  (HDMaNiAcS, 1.0 s warmed), The Man from Earth 2007 (AMIABLE, 7.1 s), Ikiru
+  1952 (OFT, 4.6 s), Brick 2006 (RARBG, 7.1 s). Shows: Columbo S01E01 (AMZN
+  DEADORBIT, 5.0 s), The Twilight Zone 1959 S01E01 (12.1 s, 26-min episode —
+  the 1959 series, confirmed by the API run picking "Where is Everybody",
+  verified), Detectorists (SbR BluRay, 6.6 s), Patriot 2015 (DBTV, 3.0 s),
+  Deadwood (playWEB, 4.0 s), Utopia — see below. Cold starts of 5–7 s are the
+  harness pressing Play ~1 s after the page opened (search fan-out ~3 s +
+  mount); a person who reads the page first gets the ~1 s warmed start.
+- BUG found + fixed: Utopia (UK, 2013) played `Utopia (2014) S01E01 … NF` —
+  the Australian sitcom (26 min), one first-air year inside the ±1 remake
+  slack. `catalogFactsFor` now learns same-name SHOWS at neighbouring years
+  (plain + ±1 `search/tv`) and the verifier rejects a release carrying such a
+  year before the episode; the runtime check now also runs for episodes when
+  TMDB knows THIS episode's runtime (never the show average). Replayed: UK
+  `utopia.s01e01.1080p.bluray-shortbrehd` (60 min). Residual: with a 4K
+  preference a year-less Portuguese-tagged copy of the US 2020 remake
+  (`Utopia.S01E01.A.nova.vida.2160p.AMZN`) is similar length and untagged, so
+  neither name nor runtime can separate it.
+- Typed search, 20 queries (old/obscure/misspelled). BUGS found + fixed:
+  (1) the TV-vs-Movies "which section first" comparison ran on the mapped
+  cards, which drop popularity/votes, so it always tied and Movies always led
+  — "twilight zone" buried the 1959 show under thirteen obscure films,
+  "detectorists" under a 2026 placeholder; (2) library rows used a matcher that
+  accepted three edits in a six-letter word, so "utopia" listed Tooba/holia,
+  "patriot" Parisa/Pariya, "colombo" Kolombos/Columbus above the real title,
+  and a packed-word substring matched across a word boundary ("sever" →
+  "Hussain-s Ever-lasting"); (3) vote-less exact-title duplicates (a second
+  "The Twilight Zone 1959" with 0 votes) ranked with the real entry. After:
+  utopia → Utopia 2013 first, twilight zone → 1959 first, detectorists →
+  2014 first, no junk library rows; "oddyse" → Odyssey still suggested.
+
+2026-09-20 (after v3.1.30), full-app sweep on `:7799` with an error/slow-request
+recorder attached (not shipped yet):
+
+- Ten rail sections, Search, detail-from-search, Back, Live TV guide: zero
+  console errors, zero failed requests, zero unhandled rejections. Slow calls
+  were all external (YouTube Music searches 2.1–3.8 s, audiobook availability
+  1.5 s, indexer fan-out ~2.5 s).
+- Search "the odyssey" showed three identical "The Odyssey 2026" cards. Cards
+  in a result list that share title+year now carry a tiebreaker under the
+  year (`2026 · 3.8K ratings` / `565 ratings` / `no ratings yet`).
+- Nolan's Odyssey page said Resume: the knock-off had been played from it and
+  saved as his progress. Built the runtime check (regression map P6): Resume
+  mounted `…NOT.The.Chris.Nolan.FILM…-BONE`, flagged 86 vs 173 min 1.0 s after
+  start, toast shown, both BONE copies `wrong-runtime` in Sources afterwards,
+  progress no longer written for a flagged playback. `npm.cmd test` 719/719.
+- Search typing gap noted, not a bug: TMDB returns films literally called
+  "Sever" for `sever`; Severance appears at `severan`. Local prefix matching
+  (`catalogSearchItems`) already covers titles in Home rows / watchlist.
+
+2026-09-20 (after v3.1.30), subtitles double-check on `:7799` (not shipped
+yet):
+
+- Online CC (Mayday 2026, resumed at 6:39): 4 English variants (OpenSubtitles,
+  release-matched playWEB/ETHEL + SDH), WebVTT 1,323 cues, first cue rendered in
+  the overlay in sync with the resumed position; after a seek to 71:24 the
+  track re-based (381 remaining cues) and stayed in sync; "Subtitles later"
+  moved every cue exactly +0.500 s and was undone. Episode CC (The Bear
+  S03E04): 4 variants all S03E04-scoped, NTb release match ranked 780.
+  `/api/tracks` lists eng E-AC-3 5.1 plus two embedded English SubRip tracks.
+- Built-in CC (admin opt-in, off on this box) — server path exercised directly:
+  BUG found and fixed. The 120 s extraction clock killed ffmpeg, the `close`
+  handler read the signal-kill as success and cached the partial VTT (545 cues
+  ending 29:06 of 33:05) for the rest of the mount. Now: never cache a killed
+  job; stall-based watchdog (`-progress` heartbeat, 90 s stall, ≥10 min hard
+  cap); manual picks get a pollable 504 instead of a dropped socket. Re-run
+  while playing: 602 cues, last 32:43, 167 s. `npm.cmd test` 718/718 after the fix.
+
 2026-09-20, v3.1.30 ship — source finding: obfuscated volumes, 480 breaker,
 walk skip, parallel probe, Play timeout, verifier audit (wrappers, movie vs TV,
 accents, alt titles, same-title years), EPIPE guard, detail warm-up order,

@@ -253,6 +253,10 @@ const HEALTH_SCORE = {
   // and served it again ("resume keeps picking the same bad source"). Softer than mount-failed —
   // a stall can also be the viewer's line, and the verdict-cache TTL forgives it in hours.
   'playback-failed': -800,
+  // The probed file runs a different length than THIS catalog title (86 min file on a 173 min
+  // film): a same-name different film. Never auto-play it for this title again; Sources still
+  // lists it with the reason so the viewer can override on purpose.
+  'wrong-runtime': -100000,
 };
 
 // Score one candidate against a user policy.

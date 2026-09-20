@@ -5724,10 +5724,10 @@ async function api(path, opts = {}) {
 
 /* ============ toast + backdrop ============ */
 let toastTimer = null;
-function toast(msg) {
+function toast(msg, ms = 3600) {
   $('toastMsg').textContent = msg; $('toast').classList.add('show');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => $('toast').classList.remove('show'), 3600);
+  toastTimer = setTimeout(() => $('toast').classList.remove('show'), Math.max(1500, Math.min(15000, Number(ms) || 3600)));
 }
 function hideToast() {
   if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
@@ -6420,6 +6420,7 @@ function mapTmdb(x) {
     title: x.title || x.name, year: (x.release_date || x.first_air_date || '').slice(0, 4),
     genre: type === 'tv' ? 'Series' : 'Movie',
     rating: x.vote_average ? x.vote_average.toFixed(1) : '—',
+    voteCount: Number(x.vote_count) || 0,
     originalLanguage: x.original_language || x.originalLanguage || '',
     originalTitle: x.original_title || x.original_name || x.originalTitle || '',
     overview: x.overview || '',
@@ -7850,6 +7851,35 @@ function closeCwMenu() {
   if (S.zone === 'grid') return focusGrid(S.gridIdx); // poster grids hand focus back too
   if (S.zone !== 'rail') focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0); // hand focus back to the card
 }
+// Year line under a poster. `subHint` is set only when a result list holds two titles with the
+// SAME name and year (three films called "The Odyssey" in 2026): the rating count is the one
+// thing in TMDB's search payload that tells the real film (3.8K ratings) from a knock-off (565)
+// or a placeholder (none yet). Everywhere else the line is just the year.
+function cardSubText(it) {
+  const base = it.year || it.genre || '';
+  return it.subHint ? `${base} · ${it.subHint}` : base;
+}
+function ratingsCountHint(n) {
+  const v = Number(n) || 0;
+  if (v <= 0) return 'no ratings yet';
+  if (v >= 10000) return `${Math.round(v / 1000)}K ratings`;
+  if (v >= 1000) return `${(v / 1000).toFixed(1)}K ratings`;
+  return `${v} ratings`;
+}
+function tagSameTitleYear(items) {
+  const groups = new Map();
+  for (const it of items || []) {
+    if (!it || !(it.title || it.name)) continue;
+    const key = `${String(it.title || it.name).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}|${it.year || ''}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(it);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    for (const it of group) it.subHint = ratingsCountHint(it.voteCount);
+  }
+  return items;
+}
 // One card for a catalog item — POSTER cover art (.pcard) or 16:9 backdrop (.card, e.g.
 // Continue Watching / trailers). onFocus wires it to whichever spatial-nav zone owns it.
 function makeCard(it, poster, onFocus) {
@@ -7859,7 +7889,7 @@ function makeCard(it, poster, onFocus) {
     c.innerHTML = `<div class="art">` +
       `${!tmdbAdult(it) && it.rating && it.rating !== '—' ? `<span class="badge">★ ${esc(it.rating)}</span>` : ''}` +
       `${!tmdbAdult(it) && isWatched(it) ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}</div>` +
-      `<div class="cap">${esc(it.title)}</div><div class="sub">${esc(it.year || it.genre || '')}</div>`;
+      `<div class="cap">${esc(it.title)}</div><div class="sub">${esc(cardSubText(it))}</div>`;
     bgLazy(c.querySelector('.art'), it.poster, it.backdrop, artFallback(it.key || it.title, 11));
   } else if (it.trailer) {
     c.className = 'card trailerCard focusable';
@@ -9340,6 +9370,7 @@ async function openSources(it) {
           (c.reasons || []).some((r) => String(r).startsWith('over-size-cap')) ? '<span class="chip warn">Over size cap</span>' : '',
           c.health === 'verified' ? '<span class="chip ok">Verified</span>' : '',
           c.health === 'blocked' || c.health === 'mount-failed' ? '<span class="chip warn">' + esc(c.health) + '</span>' : '',
+          c.health === 'wrong-runtime' ? `<span class="chip warn">Wrong length${c.runtimeMismatch && c.runtimeMismatch.fileMin ? ` · ${esc(String(c.runtimeMismatch.fileMin))} min` : ''}</span>` : '',
         ].join('');
         row.title = c.name || '';
         // Release names are PUBLISHED BY STRANGERS on usenet — the #1 XSS vector in this app.
@@ -13529,12 +13560,24 @@ async function fetchPlayerTracks(p, timeoutMs = 0) {
           if (!p.duration || t.duration > p.duration * 1.05) p.duration = t.duration;
           if (t.duration > (p._lastKnownDuration || 0)) p._lastKnownDuration = t.duration;
         }
+        noteRuntimeMismatch(p, t);
         scheduleEmbeddedSubtitlePrewarm(p);
         return t;
       })
       .finally(() => { if (p) p._tracksJob = null; });
   }
   return timeoutMs ? Promise.race([p._tracksJob, waitMs(timeoutMs, null)]) : p._tracksJob;
+}
+// The server compared the probed file length with the catalog film's runtime and they do not
+// fit (86-minute file on a 173-minute film = a same-name different film). Say so ONCE, plainly,
+// and point at Sources; the server already stopped auto-picking that release for this title.
+// No automatic switch mid-playback — when every copy is the wrong film, flipping would be worse.
+function noteRuntimeMismatch(p, t) {
+  const m = t && t.runtimeMismatch;
+  if (!m || !p || p._runtimeMismatchShown) return;
+  p._runtimeMismatchShown = true;
+  const title = (p.item && (p.item.title || p.item.name)) || m.title || 'this title';
+  toast(`This file runs ${m.fileMin} min. ${title} runs ${m.titleMin} min — it may be a different film. Open Sources to pick another.`, 9000);
 }
 async function prepareNativeStartKindForAudio(startKind) {
   const p = S.playing;
@@ -15566,6 +15609,10 @@ function takePlayedSeconds(p = S.playing) {
 async function saveWatch(final, opts = {}) {
   const p = S.playing; if (!p || !p.item) return;
   if (p.item.type === 'live' || String(p.item.key || '').startsWith('live:')) return; // live TV never lands in Continue Watching
+  // The server flagged this file as a different film (runtime does not fit the catalog title).
+  // Its minutes are not progress on THIS title: no resume point, no Continue Watching card, no
+  // watched mark, no Trakt scrobble — the knock-off "The Odyssey" used to save itself as Nolan's.
+  if (p._runtimeMismatchShown || (p.tracks && p.tracks.runtimeMismatch)) return;
   let pos = currentTime();
   const playedSeconds = takePlayedSeconds(p);
   if (!final && Math.abs(pos - p.lastSaved) < 5 && playedSeconds < 1) return;
@@ -25682,11 +25729,16 @@ function searchFuzzLimit(len) {
   if (len <= 5) return 1;
   return 2;
 }
-function searchCloseWord(a, b, singleToken) {
+// `strict` is for LIBRARY and channel rows, which render as real cards ABOVE the TMDB results: two
+// or more edits must keep the first letter and a third edit is never allowed, so "utopia" no
+// longer lists Tooba/holia, "patriot" Parisa/Pariya, "colombo" Kolombos/Columbus. The loose form
+// still powers the harmless "Did you mean …" chip ("oddyse" → Odyssey).
+function searchCloseWord(a, b, singleToken, strict = false) {
   if (searchWordEq(a, b)) return true;
   const d = searchEditDist(a, b);
+  if (strict && d >= 2 && a[0] !== b[0]) return false;
   if (d <= searchFuzzLimit(a.length) && d <= searchFuzzLimit(b.length)) return true;
-  if (singleToken && a.length >= 6 && d <= 3 && Math.abs(a.length - b.length) <= 2) return true;
+  if (!strict && singleToken && a.length >= 6 && d <= 3 && Math.abs(a.length - b.length) <= 2) return true;
   return false;
 }
 function searchWordAffix(a, b) {
@@ -25715,9 +25767,15 @@ function searchLibraryTitleMatch(query, title) {
   const need = searchContentWords(qw);
   if (!need.length || !tw.length) return false;
   if (need.every((w) => tw.some((t) => searchWordEq(w, t)))) return true;
+  // "spiderman" must still find "Spider Man", so the words are packed — but only a match that
+  // STARTS at a word boundary counts: "sever" sat inside "Hussain-s Ever-lasting" and dragged an
+  // unrelated library film above every real result.
   const packed = tw.join('');
-  if (need.every((w) => w.length >= 4 && packed.includes(w))) return true;
-  return searchWholeTitleClose(query, title);
+  const starts = new Set();
+  for (let off = 0, i = 0; i < tw.length; i++) { starts.add(off); off += tw[i].length; }
+  const packedHit = (w) => { let at = packed.indexOf(w); while (at >= 0) { if (starts.has(at)) return true; at = packed.indexOf(w, at + 1); } return false; };
+  if (need.every((w) => w.length >= 4 && packedHit(w))) return true;
+  return searchWholeTitleClose(query, title, true);
 }
 function searchSuggestRank(q, title) {
   if (!searchCloseTitle(q, title)) return 0;
@@ -25761,16 +25819,16 @@ function spellcheckQuery(q) {
   const next = out.join(' ');
   return searchWords(next).join('') === searchWords(q).join('') ? null : next;
 }
-function searchWholeTitleClose(query, title) {
+function searchWholeTitleClose(query, title, strict = false) {
   const qw = searchWords(query);
   const qk = qw.join('');
   if (qk.length < 4) return false;
   const single = searchContentWords(qw).length === 1;
-  if (searchCloseWord(qk, searchWords(title).join(''), single)) return true;
+  if (searchCloseWord(qk, searchWords(title).join(''), single, strict)) return true;
   const tw = searchWords(title);
   const noArt = tw[0] && ['the', 'a', 'an'].includes(tw[0]) ? tw.slice(1) : tw;
-  if (noArt.length && searchCloseWord(qk, noArt.join(''), single)) return true;
-  if (noArt.length >= 2 && noArt[0].length === 1 && searchCloseWord(qk, noArt.slice(1).join(''), single)) return true;
+  if (noArt.length && searchCloseWord(qk, noArt.join(''), single, strict)) return true;
+  if (noArt.length >= 2 && noArt[0].length === 1 && searchCloseWord(qk, noArt.slice(1).join(''), single, strict)) return true;
   return false;
 }
 let _catalogSearchMemo = { at: 0, items: null };
@@ -25972,7 +26030,13 @@ function tmdbSearchRank(x, q) {
   // "office" is The Office, not Office Romance. Extra words lose to the exact title.
   const qExact = searchContentWords(queryWords).join('');
   const tExact = searchTitleNoArt(title);
-  if (qExact && tExact === qExact) score += 25000;
+  if (qExact && tExact === qExact) {
+    score += 25000;
+    // An exact-title entry nobody has rated is a stale duplicate or a placeholder (a second
+    // "The Twilight Zone 1959" with 0 votes, "The Detectorists 2026"). Keep it exact, but below
+    // the rated entry of the same name.
+    if ((Number(x.vote_count) || 0) < 20) score -= 3000;
+  }
   return score;
 }
 async function searchLibrary(q) {
@@ -26018,8 +26082,15 @@ async function doSearch() {
       // Maturity applies to SEARCH too — a kids profile must not even see the cover art.
       const ok = (r.results || []).filter((x) => x.media_type !== 'person' && (x.poster_path || x.backdrop_path) && passesMaturity(x));
       const bySearchRank = (a, b) => tmdbSearchRank(b, q) - tmdbSearchRank(a, q);
-      let movies = ok.filter((x) => x.media_type === 'movie').sort(bySearchRank).map(mapTmdb);
-      let shows = ok.filter((x) => x.media_type === 'tv').sort(bySearchRank).map(mapTmdb);
+      const rawMovies = ok.filter((x) => x.media_type === 'movie').sort(bySearchRank);
+      const rawShows = ok.filter((x) => x.media_type === 'tv').sort(bySearchRank);
+      let movies = rawMovies.map(mapTmdb);
+      let shows = rawShows.map(mapTmdb);
+      // Which section leads is decided on the RAW TMDB rows: the mapped cards drop popularity and
+      // vote counts, so the two leads always tied and Movies always came first — "twilight zone"
+      // opened with thirteen obscure films above the 1959 show.
+      const movieLead = rawMovies[0] ? tmdbSearchRank(rawMovies[0], q) : -1;
+      const showLead = rawShows[0] ? tmdbSearchRank(rawShows[0], q) : -1;
       const closeHit = ok.some((x) => searchWholeTitleClose(q, x.title || x.name || ''));
       const serverHint = r.didYouMean || '';
       if (searchSuggestPicked || searchTitleResolved(q) || closeHit) showSearchSuggest(null);
@@ -26038,9 +26109,9 @@ async function doSearch() {
       }
       hydrateSearchLibrary(movies, lib);
       hydrateSearchLibrary(shows, lib);
+      tagSameTitleYear(movies);
+      tagSameTitleYear(shows);
       const libHits = lib.filter((it) => searchLibraryTitleMatch(q, it.title || it.name || ''));
-      const movieLead = movies[0] ? tmdbSearchRank(movies[0], q) : -1;
-      const showLead = shows[0] ? tmdbSearchRank(shows[0], q) : -1;
       const catalogSecs = showLead > movieLead
         ? [{ name: 'TV Shows', items: shows }, { name: 'Movies', items: movies }]
         : [{ name: 'Movies', items: movies }, { name: 'TV Shows', items: shows }];

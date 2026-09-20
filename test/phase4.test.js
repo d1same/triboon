@@ -368,14 +368,28 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.ok(serverForPolicy.includes('function parseCapsQuery(raw) {')
     && serverForPolicy.includes("caps: parseCapsQuery(ctx.url.searchParams.get('caps'))"),
     'Sources search should parse native device caps into the server scoring policy');
-  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.akaTitles = [\s\S]+policy\.otherYears = [\s\S]+policy\.mediaType = mediaType[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.wantedYear[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
+  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, runtimeMin, tmdbId, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.akaTitles = [\s\S]+policy\.otherYears = [\s\S]+policy\.mediaType = mediaType[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.wantedYear[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
     'Server playback policy should preserve media-type/language/year/aka/device hints for the scorer and verifier');
   // The restored-page year gap + same-title films: search/play/prepare pull catalog facts (year,
   // alternative titles, other same-title years) from TMDB before building the policy, so a
   // year-less `q=Mayday` still verifies as the 2026 film and Nosferatu 2023 cannot pass for 2024.
-  assert.ok(serverForPolicy.includes('async function catalogFactsFor(year, tmdbId, mediaType)'), 'server derives catalog facts from TMDB');
-  assert.match(serverForPolicy, /\.\.\.\(await catalogFactsFor\(ctx\.url\.searchParams\.get\('year'\), ctx\.url\.searchParams\.get\('tmdbId'\), ctx\.url\.searchParams\.get\('mediaType'\)\)\)/, 'Sources search carries the facts');
-  assert.strictEqual((serverForPolicy.match(/Object\.assign\(body, await catalogFactsFor\(body\.year, body\.tmdbId, body\.mediaType\)\);/g) || []).length, 2, 'play and prepare carry the facts');
+  assert.ok(serverForPolicy.includes('async function catalogFactsFor(year, tmdbId, mediaType, season, ep)'), 'server derives catalog facts from TMDB (episode runtime too)');
+  // Same-name different film: the probed duration is checked against the catalog runtime at BOTH
+  // probe sites, armed on play and prepare, surfaced on /api/tracks and in Sources, and the
+  // client says so once (no mid-playback switching).
+  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{[^}]*runtimeMin, tmdbId,[^}]*\}[\s\S]+policy\.catalogTmdbId = parseInt\(tmdbId, 10\);[\s\S]+policy\.wantedRuntimeMin = Number\(runtimeMin\);/, 'policy carries catalog id + runtime');
+  assert.strictEqual((serverForPolicy.match(/armRuntimeCheck\(vf, policy, candidate, body\);/g) || []).length, 2, 'play and prepare arm the runtime check');
+  assert.strictEqual((serverForPolicy.match(/(?<!function )noteRuntimeCheck\(vf\)/g) || []).length, 3, 'both probe sites (remux background probe + /api/tracks) run the check; a reused prepared mount checks at arm time');
+  assert.match(serverForPolicy, /if \(!runtimeMin \|\| !tmdbId \|\| !\(policy\.mediaType === 'movie' \|\| policy\.mediaType === 'tv'\)\) return;/, 'films, and episodes only with a per-episode TMDB runtime');
+  assert.match(serverForPolicy, /tmdb\.get\(`\/tv\/\$\{id\}\/season\/\$\{s\}\/episode\/\$\{e\}`\)/, 'episode runtime comes from the episode itself, never the show average');
+  assert.match(serverForPolicy, /pipeline\.recordRuntimeMismatch\(rc\.candidate, rc\.tmdbId, mismatch\);/, 'mismatch is remembered per title');
+  assert.match(serverForPolicy, /\.\.\.\(c\.runtimeMismatch \? \{ runtimeMismatch: c\.runtimeMismatch \} : \{\}\),/, 'Sources rows carry the reason');
+  assert.match(ui, /function noteRuntimeMismatch\(p, t\) \{[\s\S]+p\._runtimeMismatchShown = true;[\s\S]+it may be a different film\. Open Sources to pick another\./, 'the player says it once');
+  assert.match(ui, /c\.health === 'wrong-runtime' \? `<span class="chip warn">Wrong length/, 'Sources shows a Wrong length chip');
+  const scoringSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'scoring.js'), 'utf8');
+  assert.match(scoringSrc, /'wrong-runtime': -100000,/, 'wrong-runtime is never auto-picked');
+  assert.match(serverForPolicy, /\.\.\.\(await catalogFactsFor\(ctx\.url\.searchParams\.get\('year'\), ctx\.url\.searchParams\.get\('tmdbId'\), ctx\.url\.searchParams\.get\('mediaType'\), ctx\.url\.searchParams\.get\('season'\), ctx\.url\.searchParams\.get\('ep'\)\)\)/, 'Sources search carries the facts');
+  assert.strictEqual((serverForPolicy.match(/Object\.assign\(body, await catalogFactsFor\(body\.year, body\.tmdbId, body\.mediaType, body\.season, body\.ep\)\);/g) || []).length, 2, 'play and prepare carry the facts');
   assert.match(serverForPolicy, /policy\.preferredAudioLanguage = preferredAudio \|\| 'en'/,
     'Play defaults to English audio unless the owner saved a different language');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /if \(preferRank === 4\) policy\.exactResolutionRank = 4;/,
@@ -1267,9 +1281,9 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Trakt percent-only progress sends resumeFrac to warm the resume byte window');
   assert.match(ui, /id="chBar"><div class="chWrap"><input id="chSearch"[\s\S]+id="chClearBtn"/,
     'Live TV filter is wrapped so it can host a clear (X) button');
-  assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+searchCloseTitle\(q, title\)[\s\S]+score \+= 8000[\s\S]+score -= 1800[\s\S]+tExact === qExact\) score \+= 25000[\s\S]+sort\(bySearchRank\)/,
+  assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+searchCloseTitle\(q, title\)[\s\S]+score \+= 8000[\s\S]+score -= 1800[\s\S]+tExact === qExact\) \{\s+score \+= 25000;[\s\S]+sort\(bySearchRank\)/,
     'TMDB search should rank exact franchise/title-prefix matches above incidental phrase matches');
-  assert.match(ui, /const showLead = shows\[0\] \? tmdbSearchRank\(shows\[0\], q\) : -1;[\s\S]+showLead > movieLead/,
+  assert.match(ui, /const showLead = rawShows\[0\] \? tmdbSearchRank\(rawShows\[0\], q\) : -1;[\s\S]+showLead > movieLead/,
     'Search paints the stronger of TV/Movies first so Office shows The Office, not Office Romance');
   assert.match(ui, /function searchCloseTitle\(query, title\) \{[\s\S]+w\.length >= 3 && t\.startsWith\(w\)[\s\S]+function spellcheckQuery\(q\) \{[\s\S]+function paintInstantSearch\(q\)/,
     'a close misspelling like frekestein should still surface Frankenstein via Plex-style spellcheck');
@@ -2733,8 +2747,16 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'failed embedded subtitle tracks should be remembered briefly for auto-start fallback');
   assert.match(server, /if \(opts\.mode === 'manual'\) vf\._subFailures\.delete\(track\);[\s\S]+opts\.mode === 'startup' \? recentSubtitleFailure\(vf, track\) : null/,
     'manual built-in subtitle selection should still retry while startup may skip a recent failed track');
-  assert.match(server, /const waitMs = mode === 'startup' \? embeddedSubtitleStartupWaitMs\(\) : embeddedSubtitleTimeoutMs\(mode\);[\s\S]+const job = ensureSubtitleVtt\(vf, track, ctx\.claims\.uid, \{ mode \}\);[\s\S]+mode === 'startup' \? await waitForSubtitleStartup\(job, embeddedSubtitleStartupWaitMs\(\)\) : await job/,
-    'slow built-in subtitle extraction should keep the background job alive while startup returns quickly');
+  assert.match(server, /const waitMs = mode === 'startup' \? embeddedSubtitleStartupWaitMs\(\) : embeddedSubtitleTimeoutMs\(mode\);[\s\S]+const job = ensureSubtitleVtt\(vf, track, ctx\.claims\.uid, \{ mode \}\);[\s\S]+const vtt = await waitForSubtitleStartup\(job, waitMs\);/,
+    'slow built-in subtitle extraction should keep the background job alive while BOTH startup and manual picks return a pollable 504 instead of a dropped socket');
+  // The job clock measures STALL (ffmpeg -progress heartbeat / cues), not wall time: a background-
+  // priority read behind a busy player legitimately takes minutes for a 2 GB episode.
+  assert.match(server, /const EMBEDDED_SUB_STALL_MS = 90000;/, 'stall budget is explicit');
+  assert.match(server, /const hardCapMs = envForced \? timeoutMs : Math\.min\(20 \* 60000, Math\.max\(timeoutMs, 10 \* 60000\)\);[\s\S]+if \(now - lastActivity > EMBEDDED_SUB_STALL_MS\) reason = [\s\S]+else if \(now - startedAt > hardCapMs\) reason = [\s\S]+ff\.stdout\.on\('data', \(d\) => \{ lastActivity = Date\.now\(\); chunks\.push\(d\); \}\);[\s\S]+ff\.stderr\.on\('data', \(d\) => \{ lastActivity = Date\.now\(\); err = \(err \+ d\)\.slice\(-4000\); \}\);/,
+    'extraction is killed on stall or an honest hard cap, and every stdout/stderr byte counts as progress');
+  const transcodeSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'transcode.js'), 'utf8');
+  assert.match(transcodeSrc, /function spawnSubtitleExtract\(streamUrl, subTrack\) \{[\s\S]+'-nostats', '-progress', 'pipe:2',[\s\S]+'-map', `0:s:\$\{subTrack\}`, '-f', 'webvtt', 'pipe:1'/,
+    'ffmpeg emits a -progress heartbeat on stderr so silent dialogue-free stretches are not mistaken for a stall');
   assert.match(server, /function extendSubtitleResponseTimeout\(ctx, ms\) \{[\s\S]+ctx\.req\.setTimeout\(timeoutMs\)[\s\S]+ctx\.res\.setTimeout\(timeoutMs\)[\s\S]+socket\.setTimeout\(timeoutMs\)[\s\S]+ctx\.res\.once\('finish', restore\);[\s\S]+ctx\.res\.once\('close', restore\);/,
     'subtitle route timeout extension should restore the normal socket timeout after the response closes');
   assert.match(server, /priority=background/,
@@ -4595,6 +4617,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native subtitle menu should route the show-all local languages action back to the web player state');
   assert.match(server, /embeddedSubtitleTimeoutMs\(mode = '', vf = null\)[\s\S]+embedded subtitle extraction timed out after/,
     'embedded subtitle extraction should fail cleanly instead of hanging indefinitely on streamed mounts');
+  // Live find (2026-09-20): the timeout SIGKILL closed ffmpeg with code null + signal, which read as
+  // success and CACHED the partial VTT — captions then stopped mid-episode for the rest of the mount.
+  assert.match(server, /ff\.on\('close', \(codeNum, signal\) => \{[\s\S]{0,600}if \(done \|\| signal\) return fail\([\s\S]+vf\._subCache\.set\(track, vtt\)/,
+    'a killed or already-failed extraction must never cache its partial VTT');
   assert.match(server, /function episodeSubtitleQuery\(query, season, ep\)[\s\S]+S\$\{String\(s\)\.padStart\(2, '0'\)\}E\$\{String\(e\)\.padStart\(2, '0'\)\}/,
     'server subtitle lookup should be able to add episode identity even when source filenames are opaque');
   assert.match(server, /vf\._q = body\.q;[\s\S]+vf\._subQuery = episodeSubtitleQuery\(body\.q, body\.season, body\.ep\);/,

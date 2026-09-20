@@ -538,8 +538,11 @@ function makeThumb(file, out, atSeconds = 120) {
 function spawnSubtitleExtract(streamUrl, subTrack) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
+  // -progress on stderr: text subtitles are sparse, so stdout can stay silent for minutes of
+  // dialogue-free video. The progress ticks (every ~0.5s of demuxed input) are the heartbeat the
+  // extraction job uses to tell "still reading the file behind playback" from "stalled".
   return spawn(ff.path, [
-    '-hide_banner', '-loglevel', 'error',
+    '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:2',
     '-i', streamUrl,
     '-map', `0:s:${subTrack}`, '-f', 'webvtt', 'pipe:1',
   ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });

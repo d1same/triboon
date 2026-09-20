@@ -283,6 +283,15 @@ test('title verification: short titles match only releases that ARE that title',
   assert.ok(releaseMatches('The.Last.of.Us.2025.S02E01.MULTi.VFi.2160p.UHD.BluRay.REMUx.HEVC-GRP', tlou));
   const office = parseWantedTitle('the office s02e01'); office.year = 2005;
   assert.ok(!releaseMatches('The.Office.2024.S02E01.1080p.AMZN.WEB-DL-GRP', office), '2024 cannot be season 2 of a 2005 show');
+  // Live find 2026-09-20: Utopia (UK, 2013) played "Utopia (2014) S01E01 … NF" — the Australian
+  // sitcom, one first-air year later, inside the ±1 remake-year slack. TMDB knows the neighbour.
+  const utopia = parseWantedTitle('utopia s01e01'); utopia.year = 2013; utopia.otherYears = [2014, 2020];
+  assert.ok(!releaseMatches('Utopia (2014) S01E01 (1080p NF WEB-DL H264 SDR DDP 2.0 English - HONE)', utopia), 'the other show at the neighbouring year is rejected');
+  assert.ok(!releaseMatches('Utopia.2020.S01E01.1080p.AMZN.WEB-DL-NTb', utopia), 'the US remake is rejected as before');
+  assert.ok(releaseMatches('Utopia.2013.S01E01.1080p.BluRay.x264-SHORTBREHD', utopia));
+  assert.ok(releaseMatches('Utopia.S01E01.1080p.BluRay.x264-SHORTBREHD', utopia), 'year-less TV names stay accepted (that is the scene norm)');
+  const utopiaNoFacts = parseWantedTitle('utopia s01e01'); utopiaNoFacts.year = 2013;
+  assert.ok(releaseMatches('Utopia (2014) S01E01 (1080p NF WEB-DL H264 SDR DDP 2.0 English - HONE)', utopiaNoFacts), 'without TMDB facts the ±1 drift tolerance still applies');
 
   // Spin-off trap: the structural-boundary rule keeps longer-titled shows out.
   const twd = parseWantedTitle('the walking dead s01e01');
@@ -2713,6 +2722,80 @@ test('pipeline: a year-less film request (restored page) keeps the same-name TV 
     assert.deepStrictEqual(show.candidates.map((c) => c.name), ['Mayday.S26E10.Mixed.Measures.2160p.CRAV.WEB-DL.DDP5.1.H.265-Kitsune']);
   } finally {
     server.close();
+  }
+});
+
+test('pipeline: a probed runtime that does not fit the film is remembered per title (same-name different film)', async () => {
+  // Three TMDB films are called "The Odyssey" (2026); the indexer rows carry no IMDb tag, so the
+  // 86-minute knock-off mounted on Nolan's page (173 min) and even saved its progress there.
+  const { runtimeMismatch, runtimeVerdictKeys, RUNTIME_VERDICT_TTL_MS } = require('../server/pipeline');
+  const { VerdictCache, Store } = require('../server/store');
+  // Tolerance: knock-offs far shorter (or longer) fail; extended cuts (≤ ~35% longer) and shorts pass.
+  assert.deepStrictEqual(runtimeMismatch(86 * 60, 173), { fileMin: 86, titleMin: 173, ratio: 0.5 });
+  assert.ok(runtimeMismatch(173 * 60, 86), 'the real film mounted on the knock-off page is flagged too');
+  assert.strictEqual(runtimeMismatch(228 * 60, 178), null, 'LOTR Extended (228) fits the 178-min catalog runtime');
+  assert.strictEqual(runtimeMismatch(20 * 60, 25), null, 'shorts (<40 min) are never judged');
+  assert.strictEqual(runtimeMismatch(5000, 0), null, 'unknown catalog runtime is never judged');
+  assert.deepStrictEqual(runtimeVerdictKeys({ nzbUrl: 'http://x/odyssey', name: 'The.Odyssey.2026.1080p.AMZN.WEB-DL-Kitsune' }, 0), [], 'no catalog id → no runtime verdict');
+
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(rssFor([
+      { name: 'The.Odyssey.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-Kitsune', url: 'http://x/kitsune-a', size: 5.1e9 },
+      { name: 'The Odyssey 2026 1080p AMZN WEB-DL DDP5 1 H 264-Kitsune', url: 'http://x/kitsune-b', size: 5.3e9 },
+      { name: 'The.Odyssey.2026.720p.TUBI.WEB-DL.AAC2.0-NOtLAN', url: 'http://x/notlan', size: 1.5e9 },
+    ]));
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-runtime-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const nolan = { mediaType: 'movie', wantedYear: 2026, catalogTmdbId: 1368337 };
+    const knockoff = { mediaType: 'movie', wantedYear: 2026, catalogTmdbId: 1698863 };
+    const before = await pipeline.search({ q: 'The Odyssey 2026' }, nolan);
+    assert.strictEqual(before.candidates[0].name, 'The.Odyssey.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-Kitsune');
+    assert.ok(before.candidates.every((c) => c.score > -5000), 'nothing known yet: every copy is auto-playable');
+
+    // The mount's probe said 86 minutes on the 173-minute film.
+    assert.ok(pipeline.recordRuntimeMismatch(before.candidates[0], 1368337, runtimeMismatch(86 * 60, 173)));
+    const after = await pipeline.search({ q: 'The Odyssey 2026' }, nolan);
+    const kitsune = after.candidates.filter((c) => /Kitsune/.test(c.name));
+    assert.strictEqual(kitsune.length, 2);
+    for (const c of kitsune) {
+      assert.strictEqual(c.health, 'wrong-runtime', `sibling indexer copy shares the title-level verdict: ${c.name}`);
+      assert.ok(c.score < -5000, 'never auto-picked again for this title');
+      assert.deepStrictEqual(c.runtimeMismatch, { fileMin: 86, titleMin: 173 }, 'Sources can show why');
+      assert.ok(pipeline._manualWalkable(c), 'a deliberate tap in Sources may still override');
+    }
+    assert.strictEqual(after.candidates[0].name, 'The.Odyssey.2026.720p.TUBI.WEB-DL.AAC2.0-NOtLAN', 'Auto moves on to the next copy');
+    assert.strictEqual(pipeline._playableCandidates(after.candidates).length, 1);
+    // The pinned resume of the knock-off is not owed on this title any more.
+    const pinned = pipeline._playableCandidates(after.candidates, { pinnedResume: true, pickKey: kitsune[0].pickKey });
+    assert.ok(!pinned.some((c) => c.pickKey === kitsune[0].pickKey), 'wrong-film pin is dropped from the resume race');
+
+    // Same NZBs on the knock-off's OWN page are perfectly fine.
+    const own = await pipeline.search({ q: 'The Odyssey 2026' }, knockoff);
+    assert.ok(own.candidates.filter((c) => /Kitsune/.test(c.name)).every((c) => c.health === undefined && c.score > -5000),
+      'the verdict is scoped to the catalog title it was measured against');
+
+    // The memory outlives the 6h health TTL (the file will not change).
+    const key = runtimeVerdictKeys(before.candidates[0], 1368337)[0];
+    const raw = store.read('verdicts', {})[key];
+    assert.strictEqual(raw.verdict, 'wrong-runtime');
+    assert.strictEqual(raw.ttlMs, RUNTIME_VERDICT_TTL_MS);
+    const later = new VerdictCache(store);
+    later._now = () => Date.now() + 7 * 24 * 3600 * 1000;
+    assert.ok(later.get(key), 'still remembered a week later');
+    later._now = () => Date.now() + 31 * 24 * 3600 * 1000;
+    assert.strictEqual(later.get(key), null, 'forgotten after 30 days');
+  } finally {
+    server.close();
+    store.close();
   }
 });
 

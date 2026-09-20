@@ -469,6 +469,12 @@ function releaseMatches(name, wanted) {
         const split = norm.split(/\b(?:s\d{1,2}\s?e\d{1,3}|\d{1,2}x\d{1,3})\b/);
         const beforeEp = String(split[0] || '');
         const remakeYears = [...beforeEp.matchAll(/\b(19|20)\d{2}\b/g)].map((m) => +m[0]);
+        // Another SHOW with this exact name started at that neighbouring year (Utopia AU 2014 next
+        // to Utopia UK 2013): the ±1 slack below must not hand the other show's episodes over.
+        if (remakeYears.length && wanted.otherYears && wanted.otherYears.length
+            && !remakeYears.includes(wanted.year) && remakeYears.some((y) => wanted.otherYears.includes(y))) {
+          return false;
+        }
         if (remakeYears.length && !remakeYears.some((y) => Math.abs(y - wanted.year) <= 1)) {
           // A season's own air year (The.Last.of.Us.2025.S02E01 for the 2023 show) is fine when it
           // fits the season number; The.Office.2024.S01E01 for the 2005 show is a remake and is not.
@@ -1228,8 +1234,35 @@ function applyNzbFingerprintFields(candidate, xml) {
   } catch {}
 }
 
-function lookupVerdict(verdicts, candidate) {
+// Runtime verdicts are scoped to the CATALOG title: the 86-minute "The Odyssey" is a wrong film
+// on Nolan's page and the right film on its own page, so the same NZB carries the verdict only
+// under `…|tmdb:<id>` keys. Sibling indexer copies of the release share the title-level key.
+const RUNTIME_VERDICT_TTL_MS = 30 * 24 * 3600 * 1000;
+function runtimeVerdictKeys(candidate, tmdbId) {
+  const id = parseInt(tmdbId, 10);
+  if (!candidate || !id) return [];
+  return [
+    `${nzbVerdictKey(candidate.nzbUrl)}|tmdb:${id}`,
+    `t:${normTitle(candidate.name)}|tmdb:${id}`,
+  ];
+}
+// Does the probed duration fit the catalog runtime? Knock-offs run far shorter than the real film
+// (86 vs 173); extended/director's cuts run up to ~35% longer and must stay accepted, so the
+// long side is generous. Shorts and unknown runtimes are never judged.
+function runtimeMismatch(fileSeconds, titleMinutes) {
+  const fileMin = Number(fileSeconds) / 60;
+  const titleMin = Number(titleMinutes);
+  if (!Number.isFinite(fileMin) || !Number.isFinite(titleMin) || fileMin <= 0 || titleMin < 40) return null;
+  const ratio = fileMin / titleMin;
+  if (ratio >= 0.7 && ratio <= 1.6) return null;
+  return { fileMin: Math.round(fileMin), titleMin: Math.round(titleMin), ratio: +ratio.toFixed(2) };
+}
+function lookupVerdict(verdicts, candidate, catalogTmdbId) {
   if (!verdicts || !candidate) return null;
+  for (const k of runtimeVerdictKeys(candidate, catalogTmdbId)) {
+    const v = verdicts.get(k);
+    if (v) return v;
+  }
   return verdicts.get(nzbVerdictKey(candidate.nzbUrl))
     || verdicts.get('t:' + normTitle(candidate.name))
     || (releaseFingerprint(candidate) && verdicts.get(releaseFingerprint(candidate)))
@@ -2301,7 +2334,7 @@ class Pipeline {
       const extra = policy.akaTitles.map((a) => parseWantedTitle(a).words).filter((w) => w && w.length);
       if (extra.length) wanted.akaWords = (wanted.akaWords || []).concat(extra);
     }
-    if (wanted && wanted.s === null && Array.isArray(policy.otherYears) && policy.otherYears.length) {
+    if (wanted && Array.isArray(policy.otherYears) && policy.otherYears.length) {
       wanted.otherYears = policy.otherYears.map(Number).filter((y) => Number.isInteger(y) && y !== wanted.year);
     }
     // TV episode context for scoring: a whole-season PACK must not be size-cap-disqualified — only ONE
@@ -2381,14 +2414,27 @@ class Pipeline {
       }
     }
     const enriched = results.map((r) => {
-      const v = lookupVerdict(this.verdicts, r);
+      const v = lookupVerdict(this.verdicts, r, policy.catalogTmdbId);
       return {
         ...r,
         streamClass: cachedStreamClass(v),
         health: v ? (v.verdict === 'ok' ? 'verified' : v.verdict) : undefined,
+        ...(v && v.verdict === 'wrong-runtime' && v.detail ? { runtimeMismatch: { fileMin: v.detail.fileMin, titleMin: v.detail.titleMin } } : {}),
       };
     });
     return { candidates: rankReleases(enriched, policy).map((c) => ({ ...c, pickKey: candidateKey(c) })), errors };
+  }
+
+  // The mounted file's probed duration does not fit this catalog title's runtime: remember it
+  // for THIS title (30 days — the file will not change), so the next Play/Sources for the title
+  // skips every copy of that release, while the release stays perfectly valid for its own title.
+  recordRuntimeMismatch(candidate, tmdbId, mismatch) {
+    if (!candidate || !mismatch) return false;
+    const keys = runtimeVerdictKeys(candidate, tmdbId);
+    if (!keys.length) return false;
+    for (const k of keys) this.verdicts.set(k, 'wrong-runtime', { ...mismatch, name: String(candidate.name || '').slice(0, 160) }, { ttlMs: RUNTIME_VERDICT_TTL_MS });
+    this.metrics.runtimeMismatches = (this.metrics.runtimeMismatches || 0) + 1;
+    return true;
   }
 
   // Audiobook search: same indexer fan-out + verdict-cache + NZB machinery as video, but with the
@@ -3042,7 +3088,9 @@ class Pipeline {
     if (params.pinnedResume) {
       // Last watched file is owed even when Auto would skip it (over-size-cap remux).
       // Only a dead pin (blocked / missing / ISO) falls back to the ranked race.
-      const pinOk = picked && !this._hardDeadCandidate(picked)
+      // A pin that turned out to be a DIFFERENT film (runtime verdict) is not owed either: the
+      // knock-off "The Odyssey" resumed forever on Nolan's page until the ranked race got a turn.
+      const pinOk = picked && !this._hardDeadCandidate(picked) && picked.health !== 'wrong-runtime'
         && (this._manualWalkable(picked) || autoPlayable.some((c) => c.pickKey === picked.pickKey));
       if (!pinOk) return autoPlayable;
       return [picked, ...autoPlayable.filter((c) => c.pickKey !== picked.pickKey)];
@@ -3075,6 +3123,9 @@ class Pipeline {
     // 1080p stays out of a 4K tap walk. Size-cap is Auto-only — the tap overrides it.
     if (reasons.some((r) => /^(over-cap |not-requested-resolution)/i.test(r))) return false;
     if (reasons.some((r) => r.startsWith('over-size-cap'))) return true;
+    // A deliberate tap on a "wrong length" row in Sources is the viewer overriding the runtime
+    // verdict on purpose (maybe TMDB's runtime is the odd one). Auto never picks it; a tap may.
+    if (c.health === 'wrong-runtime') return true;
     return (Number(c.score) || 0) > -50000;
   }
 
@@ -3500,7 +3551,7 @@ module.exports = {
   Pipeline, GATE_MS, STARTUP_SLOTS, PLAY_RACE_WIDTH, StartupGate,
   parseWantedTitle, releaseMatches, catalogIdentityMatches, releaseQualifies, shortTitleQuery, foldDiacritics,
   aliasSearchQueries, yearlessSearchQuery, qualitySearchQuery, seasonPackSearchQuery, widenSearchQueries, widenSearchJobs,
-  candidateKey, nzbVerdictKey,
+  candidateKey, nzbVerdictKey, runtimeVerdictKeys, runtimeMismatch, lookupVerdict, RUNTIME_VERDICT_TTL_MS,
   releaseFingerprint, applyNzbFingerprintFields,
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
   isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, mountNeedsUsenetShare, ACTIVE_PLAYBACK_GRACE_MS,
