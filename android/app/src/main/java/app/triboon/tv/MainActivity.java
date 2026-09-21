@@ -4217,6 +4217,8 @@ public class MainActivity extends Activity {
         b.setTag(iconRes);
         b.setPadding(dp(primary ? 9 : 8), dp(primary ? 9 : 8), dp(primary ? 9 : 8), dp(primary ? 9 : 8));
         b.setScaleType(ImageButton.ScaleType.CENTER_INSIDE);
+        b.setCropToPadding(false);
+        b.setClipToOutline(false);
         b.setBackground(nativeButtonBg(false, primary));
         setNativeButtonIcon(b, iconRes, primary, false);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(

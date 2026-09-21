@@ -126,6 +126,24 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-21, v3.2.0 ship — Android Next icon no longer clipped, phone menu
+button hides while video/trailer/audiobook/now-playing is open:
+
+- Version contract: `package.json` 3.2.0; Android `versionName` 3.2.0 /
+  `versionCode` 377; Windows client package/Tauri/Cargo(.lock) 3.2.0.
+- Gate: `npm.cmd test` 719/719. `npm.cmd run verify:full` against
+  `http://127.0.0.1:7799` (repo code) + `emulator-5554` (never the Shield):
+  every gate PASS in one run — whitespace, JS syntax, inline script parse,
+  IPTV/P9, fast VOD/P14, CC/P11, full suite, isolated `/api/server` 3.2.0,
+  household VOD play/seek/resume/CC, household IPTV first-byte + retune,
+  household overlapping Play, Android lint + unit tests + debug build,
+  Android ExoPlayer stress smoke. "Automated verification passed."
+- Live player QA the same day: browser :7799 Utopia play/pause/seek/CC +
+  Live A&E; emulator native ExoPlayer pause/seek/Next S02E01→S02E02 + Live
+  A&E; Windows libmpv The Boys 4K pause/seek/CC + Live A&E. Phone
+  mobileShell: home, title Play gutter, player OSD; burger no longer sits
+  on the video.
+
 2026-09-20, v3.1.31 ship — built-in subtitle extraction (no truncated cache,
 stall-based watchdog), same-name/same-year film + episode runtime check,
 same-name shows at neighbouring years, search ranking (TV-vs-Movies lead,

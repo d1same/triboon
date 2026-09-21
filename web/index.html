@@ -3685,7 +3685,10 @@ body.musicPaused .mEq i{animation-play-state:paused}
 #musicNow{position:fixed;inset:0;z-index:70;display:none;flex-direction:column;align-items:center;background:var(--ink);overflow:hidden}
 #musicNow.open{display:flex}
 /* Phone burger lives at the same corner as Back. Hide it while this page is open. */
-body:has(#musicNow.open) #burger{display:none!important}
+body:has(#musicNow.open) #burger,
+body:has(#player.open) #burger,
+body:has(#trailer.open) #burger,
+body:has(#abPlayer.open) #burger{display:none!important}
 #musicNow .mnBg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(60px) brightness(.4);transform:scale(1.18);opacity:.7}
 #musicNow.open .mnBg{animation:mnDrift 28s ease-in-out infinite alternate}
 #musicNow::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,8,18,.5),rgba(11,8,18,.85))}
@@ -5406,7 +5409,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
           <button class="cbtn big focusable" id="playPause" aria-label="Play / pause"><svg id="ppIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
           <button class="cbtn focusable liveOnly" id="liveBtn" title="Go to live"><span class="liveBtnDot"></span><span class="liveBtnTxt">LIVE</span></button>
           <button class="cbtn focusable" id="fwd30" title="Forward 30s" aria-label="Forward 30 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
-          <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg></button>
+          <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(12 12) scale(0.78) translate(-12 -12)"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></g></svg></button>
         </div>
         <div class="ctlGroup ctlRight">
           <button class="cbtn focusable" id="favBtn" title="Favorite channel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.9L12 3z"/></svg></button>

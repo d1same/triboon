@@ -5391,6 +5391,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'subtitle preference should not prevent Android native direct play; CC can hand off on demand');
   assert.match(android, /ImageButton nativeButton\(int iconRes, String label, boolean primary\)/,
     'native controls should use true image buttons so icons stay centered and unclipped');
+  assert.match(android, /b\.setCropToPadding\(false\);[\s\S]+b\.setClipToOutline\(false\);/,
+    'native player image buttons must not clip the skip-next bar to the circular outline');
   assert.match(android, /lp\.rightMargin = dp\(8\);/,
     'native player buttons should keep a small gap so icons do not sit on top of each other');
   assert.match(android, /nativeButton\(R\.drawable\.ic_player_pause, "Pause", true\)/,
@@ -5537,6 +5539,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android forward icon should use the Lucide rotate-cw shape');
   assert.match(nextIcon, /M5,4 L15,12 L5,20 Z[\s\S]+M19,5 V19/,
     'Android next episode icon should use the Lucide skip-forward shape');
+  assert.match(nextIcon, /android:pivotX="12"[\s\S]+android:scaleX="0\.78"/,
+    'Android next episode icon should scale in so the trailing bar is not clipped by the TV circle');
+  assert.match(ui, /id="nextEpBtn"[\s\S]+scale\(0\.78\)[\s\S]+15 12 5 20/,
+    'web next episode icon should use the same inset skip-forward shape');
   assert.match(ui, /data-nav="home"[\s\S]+M15 21v-8[\s\S]+M3 10a2 2/,
     'rail Home should use the Lucide house icon');
   assert.match(ui, /data-nav="discover"[\s\S]+M5 12s2\.5-5 7-5[\s\S]+circle cx="12" cy="12"/,
@@ -6961,8 +6967,8 @@ test('Artwork regression: Music and Audiobook covers use shared sanitized fallba
     'like/lyrics/radio/queue labels must stay full words instead of shrinking to one letter');
   assert.match(ui, /\.mnExtra\{display:flex;align-items:center;justify-content:flex-start;gap:10px;margin-top:18px;flex-wrap:wrap\}/,
     'like/lyrics/radio/queue keep their labels and wrap instead of shrinking');
-  assert.match(ui, /body:has\(#musicNow\.open\) #burger\{display:none!important\}/,
-    'phone menu button hides while now-playing is open');
+  assert.match(ui, /body:has\(#musicNow\.open\) #burger,\s*body:has\(#player\.open\) #burger,\s*body:has\(#trailer\.open\) #burger,\s*body:has\(#abPlayer\.open\) #burger\{display:none!important\}/,
+    'phone menu button hides while now-playing, video, trailer, or audiobook player is open');
   assert.match(ui, /@media \(max-width:900px\)\{[\s\S]*\.mnExtra\{display:grid;grid-template-columns:1fr 1fr/,
     'phone now-playing actions sit in a two-by-two grid');
   assert.match(music, /function renderMusicQueue\(\)[\s\S]{0,500}artBackgroundHtml\(t\.thumb, artFallback\('music-queue:/,
