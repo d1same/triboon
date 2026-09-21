@@ -62,6 +62,8 @@ graphify-out/
 .codex-remote-attachments/
 .hindsight/
 .cursor/mcp.json
+# Local-only Cursor rule with house device addresses. Keep on this PC only.
+.cursor/rules/shield-push.mdc
 
 # Windows native-client build products. The checksum-verified DLL is injected by CI/local builds;
 # generated capability schemas and compiled binaries must never be committed.

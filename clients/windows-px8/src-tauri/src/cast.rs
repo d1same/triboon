@@ -252,7 +252,7 @@ fn local_private_ipv4s() -> Vec<Ipv4Addr> {
     for dest in [
         "8.8.8.8:80",
         "1.1.1.1:80",
-        "10.1.20.1:9",
+        "10.0.1.1:9",
         "10.0.0.1:9",
         "192.168.1.1:9",
         "192.168.0.1:9",
@@ -278,7 +278,7 @@ fn local_private_ipv4s() -> Vec<Ipv4Addr> {
 }
 
 fn skip_cast_scan_network(ip: Ipv4Addr) -> bool {
-    // Hyper-V / WSL 172.x sweeps are slow and never have the living-room TVs.
+    // Hyper-V / WSL 172.x sweeps are slow and never have LAN TVs.
     ip.octets()[0] == 172
 }
 
@@ -1139,47 +1139,47 @@ mod tests {
         let url = media_url_for_receiver(
             "http://127.0.0.1:7777/api/stream/abc?t=secret",
             "http://127.0.0.1:7777",
-            "http://10.1.20.120:7777",
+            "http://10.0.0.20:7777",
         )
         .unwrap();
-        assert_eq!(url, "http://10.1.20.120:7777/api/stream/abc?t=secret");
+        assert_eq!(url, "http://10.0.0.20:7777/api/stream/abc?t=secret");
     }
 
     #[test]
     fn cast_prefers_remux_over_the_raw_file() {
         let (url, time) = preferred_cast_source(
-            "http://10.1.20.120:7777/api/stream/abc?t=secret",
-            "http://10.1.20.120:7777/api/remux/abc?t=secret",
+            "http://10.0.0.20:7777/api/stream/abc?t=secret",
+            "http://10.0.0.20:7777/api/remux/abc?t=secret",
             "",
             669.0,
         );
-        assert_eq!(url, "http://10.1.20.120:7777/api/remux/abc?t=secret&start=669.000");
+        assert_eq!(url, "http://10.0.0.20:7777/api/remux/abc?t=secret&start=669.000");
         assert_eq!(time, 0.0);
     }
 
     #[test]
     fn house_server_urls_are_left_alone() {
         let url = media_url_for_receiver(
-            "http://10.1.20.120:7777/api/remux/abc?t=secret",
-            "http://10.1.20.120:7777",
+            "http://10.0.0.20:7777/api/remux/abc?t=secret",
+            "http://10.0.0.20:7777",
             "",
         )
         .unwrap();
-        assert_eq!(url, "http://10.1.20.120:7777/api/remux/abc?t=secret");
+        assert_eq!(url, "http://10.0.0.20:7777/api/remux/abc?t=secret");
     }
 
     #[test]
     fn foreign_urls_never_go_to_the_tv() {
         assert!(media_url_for_receiver(
             "http://evil.example/api/stream/abc?t=secret",
-            "http://10.1.20.120:7777",
-            "http://10.1.20.120:7777",
+            "http://10.0.0.20:7777",
+            "http://10.0.0.20:7777",
         )
         .is_err());
         assert!(media_url_for_receiver(
-            "http://10.1.20.120:7777/api/settings",
-            "http://10.1.20.120:7777",
-            "http://10.1.20.120:7777",
+            "http://10.0.0.20:7777/api/settings",
+            "http://10.0.0.20:7777",
+            "http://10.0.0.20:7777",
         )
         .is_err());
     }
@@ -1187,10 +1187,10 @@ mod tests {
     #[test]
     fn private_cast_hosts_are_lan_only() {
         assert!(is_private_cast_host("192.168.1.40"));
-        assert!(is_private_cast_host("10.1.20.11"));
+        assert!(is_private_cast_host("10.0.0.11"));
         assert!(!is_private_cast_host("127.0.0.1"));
         assert!(!is_private_cast_host("8.8.8.8"));
-        assert!(!is_private_cast_host("living-room.local"));
+        assert!(!is_private_cast_host("test-tv.local"));
     }
 
     #[test]
@@ -1216,22 +1216,22 @@ mod tests {
 
     #[test]
     fn mdns_srv_without_ptr_still_makes_a_device() {
-        // One packet with SRV + A only — no PTR. Living-room stacks often split those.
+        // One packet with SRV + A only — no PTR. Home stacks often split those.
         let mut store = super::MdnsRecords::default();
         store.srvs.insert(
-            "livingroom._googlecast._tcp.local".into(),
-            (8009, "livingroom.local".into()),
+            "testtv._googlecast._tcp.local".into(),
+            (8009, "testtv.local".into()),
         );
-        store.addrs.insert("livingroom.local".into(), "10.1.20.40".into());
+        store.addrs.insert("testtv.local".into(), "10.0.0.40".into());
         store
             .txts
-            .entry("livingroom._googlecast._tcp.local".into())
+            .entry("testtv._googlecast._tcp.local".into())
             .or_default()
-            .insert("fn".into(), "Living Room".into());
+            .insert("fn".into(), "Test TV".into());
         let devices = super::devices_from_mdns(&store);
         assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].name, "Living Room");
-        assert_eq!(devices[0].host, "10.1.20.40");
+        assert_eq!(devices[0].name, "Test TV");
+        assert_eq!(devices[0].host, "10.0.0.40");
         assert_eq!(devices[0].port, 8009);
         assert!(super::parse_mdns_googlecast(&[]).is_empty());
     }
@@ -1239,6 +1239,6 @@ mod tests {
     #[test]
     fn wsl_subnets_are_not_port_scanned() {
         assert!(super::skip_cast_scan_network(Ipv4Addr::new(172, 24, 16, 1)));
-        assert!(!super::skip_cast_scan_network(Ipv4Addr::new(10, 1, 20, 120)));
+        assert!(!super::skip_cast_scan_network(Ipv4Addr::new(10, 0, 0, 20)));
     }
 }

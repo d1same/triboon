@@ -3377,29 +3377,29 @@ mod tests {
     fn cast_to_only_accepts_private_tv_addresses() {
         let ok = parse_control(
             "cast_to",
-            json!({"host":"10.1.20.11","port":8009,"name":"Living Room"}),
-            Some("http://10.1.20.120:7777"),
+            json!({"host":"10.0.0.11","port":8009,"name":"Test TV"}),
+            Some("http://10.0.0.20:7777"),
         )
         .unwrap();
         match ok {
             ControlAction::CastTo { host, port, name, server } => {
-                assert_eq!(host, "10.1.20.11");
+                assert_eq!(host, "10.0.0.11");
                 assert_eq!(port, 8009);
-                assert_eq!(name, "Living Room");
-                assert_eq!(server, "http://10.1.20.120:7777");
+                assert_eq!(name, "Test TV");
+                assert_eq!(server, "http://10.0.0.20:7777");
             }
             other => panic!("unexpected {other:?}"),
         }
         assert!(parse_control(
             "cast_to",
             json!({"host":"8.8.8.8","port":8009,"name":"Nope"}),
-            Some("http://10.1.20.120:7777"),
+            Some("http://10.0.0.20:7777"),
         )
         .is_err());
         assert!(parse_control(
             "cast_to",
             json!({"host":"evil.example","port":8009,"name":"Nope"}),
-            Some("http://10.1.20.120:7777"),
+            Some("http://10.0.0.20:7777"),
         )
         .is_err());
     }

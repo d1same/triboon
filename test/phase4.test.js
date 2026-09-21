@@ -233,7 +233,7 @@ test('final watch checkpoints coalesce duplicate lifecycle beacons without hidin
 
   const calls = [];
   const player = { item: { key: 'tmdb:movie:77' }, lastSaved: 0 };
-  const S = { playing: player, profile: { id: 'living-room' } };
+  const S = { playing: player, profile: { id: 'test-tv' } };
   const saveWatch = new Function('S', 'currentTime', 'totalDuration', 'wlMeta', 'upsertWatchCache', 'api', 'trackWatchPost', 'takePlayedSeconds', 'isGenuineEpisodeEof',
     `${ui.slice(start, end)}\nreturn saveWatch;`)(
       S, () => 321.9, () => 3600, () => ({ title: 'Checkpoint' }), () => {},
@@ -2842,6 +2842,8 @@ test('Live TV startup warm is delayed so app login and first playback stay respo
     'startup warm should default to a long delay with bounded override');
   assert.match(server, /scheduleIptvWarmSoon\('startup', IPTV_STARTUP_WARM_DELAY_MS, \{ skipGuide: true \}\);/,
     'startup warm must not use the short source-change delay or heavy guide parse');
+  assert.match(server, /const orphanTemps = scrubOrphanTempDirs\(\);/,
+    'Unraid/Docker restart must sweep leftover /tmp ffmpeg folders without wiping /data caches');
 });
 
 test('VOD pause resume: paused players warm ahead without stealing startup or seek priority', () => {

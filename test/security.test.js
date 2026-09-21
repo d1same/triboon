@@ -3802,7 +3802,7 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   const st = await httpJson(srv.port, 'GET', '/api/trakt/status', null, admin);
   assert.strictEqual(st.json.linked, true);
   assert.strictEqual(st.json.user, 'owner-trakt');
-  const traktProfile = (await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'Trakt Living Room', level: 3 }, admin)).json;
+  const traktProfile = (await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'Trakt Test Room', level: 3 }, admin)).json;
 
   // Watch save → scrobble (fire-and-forget, give it a beat).
   await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:603', position: 300, duration: 600, meta: {} }, admin);
@@ -3999,7 +3999,7 @@ test('password change: requires the current password, old one stops working', as
 });
 
 test('quick connect: TV code approved from an authed phone yields a working token', async () => {
-  const code = await httpJson(srv.port, 'POST', '/api/quickconnect', { deviceName: 'Living Room TV' });
+  const code = await httpJson(srv.port, 'POST', '/api/quickconnect', { deviceName: 'Test TV' });
   assert.strictEqual(code.status, 200);
   assert.match(code.json.code, /^\d{6}$/);
 

@@ -46,7 +46,7 @@ Never change the episode. Never search indexers again for a pause.
 
 ## How to test (now and later)
 
-Device: TV emulator `emulator-5554`. Use the living-room Shield only when the owner asks.
+Device: TV emulator `emulator-5554`. Use a physical Android TV only when the owner asks.
 
 On a playing 1080p or 4K title, watch logcat for:
 

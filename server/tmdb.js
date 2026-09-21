@@ -1,7 +1,7 @@
 'use strict';
 // TMDB server-side proxy + cache. The admin's key lives in encrypted settings; clients call
 // /api/tmdb/* and never see it. GET responses cached in the store with a TTL so browsing is
-// instant and TMDB rate limits never hit the living room.
+// instant and TMDB rate limits never stall the TV.
 
 const { fetchUrl } = require('./newznab');
 

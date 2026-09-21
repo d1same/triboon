@@ -126,6 +126,26 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-21, v3.2.1 ship — Unraid/Docker boot tidies leftover save copies and
+ffmpeg temp folders; tracked GitHub tests use dummy LAN names; watch/login
+JSON still parse after the cleanup:
+
+- Version contract: `package.json` 3.2.1; Android `versionName` 3.2.1 /
+  `versionCode` 378; Windows client package/Tauri/Cargo(.lock) 3.2.1.
+- Extra QA before the tag: all `data/*.json` tables parse (watch included);
+  leftover `*.json.tmpN` scrubbed; isolated `/api/server` soak ~30ms p50;
+  gap suites IPTV-restart/library/search/watch-stats/xmltv/audiobook 99/99;
+  security login/invite/Quick Connect/kids PIN 125/125; store boot-scrub +
+  orphan-temp tests pass. House :7777 left running.
+- Gate: `npm.cmd test` 721/721. `npm.cmd run verify:full` repo gates PASS
+  (whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.1). First live/Android pass failed because
+  :7799 had inherited an empty temp `TRIBOON_DATA`; after a restart on the
+  real `data/` folder: household VOD play/seek/resume/CC PASS (Mario 4K +
+  FROM S01E01 remux), household IPTV ABC+ESPN first-byte + retune PASS,
+  household overlapping Play PASS (18ms), Android ExoPlayer stress on
+  `emulator-5554` against :7799 v3.2.1 PASS. Never the Shield.
+
 2026-09-21, v3.2.0 ship — Android Next icon no longer clipped, phone menu
 button hides while video/trailer/audiobook/now-playing is open:
 
@@ -1092,7 +1112,7 @@ as v3.1.30 on 2026-09-20):
 - In-player IPTV guide **Back to [title]** gets a visible D-pad focus
   fill (inset ring + gold arrow chip) via `applyFocus` / `.pgBackTop.focus`.
 - Android testing for this ship used the local TV emulator
-  (`emulator-5554`), not the living-room Shield.
+  (`emulator-5554`), not a physical Android TV.
 - `npm.cmd test` 604/604. Isolated `/api/server` smoke reported 3.1.3.
   `npm.cmd run verify:full -- -AndroidDevice emulator-5554
   -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
@@ -1121,7 +1141,7 @@ as v3.1.30 on 2026-09-20):
   guide from a title saves it; picking CNN no longer freezes the button
   as Close guide.
 - Android testing for this ship used the local TV emulator
-  (`emulator-5554`), not the living-room Shield.
+  (`emulator-5554`), not a physical Android TV.
 - `npm.cmd test` 604/604. Isolated `/api/server` smoke reported 3.1.2.
   `npm.cmd run verify:full -- -AndroidDevice emulator-5554
   -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
@@ -1616,8 +1636,8 @@ as v3.1.30 on 2026-09-20):
   3934ms/575ms/394ms/13ms (ready SLOW, stream OK, English-HONE WEB-DL);
   FROM S01E01 1433ms/176ms/548ms/43ms; overlapping Play 6ms/12ms; IPTV ABC
   then ESPN web+native first-bytes OK.
-- Unverified on this run: owner Android TV Search-mic D-pad on the living-room
-  box, Windows native GPU/HDR, and signed-in browser click-through.
+- Unverified on this run: owner Android TV Search-mic D-pad on a physical
+  TV box, Windows native GPU/HDR, and signed-in browser click-through.
 
 2026-08-13, v2.9.7 final production pass (go-live gate):
 

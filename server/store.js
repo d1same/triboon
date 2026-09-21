@@ -35,6 +35,29 @@ class Store {
     this._lastFlushAt = new Map();
     this._flushingAsync = false;
     this._tmpSeq = 0;
+    this._scrubStaleTmps();
+  }
+
+  // Windows rename can fail (AV/another reader locks the live file). The fallback then writes
+  // in place and used to leave table.json.tmpN behind forever. A long-running box accumulated
+  // hundreds of leftover watch/verdict copies. Boot + failed-rename cleanup keep data/ tidy.
+  _scrubStaleTmps() {
+    let names = [];
+    try { names = fs.readdirSync(this.dir); } catch { return 0; }
+    let n = 0;
+    for (const name of names) {
+      if (!/\.json\.tmp\d+$/.test(name)) continue;
+      this._unlinkTmp(path.join(this.dir, name));
+      n++;
+    }
+    if (n) {
+      try { console.log(`[store] boot removed ${n} leftover tmp file(s)`); } catch {}
+    }
+    return n;
+  }
+
+  _unlinkTmp(tmp) {
+    try { fs.unlinkSync(tmp); } catch {}
   }
 
   _file(table) { return path.join(this.dir, `${table}.json`); }
@@ -137,7 +160,12 @@ class Store {
         try {
           const tmp = this._tmpFile(file);
           await fs.promises.writeFile(tmp, json, { mode: 0o600 });
-          await fs.promises.rename(tmp, file);
+          try {
+            await fs.promises.rename(tmp, file);
+          } catch (renameErr) {
+            this._unlinkTmp(tmp);
+            throw renameErr;
+          }
           fs.promises.chmod(file, 0o600).catch(() => {});
           ok = true;
         } catch {
@@ -173,7 +201,12 @@ class Store {
       try {
         const tmp = this._tmpFile(file);
         fs.writeFileSync(tmp, json, { mode: 0o600 });
-        fs.renameSync(tmp, file);
+        try {
+          fs.renameSync(tmp, file);
+        } catch (renameErr) {
+          this._unlinkTmp(tmp);
+          throw renameErr;
+        }
         try { fs.chmodSync(file, 0o600); } catch {}
         this._lastFlushAt.set(table, Date.now());
       } catch {
@@ -267,4 +300,29 @@ class VerdictCache {
   }
 }
 
-module.exports = { Store, VerdictCache };
+// Unraid/Docker restart keeps the container writable layer, so ffmpeg HLS/thumb/subsync
+// folders in os.tmpdir() can survive a SIGKILL. Sweep only our prefixes. Never touch /data
+// caches (TMDB, IPTV, verdicts, watch) — wiping those would make every array reboot slow.
+const ORPHAN_TEMP_DIR = /^triboon-(hls|subsync)-/;
+const ORPHAN_TEMP_FILE = /^triboon-(thumb|ytc)-/;
+function scrubOrphanTempDirs(tmpRoot = require('os').tmpdir()) {
+  let names = [];
+  try { names = fs.readdirSync(tmpRoot); } catch { return 0; }
+  let n = 0;
+  for (const name of names) {
+    const full = path.join(tmpRoot, name);
+    try {
+      const st = fs.lstatSync(full);
+      if (st.isDirectory() && ORPHAN_TEMP_DIR.test(name)) {
+        fs.rmSync(full, { recursive: true, force: true });
+        n++;
+      } else if (st.isFile() && ORPHAN_TEMP_FILE.test(name)) {
+        fs.unlinkSync(full);
+        n++;
+      }
+    } catch {}
+  }
+  return n;
+}
+
+module.exports = { Store, VerdictCache, scrubOrphanTempDirs };

@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { NntpPool, NntpConnection } = require('./nntp');
 const { mountNzb } = require('./archive');
-const { Store, VerdictCache } = require('./store');
+const { Store, VerdictCache, scrubOrphanTempDirs } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
@@ -10348,6 +10348,10 @@ if (require.main === module) {
   server.listen(PORT, () => {
     console.log(`Triboon → http://localhost:${PORT}`);
     console.log(`[triboon] data dir: ${DATA_DIR}`); // where settings/users/secret live — verify it's persistent (e.g. C:\\ProgramData\\Triboon\\data on Windows), NOT inside the install folder
+    try {
+      const orphanTemps = scrubOrphanTempDirs();
+      if (orphanTemps) console.log(`[boot] removed ${orphanTemps} leftover temp path(s)`);
+    } catch (e) { console.error('[boot] temp scrub failed:', e && e.message); }
     if (debug.enabled()) console.log(`[debug] server debug logging ON${debug.envForced() ? ' (TRIBOON_DEBUG)' : ' (Settings)'}`);
     try { getPool(); } catch { /* no provider configured yet — fine */ }
     // Startup should stay responsive first. Stale Live TV caches are served instantly on demand;

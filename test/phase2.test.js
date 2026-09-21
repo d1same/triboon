@@ -10,7 +10,7 @@ const path = require('path');
 const os = require('os');
 const { parseRelease, scoreRelease, rankReleases, isCamCandidate, camScoringEnabled, DEFAULT_SCORING_KEYWORDS, sourceDrawerCandidates } = require('../server/scoring');
 const { parseNewznabRss, dedupe, fanout, searchIndexer, normTitle, clearIndexerCooldowns } = require('../server/newznab');
-const { Store, VerdictCache } = require('../server/store');
+const { Store, VerdictCache, scrubOrphanTempDirs } = require('../server/store');
 const {
   Pipeline, GATE_MS, nzbVerdictKey, releaseFingerprint, summarizeAttempts, stubFeatureReason, mountHasActivePlayback, mountNeedsUsenetShare,
   ACTIVE_PLAYBACK_GRACE_MS, allocateStreamConnections, classifyStreamNeed,
@@ -5665,6 +5665,41 @@ test('store: the debounced background flush is async, atomic, and leaves no tmp 
   // a tmp file (a shared name lets one writer's fd keep writing into the just-renamed live file).
   assert.notStrictEqual(s._tmpFile('x'), s._tmpFile('x'));
   s.close();
+});
+
+test('store: a failed atomic rename still removes the tmp file and boot scrubs leftovers', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  fs.writeFileSync(path.join(dir, 'watch.json.tmp99'), '{"stale":true}');
+  const s = new Store(dir);
+  assert.ok(!fs.existsSync(path.join(dir, 'watch.json.tmp99')), 'boot must delete leftover table.json.tmpN files');
+  const orig = fs.renameSync;
+  fs.renameSync = () => { const err = new Error('locked'); err.code = 'EPERM'; throw err; };
+  try {
+    s.write('watch', { x: 1 });
+    s.flush();
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'watch.json'), 'utf8')), { x: 1 });
+    assert.deepStrictEqual(fs.readdirSync(dir).filter((f) => /\.tmp/.test(f)), [], 'fallback write must not leave tmp litter');
+  } finally {
+    fs.renameSync = orig;
+    s.close();
+  }
+});
+
+test('boot: orphan ffmpeg temp dirs and thumb files are removed, live caches are not', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  fs.mkdirSync(path.join(dir, 'triboon-hls-dead1'));
+  fs.mkdirSync(path.join(dir, 'triboon-subsync-dead2'));
+  fs.writeFileSync(path.join(dir, 'triboon-thumb-x.jpg'), 'x');
+  fs.writeFileSync(path.join(dir, 'triboon-ytc-dead.txt'), 'y');
+  fs.writeFileSync(path.join(dir, 'watch.json'), '{"keep":true}');
+  fs.mkdirSync(path.join(dir, 'other-app-temp'));
+  assert.strictEqual(scrubOrphanTempDirs(dir), 4);
+  assert.ok(!fs.existsSync(path.join(dir, 'triboon-hls-dead1')));
+  assert.ok(!fs.existsSync(path.join(dir, 'triboon-subsync-dead2')));
+  assert.ok(!fs.existsSync(path.join(dir, 'triboon-thumb-x.jpg')));
+  assert.ok(!fs.existsSync(path.join(dir, 'triboon-ytc-dead.txt')));
+  assert.ok(fs.existsSync(path.join(dir, 'watch.json')), 'persistent /data files must survive boot tidy');
+  assert.ok(fs.existsSync(path.join(dir, 'other-app-temp')), 'unrelated temp folders are left alone');
 });
 
 test('store: flushIntervals throttle only the background path — explicit flush() stays durable', async () => {
