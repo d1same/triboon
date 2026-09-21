@@ -318,6 +318,13 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   assert.strictEqual(row.percent, 10);
   assert.ok(visible.json.history.some((s) => s.title === 'The Test Movie' && s.userName === 'fam' && s.poster === 'https://image.tmdb.org/t/p/w342/mock-poster.jpg'),
     'activity history keeps a compact recent watch row with cover art');
+  const again = await httpJson(srv.port, 'POST', '/api/activity', {
+    sessionId, state: 'watching', title: 'The Test Movie', type: 'movie', position: 700, duration: 6000,
+  }, user);
+  assert.strictEqual(again.status, 200);
+  const afterTick = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  assert.strictEqual(afterTick.json.history.filter((s) => s.title === 'The Test Movie').length, 1,
+    'a 10s heartbeat on the same title does not grow history');
 
   const stopped = await httpJson(srv.port, 'POST', '/api/activity', { sessionId, state: 'stopped' }, user);
   assert.strictEqual(stopped.status, 200);

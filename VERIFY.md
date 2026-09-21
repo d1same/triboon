@@ -126,6 +126,20 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-21, v3.2.3 ship — Now Watching shows the episode. Settings/F5 stay
+cheap. A VOD restart keeps leftover on-device video playing, then remounts
+the same movie/show/local file at the second they reached (Live TV unchanged):
+
+- Version contract: `package.json` 3.2.3; Android `versionName` 3.2.3 /
+  `versionCode` 380; Windows client package/Tauri/Cargo(.lock) 3.2.3.
+- Gate: `npm.cmd test` 721/721. `npm.cmd run verify:full` against
+  `http://127.0.0.1:7799` (repo 3.2.3) + `emulator-5554` (never the Shield):
+  every gate PASS — whitespace, JS syntax, web parse, IPTV/P9, VOD/P14,
+  CC/P11, full suite, isolated `/api/server` 3.2.3, household VOD
+  play/seek/resume/CC, household IPTV first-byte + retune, household
+  overlapping Play, Android lint + unit tests + debug build, Android
+  ExoPlayer stress. House :7777 left on 3.1.26.
+
 2026-09-21, v3.2.2 ship — Continue Watching keeps the last custom Sources
 pick (no silent 1080→4K remount). 4K transcode is GPU-only unless the admin
 allows software 4K. Home/Details prepare prefers the pin's own resolution so

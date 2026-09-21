@@ -33,7 +33,7 @@ Example: you pause The Rookie for a minute, press Play, and sit on Preparing. Th
 - Quality / audio change that needs a new server stream.
 - Mid-title remux `ENDED` while **playing**.
 - Remux jumped backward (stream replayed from the head) — seek back to the last good time.
-- Session/mount `404` / server restart (`reMountAndResume`) — wait for `/api/server`, hold the last frame, same title, new mount, resume. Do not replay the dead URL (that flickers Preparing).
+- Session/mount `404` / server restart (`reMountAndResume`) — movies, episodes, and local files only. Live TV is unchanged. Keep playing bytes already on the TV/browser (usually 30–90s). The Settings 1–2 min read-ahead is server RAM and dies with Docker. A 4s `/api/server` watch starts the remount before the leftover runs out. Hold the last frame only when leftover is under 8s. Wait up to 6 minutes, then remount the same title at the time they are now (not the time the server died). Android 404/5xx must remount, not seek the dead leftover URL.
 
 Reuse the existing ExoPlayer (`reuseQuietVideo` / same playback token + same URL). Do not `new ExoPlayer.Builder`.
 

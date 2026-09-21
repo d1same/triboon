@@ -4539,6 +4539,12 @@ public class MainActivity extends Activity {
                         // recover by re-mounting at the CURRENT position — resume forward, no 3-min rewind.
                         // Direct play retries the same ExoPlayer in place. Bounded so a truly dead
                         // source still surfaces an error and auto-advances.
+                        // A server restart/update 404s the old mount. Seeking that dead URL
+                        // just spins, then gives up. Hand it to JS remount of the same title.
+                        if (nativeVideoStarted && isNativeMountGoneError(error)) {
+                            notifyNativeVideoError(msg, pos, dur);
+                            return;
+                        }
                         if (nativeVideoStarted && nativeLastVideoDisplayMs > 0L
                                 && isNativeRecoverableIoError(error) && nativeAllowReconnectResume()) {
                             // Resume at the FRESH live position (not the up-to-1s-stale sample) so the
@@ -6011,6 +6017,20 @@ public class MainActivity extends Activity {
         int c = e.errorCode;
         return c >= PlaybackException.ERROR_CODE_IO_UNSPECIFIED
                 && c < PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED;
+    }
+
+    // Old stream token / mount dies on Docker restart. 404/5xx must remount the title,
+    // not retry the leftover URL (that is the "users got disconnected" case).
+    private boolean isNativeMountGoneError(PlaybackException error) {
+        Throwable t = error;
+        while (t != null) {
+            if (t instanceof HttpDataSource.InvalidResponseCodeException) {
+                int code = ((HttpDataSource.InvalidResponseCodeException) t).responseCode;
+                if (code == 404 || code == 500 || code == 502 || code == 503) return true;
+            }
+            t = t.getCause();
+        }
+        return false;
     }
 
     // Bound the reconnect-resume so a genuinely dead source cannot loop forever: at most 6 resumes per 90s,

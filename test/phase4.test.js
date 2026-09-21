@@ -2143,10 +2143,12 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
   const reMountAndResume = new Function('S', 'vodPlaybackStarted', 'showPlaybackInterrupted', 'currentTime',
     'currentPlayerKind', 'toast', 'api', 'playbackRequestBody', 'canUseNativeVideoPlayer',
     'tryNativeVideoPlayer', 'startSource', 'setTimeout', 'markPlaybackSourceSwap',
+    'maybeHoldPlaybackAcrossRestart', 'vodRestartHoldNeeded',
     `${remountSource}\nreturn reMountAndResume;`)(
       remountState, () => true, (reason) => remountEvents.push(['interrupted', reason]), () => 90,
       () => 'direct', () => {}, () => remountGate.promise, () => ({}), () => false,
-      () => false, () => false, () => remountEvents.push(['retry']), () => {});
+      () => false, () => false, () => remountEvents.push(['retry']), () => {},
+      () => {}, () => false);
   const staleRemountJob = reMountAndResume('old mount failed');
   remountState.playing = { item: { key: 'episode-b' } };
   remountGate.reject(new Error('old request failed'));
@@ -2948,6 +2950,12 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'a real stall still remounts the same file quietly, never a new search');
   assert.match(ui, /playbackServerGone\(reason\)[\s\S]+reMountAndResume\(reason \|\| 'playback session expired'\)/,
     'a swept mount 404 must mint a new mount for the same title, not retry the dead URL');
+  assert.match(ui, /function startVodServerWatch\(\) \{[\s\S]+playing\.item\.type === 'live'[\s\S]+reMountAndResume\('server restart'\)/,
+    'movies/shows/local poll /api/server so a restart remounts while leftover buffer still plays; Live TV does not');
+  assert.match(ui, /function vodRestartHoldNeeded\(p = S\.playing\) \{[\s\S]+clientBufferedAheadSec\(p\) < 8/,
+    'a restart holds the last frame only after the on-device leftover is under 8s');
+  assert.match(ui, /maybeHoldPlaybackAcrossRestart\(p\);[\s\S]+const at = currentTime\(\);/,
+    'remount resumes at the second they reached while leftover kept playing, not the second the server died');
   assert.match(ui, /if \(sourceDead\) \{[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true/,
     'a new NZB is only when health says the release is dead');
 });
@@ -4160,6 +4168,26 @@ test('Android native player: direct source and native chrome stay out of the web
     'next-episode startup must not remount the opening after a one-time remux wobble');
   assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+typeof waitForTriboonServer === 'function'[\s\S]+playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\)[\s\S]+resumeFrac = Math\.max\(0, Math\.min\(0\.98, at \/ remountDur\)\)[\s\S]+api\('\/api\/play', \{ method: 'POST', body: remountBody \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
     'reMountAndResume should wait for the server, re-play the same title, warm the live timestamp, reject stale ownership, resume at position, and retry with backoff then fall back');
+  assert.match(ui, /async function waitForTriboonServer\(ms = 6 \* 60 \* 1000\)/,
+    'a Unraid update can take minutes; stay on the last frame instead of giving up at 90s');
+  assert.match(android, /isNativeMountGoneError\(error\)/,
+    'Android 404/5xx after a restart remounts the title instead of seeking the dead leftover URL');
+  assert.match(ui, /s\.subline && activityStreamKind\(s\) !== 'live'[\s\S]+activityEp/,
+    'Now Watching shows the episode code under the show name');
+  assert.match(ui, /if \(opts\.force \|\| tab === 'activity'\) refreshActivity\(\)/,
+    'opening Engine does not refetch Now Watching; Activity tab does');
+  assert.match(ui, /if \(opts\.force \|\| tab === 'security'\) refreshSecurity\(\)/,
+    'opening Engine does not refetch Security');
+  assert.match(ui, /if \(opts\.force \|\| tab === 'users' \|\| tab === 'livetv' \|\| tab === 'catalog'\) await ensureAdminUsers\(true\)/,
+    'opening Engine does not refetch the users list');
+  assert.match(ui, /if \(!opts\.force && S\._activityFreshAt && now - S\._activityFreshAt < 8000\) return/,
+    'a Now Watching refresh within 8s does not hit the server again');
+  assert.match(ui, /S\._activityLiveT = setInterval\(\(\) => \{[\s\S]+accountTabKey\(\) === 'activity'[\s\S]+15000/,
+    'Now Watching polls every 15s only while that tab is open');
+  assert.match(ui, /toast\(editing \? 'Provider updated' : 'Provider added \(encrypted\)'\); refreshSettings\(\{ force: true \}\)/,
+    'saving a provider bypasses the settings throttle so the list updates');
+  assert.match(ui, /S\._dashCache && S\._dashCache\.range === range && now - S\._dashCache\.at < 15000/,
+    'Dashboard does not hit watch-stats again if the same range was painted in the last 15s');
   assert.match(ui, /function playbackServerGone\(reason\) \{[\s\S]+Source error[\s\S]+function recoverSamePlaybackSource/,
     'a server restart (404/502/Source error) remounts instead of replaying the dead URL');
   assert.match(ui, /function holdPlaybackAcrossRestart\(\) \{[\s\S]+clearPlayerLoadingStages\(\)[\s\S]+playerLoader[\s\S]+showSeekHoldFrame/,
@@ -6050,8 +6078,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'web Live TV should mint playback URLs only for the selected server channel');
   assert.match(server, /iptvPlay: async \(ctx\) => \{[\s\S]+ensureIptvChannelStateForUser\(ctx\.user\)[\s\S]+const channelScope = `iptv:\$\{ch\.idx\}:\$\{ch\.id\}`;[\s\S]+auth\.streamToken\(ctx\.user\.id, channelScope\)[\s\S]+streamUrl: `\/api\/iptv\/stream\/\$\{ch\.idx\}\?cid=\$\{cid\}&t=\$\{token\}`/,
     'server Live TV should expose a per-channel playback URL endpoint without bloating the channel list');
-  assert.match(ui, /function openPrefs\(\)[\s\S]+\$\('prefTabLive'\)\.style\.display = '';[\s\S]+renderPrefPersonalIptv\(\);/,
+  assert.match(ui, /function openPrefs\(\)[\s\S]+\$\('prefTabLive'\)\.style\.display = '';/,
     'Preferences should always expose Live TV so users can find the personal IPTV setup before a playlist exists');
+  assert.match(ui, /if \(!isSrv && key === 'livetv'\) \{ renderPrefLiveCats\(\); renderPrefPersonalIptv\(\); \}/,
+    'personal IPTV sources load when the Live TV tab opens, not on every Account visit');
+  assert.match(ui, /if \(!isSrv && key === 'connect'\) \{ renderTraktBox\(\); renderYtmBox\(\); \}/,
+    'Trakt and YouTube Music status load when Connections opens, not on Dashboard');
   assert.match(ui, /Save to my account[\s\S]+personalIptvSaveDevice[\s\S]+Save on this device only/,
     'Preferences should make account IPTV the default path and keep Android device-local IPTV as an optional path');
   assert.ok(ui.includes('id="personalIptvAddOpen">Add playlist')

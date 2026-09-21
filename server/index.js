@@ -4586,7 +4586,7 @@ function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
   const position = Math.max(0, Number(b.position || 0) || 0);
   const percent = duration ? Math.max(0, Math.min(100, Math.round((position / duration) * 100))) : 0;
   const live = activityLooksLive({ ...b, key: b.key || existing.key });
-  const title = live ? 'Live TV' : scrubActivityText(b.title || (b.meta && b.meta.title) || 'Playing', 180);
+  const title = live ? 'Live TV' : scrubActivityText(b.title || (b.meta && b.meta.title) || existing.title || 'Playing', 180);
   const ip = clientIpForGeo(ctx);
   const row = {
     id,
@@ -4595,8 +4595,8 @@ function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
     userName: activityUserName(ctx.user.id),
     profile: scrubActivityText(b.profile || existing.profile || '', 40),
     title,
-    subline: live ? 'Live stream' : scrubActivityText(b.subline || '', 120),
-    key: live ? 'live' : scrubActivityText(b.key || '', 140),
+    subline: live ? 'Live stream' : scrubActivityText(b.subline || existing.subline || '', 120),
+    key: live ? 'live' : scrubActivityText(b.key || existing.key || '', 140),
     type: live ? 'live' : scrubActivityText(b.type || '', 30),
     player: scrubActivityText(b.player || '', 30),
     mode: scrubActivityText(b.mode || '', 30),
@@ -8039,7 +8039,11 @@ Object.assign(H, {
     }
     const row = normalizeActivityRow(ctx, b, id, existing || {});
     activitySessions.set(id, row);
-    recordActivityHistory(row);
+    // Heartbeats tick every 10s. Rewriting history.json on each tick was extra disk
+    // load on Unraid. Keep the live row in RAM; persist history on a new title only.
+    const sameWatch = existing && existing.key === row.key && existing.title === row.title
+      && existing.userId === row.userId && (existing.subline || '') === (row.subline || '');
+    if (!sameWatch) recordActivityHistory(row);
     send(ctx.res, 200, { ok: true });
   },
 

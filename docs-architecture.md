@@ -191,6 +191,7 @@ write only their own rows, while only admins may read Settings -> Activity.
 
 The activity store retains at most 60 movie/TV rows from the last three days so
 the owner can see recent VOD playback without accumulating a long-term log.
+History is written when a title starts or stops, not on every 10s heartbeat.
 Live TV/IPTV is current-activity only. Neither location labels nor raw viewer IPs
 are written to retained history.
 
