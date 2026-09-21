@@ -4,9 +4,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { decidePlayback, detectFfmpeg, detectEncoder } = require('../server/transcode');
+const { decidePlayback, detectFfmpeg, canTranscode4k } = require('../server/transcode');
 const HAS_FFMPEG = !!detectFfmpeg();
-const HAS_ENCODER = !!detectEncoder();
 
 const SHIELD = { mkv: true, ac3: true, eac3: true, dts: true };
 const BUDGET = { mkv: true, ac3: true, eac3: false, dts: false, lowPower: true, hevc: false };
@@ -49,9 +48,14 @@ test('budget Android TV remuxes MKV catalog titles instead of eating RAM on 4K o
       continue;
     }
     assert.notStrictEqual(budget.method, undefined, item.name);
-    if (item.res === '4k' && HAS_ENCODER) {
-      assert.strictEqual(budget.method, 'transcode', `${item.name} 4K without HEVC hardware must transcode`);
-      assert.strictEqual(onn.method, 'remux', `${item.name} Onn with HEVC remuxes 4K`);
+    if (item.res === '4k') {
+      if (canTranscode4k()) {
+        assert.strictEqual(budget.method, 'transcode', `${item.name} 4K without HEVC must transcode when a GPU encoder is live`);
+      } else {
+        assert.ok(budget.skip4k, `${item.name} 4K without HEVC and without a GPU encoder must not CPU-transcode`);
+        assert.strictEqual(budget.method, HAS_FFMPEG ? 'remux' : 'direct');
+      }
+      if (HAS_FFMPEG) assert.strictEqual(onn.method, 'remux', `${item.name} Onn with HEVC remuxes 4K`);
       continue;
     }
     assert.ok(budget.method === 'remux' || budget.method === 'direct' || budget.method === 'transcode', `${item.name} budget=${budget.method}`);
