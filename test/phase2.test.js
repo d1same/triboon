@@ -4489,6 +4489,20 @@ test('pipeline: a pinned resume source leads only while playable, and never turn
   const lastBig = pipeline._playableCandidates(cands, { pickKey: 'big', pinnedResume: true }).map((c) => c.pickKey);
   assert.deepStrictEqual(lastBig, ['big', 'p', 'c', 'd'],
     'Continue Watching resumes the last over-size-cap file the viewer actually watched');
+  const custom1080 = [
+    { pickKey: 'uhd', score: 400, reasons: [] },
+    { pickKey: 'p1080', score: -100000, reasons: ['not-requested-resolution 1080p'] },
+  ];
+  const keptCustom = pipeline._playableCandidates(custom1080, { pickKey: 'p1080', pinnedResume: true }).map((c) => c.pickKey);
+  assert.deepStrictEqual(keptCustom, ['p1080', 'uhd'],
+    'a custom 1080 Sources pin stays first even when a 4K exact lock would auto-skip it');
+  const overCap4k = [
+    { pickKey: 'ok1080', score: 200, reasons: [] },
+    { pickKey: 'tooBig4k', score: -100000, reasons: ['over-cap 2160p'] },
+  ];
+  const droppedCap = pipeline._playableCandidates(overCap4k, { pickKey: 'tooBig4k', pinnedResume: true }).map((c) => c.pickKey);
+  assert.deepStrictEqual(droppedCap, ['ok1080'],
+    'a 4K pin above the device/account cap is skipped so resume stays inside the cap');
   const rotted = pipeline._playableCandidates(cands, { pickKey: 'dead', pinnedResume: true }).map((c) => c.pickKey);
   assert.deepStrictEqual(rotted, ['p', 'c', 'd'],
     'a pin that is now missing/blocked is skipped outright — resume behaves like auto-pick');

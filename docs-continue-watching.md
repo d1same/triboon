@@ -81,6 +81,11 @@ flowchart LR
 - A 4K preference should request 4K sources first and must not silently fall
   back to a local 1080p file unless the user changes the quality choice or no
   quality preference exists.
+- Continue Watching must replay the last pinned file. Do not auto-upgrade a
+  living 1080 pin to 4K because the profile default is 4K. An explicit quality
+  tap (or a device/account cap below the pin, such as browser 1080) may drop it.
+  Home/Details prepare must prefer that pin's own resolution so Play joins the
+  already-warmed mount instead of remounting a different 4K file.
 - Next Episode / Up Next inherit that same rank. Near-end `/api/prepare`
   warms the matching 1080p or 4K usenet mount. Local-library next episodes
   skip that warmup — the file is already on the server.

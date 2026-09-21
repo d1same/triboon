@@ -106,21 +106,47 @@ function releaseLosslessAudioDirectOk(name, caps = {}) {
   return true;
 }
 
+function encoderIsHardware(enc = detectEncoder()) {
+  return !!(enc && enc.hardware);
+}
+
+// Software libx264 of a 4K file melts a CPU box (Unraid without a GPU) and the
+// picture drops. Default is hardware-only; admin can allow software 4K transcode.
+let _allowSoftware4k = false;
+function setAllowSoftware4k(on) { _allowSoftware4k = !!on; }
+function allowSoftware4k() { return _allowSoftware4k; }
+function canTranscode4k() {
+  const enc = detectEncoder();
+  if (!enc) return false;
+  return !!(enc.hardware || _allowSoftware4k);
+}
+
 function decidePlayback(name, caps = {}) {
   const isMp4 = /\.(mp4|m4v)$/i.test(name);
   const isWebm = /\.webm$/i.test(name);
   const isMkv = /\.(mkv|ts)$/i.test(name);
   const hasKnownContainer = isMp4 || isWebm || isMkv;
   const losslessAudioOk = releaseLosslessAudioDirectOk(name, caps);
+  const is4k = /\b(2160p|4k|uhd)\b/i.test(String(name || ''));
+  const fourKNeedsHelp = !!(caps.lowPower && is4k && !caps.hevc);
   // MKV direct play needs MORE than container support: most MKVs carry AC3-family audio,
   // and Chromium happily claims matroska while decoding none of it — a "direct" DDP MKV
   // plays silent video. Devices with full container+audio hardware DO skip the server
   // entirely (true direct play); everything else gets the video-copy remux.
-  if (isMp4 || isWebm || (isMkv && caps.mkv && caps.ac3 && caps.eac3 && losslessAudioOk)) return { method: 'direct' };
-  const is4k = /\b(2160p|4k|uhd)\b/i.test(String(name || ''));
+  if (isMp4 || isWebm || (isMkv && caps.mkv && caps.ac3 && caps.eac3 && losslessAudioOk)) {
+    if (fourKNeedsHelp) {
+      if (canTranscode4k()) return { method: 'transcode' };
+      return { method: detectFfmpeg() ? 'remux' : 'direct', skip4k: true };
+    }
+    return { method: 'direct' };
+  }
   // Remux copies 4K HEVC as-is. A budget box / emulator with only a software decoder
-  // will sit on "loading" forever. Transcode to 1080 there; Shield-class HEVC stays remux.
-  if (caps.lowPower && is4k && !caps.hevc && detectEncoder()) return { method: 'transcode' };
+  // will sit on "loading" forever. Transcode to 1080 only when a GPU encoder is live
+  // (or the admin allowed software 4K). Otherwise mark skip4k so Play picks 1080.
+  if (fourKNeedsHelp) {
+    if (canTranscode4k()) return { method: 'transcode' };
+    return { method: detectFfmpeg() ? 'remux' : 'direct', skip4k: true };
+  }
   // Usenet release names often do not expose the inner filename extension until after mount.
   // Treat that unknown container like MKV: remux first when ffmpeg is available.
   if ((isMkv || !hasKnownContainer) && detectFfmpeg()) return { method: 'remux' };
@@ -241,7 +267,7 @@ function detectEncoder() {
         if (t.status !== 0) continue;
       } catch { continue; }
     }
-    _encoder = p;
+    _encoder = { ...p, hardware: p.name !== 'libx264' };
     return _encoder;
   }
   _encoder = null;
@@ -585,4 +611,4 @@ function spawnSubSync(refPath, inPath, outPath) {
     { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter };

@@ -4912,6 +4912,16 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <button class="btn primary focusable" id="debugLoggingSave">Save debug logging</button>
     </div>
     <div class="hint" id="debugLoggingStatus"></div>
+    <h3 style="font:800 15px 'Sora';margin:22px 0 2px;color:var(--text)">4K transcode</h3>
+    <p>A 4K re-encode on the CPU makes the picture stutter and the server go slow. Leave this on unless this box has a working GPU encoder.</p>
+    <div class="field">
+      <select id="transcode4kMode" style="max-width:420px">
+        <option value="hw">GPU only — never software-transcode 4K</option>
+        <option value="sw">Allow software 4K transcode (CPU, last resort)</option>
+      </select>
+      <button class="btn primary focusable" id="transcode4kSave">Save 4K transcode</button>
+    </div>
+    <div class="hint" id="transcode4kStatus"></div>
   </div>
 
   <div class="panel"><h2>Streaming performance</h2>
@@ -8266,10 +8276,11 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   if (!picked && it && it.key && Number(it.resume) > 0) {
     const w = S.watchMap && S.watchMap[it.key];
     const src = w && w.meta && w.meta.source;
-    if (src && (src.pickKey || src.name) && sourceFitsQualityPref(src, qRank)) {
+    if (shouldReplayResumePin(src, it, qRank)) {
       picked = { name: src.name, pickKey: src.pickKey };
       // Auto-pin, not a human Sources choice: tell the server, so a pin that rotted since the
       // last session is skipped instantly and the resume keeps the ranked parallel race.
+      // Keep the last file on Continue Watching — do not auto-upgrade 1080 → 4K.
       // A 4K pin must not ride along after the user tapped 1080 — that Play should pick a 1080.
       pinnedResume = true;
     }
@@ -8300,6 +8311,18 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   if (qRank !== null) {
     body.maxResolutionRank = qRank;
     body.preferResolutionRank = qRank;
+  }
+  // A saved Sources pick (or any living pin) must warm THAT file. Sending the profile's 4K
+  // prefer lock here would mark a 1080 pin "not-requested-resolution", skip it, and remount
+  // a different 4K — the ~20s Continue Watching hop. Prefer the pin's own rank so prepare
+  // and Play join the same mount.
+  if (pinnedResume && picked) {
+    const pinRank = releaseRankOfSource(picked);
+    if (pinRank != null) {
+      body.preferResolutionRank = pinRank;
+      if (qRank != null) body.maxResolutionRank = Math.max(qRank, pinRank);
+      else body.maxResolutionRank = pinRank;
+    }
   }
   // Resume warm: tell the server WHERE (as a fraction of the file) the player will seek to, so it can
   // prime that deep byte window on the read-ahead lane BEFORE the seek — otherwise the resume offset
@@ -8718,6 +8741,17 @@ function sourceFitsQualityPref(src, qRank) {
   if (rank == null) return true;
   if (qRank >= 4) return rank >= 4;
   return rank < 4 && rank <= qRank;
+}
+function shouldReplayResumePin(src, it, qRank) {
+  if (!src || !(src.pickKey || src.name)) return false;
+  if (it && it._startOver) return false;
+  const pinRank = releaseRankOfSource(src);
+  // Never replay a pin the device/account cannot play (4K pin in a 1080-capped browser).
+  if (pinRank != null && qRank != null && pinRank > qRank) return false;
+  // Detail-page quality tap this session can drop a pin that no longer matches.
+  const tapped = S._qualityTappedKey && qualityTitleKey(it) === S._qualityTappedKey;
+  if (tapped && S.qualityPref != null) return sourceFitsQualityPref(src, S.qualityPref);
+  return true;
 }
 function applyExternalIds(it, d) {
   if (!it || !d) return it;
@@ -10729,6 +10763,7 @@ $('qToggle').addEventListener('click', (e) => {
   S.qualityPref = +b.dataset.q;
   saveGlobalQualityPref(S.qualityPref); // remember globally → next title pre-mounts this quality
   const target = detailPlayTarget || S.detailItem;
+  S._qualityTappedKey = qualityTitleKey(target || S.detailItem);
   saveQualityPref(target, S.qualityPref);
   if (target && S.detailItem && qualityTitleKey(target) !== qualityTitleKey(S.detailItem)) saveQualityPref(S.detailItem, S.qualityPref);
   paintQualityToggle(S.qualityPref);
@@ -12801,6 +12836,8 @@ function playbackStartKind(mount) {
   const name = String((mount && mount.name) || '');
   const is4k = /\b(2160p|4k|uhd)\b/i.test(name);
   // A remux of 4K HEVC is still 4K HEVC. No hardware decoder → start transcode, do not spin.
+  // No transcodeUrl means the server has no GPU for 4K — remux would freeze; stay remux only
+  // if the user forced this file from Sources.
   if (caps.lowPower && is4k && !caps.hevc && mount && mount.transcodeUrl) return 'transcode';
   if (method === 'transcode' && mount.transcodeUrl) return 'transcode';
   if (method === 'remux' && mount.remuxUrl) return 'remux';
@@ -26566,6 +26603,7 @@ async function refreshSettings() {
       <div class="kv"><span>Indexers</span><span>${st.indexers}</span></div>
       <div class="kv"><span>TMDB</span><span>${st.tmdb ? 'connected (server-side key)' : 'not configured'}</span></div>
       <div class="kv"><span>ffmpeg (remux)</span><span>${st.ffmpeg ? st.ffmpeg.replace('ffmpeg version ', '').slice(0, 28) : 'not found — direct play & VLC only'}</span></div>
+      <div class="kv"><span>H.264 encoder</span><span>${st.encoder ? esc(st.encoder) + (st.encoderHardware ? ' · GPU' : ' · software CPU') : 'none — transcode off'}</span></div>
       <div class="kv"><span>yt-dlp (music)</span><span>${st.ytdlp ? esc(st.ytdlp) + ' — Music enabled' : 'not found — Music tab hidden'}</span></div>
       <div class="kv"><span>Subtitle sync</span><span>${(S.serverInfo && S.serverInfo.subSync) ? 'alass active — non-matched subtitles auto-sync' : 'alass not found — subtitles served unsynced (no auto-sync)'}</span></div>
       <div class="kv"><span>Active mounts</span><span>${st.mounts}</span></div>`;
@@ -26682,6 +26720,20 @@ async function refreshSettings() {
       : s.debugLogging
         ? 'on — extra [debug] Play / prepare / sweep lines in the server log'
         : 'off — server log stays quiet';
+    if ($('transcode4kMode')) {
+      $('transcode4kMode').value = s.transcode4kHardwareOnly === false ? 'sw' : 'hw';
+    }
+    if ($('transcode4kStatus')) {
+      const enc = s.encoder || st.encoder;
+      const hw = s.encoderHardware === true || st.encoderHardware === true;
+      $('transcode4kStatus').textContent = enc
+        ? (hw
+          ? `GPU encoder: ${enc} — 4K transcode allowed`
+          : (s.transcode4kHardwareOnly === false
+            ? `software encoder: ${enc} — 4K transcode allowed (CPU)`
+            : `software encoder: ${enc} — 4K transcode off (pick 1080 instead)`))
+        : 'no H.264 encoder — transcode off';
+    }
     if ($('viewerGeoMode')) {
       $('viewerGeoMode').value = s.viewerGeolocationEnabled ? 'on' : 'off';
       $('viewerGeoMode').disabled = s.viewerGeolocationEnvForced === true;
@@ -26755,7 +26807,7 @@ async function refreshSettings() {
          ${[['4', '4K allowed'], ['3', '1080p cap'], ['2', '720p cap']].map(([v, l]) =>
            `<option value="${v}" ${String(u.policy.maxResolutionRank) === v ? 'selected' : ''}>${l}</option>`).join('')}
          </select>${u.role === 'admin' ? '' :
-         `<label class="catRow" title="Allow this user to use server transcoding (off = direct/remux only)"><input type="checkbox" data-utr="${esc(u.id)}" ${u.policy.allowTranscode === false ? '' : 'checked'}><span class="cgN">Transcode</span></label>`}${u.role === 'admin' ? '' :
+         `<label class="catRow" title="Allow this user to use server transcoding (off = direct/remux only). 4K still needs a GPU unless you turned on software 4K in Engine."><input type="checkbox" data-utr="${esc(u.id)}" ${u.policy.allowTranscode === false ? '' : 'checked'}><span class="cgN">Transcode</span></label>`}${u.role === 'admin' ? '' :
          `<button class="iconBtn" data-upw="${esc(u.id)}" data-uname="${esc(u.name)}" title="Reset password">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></button>
           <button class="iconBtn" data-udel="${esc(u.id)}" data-uname="${esc(u.name)}" title="Delete user">
@@ -27275,6 +27327,23 @@ $('sec2faDisable').addEventListener('click', async () => {
     $('sec2faMsg').textContent = 'Two-factor sign-in disabled.';
     await refreshSecurity();
   } catch (e) { $('sec2faMsg').textContent = e.message; }
+});
+$('transcode4kSave').addEventListener('click', async () => {
+  const hwOnly = $('transcode4kMode').value !== 'sw';
+  try {
+    const result = await api('/api/settings', { method: 'POST', body: { transcode4kHardwareOnly: hwOnly } });
+    $('transcode4kMode').value = result.transcode4kHardwareOnly === false ? 'sw' : 'hw';
+    const enc = result.encoder;
+    const hw = result.encoderHardware === true;
+    $('transcode4kStatus').textContent = enc
+      ? (hw
+        ? `GPU encoder: ${enc} — 4K transcode allowed`
+        : (result.transcode4kHardwareOnly === false
+          ? `software encoder: ${enc} — 4K transcode allowed (CPU)`
+          : `software encoder: ${enc} — 4K transcode off (pick 1080 instead)`))
+      : 'no H.264 encoder — transcode off';
+    toast(result.transcode4kHardwareOnly === false ? 'Software 4K transcode on' : '4K transcode GPU-only');
+  } catch (e) { $('transcode4kStatus').textContent = 'Save failed: ' + e.message; }
 });
 $('debugLoggingSave').addEventListener('click', async () => {
   const enabled = $('debugLoggingMode').value === 'on';

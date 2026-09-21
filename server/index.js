@@ -25,7 +25,7 @@ const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInW
 const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter } = require('./transcode');
 const ytmusic = require('./ytmusic');
 const https = require('https');
 const dns = require('dns').promises;
@@ -78,6 +78,13 @@ const debug = require('./debug');
 const auth = new Auth(store, process.env.TRIBOON_SECRET);
 const settings = new SecureSettings(store, auth.secret);
 debug.bindSettings(() => settings.get());
+function transcode4kHardwareOnly(s = settings.get()) {
+  return s.transcode4kHardwareOnly !== false;
+}
+function applyTranscode4kPolicy(s = settings.get()) {
+  setAllowSoftware4k(!transcode4kHardwareOnly(s));
+}
+applyTranscode4kPolicy();
 const verdicts = new VerdictCache(store);
 const mounts = new Map(); // id -> virtual file
 const scanStates = new Map(); // library id -> { running, startedAt, progress, ...summary }
@@ -4223,6 +4230,11 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
     policy.deviceClass = caps.deviceClass || 'budget-android-tv';
     const target = (policy.preferResolutionRank ?? policy.maxResolutionRank ?? 4) >= 4 ? 10 : 6;
     policy.sizePreferenceGB = policy.sizePreferenceGB ? Math.min(policy.sizePreferenceGB, target) : target;
+    // No HEVC decode and no GPU encoder → a 4K pick remux-spins or CPU-melts. Auto-play
+    // stays at 1080 unless the user explicitly tapped 4K (preferResolutionRank 4).
+    if (!caps.hevc && !canTranscode4k() && preferRank !== 4) {
+      policy.maxResolutionRank = Math.min(policy.maxResolutionRank ?? 4, 3);
+    }
   }
   return policy;
 }
@@ -4243,8 +4255,10 @@ function mountPayload(vf, uid, extra = {}) {
     // pipe, but plays HLS natively (each fMP4 segment is a rangeable file). The web player uses this only
     // for iOS (iosWebkitVideo()); every other client sticks to direct/remux/transcode.
     hlsUrl: detectFfmpeg() ? `/api/hls/${vf.id}?t=${st}` : null,
-    transcodeUrl: detectEncoder() ? `/api/transcode/${vf.id}?t=${st}` : null,
+    transcodeUrl: (detectEncoder() && (!/\b(2160p|4k|uhd)\b/i.test(String(vf.name || '')) || canTranscode4k()))
+      ? `/api/transcode/${vf.id}?t=${st}` : null,
     encoder: detectEncoder() ? detectEncoder().kind : null,
+    encoderHardware: encoderIsHardware(),
     tracksUrl: `/api/tracks/${vf.id}`,
     subtitleBase: `/api/subtitle/${vf.id}`, // + /<n>?t=<stream token>
     thumbBase: `/api/thumb/${vf.id}`, // + ?t=<stream token>&at=<seconds> — scrub preview JPEGs
@@ -5475,6 +5489,9 @@ const H = {
         totalConnections: provs.reduce((n, p) => n + (p.connections || 16), 0),
       } : null;
       body.ffmpeg = detectFfmpeg() ? detectFfmpeg().version : null;
+      body.encoder = detectEncoder() ? detectEncoder().kind : null;
+      body.encoderHardware = encoderIsHardware();
+      body.transcode4kHardwareOnly = transcode4kHardwareOnly();
       body.ytdlp = ytmusic.detectYtdlp() ? ytmusic.detectYtdlp().version : null;
       body.device = {
         os: `${os.type()} ${os.release()}`, arch: process.arch,
@@ -8174,6 +8191,9 @@ Object.assign(H, {
       debugLogging: debug.enabled(),
       debugLoggingSaved: s.debugLogging === true,
       debugLoggingEnvForced: debug.envForced(),
+      transcode4kHardwareOnly: transcode4kHardwareOnly(s),
+      encoder: detectEncoder() ? detectEncoder().kind : null,
+      encoderHardware: encoderIsHardware(),
       viewerGeolocationEnabled: viewerGeolocationEnabled(),
       viewerGeolocationSavedEnabled: s.viewerGeolocationEnabled === true,
       viewerGeolocationEnvForced: envFlag('TRIBOON_VIEWER_GEO'),
@@ -8344,6 +8364,9 @@ Object.assign(H, {
         debugLogging: b.debugLogging !== undefined
           ? b.debugLogging === true
           : s.debugLogging === true,
+        transcode4kHardwareOnly: b.transcode4kHardwareOnly !== undefined
+          ? b.transcode4kHardwareOnly === true
+          : s.transcode4kHardwareOnly !== false,
         viewerGeolocationEnabled: b.viewerGeolocationEnabled !== undefined
           ? b.viewerGeolocationEnabled === true
           : s.viewerGeolocationEnabled === true,
@@ -8518,12 +8541,16 @@ Object.assign(H, {
       geoCache.clear();
       geoInflight.clear();
     }
+    applyTranscode4kPolicy();
     send(ctx.res, 200, {
       ok: true,
       viewerGeolocationEnabled: viewerGeolocationEnabled(),
       viewerGeolocationEnvForced: envFlag('TRIBOON_VIEWER_GEO'),
       debugLogging: debug.enabled(),
       debugLoggingEnvForced: debug.envForced(),
+      transcode4kHardwareOnly: transcode4kHardwareOnly(),
+      encoder: detectEncoder() ? detectEncoder().kind : null,
+      encoderHardware: encoderIsHardware(),
     });
     if (b.debugLogging !== undefined) {
       console.log(`[debug] ${debug.enabled() ? 'ON' : 'off'}${debug.envForced() ? ' (TRIBOON_DEBUG)' : ''}`);
@@ -8812,6 +8839,9 @@ Object.assign(H, {
     }
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     if (!detectEncoder()) return send(ctx.res, 503, { error: 'no H.264 encoder available on this server' });
+    if (/\b(2160p|4k|uhd)\b/i.test(String(vf.name || '')) && !canTranscode4k()) {
+      return send(ctx.res, 403, { error: '4K transcode needs a GPU encoder on this server' });
+    }
     vf._touched = Date.now();
     // Same idle-timeout disable as /api/remux — a client-paced transcode pipe must not inherit the
     // default 30s socket idle timeout, which killed it mid-buffer and forced a re-mount.

@@ -3086,12 +3086,13 @@ class Pipeline {
     // session is skipped outright, and the ranked list plays without the manual-pick size-window
     // detour (that heuristic models a deliberate human override, which this is not).
     if (params.pinnedResume) {
-      // Last watched file is owed even when Auto would skip it (over-size-cap remux).
-      // Only a dead pin (blocked / missing / ISO) falls back to the ranked race.
+      // Last watched file is owed even when Auto would skip it (over-size-cap remux, or a
+      // 1080 Sources pick while the profile default is now 4K). Only a dead pin (blocked /
+      // missing / ISO) or an over-resolution-cap pin falls back to the ranked race.
       // A pin that turned out to be a DIFFERENT film (runtime verdict) is not owed either: the
       // knock-off "The Odyssey" resumed forever on Nolan's page until the ranked race got a turn.
-      const pinOk = picked && !this._hardDeadCandidate(picked) && picked.health !== 'wrong-runtime'
-        && (this._manualWalkable(picked) || autoPlayable.some((c) => c.pickKey === picked.pickKey));
+      const overResCap = !!(picked && (picked.reasons || []).some((r) => /^over-cap /.test(String(r))));
+      const pinOk = picked && !this._hardDeadCandidate(picked) && picked.health !== 'wrong-runtime' && !overResCap;
       if (!pinOk) return autoPlayable;
       return [picked, ...autoPlayable.filter((c) => c.pickKey !== picked.pickKey)];
     }

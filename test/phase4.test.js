@@ -12,7 +12,7 @@ const path = require('path');
 const http = require('http');
 const zlib = require('zlib');
 const { spawnSync } = require('child_process');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnHls, spawnLiveRemux, spawnTranscode, spawnSubtitleExtract, supportsFfmpegHttpOption } = require('../server/transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, spawnRemux, spawnHls, spawnLiveRemux, spawnTranscode, spawnSubtitleExtract, supportsFfmpegHttpOption } = require('../server/transcode');
 
 const HAS_FFMPEG = !!detectFfmpeg();
 const HAS_FFPROBE = !!detectFfprobe();
@@ -396,6 +396,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     '4K selection should be exact so fallback stays in the 4K source class');
   assert.match(serverForPolicy, /transcode: async \(ctx\) => \{[\s\S]+ctx\.user\.policy\.allowTranscode === false[\s\S]+transcoding is disabled for this account/,
     'per-user allowTranscode=false must be enforced at the transcode endpoint (cap contract, transcoder half)');
+  assert.match(serverForPolicy, /4K transcode needs a GPU encoder on this server/,
+    '4K transcode without a GPU encoder is refused so the CPU box does not melt');
+  assert.match(serverForPolicy, /transcode4kHardwareOnly: b\.transcode4kHardwareOnly !== undefined/,
+    'admin can save the 4K GPU-only transcode switch');
+  assert.match(serverForPolicy, /if \(!caps\.hevc && !canTranscode4k\(\) && preferRank !== 4\) \{[\s\S]+policy\.maxResolutionRank = Math\.min\(policy\.maxResolutionRank \?\? 4, 3\)/,
+    'auto-play on a no-HEVC box without GPU transcode stays at 1080 unless the user tapped 4K');
+  assert.match(ui, /id="transcode4kMode"[\s\S]+id="transcode4kSave"/,
+    'Engine settings expose the 4K GPU-only transcode switch');
   assert.match(serverForPolicy, /const abortRead = \(\) => \{[\s\S]+!\['readAhead', 'background', 'health'\]\.includes\(readPriority\)[\s\S]+vf\.cancelReadAhead\(\)/,
     'a closing read-ahead/warm-ahead/background connection must NOT cancel the live player read-ahead (pause→resume stall fix)');
   assert.match(ui, /data-utr="\$\{esc\(u\.id\)\}"[\s\S]+policy: \{ allowTranscode: cb\.checked \}/,
@@ -6460,10 +6468,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'a Sources tap pins immediately; auto-pick still waits ~30s of real playback');
   assert.match(ui, /userPicked: !!\(picked && \(picked\.name \|\| picked\.pickKey\)\)/,
     'openPlayer records a human Sources choice so the first checkpoint can save that file');
-  assert.match(ui, /if \(!picked && it && it\.key && Number\(it\.resume\) > 0\) \{[\s\S]{0,220}const src = w && w\.meta && w\.meta\.source;[\s\S]{0,220}sourceFitsQualityPref\(src, qRank\)[\s\S]{0,80}picked = \{ name: src\.name, pickKey: src\.pickKey \};/,
+  assert.match(ui, /if \(!picked && it && it\.key && Number\(it\.resume\) > 0\) \{[\s\S]{0,220}const src = w && w\.meta && w\.meta\.source;[\s\S]{0,220}shouldReplayResumePin\(src, it, qRank\)[\s\S]{0,80}picked = \{ name: src\.name, pickKey: src\.pickKey \};/,
     'a resume play replays the pinned source as a pick (explicit Sources picks still win)');
   assert.match(ui, /function sourceFitsQualityPref\(src, qRank\) \{[\s\S]+if \(qRank >= 4\) return rank >= 4;[\s\S]+return rank < 4 && rank <= qRank;/,
     'a 4K pin must not ride along after the user taps 1080 — Play should pick a 1080 source');
+  assert.match(ui, /function shouldReplayResumePin\(src, it, qRank\) \{[\s\S]+pinRank > qRank[\s\S]+S\._qualityTappedKey[\s\S]+return true;/,
+    'Continue Watching keeps the last file and does not auto-upgrade 1080 to 4K');
   assert.match(ui, /const userPicked = !!\(picked && \(picked\.name \|\| picked\.pickKey\)\);[\s\S]+if \(resumeSec > 0 && !userPicked\) \{[\s\S]+body\.resumeFrac = Math\.max\(0, Math\.min\(0\.98, resumeSec \/ dur\)\);/,
     'resumeFrac warms any same-title resume; an explicit Sources pick must not treat the old file duration as a percent of the new one');
   assert.match(ui, /if \(pos >= resumeAt - 5\) p\._resumeLanded = true;[\s\S]+if \(!watched && !\(p\.item && p\.item\._startOver\) && resumeAt > 30 && !p\._resumeLanded && pos < resumeAt - 20\) \{[\s\S]+pos = resumeAt;/,
@@ -6472,6 +6482,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'a replayed pin is FLAGGED as a pinned resume so the server may skip a rotted pin and keep the parallel race (a manual Sources pick stays unflagged)');
   assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(it, null, qRank\) \}/,
     'Home/Details prepare uses the same body as Play, so Continue Watching warms the pinned last source');
+  assert.match(ui, /if \(pinnedResume && picked\) \{[\s\S]+body\.preferResolutionRank = pinRank;[\s\S]+body\.maxResolutionRank = Math\.max\(qRank, pinRank\)/,
+    'Continue Watching prefers the pinned file\'s own resolution so a 4K profile does not remount a different 4K');
   assert.match(ui, /p\.sourcePickKey = \(r\.candidate && r\.candidate\.pickKey\) \|\| null; \/\/ resume must pin the REPLACEMENT, not the dead source[\s\S]{0,120}p\._resumeSourceOk = false;/,
     'recovery advance repoints the pin at the replacement source and makes it re-earn the 30s');
   // Native audio language: payload carries the user's saved preference + the probed source tracks
@@ -7639,8 +7651,22 @@ test('client caps: hardware that decodes the codec gets a bit-exact copy (true d
   assert.strictEqual(decidePlayback('Movie.1992.1080p.BluRay.X264-GROUP', {}).method, detectFfmpeg() ? 'remux' : 'direct');
   const budget4k = decidePlayback('Dune.2024.2160p.WEB-DL.DDP5.1.H.265-NTb.mkv',
     { native: true, lowPower: true, mkv: true, hevc: false, ac3: true, eac3: false });
-  if (detectEncoder()) {
-    assert.strictEqual(budget4k.method, 'transcode', '4K on a box with no HEVC hardware must transcode, not remux-and-spin');
+  if (canTranscode4k()) {
+    assert.strictEqual(budget4k.method, 'transcode', '4K on a box with no HEVC hardware must transcode when a GPU encoder is live');
+  } else {
+    assert.ok(budget4k.skip4k, '4K without HEVC and without a GPU encoder must not CPU-transcode');
+    assert.strictEqual(budget4k.method, detectFfmpeg() ? 'remux' : 'direct');
+  }
+  const prevSoft = require('../server/transcode').allowSoftware4k();
+  setAllowSoftware4k(true);
+  try {
+    if (detectEncoder() && !encoderIsHardware()) {
+      const soft4k = decidePlayback('Dune.2024.2160p.WEB-DL.DDP5.1.H.265-NTb.mkv',
+        { native: true, lowPower: true, mkv: true, hevc: false, ac3: true, eac3: false });
+      assert.strictEqual(soft4k.method, 'transcode', 'admin software-4K opt-in still transcodes on CPU');
+    }
+  } finally {
+    setAllowSoftware4k(prevSoft);
   }
   const onn4k = decidePlayback('Dune.2024.2160p.WEB-DL.DDP5.1.H.265-NTb.mkv',
     { native: true, lowPower: true, mkv: true, hevc: true, ac3: true, eac3: false });
