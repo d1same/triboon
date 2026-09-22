@@ -4721,7 +4721,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'online subtitle URLs should carry a timing shift when sync is adjusted');
   assert.match(ui, /const activeShift = p\.subTrack === rel && Number\.isFinite\(\+p\._subShift\) \? \+p\._subShift : null;[\s\S]+const shift = !list \? \(activeShift !== null \? activeShift : loadSubShift\(rel\)\) : 0;/,
     'native subtitle choice URLs should carry the saved sync for their own row, not the currently active row');
-  assert.match(android, /double t = Math\.max\(0, nativeDisplayPositionMs\(\) \/ 1000\.0 - nativeSubtitleShift\);/,
+  assert.match(android, /long live = nativeDisplayPositionMs\(\);[\s\S]+double t = Math\.max\(0, nativeSubtitleMediaMs\(\) \/ 1000\.0 - nativeSubtitleShift\);/,
     'native subtitle overlay should compare cues against the episode display clock after remux seeks');
   assert.match(android, /String selectedSubtitleUrl = subtitleUrlForRel\(choice\.subtitleRel\);[\s\S]+nativeSubtitleShift = nativeShiftFromUrl\(selectedSubtitleUrl\);[\s\S]+ValidatedNativeUrl subtitlePin = cleanSubtitleUrl\.isEmpty\(\) \? null : validateNativePlaybackUrl\(cleanSubtitleUrl\);[\s\S]+nativeSubtitleUrl = subtitlePin == null \? "" : subtitlePin\.connectUrl;[\s\S]+nativeSubtitleHostHeader = subtitlePin == null \? "" : subtitlePin\.hostHeader;/,
     'native subtitle version changes should preserve the saved subtitle sync instead of resetting to zero');
@@ -4775,8 +4775,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'player subtitle labels should not show provider branding');
   assert.match(ui, /if \(prefSubtitleMode\(\) !== 'always'\) return '';/,
     'native subtitles should respect manual mode before considering saved online subtitle choices');
-  assert.match(ui, /function activeSubtitleCues\(tt\) \{[\s\S]+tt\.activeCues[\s\S]+tt\.cues[\s\S]+\$\(\'video\'\)[\s\S]+v\.currentTime[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
-    'web subtitle rendering should fall back to scanning loaded cues when activeCues is empty');
+  assert.match(ui, /function subtitleMediaNow\(p\) \{[\s\S]+p\._subFrozen[\s\S]+p\._subSlip[\s\S]+function activeSubtitleCues\(tt\) \{[\s\S]+subtitleMediaNow\(S\.playing\)[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
+    'captions follow the picture clock and drop a stall jump instead of the browser cue scheduler');
+  assert.match(android, /nativeSubtitleMediaMs\(\)[\s\S]+nativePlayer\.isPlaying\(\)[\s\S]+nativeSubtitleSlipMs/,
+    'native captions stay on the frozen frame and ignore a clock jump from the buffer');
   assert.match(ui, /function renderSubCues\(\) \{[\s\S]+const active = activeSubtitleCues\(tt\);[\s\S]+for \(const c of active\.slice\(-5\)\)/,
     'web subtitle overlay should render from the shared active-cue helper and cap noisy tracks at 5 lines');
   assert.match(ui, /function applySubtitleTrack\(\) \{[\s\S]+const seq = \(p\._subSeq \|\| 0\) \+ 1; p\._subSeq = seq;[\s\S]+if \(p\.subTrack === null \|\| p\.subTrack === undefined\) \{ clearTimeout\(_subPrepT\); return; \}/,

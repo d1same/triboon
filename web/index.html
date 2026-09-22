@@ -12959,6 +12959,7 @@ async function openPlayer(it, mount, opts = {}) {
     clearWebRebufferRecovery(); clearPauseIdleExit(); cancelPauseWarmAhead(); playingRef._pausedAt = 0; playingRef._webResuming = false; markVodPlaybackStarted(playingRef);
     bumpPlayClock(playingRef);
     clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame();
+    if (!(playingRef.item && playingRef.item.type === 'live')) renderSubCues();
   };
   v.onpause = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
@@ -12998,6 +12999,7 @@ async function openPlayer(it, mount, opts = {}) {
     if (playingRef.item && playingRef.item.type === 'live' && v.readyState >= 2) clearReadyFrame();
     if ($('playerLoader').classList.contains('show')) { clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); }
     hideSeekHoldFrame();
+    if (!(playingRef.item && playingRef.item.type === 'live')) renderSubCues();
   };
   // A finished movie closes the player itself. Episodes keep the Up Next card on screen even
   // if the final timeupdate did not fire before the ended event.
@@ -13107,6 +13109,7 @@ function startSource(kind, atSeconds, opts = {}) {
   const serverSeek = p.usingRemux || p.usingTranscode;
   const seekStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
   p.startOffset = seekStart;
+  resetSubtitleClock(p, 0);
   cleanupLiveMse();
   if (p.item && p.item.type === 'live') {
     // iPhone/iPad only: play the tokened provider HLS in <video>. MSE remux stays on every
@@ -16336,6 +16339,7 @@ function seekTo(seconds) {
   hideSeekThumb(); // the preview's job ends when the real seek commits
   const v = $('video'); const p = S.playing; if (!p) return;
   seconds = Math.max(0, seconds);
+  resetSubtitleClock(p, (p.usingRemux || p.usingTranscode) ? Math.max(0, seconds - (p.startOffset || 0)) : seconds);
   if (p.castingActive) { // seek the TV, not the idle local element
     if (_castRp && _castRpc) { try { _castRp.currentTime = seconds; _castRpc.seek(); p.castPos = seconds; } catch {} }
     else if (window.TriboonTV && TriboonTV.castControl) { try { TriboonTV.castControl('seek:' + Math.floor(seconds)); p.castPos = seconds; } catch {} }
@@ -17512,14 +17516,45 @@ function applySubShiftToCues(tt, shift) {
 // native cue PAINTING is unreliable (tracks "showing", cues active, nothing on screen —
 // the "is it under the player?" mystery). mode:'hidden' keeps parsing + cuechange events
 // while we own the pixels — same look everywhere, sized by the caption preference.
+function resetSubtitleClock(p, videoSeconds) {
+  if (!p || (p.item && p.item.type === 'live')) return;
+  p._subSlip = 0;
+  p._subShown = Math.max(0, Number(videoSeconds) || 0);
+  p._subShownWall = Date.now();
+  p._subFrozen = false;
+}
+// A freeze/buffer/disconnect must not walk the captions. While the picture is stuck,
+// keep the last line. If the media clock then jumps by about that wait, drop the jump
+// so the words stay with the frame the person is looking at. A real seek resets this.
+function subtitleMediaNow(p) {
+  const v = $('video');
+  const raw = Math.max(0, (v && Number.isFinite(v.currentTime) ? v.currentTime : 0) || 0);
+  if (!p || (p.item && p.item.type === 'live')) return raw;
+  const moving = !!(v && !v.paused && !v.seeking && v.readyState >= 3);
+  if (!moving) {
+    if (p._subShown == null) p._subShown = raw;
+    p._subFrozen = true;
+    return Math.max(0, p._subShown - (p._subSlip || 0));
+  }
+  if (p._subFrozen && p._subShown != null && p._subShownWall) {
+    const wallSec = Math.max(0, (Date.now() - p._subShownWall) / 1000);
+    const jump = raw - p._subShown;
+    if (jump > 2 && (Math.abs(jump - wallSec) < 2 || jump > wallSec + 1.5)) {
+      p._subSlip = (p._subSlip || 0) + jump;
+    }
+  }
+  p._subFrozen = false;
+  p._subShown = raw;
+  p._subShownWall = Date.now();
+  return Math.max(0, raw - (p._subSlip || 0));
+}
 function activeSubtitleCues(tt) {
   if (!tt || tt.mode === 'disabled') return [];
-  const active = tt.activeCues && tt.activeCues.length ? [...tt.activeCues] : [];
-  if (active.length) return active;
   const cues = tt.cues ? [...tt.cues] : [];
   if (!cues.length) return [];
-  const v = $('video');
-  const now = Math.max(0, (v && Number.isFinite(v.currentTime) ? v.currentTime : 0) || 0);
+  // activeCues follows the browser cue scheduler. After a stall that scheduler stays
+  // on the old line (or skips ahead by the wait). The video clock is the picture.
+  const now = subtitleMediaNow(S.playing);
   return cues.filter((c) => now + 0.05 >= c.startTime && now <= c.endTime + 0.05);
 }
 function renderSubCues() {

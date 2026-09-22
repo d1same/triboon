@@ -126,6 +126,19 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-22, v3.2.4 ship — captions stay on the frozen frame after a buffer
+or disconnect, and a real skip still moves them:
+
+- Version contract: `package.json` 3.2.4; Android `versionName` 3.2.4 /
+  `versionCode` 381; Windows client package/Tauri/Cargo(.lock) 3.2.4.
+- Gate: `npm.cmd test` 721/721. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.4, household VOD play/seek/resume/CC, household
+  IPTV first-byte + retune, household overlapping Play, Android lint +
+  unit tests + debug build, Android ExoPlayer stress on `emulator-5554`
+  (never the Shield). Household live used the Unraid server. Windows
+  GPU/HDR was not run.
+
 2026-09-21, v3.2.3 ship — Now Watching shows the episode. Settings/F5 stay
 cheap. A VOD restart keeps leftover on-device video playing, then remounts
 the same movie/show/local file at the second they reached (Live TV unchanged):

@@ -317,6 +317,9 @@ public class MainActivity extends Activity {
     private final Object nativeSubtitleFetchLock = new Object();
     private HttpURLConnection nativeSubtitleConn;
     private float nativeSubtitleShift;
+    private long nativeSubtitleShownMs = -1L;
+    private long nativeSubtitleShownWallMs;
+    private long nativeSubtitleSlipMs;
     private boolean nativeHasWyzieSubtitle;
     private boolean nativeLiveStarted;
     private boolean nativeUserSeeking;
@@ -4466,6 +4469,11 @@ public class MainActivity extends Activity {
                 nativeSeekHoldDisplayMs = 0L;
             }
             nativeStartOffsetMs = "video".equals(mode) ? startOffsetMs : 0L;
+            if (!reuseQuietVideo) {
+                nativeSubtitleSlipMs = 0L;
+                nativeSubtitleShownMs = nativeStartOffsetMs;
+                nativeSubtitleShownWallMs = SystemClock.elapsedRealtime();
+            }
             // Quiet remount of an already-playing title is a rebuffer, not a cold start.
             // Resetting this made 4K remux Play use the 12s startup watchdog and recover-loop.
             if (!(reuseQuietVideo && nativeVideoStarted)) nativeVideoStarted = false;
@@ -5159,6 +5167,9 @@ public class MainActivity extends Activity {
         if (web == null || !"video".equals(nativeMode)) return;
         nativeVideoUnhealthySinceMs = 0L;
         nativeVideoErrorNotified = false;
+        nativeSubtitleSlipMs = 0L;
+        nativeSubtitleShownMs = Math.max(0L, displayMs);
+        nativeSubtitleShownWallMs = SystemClock.elapsedRealtime();
         nativeResumeGraceUntilMs = SystemClock.elapsedRealtime()
                 + (nativeServerSeekMode() ? NATIVE_VIDEO_REMUX_RESUME_GRACE_MS : NATIVE_VIDEO_RESUME_GRACE_MS);
         web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
@@ -6469,6 +6480,26 @@ public class MainActivity extends Activity {
         }
     }
 
+    // While the picture is frozen, captions stay on that frame. A buffer that makes
+    // ExoPlayer's clock jump by about the wait is ignored. A real seek clears the slip.
+    private long nativeSubtitleMediaMs() {
+        long live = nativeDisplayPositionMs();
+        boolean moving = nativePlayer != null && nativePlayer.isPlaying();
+        if (!moving) {
+            if (nativeSubtitleShownMs < 0L) nativeSubtitleShownMs = live;
+            return Math.max(0L, nativeSubtitleShownMs - nativeSubtitleSlipMs);
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (nativeSubtitleShownMs >= 0L && nativeSubtitleShownWallMs > 0L && live - nativeSubtitleShownMs > 2000L) {
+            long wall = Math.max(0L, now - nativeSubtitleShownWallMs);
+            long jump = live - nativeSubtitleShownMs;
+            if (Math.abs(jump - wall) < 2000L || jump > wall + 1500L) nativeSubtitleSlipMs += jump;
+        }
+        nativeSubtitleShownMs = live;
+        nativeSubtitleShownWallMs = now;
+        return Math.max(0L, live - nativeSubtitleSlipMs);
+    }
+
     private void updateNativeSubtitleOverlay() {
         if (nativeSubtitleOverlay == null) return;
         if (nativePercentResumePending) {
@@ -6482,7 +6513,7 @@ public class MainActivity extends Activity {
             nativeSubtitleOverlay.setVisibility(View.GONE);
             return;
         }
-        double t = Math.max(0, nativeDisplayPositionMs() / 1000.0 - nativeSubtitleShift);
+        double t = Math.max(0, nativeSubtitleMediaMs() / 1000.0 - nativeSubtitleShift);
         java.util.ArrayList<String> active = new java.util.ArrayList<>();
         for (NativeCue cue : nativeSubtitleCues) {
             if (t + 0.05 < cue.start) {
