@@ -342,7 +342,9 @@ test('release contract: Docker downloads are pinned, verified, and carry license
   assert.match(dockerfile, /^ARG YTDLP_SHA256=[0-9a-f]{64}$/m);
   assert.match(dockerfile, /^ARG ALASS_VERSION=\S+$/m);
   assert.match(dockerfile, /^ARG ALASS_SHA256=[0-9a-f]{64}$/m);
-  assert.strictEqual((dockerfile.match(/sha256sum -c -/g) || []).length, 2, 'both downloaded binaries are verified');
+  assert.match(dockerfile, /^ARG JELLYFIN_WEB_SHA256=[0-9a-f]{64}$/m);
+  assert.strictEqual((dockerfile.match(/sha256sum -c -/g) || []).length, 3, 'yt-dlp, alass, and jellyfin-web are hash-checked');
+  assert.match(read('THIRD-PARTY-NOTICES.md'), /jellyfin-web \| 10\.11\.11/);
   assert.doesNotMatch(dockerfile, /releases\/latest/, 'container build does not consume mutable release URLs');
   assert.match(dockerfile, /COPY LICENSE THIRD-PARTY-NOTICES\.md/);
   assert.match(dockerignore, /^!THIRD-PARTY-NOTICES\.md$/m,

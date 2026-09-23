@@ -2889,6 +2889,10 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'direct-play IO after a real start retries the same player in place');
   assert.match(android, /private void resumeNativeVideoInPlace\(\) \{[\s\S]+nativeQuietSeekHoldPlay \|\| nativeResumeGraceUntilMs[\s\S]+hideNativeLoading\(\);[\s\S]+__tvNativeVideoResuming[\s\S]+STATE_IDLE \|\| state == Player\.STATE_ENDED[\s\S]+remountNativeRemuxAtResume\(\)[\s\S]+nativeRemuxBufferLooksLive\(\)[\s\S]+nativePlayer\.play\(\)[\s\S]+nativeRemuxInPlaceResumeCheck/,
     'Play after a crash must hide the circles; remux Play uses leftover when live and remounts only a dead pipe; a second Play while remounting is ignored');
+  assert.match(android, /NATIVE_LONG_PAUSE_REMOUNT_MS = 45000L[\s\S]+pausedForMs >= NATIVE_LONG_PAUSE_REMOUNT_MS[\s\S]+nativeRemuxBufferLooksLive\(\)/,
+    'a phone-call length pause remounts the same file instead of playing a dead leftover');
+  assert.match(android, /protected void onPause\(\) \{[\s\S]+nativeWantsPause\(\)[\s\S]+markNativeUserPaused\(\)[\s\S]+nativePlayer\.pause\(\)/,
+    'leaving the app, including a phone call, remembers when playback stopped');
   assert.match(ui, /window\.__tvNativeVideoResuming = \(pos, dur, token\) => \{[\s\S]+p\.nativePaused = false;/,
     'user Play must clear nativePaused so a dead remux pipe can recover');
   assert.match(ui, /function remuxResumeLooksLive\(v\) \{[\s\S]+ranges\.end\(i\) > t \+ 0\.4[\s\S]+function togglePlay\(\) \{[\s\S]+p\.usingRemux \|\| p\.usingTranscode[\s\S]+if \(p\._webResuming\) \{ updPP\(\); return; \}[\s\S]+if \(remuxResumeLooksLive\(v\)\) \{[\s\S]+requestVideoPlay\(v\)[\s\S]+remountWebRemuxResume\(p\)/,
@@ -3593,6 +3597,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'phone details drop the 44vh TV hero hollow');
   assert.match(ui, /@media \(hover:none\) and \(pointer:coarse\)\{[\s\S]+body:not\(\.tv\) #backdrop[\s\S]+body:not\(\.tv\) #home\{justify-content:flex-start!important\}[\s\S]+body:not\(\.tv\) #rows/,
     'landscape phones still pin the catalog under the burger when the CSS viewport is wider than 600px');
+  assert.match(ui, /@media \(hover:none\) and \(pointer:coarse\)\{[\s\S]+body:not\(\.tv\) \.cwAct\{display:none!important\}[\s\S]+body:not\(\.tv\) \.cardMenuBtn,body:not\(\.tv\) \.epMenuBtn\{opacity:\.95/,
+    'phone posters and thumbnails show one options button and hide the continue-watching check and X');
+  assert.match(ui, /body\.mobileShell:not\(\.tv\) \.cwAct\{display:none!important\}[\s\S]+body\.mobileShell:not\(\.tv\) \.cardMenuBtn,[\s\S]+body\.mobileShell:not\(\.tv\) \.epMenuBtn\{opacity:\.95/,
+    'the Android phone app uses the same one-button poster menu');
   assert.ok(ui.includes('body.mobileShell:not(.tv) #trailer .trailerCtl,')
     && ui.includes('flex:0 0 auto;min-height:52px;padding:14px 28px;font-size:15px')
     && ui.includes('@media (orientation:landscape){')
@@ -4116,8 +4124,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native playback should not allow provider redirects to switch protocols after URL validation');
   assert.match(android, /setAudioAttributes\(new AudioAttributes\.Builder\(\)[\s\S]+setUsage\(C\.USAGE_MEDIA\)[\s\S]+setHandleAudioBecomingNoisy\(true\)/,
     'Android ExoPlayer should request media audio focus and pause on noisy-device changes');
-  assert.match(android, /protected void onPause\(\) \{[\s\S]+boolean inPip = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.N && isInPictureInPictureMode\(\);[\s\S]+if \(nativePlayer != null && !inPip\) nativePlayer\.pause\(\);[\s\S]+__tvNativeVideoProgress[\s\S]+__tvPlaybackBackgrounded[\s\S]+document\.querySelectorAll\('video'\)\.forEach\(v=>v\.pause\(\)\)[\s\S]+if \(!inPip && !musicPlaying\) \{[\s\S]+web\.evaluateJavascript\(checkpoint, ignored -> suspendWeb\.run\(\)\);[\s\S]+web\.postDelayed\(suspendWeb, 250L\);/,
-    'Android backgrounding should checkpoint exact native progress before pausing playback/WebView timers, while keeping system PiP playback and background music alive');
+  assert.match(android, /protected void onPause\(\) \{[\s\S]+boolean inPip = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.N && isInPictureInPictureMode\(\);[\s\S]+if \(nativePlayer != null && !inPip\) \{[\s\S]+nativeWantsPause\(\)[\s\S]+markNativeUserPaused\(\)[\s\S]+nativePlayer\.pause\(\);[\s\S]+__tvNativeVideoProgress[\s\S]+__tvPlaybackBackgrounded[\s\S]+document\.querySelectorAll\('video'\)\.forEach\(v=>v\.pause\(\)\)[\s\S]+if \(!inPip && !musicPlaying\) \{[\s\S]+web\.evaluateJavascript\(checkpoint, ignored -> suspendWeb\.run\(\)\);[\s\S]+web\.postDelayed\(suspendWeb, 250L\);/,
+    'Android backgrounding should remember a phone-call pause, then checkpoint exact native progress before pausing playback/WebView timers, while keeping system PiP playback and background music alive');
   assert.doesNotMatch(android, /protected void onPause\(\) \{[\s\S]{0,240}closeNativePlayback\(true\);/,
     'Android onPause must not close native playback; that caused resume/PiP churn');
   assert.match(android, /protected void onUserLeaveHint\(\) \{[\s\S]+super\.onUserLeaveHint\(\);[\s\S]+enterNativePictureInPictureIfUseful\(\);[\s\S]+onPictureInPictureModeChanged\(boolean isInPictureInPictureMode, Configuration newConfig\)[\s\S]+PictureInPictureParams\.Builder\(\)[\s\S]+new Rational\(16, 9\)/,

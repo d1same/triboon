@@ -172,10 +172,114 @@ function owns(ctx, id) {
   return false;
 }
 
+// The TV app only accepts item ids shaped like 8-4-4-4-12. Ours are short
+// (m550, viewmovies, l{library}i{file}). Pack the short id into that shape
+// and unpack it when the app asks for the same poster again.
+const ITEM_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function uuidFromBytes(buf) {
+  const hex = buf.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+function u32(n) {
+  const v = Number(n);
+  if (!Number.isInteger(v) || v < 0 || v > 0xffffffff) return null;
+  return v;
+}
+
+function u16(n) {
+  const v = Number(n);
+  if (!Number.isInteger(v) || v < 0 || v > 0xffff) return null;
+  return v;
+}
+
+function publicItemId(short) {
+  const id = String(short || '');
+  if (ITEM_UUID.test(id)) return internalItemId(id) === id.toLowerCase() ? id.toLowerCase() : publicItemId(internalItemId(id));
+  const buf = Buffer.alloc(16);
+  let m;
+  const tmdb = (kind, value) => {
+    const n = u32(value);
+    if (n == null) return false;
+    buf[0] = kind;
+    buf.writeUInt32BE(n, 1);
+    return true;
+  };
+  if (id === 'viewmovies') buf[0] = 1;
+  else if (id === 'viewshows') buf[0] = 2;
+  else if ((m = /^m(\d+)$/.exec(id)) && tmdb(3, m[1])) { /* movie */ }
+  else if ((m = /^t(\d+)$/.exec(id)) && tmdb(4, m[1])) { /* series */ }
+  else if ((m = /^n(\d+)s(\d+)$/.exec(id)) && tmdb(5, m[1]) && u16(m[2]) != null) buf.writeUInt16BE(u16(m[2]), 5);
+  else if ((m = /^e(\d+)s(\d+)e(\d+)$/.exec(id)) && tmdb(6, m[1]) && u16(m[2]) != null && u16(m[3]) != null) {
+    buf.writeUInt16BE(u16(m[2]), 5);
+    buf.writeUInt16BE(u16(m[3]), 7);
+  } else if ((m = /^p(\d+)$/.exec(id)) && tmdb(7, m[1])) { /* person */ }
+  else if ((m = /^l([0-9a-f]{10})i(\d+)s(\d+)$/i.exec(id)) && u32(m[2]) != null && u16(m[3]) != null) {
+    buf[0] = 10;
+    Buffer.from(m[1], 'hex').copy(buf, 1);
+    buf.writeUInt32BE(u32(m[2]), 6);
+    buf.writeUInt16BE(u16(m[3]), 10);
+  } else if ((m = /^l([0-9a-f]{10})i(\d+)$/i.exec(id)) && u32(m[2]) != null) {
+    buf[0] = 9;
+    Buffer.from(m[1], 'hex').copy(buf, 1);
+    buf.writeUInt32BE(u32(m[2]), 6);
+  } else if ((m = /^l([0-9a-f]{10})$/i.exec(id))) {
+    buf[0] = 8;
+    Buffer.from(m[1], 'hex').copy(buf, 1);
+  } else {
+    const hash = crypto.createHash('sha256').update(`triboon-jf-item:${id}`).digest().subarray(0, 16);
+    hash[0] = 15;
+    return uuidFromBytes(hash);
+  }
+  return uuidFromBytes(buf);
+}
+
+function internalItemId(incoming) {
+  const id = String(incoming || '');
+  if (!ITEM_UUID.test(id)) return id;
+  const buf = Buffer.from(id.replace(/-/g, ''), 'hex');
+  const kind = buf[0];
+  const n = buf.readUInt32BE(1);
+  const lib = buf.subarray(1, 6).toString('hex');
+  if (kind === 1) return 'viewmovies';
+  if (kind === 2) return 'viewshows';
+  if (kind === 3) return `m${n}`;
+  if (kind === 4) return `t${n}`;
+  if (kind === 5) return `n${n}s${buf.readUInt16BE(5)}`;
+  if (kind === 6) return `e${n}s${buf.readUInt16BE(5)}e${buf.readUInt16BE(7)}`;
+  if (kind === 7) return `p${n}`;
+  if (kind === 8) return `l${lib}`;
+  if (kind === 9) return `l${lib}i${buf.readUInt32BE(6)}`;
+  if (kind === 10) return `l${lib}i${buf.readUInt32BE(6)}s${buf.readUInt16BE(10)}`;
+  return id.toLowerCase();
+}
+
+function stampItem(item) {
+  if (!item || typeof item !== 'object') return item;
+  if (item.Id) {
+    const short = internalItemId(item.Id);
+    item.Id = publicItemId(short);
+    if (item.UserData && typeof item.UserData === 'object') {
+      item.UserData.PlaybackPositionTicks = Number(item.UserData.PlaybackPositionTicks) || 0;
+      item.UserData.PlayCount = Number(item.UserData.PlayCount) || 0;
+      item.UserData.IsFavorite = !!item.UserData.IsFavorite;
+      item.UserData.Played = !!item.UserData.Played;
+      item.UserData.Key = short;
+      item.UserData.ItemId = item.Id;
+    }
+  }
+  for (const key of ['ParentId', 'SeriesId', 'SeasonId']) {
+    if (typeof item[key] === 'string' && item[key]) item[key] = publicItemId(item[key]);
+  }
+  if (Array.isArray(item.People)) item.People.forEach(stampItem);
+  return item;
+}
+
 // Item ids are short and stable. A movie is m550, a show is t1396, a season is
 // n1396s2, an episode is e1396s2e5. Browsing these never mounts usenet.
 function parseItemId(id) {
-  const s = String(id || '').toLowerCase();
+  const s = internalItemId(id).toLowerCase();
   let m = s.match(/^m(\d{1,10})$/);
   if (m) return { type: 'movie', tmdbId: Number(m[1]) };
   m = s.match(/^t(\d{1,10})$/);
@@ -214,7 +318,7 @@ function baseItem(fields) {
   const imageTags = {};
   if (fields.poster) imageTags.Primary = fields.poster === 'local' ? 'disk2' : 'p';
   if (fields.thumb) imageTags.Thumb = 't';
-  return {
+  return stampItem({
     ServerId: serverId(deps.auth.secret),
     ImageTags: imageTags,
     BackdropImageTags: fields.backdrop ? ['b'] : [],
@@ -229,7 +333,7 @@ function baseItem(fields) {
     ProductionYear: fields.year || null,
     PremiereDate: fields.premiere ? `${String(fields.premiere).slice(0, 10)}T00:00:00.0000000Z` : null,
     RunTimeTicks: ticks(fields.runtime),
-  };
+  });
 }
 
 function named(list) {
@@ -252,7 +356,7 @@ function personDto(row, type, role) {
   if (!row || !row.id || !row.name) return null;
   const person = { Name: row.name, Id: `p${row.id}`, Type: type, Role: role || type };
   if (row.profile_path) person.PrimaryImageTag = 'p';
-  return person;
+  return stampItem(person);
 }
 
 function peopleOf(credits) {
@@ -442,6 +546,45 @@ function watchFilters(filters) {
   return (filters || []).some((filter) => filter === 'isplayed' || filter === 'isunplayed' || filter === 'isresumable' || filter === 'isfavorite');
 }
 
+// The current Jellyfin TV app refuses to open a movie if any of these are missing.
+function completeSource(row) {
+  return {
+    Protocol: 'File',
+    Type: 'Default',
+    Container: 'mp4',
+    IsRemote: true,
+    ReadAtNativeFramerate: false,
+    IgnoreDts: false,
+    IgnoreIndex: false,
+    GenPtsInput: false,
+    SupportsTranscoding: true,
+    SupportsDirectStream: false,
+    SupportsDirectPlay: false,
+    IsInfiniteStream: false,
+    RequiresOpening: false,
+    RequiresClosing: false,
+    RequiresLooping: false,
+    SupportsProbing: true,
+    TranscodingSubProtocol: 'http',
+    HasSegments: false,
+    ...row,
+  };
+}
+
+function completeStream(row) {
+  return {
+    IsInterlaced: false,
+    IsForced: false,
+    IsExternal: false,
+    IsHearingImpaired: false,
+    IsTextSubtitleStream: false,
+    SupportsExternalStream: false,
+    ...row,
+    IsTextSubtitleStream: row.Type === 'Subtitle',
+    SupportsExternalStream: row.Type === 'Subtitle' && row.IsExternal !== false,
+  };
+}
+
 function mediaStreamsFromProbe(probe) {
   if (!probe) return null;
   const streams = [];
@@ -450,21 +593,21 @@ function mediaStreamsFromProbe(probe) {
   const audio = Array.isArray(probe.audio) ? probe.audio : [];
   if (!video.length && !audio.length) return null;
   for (const track of video) {
-    streams.push({
+    streams.push(completeStream({
       Index: index++,
       Type: 'Video',
       Codec: track.codec || 'h264',
       Height: track.height || null,
       IsDefault: streams.length === 0,
       DisplayTitle: track.height ? `${track.height}p` : 'Video',
-    });
+    }));
   }
   if (!video.length) {
-    streams.push({ Index: index++, Type: 'Video', Codec: 'h264', IsDefault: true, DisplayTitle: 'Video' });
+    streams.push(completeStream({ Index: index++, Type: 'Video', Codec: 'h264', IsDefault: true, DisplayTitle: 'Video' }));
   }
   audio.forEach((track, audioIndex) => {
     const lang = track.lang || '';
-    streams.push({
+    streams.push(completeStream({
       Index: index++,
       Type: 'Audio',
       Codec: track.codec || 'aac',
@@ -472,7 +615,7 @@ function mediaStreamsFromProbe(probe) {
       Channels: track.channels || 2,
       IsDefault: audioIndex === 0,
       DisplayTitle: track.title || lang || `Audio ${audioIndex + 1}`,
-    });
+    }));
   });
   return streams;
 }
@@ -485,7 +628,7 @@ const SUB_LANG = {
 
 function subtitleStream(index, lang, title, forced) {
   const code = String(lang || '').toLowerCase();
-  return {
+  return completeStream({
     Index: index,
     Type: 'Subtitle',
     Codec: 'webvtt',
@@ -495,15 +638,15 @@ function subtitleStream(index, lang, title, forced) {
     IsForced: !!forced,
     IsExternal: true,
     DeliveryMethod: 'External',
-  };
+  });
 }
 
 // Jellyfin's own CC button loads these. A sidecar .srt next to the movie, or a
 // text track inside the file. No downloaded subtitle search.
 function streamsWithSubtitles(probe, sidecars) {
   const streams = mediaStreamsFromProbe(probe) || [
-    { Index: 0, Type: 'Video', Codec: 'h264', IsDefault: true, DisplayTitle: 'Video' },
-    { Index: 1, Type: 'Audio', Codec: 'aac', IsDefault: true, Language: '', DisplayTitle: 'Audio' },
+    completeStream({ Index: 0, Type: 'Video', Codec: 'h264', IsDefault: true, DisplayTitle: 'Video' }),
+    completeStream({ Index: 1, Type: 'Audio', Codec: 'aac', IsDefault: true, Language: '', DisplayTitle: 'Audio' }),
   ];
   const byIndex = new Map();
   let index = streams.reduce((n, row) => Math.max(n, Number(row.Index) + 1), 0);
@@ -528,12 +671,12 @@ async function attachLocalMedia(ctx, item, parsed) {
   if (info.seconds) item.RunTimeTicks = Math.round(info.seconds * 10000000);
   const streams = mediaStreamsFromProbe(info.probe);
   if (streams) {
-    item.MediaSources = [{
+    item.MediaSources = [completeSource({
       Id: item.Id,
       Protocol: 'File',
       RunTimeTicks: item.RunTimeTicks,
       MediaStreams: streams,
-    }];
+    })];
   }
   return item;
 }
@@ -598,12 +741,13 @@ function pageOf(items, ctx) {
 }
 
 function libraryFolder(id) {
-  if (id === 'viewmovies') return baseItem({ id, name: 'Movies', type: 'CollectionFolder', extra: { CollectionType: 'movies', IsFolder: true } });
-  if (id === 'viewshows') return baseItem({ id, name: 'Shows', type: 'CollectionFolder', extra: { CollectionType: 'tvshows', IsFolder: true } });
+  if (id === 'viewmovies') return baseItem({ id, name: 'Movies', type: 'CollectionFolder', poster: 'shelf', thumb: 'shelf', aspect: 0.6666667, extra: { CollectionType: 'movies', IsFolder: true } });
+  if (id === 'viewshows') return baseItem({ id, name: 'Shows', type: 'CollectionFolder', poster: 'shelf', thumb: 'shelf', aspect: 0.6666667, extra: { CollectionType: 'tvshows', IsFolder: true } });
   return null;
 }
 
 async function itemById(id, ctx) {
+  id = internalItemId(id);
   const folder = libraryFolder(id);
   if (folder) return folder;
   const parsed = parseItemId(id);
@@ -634,11 +778,11 @@ async function itemById(id, ctx) {
   }
   if (parsed.type === 'season') {
     const seasons = await seasonsFor(parsed.tmdbId);
-    return seasons.find((row) => row.Id === `n${parsed.tmdbId}s${parsed.season}`) || null;
+    return seasons.find((row) => internalItemId(row.Id) === `n${parsed.tmdbId}s${parsed.season}`) || null;
   }
   if (parsed.type === 'episode') {
     const episodes = await episodesFor(parsed.tmdbId, parsed.season);
-    return episodes.find((row) => row.Id === `e${parsed.tmdbId}s${parsed.season}e${parsed.episode}`) || null;
+    return episodes.find((row) => internalItemId(row.Id) === `e${parsed.tmdbId}s${parsed.season}e${parsed.episode}`) || null;
   }
   return null;
 }
@@ -656,15 +800,18 @@ function watchKeyFromId(id) {
   return '';
 }
 
-function userDataFromRow(row, fallbackSeconds) {
+function userDataFromRow(row, fallbackSeconds, itemId) {
   const position = Math.max(0, Number(row && row.position) || 0);
   const duration = Math.max(0, Number(row && row.duration) || fallbackSeconds || 0);
+  const short = internalItemId(itemId);
   return {
     PlaybackPositionTicks: Math.round(position * 10000000),
     PlayedPercentage: duration ? Math.round((position / duration) * 1000) / 10 : 0,
     PlayCount: row && row.watched ? 1 : 0,
     IsFavorite: !!(row && row.favorite),
     Played: !!(row && row.watched),
+    Key: short,
+    ItemId: publicItemId(short),
   };
 }
 
@@ -673,7 +820,7 @@ function paintWatch(ctx, item) {
   const row = deps.jellyfinWatchGet(ctx, watchKeyFromId(item.Id));
   if (!row) return item;
   const fallback = item.RunTimeTicks ? item.RunTimeTicks / 10000000 : 0;
-  item.UserData = userDataFromRow(row, fallback);
+  item.UserData = userDataFromRow(row, fallback, item.Id);
   return item;
 }
 
@@ -738,7 +885,7 @@ function itemFromWatchRow(ctx, row) {
   if (local && typeof deps.localOne === 'function') {
     const item = localJellyItem(deps.localOne(ctx, local[1], Number(local[2])), local[1]);
     if (!item) return null;
-    item.UserData = userDataFromRow(row, duration || (item.RunTimeTicks / 10000000));
+    item.UserData = userDataFromRow(row, duration || (item.RunTimeTicks / 10000000), item.Id);
     return item;
   }
   return null;
@@ -749,6 +896,9 @@ function localFolder(lib) {
     id: `l${lib.id}`,
     name: lib.name || 'Library',
     type: 'CollectionFolder',
+    poster: 'local',
+    thumb: 'local',
+    aspect: 0.6666667,
     extra: { CollectionType: lib.kind === 'tv' ? 'tvshows' : 'movies', IsFolder: true },
   });
 }
@@ -821,7 +971,7 @@ async function nextUpItems(ctx) {
   const q = ctx.url && ctx.url.searchParams;
   const series = parseItemId((q && (q.get('SeriesId') || q.get('seriesId'))) || '');
   const parent = parseItemId((q && (q.get('ParentId') || q.get('parentId'))) || '');
-  const parentRaw = String((q && (q.get('ParentId') || q.get('parentId'))) || '');
+  const parentRaw = internalItemId(String((q && (q.get('ParentId') || q.get('parentId'))) || ''));
   const rows = typeof deps.jellyfinWatchRows === 'function' ? deps.jellyfinWatchRows(ctx) : [];
   const items = [];
   const catalogOk = parentRaw !== 'viewmovies' && (!parent || parent.type !== 'locallib') && (!series || series.type === 'series');
@@ -924,7 +1074,7 @@ function watchShelf(ctx, kind, start, limit, view) {
 
 async function itemsFor(ctx) {
   const q = ctx.url && ctx.url.searchParams;
-  const parent = String((q && (q.get('ParentId') || q.get('parentId'))) || '');
+  const parent = internalItemId(String((q && (q.get('ParentId') || q.get('parentId'))) || ''));
   const types = String((q && (q.get('IncludeItemTypes') || q.get('includeItemTypes'))) || '').toLowerCase();
   const { start, limit } = windowOf(ctx);
   const view = queryView(ctx);
@@ -1083,7 +1233,14 @@ function playPath(payload, startSeconds, audioRel) {
   // downloads the whole movie holds it all in memory.
   const rel = payload && (payload.hlsUrl || payload.remuxUrl);
   if (!rel) return '';
-  const pathOnly = rel.replace(/^https?:\/\/[^/]+/i, '');
+  let pathOnly = rel.replace(/^https?:\/\/[^/]+/i, '');
+  // The TV app only uses its show player when the address ends in .m3u8.
+  // Without that, it tries to read the playlist as a normal movie and errors.
+  const qpos = pathOnly.indexOf('?');
+  const bare = qpos === -1 ? pathOnly : pathOnly.slice(0, qpos);
+  if (/\/api\/hls\/[^/]+$/.test(bare)) {
+    pathOnly = `${bare}/master.m3u8${qpos === -1 ? '' : pathOnly.slice(qpos)}`;
+  }
   const join = pathOnly.includes('?') ? '&' : '?';
   const start = Math.max(0, Math.round(Number(startSeconds) || 0));
   const audio = Math.max(0, parseInt(audioRel, 10) || 0);
@@ -1308,7 +1465,30 @@ async function handleKind(kind, ctx) {
     const imageKind = String(ctx.m[2] || 'primary');
     const wide = imageKind === 'backdrop';
     let file = '';
-    if (parsed && parsed.type === 'movie') {
+    const pipeFile = (imgFile) => {
+      let stat;
+      try { stat = fs.statSync(imgFile); } catch { return false; }
+      const type = /\.png$/i.test(imgFile) ? 'image/png' : /\.webp$/i.test(imgFile) ? 'image/webp' : 'image/jpeg';
+      ctx.res.writeHead(200, { ...cors, 'content-type': type, 'content-length': stat.size, 'cache-control': 'private, max-age=86400' });
+      fs.createReadStream(imgFile).pipe(ctx.res);
+      return true;
+    };
+    const short = internalItemId(ctx.m[1]);
+    if (short === 'viewmovies' || short === 'viewshows') {
+      const discover = short === 'viewmovies'
+        ? '/discover/movie?sort_by=popularity.desc&include_adult=false&vote_count.gte=300'
+        : '/discover/tv?sort_by=popularity.desc&include_adult=false&vote_count.gte=100';
+      const data = await tmdbGet(discover);
+      const hit = data && Array.isArray(data.results) && data.results.find((row) => row && (wide ? row.backdrop_path : row.poster_path));
+      file = hit && (wide ? (hit.backdrop_path || hit.poster_path) : hit.poster_path);
+    } else if (parsed && parsed.type === 'locallib' && typeof deps.localPage === 'function' && typeof deps.localImage === 'function') {
+      const page = deps.localPage(ctx, parsed.libId, 0, 24, null, { sort: 'title.asc' });
+      for (const row of (page && page.items) || []) {
+        const img = deps.localImage(ctx, parsed.libId, row.idx, wide);
+        if (img && img.tmdb) { file = img.tmdb; break; }
+        if (img && img.file && pipeFile(img.file)) return;
+      }
+    } else if (parsed && parsed.type === 'movie') {
       const d = await tmdbGet(`/movie/${parsed.tmdbId}`);
       file = d && (wide ? d.backdrop_path : d.poster_path);
     } else if (parsed && parsed.type === 'series') {
@@ -1439,16 +1619,15 @@ async function handleKind(kind, ctx) {
     let streams = streamsWithSubtitles(probe, sidecars).streams;
     if (playedBody && playedBody.id && typeof deps.jellyfinSubtitleStreams === 'function') {
       const more = await deps.jellyfinSubtitleStreams(ctx, playedBody.id, streams.length, spec);
-      if (more && more.length) streams = streams.concat(more);
+      if (more && more.length) streams = streams.concat(more.map(completeStream));
     }
     const url = playPath(playedBody, streamStart(null, body), audioRelFromStreams(streams, body.AudioStreamIndex || body.audioStreamIndex));
     if (!url) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
     const runtimeTicks = spec ? ticks(spec.runtime) : 0;
     const hls = url.includes('/api/hls/');
-    const source = {
+    const source = completeSource({
       Id: playedBody.id,
       Protocol: 'Http',
-      Type: 'Default',
       Container: 'mp4',
       Name: (playedBody.candidate && playedBody.candidate.name) || (spec && spec.q) || '',
       SupportsDirectPlay: false,
@@ -1459,7 +1638,7 @@ async function handleKind(kind, ctx) {
       TranscodingSubProtocol: hls ? 'hls' : 'http',
       TranscodingContainer: 'mp4',
       MediaStreams: streams,
-    };
+    });
     if (runtimeTicks) source.RunTimeTicks = runtimeTicks;
     return send(ctx.res, 200, { PlaySessionId: playedBody.sessionId, MediaSources: [source] }, cors);
   }
@@ -1469,7 +1648,7 @@ async function handleKind(kind, ctx) {
   }
   if (kind === 'filters') {
     const q = ctx.url && ctx.url.searchParams;
-    const parent = String((q && (q.get('ParentId') || q.get('parentId'))) || '');
+    const parent = internalItemId(String((q && (q.get('ParentId') || q.get('parentId'))) || ''));
     const parsed = parseItemId(parent);
     let genres = [];
     let years = [];
@@ -1516,7 +1695,7 @@ async function handleKind(kind, ctx) {
       patch.position = 0;
     }
     deps.jellyfinWatchSave(ctx, key, patch);
-    return send(ctx.res, 200, userDataFromRow({ ...prev, ...patch }, duration), cors);
+    return send(ctx.res, 200, userDataFromRow({ ...prev, ...patch }, duration, itemId), cors);
   }
   if (kind === 'login') {
     const body = await readJson(ctx.req);
@@ -1565,32 +1744,32 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/users\/public$/, auth: 'public', kind: 'publicUsers', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/resume$/, auth: 'user', kind: 'resume', h: serveJellyfin },
   { m: 'GET', re: /^\/useritems\/resume$/, auth: 'user', kind: 'resume', h: serveJellyfin },
-  { m: 'POST', re: /^\/users\/([a-z0-9-]{4,64})\/favoriteitems\/([a-z0-9]+)$/, auth: 'user', kind: 'favorite', h: serveJellyfin },
-  { m: 'DELETE', re: /^\/users\/([a-z0-9-]{4,64})\/favoriteitems\/([a-z0-9]+)$/, auth: 'user', kind: 'unfavorite', h: serveJellyfin },
-  { m: 'POST', re: /^\/users\/([a-z0-9-]{4,64})\/playeditems\/([a-z0-9]+)$/, auth: 'user', kind: 'played', h: serveJellyfin },
-  { m: 'DELETE', re: /^\/users\/([a-z0-9-]{4,64})\/playeditems\/([a-z0-9]+)$/, auth: 'user', kind: 'unplayed', h: serveJellyfin },
+  { m: 'POST', re: /^\/users\/([a-z0-9-]{4,64})\/favoriteitems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'favorite', h: serveJellyfin },
+  { m: 'DELETE', re: /^\/users\/([a-z0-9-]{4,64})\/favoriteitems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'unfavorite', h: serveJellyfin },
+  { m: 'POST', re: /^\/users\/([a-z0-9-]{4,64})\/playeditems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'played', h: serveJellyfin },
+  { m: 'DELETE', re: /^\/users\/([a-z0-9-]{4,64})\/playeditems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'unplayed', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/latest$/, auth: 'user', kind: 'latest', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items$/, auth: 'user', kind: 'shelf', h: serveJellyfin },
-  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9]+)\/intros$/, auth: 'user', kind: 'intros', h: serveJellyfin },
-  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9]+)$/, auth: 'user', kind: 'item', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/intros$/, auth: 'user', kind: 'intros', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'item', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/views$/, auth: 'user', kind: 'views', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})$/, auth: 'user', kind: 'userById', h: serveJellyfin },
   { m: 'GET', re: /^\/userviews$/, auth: 'user', kind: 'views', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/counts$/, auth: 'user', kind: 'counts', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/filters2$/, auth: 'user', kind: 'filters', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/latest$/, auth: 'user', kind: 'latest', h: serveJellyfin },
-  { m: 'GET', re: /^\/items\/([a-z0-9]+)\/images\/(primary|backdrop|thumb|logo)(?:\/\d+)?$/, auth: 'public', kind: 'image', h: serveJellyfin },
-  { m: 'GET', re: /^\/items\/([a-z0-9]+)\/thememedia$/, auth: 'user', kind: 'theme', h: serveJellyfin },
-  { m: 'GET', re: /^\/videos\/([a-z0-9]+)\/([a-z0-9]+)\/subtitles\/(\d+)\/stream(?:\.([a-z0-9]+))?$/, auth: 'user', kind: 'subtitle', h: serveJellyfin },
-  { m: 'GET', re: /^\/videos\/([a-z0-9]+)\/stream(?:\.[a-z0-9]+)?$/, auth: 'user', kind: 'video', h: serveJellyfin },
-  { m: 'GET', re: /^\/items\/([a-z0-9]+)\/similar$/, auth: 'user', kind: 'similar', h: serveJellyfin },
-  { m: 'GET', re: /^\/items\/([a-z0-9]+)\/intros$/, auth: 'user', kind: 'intros', h: serveJellyfin },
-  { m: 'POST', re: /^\/items\/([a-z0-9]+)\/playbackinfo$/, auth: 'user', kind: 'playback', h: serveJellyfin },
-  { m: 'GET', re: /^\/items\/([a-z0-9]+)$/, auth: 'user', kind: 'item', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/images\/(primary|backdrop|thumb|logo)(?:\/\d+)?$/, auth: 'public', kind: 'image', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/thememedia$/, auth: 'user', kind: 'theme', h: serveJellyfin },
+  { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/([a-z0-9-]{1,64})\/subtitles\/(\d+)\/stream(?:\.([a-z0-9-]{1,64}))?$/, auth: 'user', kind: 'subtitle', h: serveJellyfin },
+  { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/stream(?:\.[a-z0-9]+)?$/, auth: 'user', kind: 'video', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/similar$/, auth: 'user', kind: 'similar', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/intros$/, auth: 'user', kind: 'intros', h: serveJellyfin },
+  { m: 'POST', re: /^\/items\/([a-z0-9-]{1,64})\/playbackinfo$/, auth: 'user', kind: 'playback', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'item', h: serveJellyfin },
   { m: 'GET', re: /^\/items$/, auth: 'user', kind: 'shelf', h: serveJellyfin },
   { m: 'GET', re: /^\/library\/mediafolders$/, auth: 'user', kind: 'views', h: serveJellyfin },
-  { m: 'GET', re: /^\/shows\/([a-z0-9]+)\/seasons$/, auth: 'user', kind: 'seasons', h: serveJellyfin },
-  { m: 'GET', re: /^\/shows\/([a-z0-9]+)\/episodes$/, auth: 'user', kind: 'episodes', h: serveJellyfin },
+  { m: 'GET', re: /^\/shows\/([a-z0-9-]{1,64})\/seasons$/, auth: 'user', kind: 'seasons', h: serveJellyfin },
+  { m: 'GET', re: /^\/shows\/([a-z0-9-]{1,64})\/episodes$/, auth: 'user', kind: 'episodes', h: serveJellyfin },
   { m: 'GET', re: /^\/shows\/nextup$/, auth: 'user', kind: 'nextup', h: serveJellyfin },
   { m: 'GET', re: /^\/livetv\/programs$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
   { m: 'GET', re: /^\/displaypreferences\/usersettings$/, auth: 'user', kind: 'displayPrefs', h: serveJellyfin },

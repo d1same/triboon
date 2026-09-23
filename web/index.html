@@ -2523,8 +2523,8 @@ body:not(.tv).libGrid .pcard .cardMenuBtn{opacity:.92}
 .epMenu .menuIcon svg{width:18px;height:18px;display:block}
 .epMenu .menuLabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* Continue Watching list management — ✓/✕ live ON each thumbnail (hover/focus reveals them,
-   touch keeps them visible), same pattern as the episode ⋯ button. */
+/* Continue Watching list management — ✓/✕ appear on hover for a mouse.
+   A phone tap is the poster itself; those two buttons live in the ⋯ menu. */
 .cwAct{position:absolute;top:8px;width:30px;height:30px;border-radius:50%;background:rgba(11,8,18,.82);
   display:grid;place-items:center;color:var(--text);font-size:13px;z-index:3;opacity:0;transition:opacity .15s}
 .cwAct svg{width:16px;height:16px;display:block}
@@ -2736,6 +2736,12 @@ body.mobileShell:not(.tv) .cards .pcard{flex:0 0 var(--poster);width:var(--poste
 body.mobileShell:not(.tv) .cards .card,
 body.mobileShell:not(.tv) .cards .trailerCard,
 body.mobileShell:not(.tv) .cards .chCard{flex:0 0 var(--thumb);width:var(--thumb);min-width:var(--thumb)}
+/* Android phone: one ⋯ on every poster and thumbnail. The picture plays.
+   Watched and Remove are inside that menu, not painted on the art. */
+body.mobileShell:not(.tv) .cwAct{display:none!important}
+body.mobileShell:not(.tv) .cardMenuBtn,
+body.mobileShell:not(.tv) .epMenuBtn{opacity:.95;width:36px;height:36px}
+body.mobileShell:not(.tv) .card:has(.cwAct) .cardMenuBtn{left:auto;right:8px;top:8px}
 body.mobileShell:not(.tv) #browseTitle{position:static;width:auto;height:auto;clip:auto;overflow:visible;white-space:normal;font:800 22px "Sora";letter-spacing:-.02em;margin:0 0 10px}
 body.mobileShell:not(.tv) #rows,
 body.mobileShell:not(.tv) #discoverRows,
@@ -2754,6 +2760,11 @@ body.mobileShell:not(.tv) #browse{justify-content:flex-start}
   body:not(.tv) #browse.rowsWin #grid,body:not(.tv) #personGrid{margin-top:0!important;max-height:none!important;flex:1 1 auto!important}
   body:not(.tv) .detailHero{min-height:0!important}
   body:not(.tv) #person h2{margin-top:14px}
+  /* One ⋯ in the corner of every poster and thumbnail. The picture itself
+     plays or opens. Watched and Remove stay inside that menu. */
+  body:not(.tv) .cwAct{display:none!important}
+  body:not(.tv) .cardMenuBtn,body:not(.tv) .epMenuBtn{opacity:.95;width:36px;height:36px}
+  body:not(.tv) .card:has(.cwAct) .cardMenuBtn{left:auto;right:8px;top:8px}
 }
 
 /* Bigger rail logo. */

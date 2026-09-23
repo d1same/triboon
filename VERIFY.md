@@ -126,6 +126,25 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-23, v3.2.8 ship — Jellyfin TV stays signed in and plays, library
+tiles have covers, and a long phone-call pause starts the same file again:
+
+- Version contract: `package.json` 3.2.8; Android `versionName` 3.2.8 /
+  `versionCode` 385; Windows client package/Tauri/Cargo(.lock) 3.2.8.
+- Jellyfin item ids are real UUIDs, play links end in `master.m3u8`, and
+  Movies, Shows, and custom libraries serve a cover. A browser pause shows
+  on the Jellyfin continue-watching row. The Docker image includes
+  jellyfin-web 10.11.11 so the phone app opens that page.
+- A pause of 45 seconds or more on the Triboon phone app remounts the
+  stream. Phone posters keep one corner menu; the picture is the tap.
+- Gate: `npm.cmd test` 726/726. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.8, household VOD play/seek/resume/CC, household
+  IPTV first-byte + retune, household overlapping Play, Android lint +
+  unit tests + debug build, Android ExoPlayer stress on `emulator-5554`
+  (never the Shield). Windows GPU/HDR was not run. The official Jellyfin
+  phone app was not clicked through on an emulator.
+
 2026-09-23, v3.2.7 ship — Jellyfin sign-in works on TV, phone, Apple, and Roku.
 The server returns the user card those apps need to finish a password login:
 

@@ -30,6 +30,20 @@ COPY web ./web
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# The official phone app opens the server website. Ship Jellyfin's own page
+# (the same 10.11.11 the door claims to be) so that window is not Triboon.
+ARG JELLYFIN_WEB_URL=https://repo.jellyfin.org/files/server/debian/stable/v10.11.11/amd64/jellyfin-web_10.11.11+deb12_all.deb
+ARG JELLYFIN_WEB_SHA256=f289b91e47cb44e52630c6a4262f3bdfe67a53c05db8f560edf479300ed0a37a
+RUN apk add --no-cache dpkg xz \
+ && wget -qO /tmp/jellyfin-web.deb "${JELLYFIN_WEB_URL}" \
+ && echo "${JELLYFIN_WEB_SHA256}  /tmp/jellyfin-web.deb" | sha256sum -c - \
+ && mkdir -p /tmp/jfweb \
+ && dpkg-deb -x /tmp/jellyfin-web.deb /tmp/jfweb \
+ && mkdir -p /usr/share/jellyfin-web \
+ && cp -a /tmp/jfweb/usr/share/jellyfin/web/. /usr/share/jellyfin-web/ \
+ && rm -rf /tmp/jfweb /tmp/jellyfin-web.deb
+ENV TRIBOON_JELLYFIN_WEB=/usr/share/jellyfin-web
+
 # Persistent state (users, settings, watch, verdict cache) lives here — mount a volume.
 # Ownership is taken at runtime by the entrypoint (PUID/PGID, Unraid-style; default 99:100).
 RUN mkdir -p /data

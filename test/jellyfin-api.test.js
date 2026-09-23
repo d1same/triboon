@@ -122,6 +122,16 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   const views = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Views`, { headers: { authorization: authz } });
   assert.strictEqual(views.status, 200);
   assert.deepStrictEqual(views.json.Items.map((row) => row.Name), ['Movies', 'Shows']);
+  const moviesFolder = views.json.Items.find((row) => row.Name === 'Movies');
+  assert.match(moviesFolder.Id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.strictEqual(moviesFolder.UserData.Key, 'viewmovies');
+  assert.strictEqual(moviesFolder.UserData.ItemId, moviesFolder.Id);
+  assert.strictEqual(moviesFolder.UserData.Played, false);
+  assert.ok(moviesFolder.ImageTags.Primary, 'Movies has a cover the home row can show');
+  assert.ok(moviesFolder.ImageTags.Thumb, 'Movies has a wide cover too');
+  const movieByCard = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items/${moviesFolder.Id}`, { headers: { authorization: authz } });
+  assert.strictEqual(movieByCard.status, 200);
+  assert.strictEqual(movieByCard.json.Name, 'Movies');
   const homeLibraries = await httpSend(srv.port, 'GET', '/UserViews', { headers: { authorization: authz } });
   assert.strictEqual(homeLibraries.status, 200);
   assert.deepStrictEqual(homeLibraries.json.Items.map((row) => row.Name), ['Movies', 'Shows']);
@@ -222,6 +232,11 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
     delete process.env.TRIBOON_JELLYFIN_WEB;
     fs.rmSync(web, { recursive: true, force: true });
   }
+  const phoneSite = await httpSend(srv.port, 'GET', '/', {
+    headers: { 'user-agent': 'Mozilla/5.0 (Linux; Android 14; Phone; wv) AppleWebKit Chrome Mobile' },
+  });
+  assert.strictEqual(phoneSite.status, 503, 'the phone must not open the Triboon site');
+  assert.doesNotMatch(String(phoneSite.raw || ''), /main\.[^/\s]+\.bundle\.js/);
 
   assert.strictEqual(JELLYFIN_MAX_RANK, 3, 'jellyfin play stops at 1080p');
   const disk = await httpJson(srv.port, 'POST', '/api/libraries', { name: 'Disk Movies', kind: 'movie', path: 'C:\\Movies' }, admin);
@@ -247,8 +262,15 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   ]);
   catalog.close();
   const withDisk = await httpSend(srv.port, 'GET', '/UserViews', { headers: { authorization: authz } });
-  assert.ok(withDisk.json.Items.some((row) => row.Name === 'Disk Movies' && row.Id === `l${disk.json.id}`), 'a folder on disk shows up next to Movies');
-  assert.ok(withDisk.json.Items.some((row) => row.Name === 'Disk Shows' && row.Id === `l${shows.json.id}`), 'a show folder shows up too');
+  const diskFolder = withDisk.json.Items.find((row) => row.Name === 'Disk Movies');
+  assert.ok(diskFolder, 'a folder on disk shows up next to Movies');
+  assert.match(diskFolder.Id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.strictEqual(diskFolder.UserData.ItemId, diskFolder.Id);
+  assert.ok(diskFolder.ImageTags.Primary, 'a custom library has a cover');
+  const libraryCover = await httpSend(srv.port, 'GET', `/Items/${diskFolder.Id}/Images/Primary`);
+  assert.strictEqual(libraryCover.status, 200, 'the custom library cover loads');
+  assert.match(libraryCover.headers['content-type'], /jpeg/);
+  assert.ok(withDisk.json.Items.some((row) => row.Name === 'Disk Shows'), 'a show folder shows up too');
   const shelfPath = `/Users/${me.json.Id}/Items?ParentId=l${disk.json.id}&IncludeItemTypes=Movie&Recursive=true&Limit=10`;
   const movieShelf = await httpSend(srv.port, 'GET', shelfPath, { headers: { authorization: authz } });
   assert.strictEqual(movieShelf.status, 200);
@@ -297,6 +319,11 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
     audio: [{ codec: 'aac', lang: 'eng', channels: 2 }, { codec: 'ac3', lang: 'fas', title: 'Persian', channels: 6 }],
   });
   assert.strictEqual(tracks[0].DisplayTitle, '800p');
+  assert.strictEqual(tracks[0].IsInterlaced, false);
+  assert.strictEqual(tracks[0].IsForced, false);
+  assert.strictEqual(tracks[0].IsExternal, false);
+  assert.strictEqual(tracks[0].IsTextSubtitleStream, false);
+  assert.strictEqual(tracks[0].SupportsExternalStream, false);
   assert.strictEqual(tracks[2].DisplayTitle, 'Persian');
   assert.strictEqual(tracks[2].Index, 2);
   const showShelf = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items?ParentId=l${shows.json.id}&IncludeItemTypes=Series&Recursive=true&Limit=10`, { headers: { authorization: authz } });
@@ -337,9 +364,15 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   });
   assert.strictEqual(playback.status, 200);
   assert.match(playback.json.MediaSources[0].TranscodingUrl, /\/api\/hls\//, 'Jellyfin plays short pieces so the computer does not hold the whole movie');
+  assert.match(playback.json.MediaSources[0].TranscodingUrl, /\/master\.m3u8\?/, 'the TV app needs a playlist name or it will not play');
+  assert.strictEqual(playback.json.MediaSources[0].Type, 'Default');
+  assert.strictEqual(playback.json.MediaSources[0].HasSegments, false);
+  assert.strictEqual(playback.json.MediaSources[0].SupportsProbing, true);
   assert.strictEqual(playback.json.MediaSources[0].TranscodingSubProtocol, 'hls');
   const sub = (playback.json.MediaSources[0].MediaStreams || []).find((row) => row.Type === 'Subtitle');
   assert.ok(sub && sub.DeliveryMethod === 'External', 'Jellyfin CC sees the subtitle file beside the movie');
+  assert.strictEqual(sub.IsTextSubtitleStream, true);
+  assert.strictEqual(sub.SupportsExternalStream, true);
   assert.strictEqual(sub.DisplayTitle, 'English');
   const vtt = await httpSend(srv.port, 'GET', `/Videos/${aardvark.Id}/${playback.json.MediaSources[0].Id}/Subtitles/${sub.Index}/Stream.vtt`, {
     headers: { authorization: authz },
@@ -356,6 +389,22 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(resumed.UserData.PlaybackPositionTicks, 120 * 10000000);
   const again = await httpSend(srv.port, 'GET', `/Items/${localId}`, { headers: { authorization: authz } });
   assert.strictEqual(again.json.UserData.PlaybackPositionTicks, 120 * 10000000, 'the details page offers Resume');
+  const triboonHome = await httpJson(srv.port, 'GET', '/api/watch', null, admin);
+  const mahourAtHome = triboonHome.json.find((row) => row.key === `local:${disk.json.id}:0`);
+  assert.ok(mahourAtHome && mahourAtHome.position === 120, 'a pause in the Jellyfin app shows when you open Triboon');
+  const browserWatch = await httpJson(srv.port, 'POST', '/api/watch', {
+    key: `local:${disk.json.id}:3`,
+    position: 90,
+    duration: 3600,
+    meta: { title: 'Zebra' },
+  }, admin);
+  assert.strictEqual(browserWatch.status, 200);
+  const fromBrowser = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items/Resume`, { headers: { authorization: authz } });
+  const zebraResume = fromBrowser.json.Items.find((row) => row.Name === 'Zebra');
+  assert.ok(zebraResume, 'a pause in the browser shows on the Jellyfin continue watching row');
+  assert.strictEqual(zebraResume.UserData.PlaybackPositionTicks, 90 * 10000000);
+  assert.strictEqual(zebraResume.UserData.ItemId, zebraResume.Id);
+  assert.match(zebraResume.UserData.Key, /^l[0-9a-f]{10}i3$/);
 
   const shut = await httpJson(srv.port, 'POST', '/api/settings', { jellyfinApps: false }, admin);
   assert.strictEqual(shut.status, 200);

@@ -391,6 +391,9 @@ public class MainActivity extends Activity {
     private static final long NATIVE_SERVER_SEEK_DEBOUNCE_MS = 320L;
     // Leftover remux should play immediately. If Play does not start, remount the same file.
     private static final long NATIVE_REMUX_INPLACE_RESUME_MS = 900L;
+    // A phone call pauses for a minute or two. The downloaded leftover still looks
+    // healthy, then stutters every second on a dead connection. Start the same file fresh.
+    private static final long NATIVE_LONG_PAUSE_REMOUNT_MS = 45000L;
     private final Handler nativeSeekHandler = new Handler(Looper.getMainLooper());
     private final Runnable nativeRemuxInPlaceResumeCheck = this::checkNativeRemuxInPlaceResume;
     private long nativePendingServerSeekMs = -1L;
@@ -5081,8 +5084,11 @@ public class MainActivity extends Activity {
         nativeVideoUnhealthySinceMs = 0L;
         long now = SystemClock.elapsedRealtime();
         int state = nativePlayer.getPlaybackState();
+        long pausedForMs = nativeUserPausedAtMs > 0L ? now - nativeUserPausedAtMs : 0L;
         boolean remuxNeedsRebuild = remux && "video".equals(nativeMode)
-                && (state == Player.STATE_IDLE || state == Player.STATE_ENDED || !nativeRemuxBufferLooksLive());
+                && (state == Player.STATE_IDLE || state == Player.STATE_ENDED
+                || pausedForMs >= NATIVE_LONG_PAUSE_REMOUNT_MS
+                || !nativeRemuxBufferLooksLive());
         // A remount needs the 20s ffmpeg grace. In-place remux Play must not — that long
         // grace is what froze Pause → Play on a leftover that never started.
         nativeResumeGraceUntilMs = now + (remuxNeedsRebuild
@@ -8985,7 +8991,12 @@ public class MainActivity extends Activity {
         super.onPause();
         stopCastDiscovery(); // foreground-only scan; a live cast SESSION is intentionally left running
         boolean inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode();
-        if (nativePlayer != null && !inPip) nativePlayer.pause();
+        if (nativePlayer != null && !inPip) {
+            // Remember the moment a call or home-press stopped the show, so Play
+            // after a long gap starts a fresh stream instead of the dead one.
+            if (nativeWantsPause()) markNativeUserPaused();
+            nativePlayer.pause();
+        }
         if (web != null) {
             // Update the hidden WebView with ExoPlayer's exact position, then issue keepalive watch
             // checkpoints for the main player and Multiview before WebView timers are suspended.

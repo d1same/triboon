@@ -8896,7 +8896,8 @@ Object.assign(H, {
     const os2 = require('os');
     const startSeconds = parseFloat(ctx.url.searchParams.get('start') || '0') || 0;
     const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;
-    const fileReq = ctx.m[2] ? String(ctx.m[2]) : '';
+    let fileReq = ctx.m[2] ? String(ctx.m[2]) : '';
+    if (fileReq === 'master.m3u8') fileReq = '';
 
     // Per-mount HLS sessions, keyed by (start,audio) so a seek spins up its own window.
     vf._hls = vf._hls || new Map();
@@ -10623,9 +10624,20 @@ const server = http.createServer(async (req, res) => {
       return await route.h(ctx);
     }
 
-    // Official Jellyfin apps open the server's website. Give them Jellyfin's
-    // own page. The browser and the Triboon app keep Triboon's page.
-    const jfDir = (jellyfinEnabled(settings.get()) && jellyfinClientShell(req)) ? jellyfinWebDir() : null;
+    // The phone app is a window onto the server website. Give that window
+    // Jellyfin's page. Never hand it Triboon's page: Triboon's script name
+    // looks like Jellyfin's, so the phone would stay on the wrong site.
+    // The browser and the Triboon app keep Triboon's page.
+    const jellyfinShell = jellyfinEnabled(settings.get()) && jellyfinClientShell(req);
+    const jfDir = jellyfinShell ? jellyfinWebDir() : null;
+    if (jellyfinShell && !jfDir && (p === '/' || p === '/web' || p.startsWith('/web/'))) {
+      res.writeHead(503, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-cache',
+        'x-content-type-options': 'nosniff',
+      });
+      return res.end('<!doctype html><title>Jellyfin</title><p>The Jellyfin page is not on this server yet.</p>');
+    }
     if (jfDir && (p === '/' || p === '/web')) {
       res.writeHead(302, { location: '/web/', 'cache-control': 'no-cache' });
       return res.end();

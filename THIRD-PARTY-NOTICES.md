@@ -19,10 +19,12 @@ license for each component remains with its respective copyright holders.
 | ytmusicapi | 1.12.1 | [MIT source](https://github.com/sigma67/ytmusicapi/tree/1.12.1) |
 | yt-dlp | 2026.07.04 | [Unlicense source](https://github.com/yt-dlp/yt-dlp/tree/2026.07.04) |
 | alass | 2.0.0 | [GPL-3.0 source](https://github.com/kaegi/alass/tree/v2.0.0) |
+| jellyfin-web | 10.11.11 | [GPL-2.0 source](https://github.com/jellyfin/jellyfin-web/tree/v10.11.11) |
 
-The Docker build records and verifies the SHA-256 of the downloaded yt-dlp and
-alass artifacts before installing them. FFmpeg and alass are executed as
-separate programs; Triboon does not incorporate their source code.
+The Docker build records and verifies the SHA-256 of the downloaded yt-dlp,
+alass, and jellyfin-web artifacts before installing them. FFmpeg and alass are
+executed as separate programs. jellyfin-web is the unmodified page the phone
+app opens. Triboon does not incorporate their source code.
 
 ## Windows server installer
 
