@@ -126,6 +126,18 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-23, v3.2.7 ship — Jellyfin sign-in works on TV, phone, Apple, and Roku.
+The server returns the user card those apps need to finish a password login:
+
+- Version contract: `package.json` 3.2.7; Android `versionName` 3.2.7 /
+  `versionCode` 384; Windows client package/Tauri/Cargo(.lock) 3.2.7.
+- Gate: `npm.cmd test` 726/726. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.7, household VOD play/seek/resume/CC, household
+  IPTV first-byte + retune, household overlapping Play, Android lint +
+  unit tests + debug build, Android ExoPlayer stress on `emulator-5554`
+  (never the Shield). Windows GPU/HDR was not run.
+
 2026-09-23, v3.2.6 ship — Jellyfin phone and TV apps accept this server
 from a house address or from Unraid behind https:
 

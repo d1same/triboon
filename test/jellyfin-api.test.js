@@ -98,6 +98,13 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   });
   assert.strictEqual(login.status, 200);
   assert.ok(login.json.AccessToken);
+  // TV and Android phone reject sign-in if these are missing.
+  // iPhone and Apple TV require the two provider ids. Roku reads this same card.
+  assert.strictEqual(login.json.User.Policy.SyncPlayAccess, 'None');
+  assert.strictEqual(login.json.User.Policy.EnableUserPreferenceAccess, true);
+  assert.strictEqual(login.json.User.Policy.AuthenticationProviderId, '');
+  assert.strictEqual(login.json.User.Policy.PasswordResetProviderId, '');
+  assert.deepStrictEqual(login.json.User.Configuration.GroupedFolders, []);
   assert.strictEqual(login.json.User.Name, 'owner');
   assert.match(login.json.User.Id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   assert.doesNotMatch(JSON.stringify(login.json), /salt|hash|hunter22/);
@@ -205,7 +212,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
     assert.match(atBundle.headers['content-type'], /javascript/);
     assert.match(atBundle.raw, /at-bundle/);
     const ours = await httpSend(srv.port, 'GET', '/', {
-      headers: { 'user-agent': 'Mozilla/5.0 (Linux; Android 14; wv) TriboonAndroid/3.2.6' },
+      headers: { 'user-agent': 'Mozilla/5.0 (Linux; Android 14; wv) TriboonAndroid/3.2.7' },
     });
     assert.strictEqual(ours.status, 200);
     assert.match(ours.raw, /triboon/i);
