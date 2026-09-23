@@ -7,6 +7,7 @@
      send origin-only cross-origin so those thumbnails load. Same-origin requests keep the full referrer. -->
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Triboon</title>
+<script src="/main.triboon.bundle.js" defer></script>
 <link rel="icon" href="T-Logo.svg"><link rel="alternate icon" href="T-Logo.png">
 <link rel="preload" href="fonts/Sora.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/AlbertSans.woff2" as="font" type="font/woff2" crossorigin>
@@ -4009,21 +4010,21 @@ body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
 </div>
 
 <div class="gate" id="gateLogin">
-  <div class="gateCard">
+  <form class="gateCard" id="gateLoginForm" autocomplete="on">
     <div class="logoRow"><img src="triboon.png" alt="Triboon"></div>
     <div class="sub">Sign in to your server.</div>
-    <label>Name</label><input id="liName" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <label>Password</label><input id="liPass" type="password" autocomplete="current-password" inputmode="text" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <label>Name</label><input id="liName" name="username" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <label>Password</label><input id="liPass" name="password" type="password" autocomplete="current-password" inputmode="text" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false">
     <div id="li2fa" hidden>
       <label>Authenticator code</label><input id="liCode" inputmode="numeric" autocomplete="one-time-code" maxlength="12">
       <div class="sub">Enter the 6-digit code or a recovery code.</div>
-      <div class="alt"><button id="liBack">Use a different account</button></div>
+      <div class="alt"><button type="button" id="liBack">Use a different account</button></div>
     </div>
-    <button class="btn primary" id="liGo">Sign in</button>
+    <button class="btn primary" id="liGo" type="submit">Sign in</button>
     <div class="err" id="liErr"></div>
-    <div class="alt">Tired of typing on a remote? <button id="qcStart" class="focusable">Use Quick Connect</button>
+    <div class="alt">Tired of typing on a remote? <button type="button" id="qcStart" class="focusable">Use Quick Connect</button>
       <div class="altSub">We'll show a 6-digit code — approve it from a phone or computer that's already signed in, and this device logs in as you.</div></div>
-  </div>
+  </form>
 </div>
 
 <div class="gate" id="gateQc">
@@ -5152,6 +5153,13 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <button class="btn primary focusable" id="abSaveSettings">Save</button>
     <div class="hint" id="abSettingsStatus"></div>
   </div>
+
+  <div class="panel"><h2>Jellyfin apps</h2>
+    <p>Official Jellyfin apps can sign in with a Triboon name and play movies and shows from this server. They keep Jellyfin’s own screens. Leave this off until you want that.</p>
+    <label class="catRow" style="margin-bottom:10px"><input type="checkbox" id="jellyfinAppsEnabled"><span class="cgN">Allow Jellyfin apps</span></label>
+    <button class="btn primary focusable" id="jellyfinAppsSave">Save</button>
+    <div class="hint" id="jellyfinAppsStatus"></div>
+  </div>
   </div>
 
   <div class="setGrid" data-stab="catalog" hidden>
@@ -5712,7 +5720,9 @@ const tokenStore = {
     try { t ? sessionStorage.setItem('triboon.token', t) : sessionStorage.removeItem('triboon.token'); } catch {}
   },
 };
-async function api(path, opts = {}) {
+// Keep this off window.api. Jellyfin Desktop replaces window.api with its own
+// object, and a function declaration lives there. A const stays ours.
+const api = async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   const tok = tokenStore.get();
   if (tok) headers.authorization = 'Bearer ' + tok;
@@ -6327,9 +6337,7 @@ $('suGo').addEventListener('click', async () => {
     await enterApp(); openServerSettings();
   } catch (e) { $('suErr').textContent = e.message; }
 });
-$('liGo').addEventListener('click', doLogin);
-$('liPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
-$('liCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('gateLoginForm').addEventListener('submit', (e) => { e.preventDefault(); doLogin(); });
 // iPhone: type=password + current-password opens AutoFill and hides the QWERTY keys.
 // Name still types. Password shows Done/Paste and no keyboard. iOS-only — desktop/TV keep keychain fill.
 function armIosPasswordKeyboard() {
@@ -6360,9 +6368,17 @@ async function doLogin() {
       await enterApp();
       return;
     }
-    // Windows WebView2 / paste often leaves a trailing space or CR. Name was already trimmed;
-    // password was sent raw, so a good password looked wrong.
-    const r = await api('/api/login', { method: 'POST', body: { name: $('liName').value.trim(), password: $('liPass').value.trim() } });
+    // The Jellyfin window commits a password field only after it blurs. Read the form
+    // after that, or a good password is sent blank and looks like a wrong password.
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    const fd = new FormData($('gateLoginForm'));
+    const name = String($('liName').value || fd.get('username') || '').trim();
+    const password = String($('liPass').value || fd.get('password') || '').trim();
+    if (!name || !password) {
+      $('liErr').textContent = 'Type the name and the password, then press Sign in';
+      return;
+    }
+    const r = await api('/api/login', { method: 'POST', body: { name, password } });
     if (r.twoFactorRequired) {
       setLogin2faMode(r.challenge);
       return;
@@ -6370,9 +6386,11 @@ async function doLogin() {
     tokenStore.set(r.token); S.user = r.user;
     await enterApp();
   } catch (e) {
+    console.warn('sign-in failed', e && e.status, e && e.message);
     if (S.loginChallenge) $('liErr').textContent = 'Invalid authenticator or recovery code';
+    else if (e && e.status === 401) $('liErr').textContent = 'Invalid name or password';
     else if (e && e.status === 429) $('liErr').textContent = e.message || 'Too many attempts — try again later';
-    else $('liErr').textContent = 'Invalid name or password';
+    else $('liErr').textContent = (e && e.message) || 'Sign-in failed';
   } finally { _loginBusy = false; }
 }
 $('ivGo').addEventListener('click', async () => {
@@ -13034,6 +13052,11 @@ async function openPlayer(it, mount, opts = {}) {
     toast('Native player could not start this source');
     closePlayer();
     return;
+  } else if (it.type !== 'live' && jellyfinDesktopPlayer() && mount.remuxUrl) {
+    revealWebPlayerShell(it);
+    startWebPlayerHousekeeping(mount, it);
+    playingRef.usingJellyfinDesktop = true;
+    startJellyfinDesktopPlayback(playingRef, it.resume || 0);
   } else {
     revealWebPlayerShell(it);
     startWebPlayerHousekeeping(mount, it);
@@ -13087,6 +13110,52 @@ async function loadTracks() {
     applyTrackPrefs(); // preferred audio/subtitle language + surround button
     updateClocks(); // duration just arrived → "Ends at" can render
   } catch { updatePlayerControlAvailability(); }
+}
+function jellyfinDesktopPlayer() {
+  try {
+    const player = window.api && window.api.player;
+    return player && typeof player.load === 'function' ? player : null;
+  } catch { return null; }
+}
+function startJellyfinDesktopPlayback(p, atSeconds) {
+  const player = jellyfinDesktopPlayer();
+  if (!player || !p || !p.remuxUrl) return false;
+  const start = Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000);
+  p.usingJellyfinDesktop = true;
+  p.usingRemux = true;
+  p.startOffset = start;
+  p.jfPaused = false;
+  const url = new URL(`${p.remuxUrl}&start=${start}&audio=0&audioSafe=1`, location.origin).href;
+  $('playerLoader').classList.add('show');
+  try {
+    player.load(url, { startMilliseconds: Math.round(start * 1000), autoplay: true }, {
+      type: 'video', title: (p.item && p.item.title) || '',
+    }, {}, {}, () => {});
+  } catch { return false; }
+  if (p._jfClock) clearInterval(p._jfClock);
+  p._jfClock = setInterval(() => {
+    if (S.playing !== p) { clearInterval(p._jfClock); p._jfClock = null; return; }
+    if (typeof player.getPosition !== 'function') return;
+    try {
+      player.getPosition((ms) => {
+        if (S.playing !== p) return;
+        const sec = Math.max(0, Number(ms) || 0) / 1000;
+        p.jfPos = start + sec;
+        if (sec > 0.2) {
+          markVodPlaybackStarted(p);
+          const loader = $('playerLoader');
+          if (loader) loader.classList.remove('show');
+        }
+      });
+    } catch {}
+  }, 1000);
+  return true;
+}
+function stopJellyfinDesktopPlayback(p) {
+  if (p && p._jfClock) { clearInterval(p._jfClock); p._jfClock = null; }
+  const player = jellyfinDesktopPlayer();
+  if (!player || typeof player.stop !== 'function') return;
+  try { player.stop(); } catch {}
 }
 function startSource(kind, atSeconds, opts = {}) {
   const v = $('video'); const p = S.playing;
@@ -15404,6 +15473,7 @@ function currentTime() {
   // While casting, the TV plays and the local <video> is idle — read the receiver clock so the
   // existing watch + Trakt heartbeats report the TV's real position (one reporter, no double-count).
   if (p && p.castingActive) return p.castPos || 0;
+  if (p && p.usingJellyfinDesktop) return p.jfPos || p.startOffset || 0;
   if (p && p.usingNative) return p.nativePos || 0;
   return (p ? p.startOffset : 0) + (v.currentTime || 0);
 }
@@ -15821,6 +15891,7 @@ async function closePlayer(opts = {}) {
   if (canUseNativeVideoPlayer() && window.TriboonTV.closeVideo) {
     try { window.TriboonTV.closeVideo(); } catch {}
   }
+  if (S.playing && S.playing.usingJellyfinDesktop) stopJellyfinDesktopPlayback(S.playing);
   // Leaving a movie/episode MID-PLAY: remember it, so jumping into Live TV later still
   // offers "← Back to <title>" at the top of the guide (it used to vanish on stop).
   rememberVodReturn(S.playing && S.playing.item, currentTime(), { onlyMidstream: true });
@@ -16031,6 +16102,18 @@ function togglePlay() {
     else if (window.TriboonTV && TriboonTV.castControl) { try { TriboonTV.castControl(S.playing.castPaused ? 'play' : 'pause'); } catch {} } // native app bridge
     updPP(); return;
   }
+  if (S.playing && S.playing.usingJellyfinDesktop) {
+    const player = jellyfinDesktopPlayer();
+    const p = S.playing;
+    if (player) {
+      try {
+        if (p.jfPaused) { player.play(); p.jfPaused = false; p._pausedAt = 0; }
+        else { player.pause(); p.jfPaused = true; p._pausedAt = Date.now(); saveWatch(true); }
+      } catch {}
+    }
+    updPP();
+    return;
+  }
   if (S.playing && S.playing.usingNative && window.TriboonTV && typeof TriboonTV.toggleVideo === 'function') {
     try { TriboonTV.toggleVideo(); } catch {}
     updPP();
@@ -16072,7 +16155,9 @@ function togglePlay() {
 }
 function updPP() {
   const casting = S.playing && S.playing.castingActive;
-  const paused = casting ? (_castRp ? _castRp.isPaused : !!S.playing.castPaused) : activePlayerVideo().paused;
+  const paused = casting ? (_castRp ? _castRp.isPaused : !!S.playing.castPaused)
+    : (S.playing && S.playing.usingJellyfinDesktop) ? !!S.playing.jfPaused
+    : activePlayerVideo().paused;
   $('ppIcon').innerHTML = paused ? '<path d="M8 5v14l11-7z"/>' : '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';
 }
 let _playerSurfaceClickT = null;
@@ -16343,6 +16428,8 @@ function seekTo(seconds) {
   if (p.castingActive) { // seek the TV, not the idle local element
     if (_castRp && _castRpc) { try { _castRp.currentTime = seconds; _castRpc.seek(); p.castPos = seconds; } catch {} }
     else if (window.TriboonTV && TriboonTV.castControl) { try { TriboonTV.castControl('seek:' + Math.floor(seconds)); p.castPos = seconds; } catch {} }
+  } else if (p.usingJellyfinDesktop) {
+    startJellyfinDesktopPlayback(p, seconds);
   } else if (p.usingNative && canUseNativeVideoPlayer()) {
     p.suppressSeekLoaderUntil = appMs() + 4500;
     clearTimeout(S._waitT);
@@ -26826,6 +26913,7 @@ async function refreshSettings(opts = {}) {
       warnings: [],
     }, s.streamingPerformance || {});
     S.settingsCache = s; // for the ✎ edit flow (secrets stay redacted)
+    if ($('jellyfinAppsEnabled')) $('jellyfinAppsEnabled').checked = s.jellyfinApps === true;
     $('npList').innerHTML = s.providers.length ? s.providers.map((p, i) =>
       `<div class="kv"><span>${esc(p.host)}:${esc(p.port)} ${p.tls ? '🔒' : ''} ${p.user ? '· <span style="color:var(--amber)">login saved ✓</span>' : ''}</span>
        <span>×${esc(p.connections)} <button class="testBtn" data-tp="${i}" title="Test connection">test</button>
@@ -27220,6 +27308,13 @@ $('osSave').addEventListener('click', async () => {
   if ($('osApiKey')) $('osApiKey').value = '';
   if ($('osPass')) $('osPass').value = '';
   refreshSettings({ force: true });
+});
+$('jellyfinAppsSave') && $('jellyfinAppsSave').addEventListener('click', async () => {
+  try {
+    await api('/api/settings', { method: 'POST', body: { jellyfinApps: $('jellyfinAppsEnabled').checked } });
+    $('jellyfinAppsStatus').textContent = 'Saved ✓';
+    toast($('jellyfinAppsEnabled').checked ? 'Jellyfin apps can sign in' : 'Jellyfin apps turned off');
+  } catch (e) { $('jellyfinAppsStatus').textContent = 'Save failed: ' + e.message; }
 });
 $('abSaveSettings') && $('abSaveSettings').addEventListener('click', async () => {
   const body = {

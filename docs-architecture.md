@@ -17,6 +17,10 @@ canonical reference.
 - Server: Node 24 LTS, stdlib runtime, no runtime npm dependencies in `server/`.
 - UI: `web/index.html`, one web app with TV D-pad navigation and browser support.
 - Android TV: Java WebView shell with native Media3/ExoPlayer for video and Live TV.
+- Jellyfin apps: optional door in `server/jellyfin-api.js`, off until Settings
+  → Jellyfin apps. Same Triboon accounts. Catalog and disk libraries. Playback
+  is short HLS pieces capped at 1080p. The Triboon web, Android, and Windows
+  clients do not use this door.
 - Data: atomic JSON store in `TRIBOON_DATA`, AES-256-GCM encrypted settings
   through `server/auth.js` `SecureSettings`, and a local-media-only SQLite
   catalog (`library.sqlite`) for large attached folders. Users, password

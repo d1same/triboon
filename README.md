@@ -80,6 +80,9 @@ reuses that mount instead of starting from zero.
 - Live TV through M3U or Xtream playlists you already have.
 - Wyzie / OpenSubtitles captions, Trakt, Music, Audiobooks, and multi-user
   profiles with invites and Quick Connect.
+- Optional Jellyfin apps. The same server can sign in the official Jellyfin
+  phone, desktop, and TV apps. They keep Jellyfin’s screens. Triboon still
+  sends the library and the stream. Turn it on under Settings, Jellyfin apps.
 
 ## Unraid
 

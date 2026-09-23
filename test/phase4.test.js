@@ -378,7 +378,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // probe sites, armed on play and prepare, surfaced on /api/tracks and in Sources, and the
   // client says so once (no mid-playback switching).
   assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{[^}]*runtimeMin, tmdbId,[^}]*\}[\s\S]+policy\.catalogTmdbId = parseInt\(tmdbId, 10\);[\s\S]+policy\.wantedRuntimeMin = Number\(runtimeMin\);/, 'policy carries catalog id + runtime');
-  assert.strictEqual((serverForPolicy.match(/armRuntimeCheck\(vf, policy, candidate, body\);/g) || []).length, 2, 'play and prepare arm the runtime check');
+  assert.strictEqual((serverForPolicy.match(/armRuntimeCheck\(vf, policy, candidate, body\);/g) || []).length, 3, 'play, prepare, and Jellyfin play arm the runtime check');
   assert.strictEqual((serverForPolicy.match(/(?<!function )noteRuntimeCheck\(vf\)/g) || []).length, 3, 'both probe sites (remux background probe + /api/tracks) run the check; a reused prepared mount checks at arm time');
   assert.match(serverForPolicy, /if \(!runtimeMin \|\| !tmdbId \|\| !\(policy\.mediaType === 'movie' \|\| policy\.mediaType === 'tv'\)\) return;/, 'films, and episodes only with a per-episode TMDB runtime');
   assert.match(serverForPolicy, /tmdb\.get\(`\/tv\/\$\{id\}\/season\/\$\{s\}\/episode\/\$\{e\}`\)/, 'episode runtime comes from the episode itself, never the show average');
@@ -389,7 +389,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   const scoringSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'scoring.js'), 'utf8');
   assert.match(scoringSrc, /'wrong-runtime': -100000,/, 'wrong-runtime is never auto-picked');
   assert.match(serverForPolicy, /\.\.\.\(await catalogFactsFor\(ctx\.url\.searchParams\.get\('year'\), ctx\.url\.searchParams\.get\('tmdbId'\), ctx\.url\.searchParams\.get\('mediaType'\), ctx\.url\.searchParams\.get\('season'\), ctx\.url\.searchParams\.get\('ep'\)\)\)/, 'Sources search carries the facts');
-  assert.strictEqual((serverForPolicy.match(/Object\.assign\(body, await catalogFactsFor\(body\.year, body\.tmdbId, body\.mediaType, body\.season, body\.ep\)\);/g) || []).length, 2, 'play and prepare carry the facts');
+  assert.strictEqual((serverForPolicy.match(/Object\.assign\(body, await catalogFactsFor\(body\.year, body\.tmdbId, body\.mediaType, body\.season, body\.ep\)\);/g) || []).length, 3, 'play, prepare, and Jellyfin play carry the facts');
   assert.match(serverForPolicy, /policy\.preferredAudioLanguage = preferredAudio \|\| 'en'/,
     'Play defaults to English audio unless the owner saved a different language');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /if \(preferRank === 4\) policy\.exactResolutionRank = 4;/,
@@ -7570,7 +7570,7 @@ test('Android phone: Settings Dashboard tap is not the burger, and tabs stay rea
 
 test('Windows / desktop login: trim password and show lockout instead of wrong password', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  assert.match(ui, /password: \$\('liPass'\)\.value\.trim\(\)/,
+  assert.match(ui, /\$\('liPass'\)\.value \|\| fd\.get\('password'\) \|\| ''\)\.trim\(\)/,
     'login trims password so Windows paste/CR does not fail a good account');
   assert.match(ui, /e && e\.status === 429[\s\S]+\$\('liErr'\)\.textContent = e\.message/,
     'a lockout must not keep saying Invalid name or password');

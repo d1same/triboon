@@ -26,6 +26,30 @@ test('library sqlite catalog pages and looks up local media without genre false 
     assert.deepStrictEqual(first.items.map((i) => i.title), ['The Matrix', 'Not Sci Fi']);
     assert.strictEqual(first.hasMore, true);
 
+    const byTitle = db.page('libA', { offset: 0, limit: 10, sort: 'title.asc' });
+    assert.deepStrictEqual(byTitle.items.map((i) => i.title), ['Not Sci Fi', 'Test Show', 'The Matrix']);
+    const nineties = db.page('libA', { offset: 0, limit: 10, years: [1999] });
+    assert.deepStrictEqual(nineties.items.map((i) => i.title), ['The Matrix']);
+    db.replaceLibrary('libShows', 99, [
+      { idx: 0, kind: 'show', title: 'Old Show', addedAt: 5000, dir: '/old' },
+      { idx: 1, kind: 'episode', showIdx: 0, title: 'Old Episode', s: 1, e: 1, addedAt: 1000, file: '/old/e.mkv' },
+      { idx: 2, kind: 'show', title: 'New Show', addedAt: 1000, dir: '/new' },
+      { idx: 3, kind: 'episode', showIdx: 2, title: 'New Episode', s: 1, e: 1, addedAt: 9000, file: '/new/e.mkv' },
+    ]);
+    const newestEpisode = db.page('libShows', { offset: 0, limit: 10, sort: 'content.desc' });
+    assert.deepStrictEqual(newestEpisode.items.map((i) => i.title), ['New Show', 'Old Show'],
+      'a show sorts by its newest episode, not the day the show folder appeared');
+    const letter = db.page('libA', { offset: 0, limit: 10, starts: 'm' });
+    assert.deepStrictEqual(letter.items.map((i) => i.title), ['The Matrix'], 'M matches Matrix after the word The');
+    db.replaceLibrary('libSort', 50, [
+      { idx: 1, kind: 'movie', title: '2001', year: 1968, runtime: 140, addedAt: 1, file: '/a.mkv' },
+      { idx: 2, kind: 'movie', title: 'Short', year: 2020, runtime: 80, addedAt: 2, file: '/b.mkv' },
+      { idx: 3, kind: 'movie', title: 'The Long One', year: 2010, runtime: 180, addedAt: 3, file: '/c.mkv' },
+    ]);
+    const longest = db.page('libSort', { offset: 0, limit: 10, sort: 'runtime.desc' });
+    assert.deepStrictEqual(longest.items.map((i) => i.title), ['The Long One', '2001', 'Short']);
+    const numbers = db.page('libSort', { offset: 0, limit: 10, before: 'A' });
+    assert.deepStrictEqual(numbers.items.map((i) => i.title), ['2001'], 'the # letter keeps titles that do not start with a letter');
     const scifi = db.page('libA', { offset: 0, limit: 10, genre: 878 });
     assert.deepStrictEqual(scifi.items.map((i) => i.title), ['The Matrix'],
       'genre tokens do not match larger ids like 2878');
@@ -120,6 +144,11 @@ test('mapped drive letters resolve to the UNC share when the letter is missing',
   assert.ok(resolved.toLowerCase().startsWith(unc.toLowerCase()),
     'missing M: becomes the UNC share so an elevated scan can still walk files');
   assert.ok(/__triboon_no_such_library_folder__$/i.test(resolved), 'folder under the share is kept');
+  if (fs.existsSync('M:\\') && fs.existsSync(unc)) {
+    const both = resolveLibraryPath('M:\\');
+    assert.ok(both.toLowerCase().startsWith(unc.toLowerCase()),
+      'when the share is there, the scan uses it even if the drive letter also exists');
+  }
 });
 
 test('library firstEpisodeFile picks the earliest season/episode file', () => {

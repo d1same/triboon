@@ -3148,6 +3148,7 @@ class Pipeline {
   // Reuse the UHD search hit and re-score under the 1080 cap. If this title is 4K-only,
   // start the 4K rather than toast "no playable".
   async _widenPlayable(params, policy, playable, candidates) {
+    if (policy.noResolutionWiden) return { playable, candidates, widened: false };
     const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
     const cap = policy.maxResolutionRank;
     if (playable.length || explicitPick || !Number.isInteger(cap) || cap >= 4) {

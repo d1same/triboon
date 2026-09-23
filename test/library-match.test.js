@@ -2,6 +2,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const {
   parseLibraryName,
@@ -10,6 +12,7 @@ const {
   libraryNfoPrefersLocal,
   libraryItemMatchesTmdb,
   unboundLibraryItem,
+  findLibraryArt,
 } = require('../server/library-match');
 
 test('parseLibraryName uses the last year token and drops trailing non-latin text', () => {
@@ -119,4 +122,16 @@ test('NFO without a TMDB id stays on folder info and does not search Hollywood',
     'admin match override still searches that id');
   assert.strictEqual(libraryNfoPrefersLocal({ title: 'The Office', tmdbId: 2316 }, 'none'), true,
     'folder-info override wins even if the NFO had an id');
+});
+
+test('the cover named in movie.nfo wins over a second picture in the folder', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-nfo-art-'));
+  fs.writeFileSync(path.join(dir, 'face.jpg'), 'cover');
+  fs.writeFileSync(path.join(dir, 'extra.jpg'), 'extra');
+  fs.writeFileSync(path.join(dir, 'movie.nfo'), '<movie><art><poster>face.jpg</poster></art></movie>');
+  const cover = findLibraryArt(dir, { videoBase: 'Movie' });
+  assert.strictEqual(path.basename(cover), 'face.jpg');
+  fs.writeFileSync(path.join(dir, 'movie.nfo'), '<movie><thumb>../secret.jpg</thumb></movie>');
+  assert.strictEqual(findLibraryArt(dir, { videoBase: 'Movie' }), null, 'an NFO cannot point outside the folder');
+  fs.rmSync(dir, { recursive: true, force: true });
 });

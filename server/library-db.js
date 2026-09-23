@@ -237,13 +237,35 @@ class LibraryDb {
     return ids;
   }
 
-  page(libId, { offset = 0, limit = 72, sort = 'added.desc', genre = 0, showIdx = null } = {}) {
+  facets(libId) {
+    if (!this.available || !this.db) return { genres: [], years: [] };
+    const rows = this.db.prepare(`
+      SELECT genres, year FROM library_items WHERE lib_id = ? AND kind != 'episode'
+    `).all(libId);
+    const genres = new Set();
+    const years = new Set();
+    for (const row of rows) {
+      const year = parseInt(row.year, 10);
+      if (year) years.add(year);
+      for (const part of String(row.genres || '').split('|')) {
+        const id = parseInt(part, 10);
+        if (id) genres.add(id);
+      }
+    }
+    return { genres: [...genres], years: [...years].sort((a, b) => b - a) };
+  }
+
+  page(libId, { offset = 0, limit = 72, sort = 'added.desc', genre = 0, genreIds = null, year = 0, years = null, q = '', starts = '', before = '', showIdx = null } = {}) {
     if (!this.available || !this.db) return null;
     const meta = this.db.prepare('SELECT scanned_at AS scannedAt FROM library_meta WHERE lib_id = ?').get(libId);
     if (!meta) return null;
     offset = Math.max(0, parseInt(offset, 10) || 0);
-    limit = Math.max(1, Math.min(500, parseInt(limit, 10) || 72));
+    limit = Math.max(1, Math.min(8000, parseInt(limit, 10) || 72));
     genre = parseInt(genre, 10) || 0;
+    const ids = (Array.isArray(genreIds) ? genreIds : []).map((id) => parseInt(id, 10)).filter(Boolean);
+    if (genre) ids.push(genre);
+    const yearList = (Array.isArray(years) ? years : []).map((n) => parseInt(n, 10)).filter(Boolean);
+    if (parseInt(year, 10)) yearList.push(parseInt(year, 10));
     let where = 'lib_id = ?';
     const args = [libId];
     let order = 'added_at DESC, idx ASC';
@@ -255,13 +277,57 @@ class LibraryDb {
       order = 'season ASC, episode ASC, title_key ASC';
     } else {
       where += " AND kind != 'episode'";
-      if (genre) {
-        where += ' AND genres LIKE ?';
-        args.push(`%|${genre}|%`);
+      if (ids.length) {
+        where += ` AND (${ids.map(() => 'genres LIKE ?').join(' OR ')})`;
+        for (const id of ids) args.push(`%|${id}|%`);
       }
-      if (sort === 'title.asc') order = 'title_key ASC, idx ASC';
-      else if (sort === 'year.desc') order = 'year DESC, title_key ASC';
-      else if (sort === 'rating.desc') order = 'rating DESC, title_key ASC';
+      if (yearList.length) {
+        where += ` AND year IN (${yearList.map(() => '?').join(',')})`;
+        args.push(...yearList);
+      }
+      const query = String(q || '').trim().toLowerCase();
+      if (query) {
+        where += ' AND (title_key LIKE ? OR lower(title) LIKE ?)';
+        const like = `%${query.replace(/[%_]/g, '')}%`;
+        args.push(like, like);
+      }
+      const letter = String(starts || '').trim().toLowerCase();
+      if (letter) {
+        where += ` AND (
+          CASE
+            WHEN title_key LIKE 'the %' THEN substr(title_key, 5)
+            WHEN title_key LIKE 'an %' THEN substr(title_key, 4)
+            WHEN title_key LIKE 'a %' THEN substr(title_key, 3)
+            ELSE title_key
+          END LIKE ?
+          OR lower(substr(title, 1, 1)) = ?
+        )`;
+        args.push(`${letter}%`, letter);
+      }
+      if (before) {
+        where += ` AND NOT (
+          CASE
+            WHEN title_key LIKE 'the %' THEN substr(title_key, 5)
+            WHEN title_key LIKE 'an %' THEN substr(title_key, 4)
+            WHEN title_key LIKE 'a %' THEN substr(title_key, 3)
+            ELSE title_key
+          END GLOB '[a-z]*'
+        )`;
+      }
+      if (sort === 'title.asc') order = 'title COLLATE NOCASE ASC, idx ASC';
+      else if (sort === 'title.desc') order = 'title COLLATE NOCASE DESC, idx ASC';
+      else if (sort === 'year.desc') order = 'year DESC, title COLLATE NOCASE ASC';
+      else if (sort === 'year.asc') order = 'year ASC, title COLLATE NOCASE ASC';
+      else if (sort === 'rating.desc') order = 'rating DESC, title COLLATE NOCASE ASC';
+      else if (sort === 'rating.asc') order = 'rating ASC, title COLLATE NOCASE ASC';
+      else if (sort === 'added.asc') order = 'added_at ASC, idx ASC';
+      else if (sort === 'runtime.desc') order = `CAST(json_extract(payload, '$.runtime') AS REAL) DESC, title COLLATE NOCASE ASC`;
+      else if (sort === 'runtime.asc') order = `CAST(json_extract(payload, '$.runtime') AS REAL) ASC, title COLLATE NOCASE ASC`;
+      else if (sort === 'content.desc' || sort === 'content.asc') {
+        const dir = sort === 'content.asc' ? 'ASC' : 'DESC';
+        order = `COALESCE((SELECT MAX(ep.added_at) FROM library_items ep WHERE ep.lib_id = library_items.lib_id AND ep.kind = 'episode' AND ep.show_idx = library_items.idx), library_items.added_at) ${dir}, title COLLATE NOCASE ASC`;
+      }
+      else if (sort === 'random') order = '(idx * 7919) % 104729 ASC, idx ASC';
     }
     const totalRow = this.db.prepare(`SELECT COUNT(*) AS n FROM library_items WHERE ${where}`).get(...args);
     const rows = this.db.prepare(`

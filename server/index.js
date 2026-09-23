@@ -13,8 +13,12 @@ const { Store, VerdictCache, scrubOrphanTempDirs } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
-const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryItemMatchesTmdb, unboundLibraryItem } = require('./library-match');
+const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
+const {
+  JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors,
+  streamsWithSubtitles,
+} = require('./jellyfin-api');
 const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch } = require('./pipeline');
 const {
   isCamCandidate, camScoringEnabled, sourceDrawerCandidates,
@@ -4739,10 +4743,12 @@ async function resolveEpisodeImdb(tmdbId, seasonParam, episodeParam) {
   }
   return epImdb;
 }
-function localLibraryItemFor(ctx, libId, idx) {
+function localLibraryItemFor(ctx, libId, idx, opts = {}) {
   const lib = store.read('libraries', { list: [] }).list.find((l) => l.id === libId);
   if (!lib || !lib.path) return { status: 404, error: 'library not found' };
-  if (lib.users && lib.users.length && ctx.user.role !== 'admin' && !lib.users.includes(ctx.user.id)) {
+  // Poster <img> tags cannot send the login header. A library limited to one
+  // account still has to serve that picture, or Jellyfin shows a gray box.
+  if (!opts.publicArt && lib.users && lib.users.length && (!ctx.user || (ctx.user.role !== 'admin' && !lib.users.includes(ctx.user.id)))) {
     return { status: 404, error: 'library not found' };
   }
   const item = libraryItemByIndex(libId, idx);
@@ -6989,13 +6995,7 @@ async function performScan(lib, state, mode = 'scan') {
     const lsDir = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
     // Display titles: NFO titles often embed the year ("High Copy (2025)") — strip it.
     const cleanTitle = (t) => String(t || '').replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').trim();
-    const findArt = (dir) => {
-      for (const n of ['poster.jpg', 'poster.png', 'folder.jpg', 'cover.jpg']) {
-        const p = path.join(dir, n);
-        if (fs.existsSync(p)) return p;
-      }
-      return null;
-    };
+    const findArt = (dir) => findLibraryArt(dir);
     // Tiny Kodi-NFO reader — title/year/plot/rating plus the TMDB id when present.
     const readNfo = (file) => {
       try {
@@ -8217,6 +8217,7 @@ Object.assign(H, {
       traktClientSecret: s.traktClientSecret ? '•••' : null,
       iptvUsers: primaryIptv.users || [], // user ids, not secrets
       audiobooksEnabled: s.audiobooksEnabled !== false, // default ON
+      jellyfinApps: s.jellyfinApps === true, // default OFF — Jellyfin apps stay dark until an admin opts in
       audiobooksUsers: Array.isArray(s.audiobooksUsers) ? s.audiobooksUsers : [],
       sizeCapMode: s.sizeCapMode || 'auto',
       sizeCap4kGb: s.sizeCap4kGb || null,
@@ -8408,6 +8409,7 @@ Object.assign(H, {
           : (s.iptvUsers || []),
         // Audiobooks: admin on/off (default ON) + optional user allowlist (empty = everyone).
         audiobooksEnabled: b.audiobooksEnabled !== undefined ? b.audiobooksEnabled !== false : (s.audiobooksEnabled !== false),
+        jellyfinApps: b.jellyfinApps !== undefined ? b.jellyfinApps === true : s.jellyfinApps === true,
         audiobooksUsers: b.audiobooksUsers !== undefined
           ? (Array.isArray(b.audiobooksUsers) ? b.audiobooksUsers.map(String).slice(0, 100) : [])
           : (s.audiobooksUsers || []),
@@ -10132,8 +10134,394 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/ossubs\/(\w+)$/, auth: 'stream', h: H.ossubs },
 ];
 
+// Jellyfin apps press play through this. It is the same mount as /api/play.
+// Browsing the shelf never calls it. The link we hand back is the remux pipe
+// (video copied, audio as AAC), which starts at the beginning and is not a
+// raw file a player can probe at the end.
+async function jellyfinPlay(ctx, body) {
+  if (!body || !body.q) return { status: 400, body: { error: 'q required' } };
+  if (throttleUserRoute(ctx, 'play', { max: 20, windowMs: 60000, lockMs: 60000 })) return { sent: true };
+  extendPlayRouteTimeout(ctx);
+  const maturityAllowed = maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType)
+    .catch(() => true);
+  const t0 = Date.now();
+  try {
+    Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType, body.season, body.ep));
+    // Jellyfin apps stay at 1080p. A lower account cap still wins. 4K on this
+    // player copied every frame into memory until the computer filled up.
+    const policy = playbackPolicyFor(ctx.user, { ...body, maxResolutionRank: JELLYFIN_MAX_RANK });
+    policy.noResolutionWiden = true;
+    const { session, vf, candidate, attempts } = await pipeline.play(
+      { ...playSearchParams(body), resumeFrac: 0 },
+      policy
+    );
+    if (!(await maturityAllowed)) { discardDeniedMount(session, vf); return { status: 403, body: { error: 'restricted' } }; }
+    session.uid = ctx.user.id;
+    session.lastSeen = Date.now();
+    releaseUserPlaySessions(ctx.user.id, session.id);
+    vf._q = body.q;
+    vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
+    vf._caps = parseCaps(body.caps);
+    session.caps = vf._caps;
+    armRuntimeCheck(vf, policy, candidate, body);
+    rememberMountOwner(vf, ctx.user.id);
+    trimUserMounts(ctx.user.id, vf.id);
+    return {
+      status: 200,
+      body: mountPayload(vf, ctx.user.id, {
+        sessionId: session.id,
+        mountMs: Date.now() - t0,
+        candidate: { name: candidate.name },
+        attempts,
+      }),
+    };
+  } catch (e) {
+    if (!(await maturityAllowed)) return { status: 403, body: { error: 'restricted' } };
+    return { status: 502, body: { error: e.message || 'play failed' } };
+  }
+}
+
+function jellyfinStream(mountId, uid) {
+  const vf = mounts.get(String(mountId || ''));
+  if (!vf || !uid) return null;
+  const payload = mountPayload(vf, uid);
+  return { remuxUrl: payload.remuxUrl || '', hlsUrl: payload.hlsUrl || '' };
+}
+
+function jellyfinNextCatalog(ctx) {
+  if (!ctx || !ctx.user) return [];
+  return nextWatchEpisodes(ctx.user.id, 'default');
+}
+
+const JELLYFIN_TEXT_SUB = new Set(['srt', 'vtt', 'ass', 'ssa']);
+
+async function jellyfinSubtitleStreams(ctx, mountId, startIndex, spec) {
+  const vf = mounts.get(String(mountId || ''));
+  if (!vf || !ctx || !ctx.user) return [];
+  const text = (vf.releaseSubs || []).filter((sub) => sub && JELLYFIN_TEXT_SUB.has(String(sub.ext || '').toLowerCase())).slice(0, 12);
+  const streams = [];
+  let index = startIndex;
+  const map = [];
+  for (const sub of text) {
+    const lang = String(sub.lang || '').toLowerCase();
+    streams.push({
+      Index: index,
+      Type: 'Subtitle',
+      Codec: 'webvtt',
+      Language: lang,
+      DisplayTitle: sub.name || lang || 'Subtitles',
+      IsExternal: true,
+      DeliveryMethod: 'External',
+      IsForced: !!sub.forced,
+    });
+    map.push({ index, releaseId: sub.id });
+    index += 1;
+  }
+  if (!streams.length && spec && spec.tmdbId && effectiveOpenSubsKey()) {
+    if (!vf._jellyfinOnlineSub) {
+      vf._jellyfinOnlineSub = Promise.race([
+        fetchOnlineSub({
+          key: effectiveOpenSubsKey(),
+          tmdbId: spec.tmdbId,
+          query: spec.q || vf._subQuery || vf._q || '',
+          lang: 'en',
+          season: spec.season,
+          episode: spec.ep,
+          attempts: 1,
+          retryDelayMs: 200,
+        }).then((vtt) => (vtt && String(vtt).includes('WEBVTT') ? vtt : '')).catch(() => ''),
+        new Promise((resolve) => setTimeout(() => resolve(''), 2500)),
+      ]).then((vtt) => {
+        vf._jellyfinOnlineSub = vtt || '';
+        return vf._jellyfinOnlineSub;
+      });
+    }
+    const vtt = await vf._jellyfinOnlineSub;
+    if (vtt) {
+      streams.push({
+        Index: index,
+        Type: 'Subtitle',
+        Codec: 'webvtt',
+        Language: 'en',
+        DisplayTitle: 'English',
+        IsExternal: true,
+        DeliveryMethod: 'External',
+        IsForced: false,
+      });
+      map.push({ index, online: true });
+    }
+  }
+  vf._jellyfinSubMap = map;
+  return streams;
+}
+
+async function jellyfinSubtitleBody(ctx, mountId, streamIndex) {
+  const vf = mounts.get(String(mountId || ''));
+  if (!vf || !ctx || !ctx.user) return null;
+  const hit = (vf._jellyfinSubMap || []).find((row) => row.index === Number(streamIndex));
+  if (!hit) return null;
+  if (hit.online) {
+    const vtt = typeof vf._jellyfinOnlineSub === 'string' ? vf._jellyfinOnlineSub : '';
+    return vtt && vtt.includes('WEBVTT') ? vtt : null;
+  }
+  if (!hit.releaseId || typeof vf.readReleaseSub !== 'function') return null;
+  const sub = (vf.releaseSubs || []).find((row) => String(row.id) === String(hit.releaseId));
+  if (!sub) return null;
+  vf._releaseSubCache = vf._releaseSubCache || new Map();
+  const id = String(hit.releaseId);
+  if (!vf._releaseSubCache.has(id)) {
+    const buf = await vf.readReleaseSub(id);
+    vf._releaseSubCache.set(id, releaseSubtitleToVtt(buf, sub.ext));
+  }
+  return vf._releaseSubCache.get(id);
+}
+
+function jellyfinLocalLibraries(ctx) {
+  return store.read('libraries', { list: [] }).list
+    .filter((lib) => lib && lib.id && lib.path)
+    .filter((lib) => !(lib.users && lib.users.length && ctx.user && ctx.user.role !== 'admin' && !lib.users.includes(ctx.user.id)))
+    .map((lib) => ({ id: String(lib.id), name: String(lib.name || 'Library').slice(0, 40), kind: lib.kind || 'movie' }));
+}
+
+function jellyfinLocalAllowed(ctx, libId) {
+  return jellyfinLocalLibraries(ctx).some((lib) => lib.id === String(libId));
+}
+
+function jellyfinLocalPage(ctx, libId, start, limit, showIdx, view) {
+  if (!jellyfinLocalAllowed(ctx, libId)) return null;
+  const offset = Math.max(0, start || 0);
+  const size = Math.max(1, Math.min(view && view.scan ? 8000 : 100, limit || 40));
+  if (libraryDb.available) {
+    const page = libraryDb.page(libId, {
+      offset, limit: size, sort: (view && view.sort) || 'title.asc',
+      genreIds: view && view.genreIds,
+      years: view && view.years,
+      q: view && view.q,
+      starts: view && view.starts,
+      before: view && view.before,
+      showIdx: Number.isFinite(showIdx) ? showIdx : null,
+    });
+    if (!page) return { items: [], total: 0 };
+    return {
+      items: page.items.map((item) => unboundLibraryItem(item)).filter(Boolean),
+      total: page.total,
+    };
+  }
+  const rec = libraryRecord(libId);
+  const all = ((rec && rec.items) || [])
+    .filter((item) => item && (Number.isFinite(showIdx) ? item.kind === 'episode' && item.showIdx === showIdx : item.kind !== 'episode'))
+    .map((item) => unboundLibraryItem(item));
+  return { items: all.slice(offset, offset + size), total: all.length };
+}
+
+function jellyfinLocalOne(ctx, libId, idx) {
+  if (!jellyfinLocalAllowed(ctx, libId)) return null;
+  const found = localLibraryItemFor(ctx, libId, idx);
+  if (found.error || !found.item) return null;
+  return unboundLibraryItem(found.item);
+}
+
+function jellyfinLocalPlay(ctx, libId, idx) {
+  const found = localLibraryItemFor(ctx, libId, idx);
+  if (found.error) return { status: found.status || 404, body: { error: found.error } };
+  const mounted = localMountFor(ctx, libId, idx, {}, {});
+  if (mounted.error) return { status: mounted.status || 404, body: { error: mounted.error } };
+  return {
+    status: 200,
+    body: mountPayload(mounted.vf, ctx.user.id, {
+      sessionId: mounted.vf.id,
+      candidate: { name: mounted.vf.name },
+      runtime: Number(found.item && found.item.runtime) || 0,
+    }),
+  };
+}
+
+function jellyfinWatchGet(ctx, key) {
+  if (!ctx || !ctx.user || !key) return null;
+  return watchRowForKeyFromAll(store.read('watch', {}), ctx.user.id, 'default', key);
+}
+
+function jellyfinWatchSave(ctx, key, patch) {
+  if (!ctx || !ctx.user || !key) return;
+  const position = Math.max(0, Math.round(Number(patch.position) || 0));
+  const duration = Math.max(0, Math.round(Number(patch.duration) || 0));
+  const storeKey = `${ctx.user.id}:default:${key}`;
+  store.update('watch', {}, (all) => {
+    const prev = all[storeKey] || {};
+    const keptDuration = duration || prev.duration || 0;
+    const watched = typeof patch.watched === 'boolean' ? patch.watched : (keptDuration > 0 && position / keptDuration > 0.92);
+    all[storeKey] = {
+      position,
+      duration: keptDuration,
+      watched,
+      favorite: typeof patch.favorite === 'boolean' ? patch.favorite : !!prev.favorite,
+      meta: sanitizeStoredMediaMeta({ ...(prev.meta || {}), ...(patch.meta || {}) }),
+      updatedAt: nextStamp(),
+    };
+    return all;
+  });
+}
+
+function jellyfinWatchRows(ctx) {
+  if (!ctx || !ctx.user) return [];
+  return watchRowsForProfileFromAll(store.read('watch', {}), ctx.user.id, 'default')
+    .filter((row) => row && !row.hidden && !String(row.key).startsWith('live:') && !String(row.key).startsWith('audiobook:'));
+}
+
+function jellyfinWatchResume(ctx) {
+  if (!ctx || !ctx.user) return [];
+  return watchRowsForProfileFromAll(store.read('watch', {}), ctx.user.id, 'default')
+    .filter((row) => row && !row.watched && !row.hidden && (row.position || 0) > 30
+      && !String(row.key).startsWith('live:') && !String(row.key).startsWith('audiobook:'));
+}
+
+function jellyfinLocalImage(ctx, libId, idx, wide) {
+  const found = localLibraryItemFor(ctx, libId, idx, { publicArt: true });
+  if (found.error || !found.item) return null;
+  const item = unboundLibraryItem(found.item);
+  const tmdb = wide ? item.backdrop : item.poster;
+  if (typeof tmdb === 'string' && tmdb.startsWith('/')) return { tmdb };
+  const stored = found.item.artFile && existingMediaPath(found.item.artFile);
+  if (stored && fs.existsSync(stored)) return { file: stored };
+  const videoBase = found.item.file ? path.parse(found.item.file).name : '';
+  const dirs = [];
+  if (found.item.dir) dirs.push(found.item.dir);
+  if (found.item.file) {
+    const folder = path.dirname(found.item.file);
+    dirs.push(folder, path.dirname(folder));
+  }
+  for (const dir of dirs) {
+    const beside = dir && findLibraryArt(dir, { videoBase, wide });
+    if (beside && fs.existsSync(beside)) return { file: beside };
+  }
+  return null;
+}
+
+const localProbeCache = new Map();
+const SUB_FILE = new Set(['.srt', '.vtt', '.ass', '.ssa']);
+function jellyfinSidecarSubtitles(dir, videoBase) {
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const base = String(videoBase || '').toLowerCase();
+  const rows = [];
+  for (const name of names) {
+    const ext = path.extname(name).toLowerCase();
+    if (!SUB_FILE.has(ext)) continue;
+    const parts = path.parse(name).name.toLowerCase().split(/[._\s-]+/).filter(Boolean);
+    const forced = parts.includes('forced');
+    const lang = [...parts].reverse().find((part) => /^[a-z]{2,3}$/.test(part) && !['forced', 'sdh', 'hi', 'cc'].includes(part)) || '';
+    rows.push({
+      file: path.join(dir, name),
+      ext: ext.slice(1),
+      lang,
+      title: name,
+      forced,
+      preferred: base && path.parse(name).name.toLowerCase().startsWith(base) ? 0 : 1,
+    });
+  }
+  rows.sort((a, b) => a.preferred - b.preferred || a.title.localeCompare(b.title));
+  return rows.slice(0, 12).map(({ preferred, ...row }) => row);
+}
+
+function jellyfinLocalSubtitles(ctx, libId, idx) {
+  const found = localLibraryItemFor(ctx, libId, idx);
+  if (found.error || !found.item || !found.item.file) return [];
+  const file = existingMediaPath(found.item.file);
+  return jellyfinSidecarSubtitles(path.dirname(file), path.parse(found.item.file).name);
+}
+
+const embeddedSubtitleCache = new Map();
+function jellyfinEmbeddedSubtitle(file, rel) {
+  const key = `${file}:${rel}`;
+  if (!embeddedSubtitleCache.has(key)) {
+    embeddedSubtitleCache.set(key, new Promise((resolve) => {
+      let ff;
+      try { ff = spawnSubtitleExtract(file, rel); } catch { return resolve(''); }
+      const chunks = [];
+      ff.stdout.on('data', (d) => chunks.push(d));
+      const timer = setTimeout(() => { try { ff.kill('SIGKILL'); } catch {} resolve(''); }, 20000);
+      const finish = () => { clearTimeout(timer); resolve(Buffer.concat(chunks).toString('utf8')); };
+      ff.on('close', finish);
+      ff.on('error', () => { clearTimeout(timer); resolve(''); });
+    }));
+  }
+  return embeddedSubtitleCache.get(key);
+}
+
+async function jellyfinLocalSubtitleBody(ctx, libId, idx, streamIndex) {
+  const found = localLibraryItemFor(ctx, libId, idx);
+  if (found.error || !found.item || !found.item.file) return null;
+  const file = existingMediaPath(found.item.file);
+  const info = await jellyfinLocalMedia(ctx, libId, idx);
+  const sidecars = jellyfinSidecarSubtitles(path.dirname(file), path.parse(found.item.file).name);
+  const src = streamsWithSubtitles(info && info.probe, sidecars).byIndex.get(streamIndex);
+  if (!src) return null;
+  if (src.file) {
+    try { return releaseSubtitleToVtt(fs.readFileSync(src.file), src.ext); } catch { return null; }
+  }
+  if (Number.isInteger(src.embedded)) {
+    const vtt = await jellyfinEmbeddedSubtitle(file, src.embedded);
+    return vtt && vtt.includes('WEBVTT') ? vtt : null;
+  }
+  return null;
+}
+
+function jellyfinLocalMedia(ctx, libId, idx) {
+  const row = jellyfinLocalOne(ctx, libId, idx);
+  if (!row) return Promise.resolve(null);
+  const minutes = Number(row.runtime) || 0;
+  const file = row.file ? existingMediaPath(row.file) : '';
+  if (!file) return Promise.resolve({ seconds: minutes > 0 ? minutes * 60 : 0, probe: null });
+  let stat;
+  try { stat = fs.statSync(file); } catch { return Promise.resolve({ seconds: minutes > 0 ? minutes * 60 : 0, probe: null }); }
+  const key = `${file}:${stat.size}:${Math.round(stat.mtimeMs)}`;
+  if (!localProbeCache.has(key)) {
+    localProbeCache.set(key, probeTracks(file).then((probe) => ({
+      seconds: (probe && probe.duration) || (minutes > 0 ? minutes * 60 : 0),
+      probe,
+    })).catch(() => ({ seconds: minutes > 0 ? minutes * 60 : 0, probe: null })));
+  }
+  return localProbeCache.get(key);
+}
+
+function jellyfinLocalFacets(ctx, libId) {
+  if (!jellyfinLocalAllowed(ctx, libId) || !libraryDb.available) return { genres: [], years: [] };
+  return libraryDb.facets(libId);
+}
+
+bindJellyfin({
+  auth, settings, send, readJson, throttled, clientIp, tmdb,
+  jellyfinPlay, jellyfinStream, jellyfinLocalPlay, jellyfinNextCatalog,
+  jellyfinSubtitleStreams, jellyfinSubtitleBody,
+  localLibraries: jellyfinLocalLibraries,
+  localPage: jellyfinLocalPage,
+  localOne: jellyfinLocalOne,
+  localImage: jellyfinLocalImage,
+  localMediaInfo: jellyfinLocalMedia,
+  localSubtitles: jellyfinLocalSubtitles,
+  localSubtitleBody: jellyfinLocalSubtitleBody,
+  localFacets: jellyfinLocalFacets,
+  jellyfinWatchGet, jellyfinWatchSave, jellyfinWatchResume, jellyfinWatchRows,
+  clearLoginThrottle: (key) => limiter.clear(key),
+});
+
 const MIME = { '.html': 'text/html; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml',
-  '.js': 'text/javascript', '.css': 'text/css', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
+  '.js': 'text/javascript', '.css': 'text/css', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
+  '.json': 'application/json', '.map': 'application/json', '.woff': 'font/woff', '.wasm': 'application/wasm',
+  '.webmanifest': 'application/manifest+json', '.gif': 'image/gif', '.webp': 'image/webp', '.ttf': 'font/ttf' };
+
+function jellyfinClientShell(req) {
+  const ua = String(req.headers['user-agent'] || '');
+  if (/Triboon/i.test(ua)) return false;
+  if (/Jellyfin/i.test(ua)) return true;
+  return /;\s*wv\)/.test(ua);
+}
+
+function jellyfinWebDir() {
+  const dir = process.env.TRIBOON_JELLYFIN_WEB || path.join(DATA_DIR, 'jellyfin-web');
+  try { if (fs.existsSync(path.join(dir, 'index.html'))) return dir; } catch {}
+  return null;
+}
 
 const server = http.createServer(async (req, res) => {
   res.shouldKeepAlive = false;
@@ -10205,10 +10593,56 @@ const server = http.createServer(async (req, res) => {
       return await route.h(ctx);
     }
 
+    // Jellyfin apps speak their own addresses (/System, /Users, ...), not /api.
+    // The door is a 404 until an admin turns jellyfinApps on. Signed-in calls
+    // use the same session token as the Triboon app, read from the Jellyfin header.
+    if (isJellyfinPath(p)) {
+      if (!jellyfinEnabled(settings.get())) {
+        req.on('error', () => {});
+        req.resume();
+        return send(res, 404, { error: 'not found' });
+      }
+      const cors = jellyfinCors();
+      for (const [k, v] of Object.entries(cors)) { try { res.setHeader(k, v); } catch {} }
+      if (req.method === 'OPTIONS') return send(res, 204, '', cors);
+      const method = req.method === 'HEAD' ? 'GET' : req.method;
+      const pathLower = p.toLowerCase();
+      const route = JELLYFIN_ROUTES.find((r) => r.m === method && r.re.test(pathLower));
+      if (!route) return send(res, 404, { error: 'not found' });
+      const ctx = { req, res, url, m: route.re.exec(pathLower), kind: route.kind };
+      if (route.auth !== 'public') {
+        const reject = (code, body) => { req.on('error', () => {}); req.resume(); return send(res, code, body, cors); };
+        const token = jellyfinToken(req);
+        const claims = auth.verifyToken(token, 'session');
+        if (!claims) return reject(401, { error: 'authentication required' });
+        ctx.claims = claims;
+        ctx.user = auth.getUser(claims.uid);
+        if (!ctx.user) return reject(401, { error: 'unknown user' });
+        if (!auth.claimsValidForUser(claims, ctx.user)) return reject(401, { error: 'session expired' });
+      }
+      return await route.h(ctx);
+    }
+
+    // Official Jellyfin apps open the server's website. Give them Jellyfin's
+    // own page. The browser and the Triboon app keep Triboon's page.
+    const jfDir = (jellyfinEnabled(settings.get()) && jellyfinClientShell(req)) ? jellyfinWebDir() : null;
+    if (jfDir && (p === '/' || p === '/web')) {
+      res.writeHead(302, { location: '/web/', 'cache-control': 'no-cache' });
+      return res.end();
+    }
+    const webRoot = (jfDir && (p === '/web/' || p.startsWith('/web/'))) ? jfDir : WEB_DIR;
+
     // ---- static UI (public shell; the app gates itself on /api/me) ----
-    let file = p === '/' ? '/index.html' : p;
-    const full = path.join(WEB_DIR, path.normalize(file).replace(/^([.][.][/\\])+/, ''));
-    if (!full.startsWith(WEB_DIR)) return send(res, 403, 'forbidden');
+    let file = (p === '/' || p === '/web' || p === '/web/' || p === '/web/index.html') ? '/index.html' : p;
+    if (webRoot !== WEB_DIR) {
+      file = (p === '/web/' || p === '/web/index.html') ? '/index.html' : p.slice(4);
+      // Jellyfin names files with a real @. The request still says %40, and the
+      // URL parser leaves that encoded, so the lookup missed and the script
+      // came back as plain text.
+      try { file = decodeURIComponent(file); } catch {}
+    }
+    const full = path.join(webRoot, path.normalize(file).replace(/^([.][.][/\\])+/, ''));
+    if (!full.startsWith(webRoot)) return send(res, 403, 'forbidden');
     let sst = null;
     try { const s = fs.statSync(full); if (s.isFile()) sst = s; } catch {}
     if (sst) {
@@ -10220,9 +10654,15 @@ const server = http.createServer(async (req, res) => {
       // LAN; the page is one file) so every client always runs the UI the server ships.
       headers['cache-control'] = full.endsWith('.html') ? 'no-cache' : 'private, max-age=3600';
       if (full.endsWith('.html')) {
-        // Single-file app → inline script/style must stay allowed, but remote script, plugin
-        // content, and framing are locked out. img http(s) covers TMDB art + channel logos.
-        headers['content-security-policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; " +
+        // Jellyfin's page loads its own bundles and posters from the catalog host.
+        // Triboon's page stays locked down.
+        headers['content-security-policy'] = webRoot !== WEB_DIR
+          ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+            "style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data: blob:; " +
+            "media-src 'self' blob: https: http:; connect-src 'self' ws: wss: https: http:; " +
+            "font-src 'self' data:; worker-src 'self' blob:; frame-src 'self'; " +
+            "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+          : "default-src 'self'; script-src 'self' 'unsafe-inline'; " +
           "style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; media-src 'self' blob:; " +
           "connect-src 'self'; frame-src 'none'; " +
           "object-src 'none'; base-uri 'self'; frame-ancestors 'self'";
@@ -10418,7 +10858,8 @@ async function shutdown() {
 }
 
 module.exports = {
-  server, mounts, pipeline, getPool, shutdown, sweep, releasePlaySession, releaseUserPlaySessions, ROUTES, auth, settings, store,
+  server, mounts, pipeline, getPool, shutdown, sweep, releasePlaySession, releaseUserPlaySessions,
+  ROUTES: ROUTES.concat(JELLYFIN_ROUTES), auth, settings, store,
   warmIptvCaches, msUntilNextIptvWarm, rewriteIptvHlsPlaylist,
   normalizeIp, isPrivateIp, clientIpForGeo, geoLocate, geoCacheKey, viewerGeolocationEnabled,
 };
