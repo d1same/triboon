@@ -8,7 +8,9 @@
 const crypto = require('crypto');
 const fs = require('fs');
 
-const SERVER_VERSION = '12.1';
+// Phone and TV apps accept a Jellyfin version with three numbers.
+// "12.1" has two numbers, so they say the server is unsupported.
+const SERVER_VERSION = '10.11.11';
 // 480, 576, 720, 1080, 2160. Jellyfin stops at 1080.
 const JELLYFIN_MAX_RANK = 3;
 
@@ -62,11 +64,27 @@ function emptyPage() {
   return { Items: [], TotalRecordCount: 0, StartIndex: 0 };
 }
 
+function firstHeader(value) {
+  return String(value || '').split(',')[0].trim();
+}
+
+// The address the app should keep using. Behind Unraid, Caddy, or any
+// proxy, the public https name wins. A direct house connection stays http.
+function clientAddress(ctx) {
+  const hdr = (ctx.req && ctx.req.headers) || {};
+  let proto = firstHeader(hdr['x-forwarded-proto']).toLowerCase();
+  if (proto !== 'https' && proto !== 'http') {
+    const match = firstHeader(hdr.forwarded).match(/proto=(https?)/i);
+    proto = match ? match[1].toLowerCase() : 'http';
+  }
+  const host = firstHeader(hdr['x-forwarded-host']) || firstHeader(hdr.host) || 'localhost';
+  return `${proto}://${host}`;
+}
+
 function publicInfo(ctx) {
   const { auth } = deps;
-  const host = ctx.req.headers.host || 'localhost';
   return {
-    LocalAddress: `http://${host}`,
+    LocalAddress: clientAddress(ctx),
     ServerName: 'Triboon',
     Version: SERVER_VERSION,
     ProductName: 'Jellyfin Server',
@@ -1052,8 +1070,7 @@ function playPath(payload, startSeconds, audioRel) {
 function playLink(ctx, payload, startSeconds) {
   const rel = playPath(payload, startSeconds);
   if (!rel) return '';
-  const host = (ctx.req.headers && ctx.req.headers.host) || 'localhost';
-  return `http://${host}${rel}`;
+  return `${clientAddress(ctx)}${rel}`;
 }
 
 async function handleKind(kind, ctx) {

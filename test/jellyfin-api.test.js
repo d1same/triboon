@@ -70,7 +70,15 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   const info = await httpSend(srv.port, 'GET', '/System/Info/Public');
   assert.strictEqual(info.status, 200);
   assert.strictEqual(info.json.ServerName, 'Triboon');
-  assert.strictEqual(info.json.Version, '12.1');
+  assert.strictEqual(info.json.Version, '10.11.11');
+  assert.strictEqual(info.json.ProductName, 'Jellyfin Server');
+  assert.match(info.json.LocalAddress, /^http:\/\/127\.0\.0\.1:\d+$/);
+  const behind = await httpSend(srv.port, 'GET', '/System/Info/Public', {
+    headers: { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'media.example' },
+  });
+  assert.strictEqual(behind.status, 200);
+  assert.strictEqual(behind.json.LocalAddress, 'https://media.example');
+  assert.strictEqual(behind.json.Version, '10.11.11');
   assert.strictEqual(info.json.StartupWizardCompleted, true);
   assert.strictEqual(info.json.providers, undefined);
   assert.doesNotMatch(JSON.stringify(info.json), /hunter22|tmdb|apikey|salt/i);
@@ -197,7 +205,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
     assert.match(atBundle.headers['content-type'], /javascript/);
     assert.match(atBundle.raw, /at-bundle/);
     const ours = await httpSend(srv.port, 'GET', '/', {
-      headers: { 'user-agent': 'Mozilla/5.0 (Linux; Android 14; wv) TriboonAndroid/3.2.5' },
+      headers: { 'user-agent': 'Mozilla/5.0 (Linux; Android 14; wv) TriboonAndroid/3.2.6' },
     });
     assert.strictEqual(ours.status, 200);
     assert.match(ours.raw, /triboon/i);
