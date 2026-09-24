@@ -8,7 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { httpJson, bootServer, setupAdmin } = require('./helpers');
-const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, rememberResumeOrigin, progressSeconds } = require('../server/jellyfin-api');
+const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds } = require('../server/jellyfin-api');
 const { LibraryDb } = require('../server/library-db');
 
 let srv, admin;
@@ -56,6 +56,35 @@ test('jellyfin resume clock reaches the saved minute before the picture', () => 
   assert.strictEqual(progressSeconds('user-1', 'm550', 2410), 2410, 'a clock that already includes the saved minute is not added twice');
   rememberResumeOrigin('user-1', 'm550', 0);
   assert.strictEqual(progressSeconds('user-1', 'm550', 10), 10, 'play from the start stays on the player clock');
+});
+
+test('jellyfin seek bar is the whole movie, and a drag is a later piece not a skip', () => {
+  const raw = '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:2.000,\nseg00000.m4s\n#EXTINF:2.000,\nseg00001.m4s\n';
+  assert.strictEqual(fullTimelinePlaylist(raw, 0), raw, 'an unknown runtime must not invent a short ending');
+  const out = fullTimelinePlaylist(raw, 10, 2);
+  const durs = [...out.matchAll(/#EXTINF:([0-9.]+),/g)].map((row) => Number(row[1]));
+  const sum = durs.reduce((total, n) => total + n, 0);
+  assert.ok(Math.abs(sum - 10) < 0.05, 'the bar adds up to the real runtime, not just the pieces made so far');
+  assert.match(out, /seg00004\.m4s/);
+  assert.match(out, /#EXT-X-ENDLIST/);
+  assert.match(out, /seg00000\.m4s/);
+  assert.doesNotMatch(out, /EXT-X-GAP|EXT-X-SKIP/);
+  const resumed = fullTimelinePlaylist(resumeClockPlaylist(raw, 4), 10, 2);
+  const resumedSum = [...resumed.matchAll(/#EXTINF:([0-9.]+),/g)].map((row) => Number(row[1])).reduce((total, n) => total + n, 0);
+  assert.ok(Math.abs(resumedSum - 10) < 0.05, 'resume still fills the clock and the bar stays the whole movie');
+  assert.match(resumed, /#EXT-X-DISCONTINUITY/);
+  assert.match(resumed, /pad\.m4s/);
+  assert.doesNotMatch(resumed, /EXT-X-GAP|EXT-X-SKIP/);
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const api = fs.readFileSync(path.join(__dirname, '..', 'server', 'jellyfin-api.js'), 'utf8');
+  assert.match(server, /if \(jellyfinPlaylist && sess\.timeline\) \{\s*raw = sess\.timeline;/,
+    'a later short encode list must not shrink the bar');
+  assert.match(server, /if \(jellyfinPlaylist && \(sess\.duration \|\| knownDur\) >= 1 && \/seg\\d\+\\.m4s\/\.test\(raw\)\) raw = fullTimelinePlaylist\(raw, sess\.duration \|\| knownDur, 2\);/,
+    'only the Jellyfin list is stretched to the runtime; iOS keeps its rolling window');
+  assert.match(server, /index > Math\.max\(highest, encodeAt\) \+ 40/,
+    'a drag past the loaded minute restarts there; normal look-ahead must not skip');
+  assert.match(api, /&dur=\$\{dur\}/,
+    'play tells the phone the real runtime');
 });
 
 test('jellyfin door stays shut until an admin opens it', async () => {

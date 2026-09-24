@@ -17,7 +17,7 @@ const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryIte
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors,
-  streamsWithSubtitles, resumeClockPlaylist,
+  streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist,
 } = require('./jellyfin-api');
 const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch } = require('./pipeline');
 const {
@@ -3825,6 +3825,78 @@ function mountAccessOk(ctx, vf) {
   return !vf._ownerUid || (ctx.user && vf._ownerUid === ctx.user.id);
 }
 // Tear down one HLS session (kill its ffmpeg + delete its temp segment dir). Safe to call twice.
+function highestHlsSegment(dir) {
+  let max = -1;
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return -1; }
+  for (const name of names) {
+    const m = /^seg(\d+)\.m4s$/.exec(name);
+    if (!m) continue;
+    const n = parseInt(m[1], 10);
+    if (n > max) max = n;
+  }
+  return max;
+}
+
+// A drag past the pieces already made used to fall off the end of a short bar.
+// Start the encoder at that minute instead, and keep the pieces already saved.
+function repositionHls(sess, index) {
+  return new Promise((resolve) => {
+    try { if (sess.ff) sess.ff.kill('SIGKILL'); } catch {}
+    const step = sess.segmentTime || 2;
+    const start = (sess.sessionStart || 0) + index * step;
+    let ff;
+    try {
+      ff = spawnHls(sess.input, {
+        startSeconds: start,
+        audioTrack: sess.audioTrack || 0,
+        transcodeAudio: !!sess.transcodeAudio,
+        safeStereo: true,
+        outDir: sess.dir,
+        segmentTime: step,
+        holdSegments: true,
+        startNumber: index,
+        initName: 'seekinit.mp4',
+      });
+    } catch (e) {
+      console.error('[hls seek]', e.message);
+      return resolve();
+    }
+    sess.ff = ff;
+    sess.encodeAt = index;
+    let err = '';
+    ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; });
+    ff.on('error', (e) => console.error('[hls seek]', e.message));
+    ff.on('close', (codeNum) => { if (codeNum) console.error('[hls seek]', err.slice(0, 400)); });
+    resolve();
+  });
+}
+
+async function ensureHlsSegment(sess, index, req) {
+  const highest = highestHlsSegment(sess.dir);
+  const encodeAt = Number.isInteger(sess.encodeAt) ? sess.encodeAt : 0;
+  // The phone loads about a minute ahead. Only a drag past that starts over
+  // at the new minute. Starting over for the normal look-ahead would skip.
+  if (index > Math.max(highest, encodeAt) + 40) {
+    if (!sess.seekLock) sess.seekLock = repositionHls(sess, index).finally(() => { sess.seekLock = null; });
+    await sess.seekLock;
+  }
+  const full = path.join(sess.dir, `seg${String(index).padStart(5, '0')}.m4s`);
+  const deadline = Date.now() + 12000;
+  while (Date.now() < deadline) {
+    if (req && (req.destroyed || req.aborted)) return null;
+    try {
+      const stat = await fs.promises.stat(full);
+      if (stat.size > 0) return stat;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  try {
+    const stat = await fs.promises.stat(full);
+    return stat.size > 0 ? stat : null;
+  } catch { return null; }
+}
+
 function closeHlsSession(sess) {
   if (!sess) return;
   try { if (sess.ff) sess.ff.kill('SIGKILL'); } catch {}
@@ -8938,6 +9010,9 @@ Object.assign(H, {
     const jellyfinPlaylist = fileReq === 'master.m3u8' || ctx.url.searchParams.get('vod') === '1';
     if (fileReq === 'master.m3u8') fileReq = '';
     const sessionStart = startSeconds;
+    const askedDur = Math.min(10 * 3600, Math.max(0, parseFloat(ctx.url.searchParams.get('dur') || '') || 0));
+    const probedDur = vf._tracks && Number(vf._tracks.duration) > 0 ? Math.min(10 * 3600, Number(vf._tracks.duration)) : 0;
+    const knownDur = Math.max(askedDur, probedDur);
 
     // Per-mount HLS sessions, keyed by (start,audio) so a seek spins up its own window.
     vf._hls = vf._hls || new Map();
@@ -8959,7 +9034,12 @@ Object.assign(H, {
         return send(ctx.res, 403, { error: 'forbidden' });
       }
       let stat;
-      try { stat = await fsp.stat(full); } catch { return send(ctx.res, 404, { error: 'segment not found' }); }
+      try { stat = await fsp.stat(full); } catch { stat = null; }
+      if ((!stat || !stat.size) && sess.hold && /^seg(\d+)\.m4s$/.test(fileReq)) {
+        stat = await ensureHlsSegment(sess, parseInt(fileReq.slice(3), 10), ctx.req);
+        if (ctx.req.destroyed || ctx.req.aborted) return;
+      }
+      if (!stat || !stat.size) return send(ctx.res, 404, { error: 'segment not found' });
       const type = fileReq.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl'
         : (fileReq.endsWith('.mp4') ? 'video/mp4' : 'video/iso.segment');
       const total = stat.size;
@@ -8996,7 +9076,11 @@ Object.assign(H, {
       // Jellyfin keeps the pieces (holdSegments) so a resume seek still has the start of the list.
       try { ff = spawnHls(selfUrl, { startSeconds: sessionStart, audioTrack, transcodeAudio, safeStereo: true, outDir: dir, segmentTime: 2, holdSegments: jellyfinPlaylist }); }
       catch (e) { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); return send(ctx.res, 503, { error: e.message }); }
-      sess = { dir, ff, createdAt: Date.now() };
+      sess = {
+        dir, ff, createdAt: Date.now(), hold: jellyfinPlaylist, input: selfUrl,
+        audioTrack, transcodeAudio, segmentTime: 2, sessionStart, encodeAt: 0,
+        duration: knownDur,
+      };
       let err = '';
       ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; });
       ff.on('error', (e) => { console.error('[hls spawn]', e.message); });
@@ -9008,7 +9092,14 @@ Object.assign(H, {
         if (oldest && oldest[0] !== key) { closeHlsSession(oldest[1]); vf._hls.delete(oldest[0]); }
       }
     }
+    if (knownDur > (sess.duration || 0)) sess.duration = knownDur;
     const playlistPath = path.join(sess.dir, 'index.m3u8');
+    let raw;
+    // The first full list is the bar the phone keeps. A later encode file only
+    // has the pieces made so far, and reloading that would shrink the movie.
+    if (jellyfinPlaylist && sess.timeline) {
+      raw = sess.timeline;
+    } else {
     // The phone pulls the next piece only when it has caught the end of the
     // list, which shows up as a spinner every two seconds. Hand it several
     // pieces before the first list so it can load ahead. Other players still
@@ -9021,7 +9112,7 @@ Object.assign(H, {
     const resume = jellyfinPlaylist && sessionStart >= 1;
     const already = sess.list && /#EXTINF:/.test(sess.list);
     const waitTicks = resume ? (already ? 1 : 70) : (jellyfinPlaylist ? 200 : 100);
-    let raw = sess.list || null;
+    raw = sess.list || null;
     for (let i = 0; i < waitTicks; i++) {
       try {
         const next = await fsp.readFile(playlistPath, 'utf8');
@@ -9040,6 +9131,10 @@ Object.assign(H, {
     // Resume: the picture already starts at the saved minute. Fill the clock
     // up to that minute so the phone's jump lands on the picture instead of waiting.
     if (jellyfinPlaylist && sessionStart >= 1 && await ensureResumePad()) raw = resumeClockPlaylist(raw, sessionStart);
+    // Name every piece through the real runtime. The bar is then the whole
+    // movie, and a drag asks for that minute instead of stopping early.
+    // iOS keeps the short rolling list and must not get this.
+    if (jellyfinPlaylist && (sess.duration || knownDur) >= 1 && /seg\d+\.m4s/.test(raw)) raw = fullTimelinePlaylist(raw, sess.duration || knownDur, 2);
     // A growing list with no end is a live channel to the phone. It then sits
     // a few seconds from the newest piece and spins whenever that piece is
     // late. TIME-OFFSET=0 starts at the beginning, so the phone can keep a
@@ -9051,6 +9146,8 @@ Object.assign(H, {
         ? '#EXT-X-START:TIME-OFFSET=0,PRECISE=YES'
         : `#EXT-X-START:TIME-OFFSET=${startAt},PRECISE=YES`;
       raw = raw.replace(/(#EXTM3U\r?\n)/, `$1${tag}\n`);
+    }
+    if (jellyfinPlaylist && /#EXT-X-ENDLIST/.test(raw) && /seg\d+\.m4s/.test(raw)) sess.timeline = raw;
     }
     // Rewrite bare segment/init filenames to tokened, same-scope route URLs the receiver can pull.
     const token = ctx.url.searchParams.get('t') || auth.streamToken(ctx.claims.uid, vf.id);

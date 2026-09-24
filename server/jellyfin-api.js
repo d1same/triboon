@@ -339,6 +339,39 @@ function resumeClockPlaylist(raw, startSeconds) {
   return `${head.replace(/#EXT-X-MAP:[^\n]*\n/, '')}${pads.join('\n')}\n${map}${text.slice(inf)}`;
 }
 
+// The phone draws the bar from the playlist. A list that only contains the
+// pieces made so far looks like a short movie, and a drag stops at the end
+// of that short piece. Name every remaining piece through the real runtime
+// and close the list, so the bar is the whole movie. Pieces that are not
+// encoded yet are filled when the phone asks for them.
+function fullTimelinePlaylist(raw, durationSeconds, segmentSeconds = 2) {
+  const duration = Number(durationSeconds) || 0;
+  const step = Number(segmentSeconds) > 0 ? Number(segmentSeconds) : 2;
+  const text = String(raw || '');
+  if (!(duration >= 1) || duration > 10 * 3600 || !/#EXTINF:/.test(text)) return text;
+  const body = text.replace(/^#EXT-X-ENDLIST\s*$/m, '').replace(/\s*$/, '\n');
+  const durs = [...body.matchAll(/^#EXTINF:([0-9.]+),/gm)].map((row) => Number(row[1]) || 0);
+  let sum = durs.reduce((total, n) => total + n, 0);
+  let maxIdx = -1;
+  for (const row of body.matchAll(/^seg(\d+)\.m4s$/gm)) {
+    const n = parseInt(row[1], 10);
+    if (n > maxIdx) maxIdx = n;
+  }
+  const lines = [];
+  let idx = maxIdx + 1;
+  while (sum < duration - 0.05 && idx < 20000) {
+    const dur = Math.min(step, Math.round((duration - sum) * 1000) / 1000);
+    if (!(dur > 0.01)) break;
+    lines.push(`#EXTINF:${dur.toFixed(3)},`, `seg${String(idx).padStart(5, '0')}.m4s`);
+    sum += dur;
+    idx += 1;
+  }
+  let out = body;
+  if (lines.length) out += `${lines.join('\n')}\n`;
+  if (!/#EXT-X-ENDLIST/.test(out)) out += '#EXT-X-ENDLIST\n';
+  return out;
+}
+
 const resumeOrigin = new Map();
 
 function rememberResumeOrigin(uid, itemId, seconds) {
@@ -1336,7 +1369,7 @@ function itemUuid(id) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s) ? s : '';
 }
 
-function playPath(payload, startSeconds, audioRel, itemId) {
+function playPath(payload, startSeconds, audioRel, itemId, durationSeconds) {
   // Short pieces, not one endless file. A phone, TV, or desktop that
   // downloads the whole movie holds it all in memory. The official phone
   // app also refuses anything except an HLS playlist.
@@ -1356,9 +1389,11 @@ function playPath(payload, startSeconds, audioRel, itemId) {
   const join = pathOnly.includes('?') ? '&' : '?';
   const start = Math.max(0, Math.round(Number(startSeconds) || 0));
   const audio = Math.max(0, parseInt(audioRel, 10) || 0);
+  const dur = Math.round(Number(durationSeconds) || 0);
+  const durQ = dur >= 1 && dur <= 10 * 3600 ? `&dur=${dur}` : '';
   // A relative path lets the app prefix its server. Skip then asks again with
   // a new start, because the live pipe itself cannot jump.
-  return `${pathOnly}${join}start=${start}&audio=${audio}&audioSafe=1`;
+  return `${pathOnly}${join}start=${start}&audio=${audio}&audioSafe=1${durQ}`;
 }
 
 function playLink(ctx, payload, startSeconds) {
@@ -1773,7 +1808,8 @@ async function handleKind(kind, ctx) {
     }
     const resumeAt = streamStart(null, body);
     rememberResumeOrigin(uid, ctx.m[1], resumeAt);
-    const url = playPath(playedBody, resumeAt, audioRelFromStreams(streams, body.AudioStreamIndex || body.audioStreamIndex), ctx.m[1]);
+    const durationSeconds = spec && spec.runtime ? Math.round(Number(spec.runtime) * 60) : 0;
+    const url = playPath(playedBody, resumeAt, audioRelFromStreams(streams, body.AudioStreamIndex || body.audioStreamIndex), ctx.m[1], durationSeconds);
     if (!url) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
     stampSubtitleUrls(streams, ctx.m[1], playedBody.id);
     const runtimeTicks = spec ? ticks(spec.runtime) : 0;
@@ -1944,5 +1980,5 @@ const JELLYFIN_ROUTES = [
 module.exports = {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors,
   mediaStreamsFromProbe, streamsWithSubtitles, tmdbSort, genreIdsFromNames,
-  resumeClockPlaylist, rememberResumeOrigin, progressSeconds,
+  resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds,
 };

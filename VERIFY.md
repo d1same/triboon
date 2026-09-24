@@ -126,6 +126,23 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-24, v3.2.10 ship — Jellyfin seek bar is the whole movie, and a
+drag jumps to that minute:
+
+- Version contract: `package.json` 3.2.10; Android `versionName` 3.2.10 /
+  `versionCode` 387; Windows client package/Tauri/Cargo(.lock) 3.2.10.
+- The Jellyfin playlist lists every piece through the known runtime, so
+  the bar is the full movie. Dragging far ahead restarts the encoder at
+  that minute. A short growing list still does not tell the player the
+  movie is over.
+- Gate: `npm.cmd test` 728/728. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.10, household VOD play/seek/resume/CC (house
+  process still 3.2.9), household IPTV first-byte + retune, household
+  overlapping Play, Android lint + unit tests + debug build, Android
+  ExoPlayer stress on `emulator-5556` (never the Shield). Windows GPU/HDR
+  was not run. The new seek bar was not re-watched on the phone emulator.
+
 2026-09-24, v3.2.9 ship — Jellyfin phone plays, resumes at the saved
 minute, and home library cards have covers:
 

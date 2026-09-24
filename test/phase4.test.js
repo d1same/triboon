@@ -7546,6 +7546,10 @@ test('hls variant: spawnHls copies video, emits fMP4 HLS, and refuses without an
     'Jellyfin waits for several pieces so the phone can load ahead instead of spinning on each one');
   assert.match(server, /#EXT-X-START:TIME-OFFSET=0,PRECISE=YES/,
     'Jellyfin starts at the beginning so the phone buffers ahead instead of spinning on the live edge');
+  assert.match(server, /if \(jellyfinPlaylist && \(sess\.duration \|\| knownDur\) >= 1 && \/seg\\d\+\\.m4s\/\.test\(raw\)\) raw = fullTimelinePlaylist\(raw, sess\.duration \|\| knownDur, 2\);/,
+    'the Jellyfin seek bar names every piece through the movie runtime; iOS does not get that list');
+  assert.match(server, /index > Math\.max\(highest, encodeAt\) \+ 40/,
+    'a seek past the loaded minute restarts at that minute; the normal buffer must not skip');
   assert.doesNotMatch(server, /sess\.snap|jellyfinResumePlaylist|EXT-X-GAP|EXT-X-SKIP/,
     'a frozen short list, fake pieces, or skip tags make the phone spin or fail the first list');
   // The mount payload advertises the HLS URL so the iOS web player can request it.

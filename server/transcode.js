@@ -402,7 +402,7 @@ function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudi
 // to a temp dir and the /api/hls route serves the playlist + segments over HTTP Range. hls_flags
 // delete_segments keeps the on-disk footprint bounded (a rolling window) even for a long movie; the
 // route re-spawns from a seek offset when the player seeks past the retained window.
-function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, outDir, playlistName = 'index.m3u8', segmentTime = 4, holdSegments = false } = {}) {
+function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, outDir, playlistName = 'index.m3u8', segmentTime = 4, holdSegments = false, startNumber = 0, initName = 'init.mp4' } = {}) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
   if (!outDir) throw new Error('spawnHls requires an output directory');
@@ -434,9 +434,9 @@ function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio 
     ...(holdSegments ? ['-hls_playlist_type', 'event'] : []),
     '-hls_flags', holdSegments ? 'independent_segments+temp_file' : 'delete_segments+independent_segments+temp_file',
     '-hls_segment_type', 'fmp4',                            // fMP4 segments (AirPlay + CAF friendly)
-    '-hls_fmp4_init_filename', 'init.mp4',
+    '-hls_fmp4_init_filename', initName,
     '-hls_segment_filename', `${outDir.replace(/\\/g, '/')}/seg%05d.m4s`,
-    '-start_number', '0',
+    '-start_number', String(Math.max(0, parseInt(startNumber, 10) || 0)),
     `${outDir.replace(/\\/g, '/')}/${playlistName}`,
   ];
   return spawn(ff.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
