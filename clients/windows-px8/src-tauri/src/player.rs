@@ -2550,7 +2550,13 @@ fn tick_session(
     }
     let raw_position = property::<f64>(mpv, "time-pos").unwrap_or(session.last_raw_pos);
     let raw_duration = property::<f64>(mpv, "duration").unwrap_or(0.0);
-    let paused = property::<bool>(mpv, "pause").unwrap_or(!session.requested_playing);
+    let mut paused = property::<bool>(mpv, "pause").unwrap_or(!session.requested_playing);
+    // The viewer pressed Pause. mpv clears that when the cache fills or the
+    // pipe goes quiet, so the movie started again after a few minutes.
+    if session.ready && !session.requested_playing && !paused {
+        let _ = mpv.set_property("pause", true);
+        paused = true;
+    }
     let buffering = property::<bool>(mpv, "paused-for-cache").unwrap_or(false);
     let idle = property::<bool>(mpv, "idle-active").unwrap_or(false);
     let configured = property::<bool>(mpv, "vo-configured").unwrap_or(false);
@@ -2671,6 +2677,8 @@ fn tick_session(
             publish_ui(app, shared, session.ui.clone());
             return;
         }
+    } else if !session.requested_playing {
+        session.buffering_since = None;
     } else if let Some(since) = session.buffering_since {
         let timeout = if session.mode == SessionMode::Live {
             LIVE_REBUFFER_TIMEOUT

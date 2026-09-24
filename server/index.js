@@ -17,6 +17,7 @@ const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryIte
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors,
+  attachJellyfinSocket, closeJellyfinSockets,
   streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist,
 } = require('./jellyfin-api');
 const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch } = require('./pipeline');
@@ -8753,10 +8754,13 @@ Object.assign(H, {
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     const _now = Date.now();
     vf._touched = _now;
+    // A pause stops the player from reading. The old 2 minute idle kill dropped
+    // the pipe, the desktop app treated that as the end, and the movie started
+    // again by itself. A gone viewer is still released by the mount sweep.
     try {
-      ctx.req.setTimeout(120000);
-      ctx.res.setTimeout(120000);
-      if (ctx.req.socket) ctx.req.socket.setTimeout(120000);
+      ctx.req.setTimeout(0);
+      ctx.res.setTimeout(0);
+      if (ctx.req.socket) ctx.req.socket.setTimeout(0);
     } catch {}
     const total = vf.size;
     let start = 0, end = total;
@@ -8869,12 +8873,18 @@ Object.assign(H, {
     if (!(at > 0) || !detectFfprobe()) return send(ctx.res, 200, { k: Math.max(0, at) });
     // One ffprobe at a time per mount. A stacked reconnect probe is a second /api/stream
     // reader on top of the remux that just dropped — that is what froze the house.
-    if (vf._keyframeInflight) return send(ctx.res, 200, { k: Math.max(0, at) });
-    vf._keyframeInflight = true;
+    // A second stall must wait for the probe already running. Answering with the
+    // raw clock made ffmpeg start at the piece just before the drop (~1s hop).
+    if (vf._keyframeInflight) {
+      const shared = await vf._keyframeInflight.catch(() => at);
+      return send(ctx.res, 200, { k: Math.max(at, Number(shared) || at) });
+    }
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
     let k = at;
-    try { k = await ffprobeKeyframeAtOrAfter(selfUrl, at).catch(() => at); }
-    finally { vf._keyframeInflight = false; }
+    const job = ffprobeKeyframeAtOrAfter(selfUrl, at).catch(() => at);
+    vf._keyframeInflight = job;
+    try { k = await job; }
+    finally { if (vf._keyframeInflight === job) vf._keyframeInflight = null; }
     send(ctx.res, 200, { k: Math.max(at, Number(k) || at) });
   },
 
@@ -10917,6 +10927,7 @@ server.maxRequestsPerSocket = 1;
 server.on('clientError', (err, socket) => {
   try { socket.destroy(); } catch {}
 });
+attachJellyfinSocket(server);
 
 // ---------- housekeeping sweep ----------
 // Mounts hold a segment map (can be tens of MB for a big release) and were historically kept
@@ -11045,6 +11056,7 @@ async function shutdown() {
   iptvWarmNextAt = 0;
   closeAllIptvLiveStreams('shutdown');
   await shutdownXmltvGuideJobs();
+  await closeJellyfinSockets();
   cleanupYtCookieFiles();
   for (const vf of mounts.values()) releaseMountResources(vf); // cancel warm jobs + HLS ffmpeg/temp dirs
   if (pool) { pool.close(); pool = null; }

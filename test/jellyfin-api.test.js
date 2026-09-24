@@ -30,6 +30,24 @@ function httpSend(port, method, p, { body, headers } = {}) {
   });
 }
 
+function openJfSocket(port, p) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let ws;
+    const timer = setTimeout(() => finish(reject, new Error('timeout')), 4000);
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+    ws = new WebSocket(`ws://127.0.0.1:${port}${p}`);
+    ws.addEventListener('message', (ev) => finish(resolve, { ws, first: String(ev.data) }));
+    ws.addEventListener('error', () => {});
+    ws.addEventListener('close', () => finish(reject, new Error('closed')));
+  });
+}
+
 test('jellyfin sort uses the first key, so release date is not treated as a name sort', () => {
   assert.strictEqual(tmdbSort('movie', { sortBy: 'PremiereDate,SortName', asc: false }), 'primary_release_date.desc');
   assert.strictEqual(tmdbSort('series', { sortBy: 'DateCreated,SortName', asc: false }), 'first_air_date.desc');
@@ -489,10 +507,41 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(zebraResume.UserData.ItemId, zebraResume.Id);
   assert.match(zebraResume.UserData.Key, /^l[0-9a-f]{10}i3$/);
 
+  const mountsBefore = srv.mounts.size;
+  const live = await openJfSocket(srv.port, `/socket?api_key=${encodeURIComponent(token)}`);
+  const hello = JSON.parse(live.first);
+  assert.strictEqual(hello.MessageType, 'ForceKeepAlive', 'the phone is told how often to check in');
+  assert.strictEqual(hello.Data, 60);
+  const reply = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('no keepalive')), 3000);
+    live.ws.addEventListener('message', (ev) => {
+      const msg = JSON.parse(String(ev.data));
+      if (msg.MessageType !== 'KeepAlive') return;
+      clearTimeout(timer);
+      resolve(msg);
+    });
+    live.ws.send(JSON.stringify({ MessageType: 'KeepAlive' }));
+    live.ws.send(JSON.stringify({ MessageType: 'Play', Data: { ItemIds: ['nope'] } }));
+  });
+  assert.strictEqual(reply.MessageType, 'KeepAlive');
+  assert.strictEqual(srv.mounts.size, mountsBefore, 'a live-line play command does not start a movie');
+  await new Promise((resolve) => {
+    live.ws.addEventListener('close', () => resolve());
+    live.ws.close();
+  });
+  await assert.rejects(openJfSocket(srv.port, '/socket?api_key=nope'), /closed|timeout/);
+  const plain = await httpSend(srv.port, 'GET', '/socket', { headers: { authorization: authz } });
+  assert.strictEqual(plain.status, 426, 'a normal page load is not the live line');
+  const anonSocket = await httpSend(srv.port, 'GET', '/socket');
+  assert.strictEqual(anonSocket.status, 401);
+  const wired = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(wired, /attachJellyfinSocket\(server\)/, 'the live line stays wired to the server');
+
   const shut = await httpJson(srv.port, 'POST', '/api/settings', { jellyfinApps: false }, admin);
   assert.strictEqual(shut.status, 200);
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json.jellyfinApps, false);
   assert.strictEqual((await httpSend(srv.port, 'GET', '/System/Info/Public')).status, 404);
+  await assert.rejects(openJfSocket(srv.port, `/socket?api_key=${encodeURIComponent(token)}`), /closed|timeout/);
 
   for (const route of JELLYFIN_ROUTES) {
     assert.ok(['public', 'user'].includes(route.auth), `jellyfin route ${route.re} declares auth`);
@@ -502,4 +551,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
 
 test('jellyfin door closes with the server', async () => {
   if (srv) await srv.shutdown();
+  // The live line finishes closing a moment later. Quitting in that moment
+  // crashes the Windows check, so this wait stays.
+  await new Promise((resolve) => setTimeout(resolve, 50));
 });

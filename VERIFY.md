@@ -126,6 +126,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-24, v3.2.11 ship — a pause stays paused, and a copied movie
+does not hop the picture back about a second:
+
+- Version contract: `package.json` 3.2.11; Android `versionName` 3.2.11 /
+  `versionCode` 388; Windows client package/Tauri/Cargo(.lock) 3.2.11.
+- A desktop pause no longer drops the stream after about two minutes and
+  starts the movie again. A buffer stall on a copied movie restarts on the
+  next piece instead of the one just before the drop. Each piece is stamped
+  so the picture does not slip backward while you are already watching.
+  The Jellyfin phone keeps a live connection so it does not say the server
+  dropped. A message on that line cannot start a movie.
+- Gate: `npm.cmd test` 728/728. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.11, household VOD play/seek/resume/CC (house
+  process still reported 3.2.10 because it was started before the version
+  bump; two titles were over the 3s ready budget, SLOW is not a hard fail),
+  household IPTV first-byte + retune, household overlapping Play, Android
+  lint + unit tests + debug build, Android ExoPlayer stress on
+  `emulator-5556` (never the Shield). Windows GPU/HDR was not run. The
+  one-second hop and the desktop pause were not re-watched after this gate.
+
 2026-09-24, v3.2.10 ship — Jellyfin seek bar is the whole movie, and a
 drag jumps to that minute:
 

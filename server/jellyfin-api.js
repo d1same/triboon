@@ -19,7 +19,7 @@ const PREFIXES = [
   '/system', '/users', '/useritems', '/userviews', '/items', '/library', '/shows',
   '/displaypreferences', '/quickconnect', '/branding', '/sessions',
   '/plugins', '/startup', '/localization', '/videos', '/livetv', '/playback',
-  '/mediasegments',
+  '/mediasegments', '/socket',
 ];
 
 let deps = null;
@@ -1835,6 +1835,7 @@ async function handleKind(kind, ctx) {
     return send(ctx.res, 200, { Items: [] }, cors);
   }
   if (kind === 'intros') return send(ctx.res, 200, emptyPage(), cors);
+  if (kind === 'socket') return send(ctx.res, 426, { error: 'websocket required' }, cors);
   if (kind === 'endpoint') {
     return send(ctx.res, 200, { IsLocal: true, IsInNetwork: true }, cors);
   }
@@ -1921,6 +1922,191 @@ async function handleKind(kind, ctx) {
 
 const serveJellyfin = (ctx) => handleKind(ctx.kind, ctx);
 
+// The phone asks for a live line at /socket. A plain 404 makes it say the
+// server dropped. This line only stays awake. A message cannot start a movie.
+const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const SOCKET_CAP = 32;
+const jellyfinSockets = new Set();
+
+function wsAccept(key) {
+  return crypto.createHash('sha1').update(String(key) + WS_GUID).digest('base64');
+}
+
+function wsFrame(opcode, payload) {
+  const data = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload));
+  const len = data.length;
+  let header;
+  if (len < 126) header = Buffer.from([0x80 | opcode, len]);
+  else if (len < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 126;
+    header.writeUInt16BE(len, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x80 | opcode;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(len), 2);
+  }
+  return Buffer.concat([header, data]);
+}
+
+function rejectUpgrade(socket, code, text) {
+  const reason = { 401: 'Unauthorized', 404: 'Not Found', 426: 'Upgrade Required', 503: 'Service Unavailable' }[code] || 'Bad Request';
+  const body = JSON.stringify({ error: text });
+  const head = `HTTP/1.1 ${code} ${reason}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n`;
+  try { socket.end(head + body); } catch { try { socket.destroy(); } catch {} }
+}
+
+function readWsFrames(buf, onFrame) {
+  while (buf.length >= 2) {
+    const fin = (buf[0] & 0x80) !== 0;
+    const opcode = buf[0] & 0x0f;
+    const masked = (buf[1] & 0x80) !== 0;
+    let len = buf[1] & 0x7f;
+    let offset = 2;
+    if (len === 126) {
+      if (buf.length < 4) return buf;
+      len = buf.readUInt16BE(2);
+      offset = 4;
+    } else if (len === 127) {
+      if (buf.length < 10) return buf;
+      const big = buf.readBigUInt64BE(2);
+      if (big > 65536n) return null;
+      len = Number(big);
+      offset = 10;
+    }
+    if (len > 65536) return null;
+    const maskLen = masked ? 4 : 0;
+    if (buf.length < offset + maskLen + len) return buf;
+    let payload = buf.subarray(offset + maskLen, offset + maskLen + len);
+    if (masked) {
+      const mask = buf.subarray(offset, offset + 4);
+      payload = Buffer.from(payload);
+      for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
+    }
+    buf = buf.subarray(offset + maskLen + len);
+    if (!fin || opcode === 0) return null;
+    const stop = onFrame(opcode, payload);
+    if (stop) return buf;
+  }
+  return buf;
+}
+
+function attachJellyfinSocket(server) {
+  if (!server || server.__triboonJellyfinSocket) return;
+  server.__triboonJellyfinSocket = true;
+  server.on('upgrade', (req, socket, head) => {
+    try { openJellyfinSocket(req, socket, head); }
+    catch { try { socket.destroy(); } catch {} }
+  });
+}
+
+function closeJellyfinSockets() {
+  const pending = [];
+  for (const live of jellyfinSockets) {
+    pending.push(new Promise((resolve) => {
+      if (live.destroyed) return resolve();
+      const timer = setTimeout(resolve, 1000);
+      if (typeof timer.unref === 'function') timer.unref();
+      live.once('close', () => { clearTimeout(timer); resolve(); });
+      if (live.__jfEnding) return;
+      live.__jfEnding = true;
+      try { live.end(); } catch { resolve(); }
+    }));
+  }
+  return Promise.all(pending);
+}
+
+function openJellyfinSocket(req, socket, head) {
+  let pathname = '/';
+  try { pathname = new URL(req.url || '/', 'http://x').pathname.toLowerCase(); } catch {}
+  if (pathname !== '/socket') {
+    socket.destroy();
+    return;
+  }
+  const enabled = !!(deps && jellyfinEnabled(deps.settings.get()));
+  const token = jellyfinToken(req);
+  if (!enabled) return rejectUpgrade(socket, 404, 'not found');
+  const claims = token && deps.auth.verifyToken(token, 'session');
+  const user = claims && deps.auth.getUser(claims.uid);
+  if (!claims || !user || !deps.auth.claimsValidForUser(claims, user)) {
+    return rejectUpgrade(socket, 401, 'authentication required');
+  }
+  const key = req.headers['sec-websocket-key'];
+  if (String(req.headers.upgrade || '').toLowerCase() !== 'websocket' || !key) {
+    return rejectUpgrade(socket, 426, 'websocket required');
+  }
+  if (jellyfinSockets.size >= SOCKET_CAP) return rejectUpgrade(socket, 503, 'too many connections');
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\n'
+    + 'Upgrade: websocket\r\n'
+    + 'Connection: Upgrade\r\n'
+    + `Sec-WebSocket-Accept: ${wsAccept(key)}\r\n`
+    + '\r\n'
+  );
+  jellyfinSockets.add(socket);
+  socket.setTimeout(0);
+  let buf = head && head.length ? Buffer.from(head) : Buffer.alloc(0);
+  let alive = Date.now();
+  const send = (obj) => {
+    if (socket.destroyed || socket.__jfEnding) return;
+    try { socket.write(wsFrame(1, JSON.stringify(obj))); } catch {}
+  };
+  send({ MessageType: 'ForceKeepAlive', Data: 60 });
+  const beat = setInterval(() => {
+    if (socket.destroyed) return;
+    if (Date.now() - alive > 120000) {
+      if (!socket.__jfEnding && !socket.destroyed) {
+        socket.__jfEnding = true;
+        try { socket.end(); } catch {}
+      }
+      return;
+    }
+    send({ MessageType: 'KeepAlive' });
+  }, 30000);
+  if (typeof beat.unref === 'function') beat.unref();
+  const cleanup = () => {
+    clearInterval(beat);
+    jellyfinSockets.delete(socket);
+  };
+  socket.on('close', cleanup);
+  socket.on('error', () => { try { if (!socket.destroyed) socket.destroy(); } catch {} });
+  const take = (chunk) => {
+    alive = Date.now();
+    buf = Buffer.concat([buf, chunk]);
+    if (buf.length > 1024 * 1024) {
+      try { if (!socket.destroyed) socket.destroy(); } catch {}
+      return;
+    }
+    const next = readWsFrames(buf, (opcode, payload) => {
+      if (opcode === 8) {
+        if (!socket.__jfEnding) {
+          socket.__jfEnding = true;
+          try { socket.end(wsFrame(8, payload)); } catch {}
+        }
+        return true;
+      }
+      if (opcode === 9) {
+        try { socket.write(wsFrame(10, payload)); } catch {}
+        return false;
+      }
+      if (opcode !== 1) return false;
+      let msg = null;
+      try { msg = JSON.parse(payload.toString('utf8')); } catch { return false; }
+      if (msg && msg.MessageType === 'KeepAlive') send({ MessageType: 'KeepAlive' });
+      return false;
+    });
+    if (next == null) {
+      try { if (!socket.destroyed) socket.destroy(); } catch {}
+      return;
+    }
+    buf = next;
+  };
+  socket.on('data', take);
+  if (buf.length) take(Buffer.alloc(0));
+}
+
 const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/system\/info\/public$/, auth: 'public', kind: 'infoPublic', h: serveJellyfin },
   { m: 'GET', re: /^\/system\/info$/, auth: 'user', kind: 'info', h: serveJellyfin },
@@ -1975,10 +2161,12 @@ const JELLYFIN_ROUTES = [
   { m: 'POST', re: /^\/sessions\/capabilities\/full$/, auth: 'user', kind: 'capabilities', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/logout$/, auth: 'user', kind: 'logout', h: serveJellyfin },
   { m: 'GET', re: /^\/plugins$/, auth: 'user', kind: 'plugins', h: serveJellyfin },
+  { m: 'GET', re: /^\/socket$/, auth: 'user', kind: 'socket', h: serveJellyfin },
 ];
 
 module.exports = {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors,
+  attachJellyfinSocket, closeJellyfinSockets,
   mediaStreamsFromProbe, streamsWithSubtitles, tmdbSort, genreIdsFromNames,
   resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds,
 };

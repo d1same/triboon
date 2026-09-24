@@ -14018,6 +14018,22 @@ window.__tvNativeVideoStats = (raw, token) => {
   nativePlaybackHeartbeat(); // stats ticks fire for native Live TV too — keeps live viewers reported
   runPendingNativeSync();    // and a second throttle-proof driver for the queued alass sync (paused playback)
 };
+// A copied movie can only restart on a piece boundary. Restarting at the
+// clock lands on the piece just before the stall, so the picture hops back
+// about a second. The next boundary is slightly ahead. That is the one we want.
+function forwardRemuxResumeSec(p, at) {
+  const t = Math.max(0, +at || 0);
+  if (!p || currentPlayerKind(p) !== 'remux' || !p.remuxUrl || !(t > 0)) return Promise.resolve(t);
+  const m = String(p.remuxUrl).match(/\/api\/remux\/(\w+)\?t=([^&]+)/);
+  if (!m) return Promise.resolve(t);
+  return fetch(`/api/keyframe/${m[1]}?at=${t}&t=${m[2]}`)
+    .then((r) => r.json())
+    .then((body) => {
+      const kf = body && body.k;
+      return Number.isFinite(kf) && kf > t + 0.05 ? kf : t;
+    })
+    .catch(() => t);
+}
 window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   const p = S.playing;
   if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
@@ -14038,18 +14054,13 @@ window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   // THERE — playback resumes slightly FORWARD (≤ one GOP), never a backward replay (the owner's bug).
   // Gated to reconnects + remux; user seeks and transcode (frame-accurate) are untouched. Any hiccup
   // falls through to mounting at the target.
-  if (resume && kind === 'remux' && p.remuxUrl) {
-    try {
-      const m = p.remuxUrl.match(/\/api\/remux\/(\w+)\?t=([^&]+)/);
-      if (m) {
-        const kf = (await (await fetch(`/api/keyframe/${m[1]}?at=${at}&t=${m[2]}`)).json()).k;
-        if (!current()) return;
-        if (Number.isFinite(kf) && kf > at + 0.05) {
-          tryNativeVideoPlayer(kind, kf, { quietSeek: true, percentResume: !!percentResume });
-          return;
-        }
-      }
-    } catch { if (!current()) return; }
+  if (resume && kind === 'remux') {
+    const kf = await forwardRemuxResumeSec(p, at);
+    if (!current()) return;
+    if (kf > at + 0.05) {
+      tryNativeVideoPlayer(kind, kf, { quietSeek: true, percentResume: !!percentResume });
+      return;
+    }
   }
   if (!current()) return;
   // User remux/transcode skip cannot seek the pipe. Rapid Left was one ffmpeg per press.
@@ -14408,7 +14419,7 @@ function playbackServerGone(reason) {
 function recoverSamePlaybackSource(reason = '') {
   const p = S.playing; if (!vodPlaybackStarted(p)) return false;
   const kind = currentPlayerKind(p);
-  const at = currentTime();
+  let at = currentTime();
   const key = `${p.mountId || p.sessionId || p.streamUrl || ''}:${kind}`;
   const now = appMs();
   const decoderFailure = /decode|decoder|codec|renderer|format/i.test(String(reason || ''));
@@ -14418,6 +14429,9 @@ function recoverSamePlaybackSource(reason = '') {
   if (!sourceDead && S._handoffQuietUntil && now < S._handoffQuietUntil) return false;
   // A user pause is not a dead source. Remounting here rebuilds 4K from scratch (~30s).
   if (p.usingNative && p.nativePaused && !sourceDead && !decoderFailure) return false;
+  // A desktop pause is not a dead movie. Reopening it here is what pressed Play
+  // by itself a couple of minutes later.
+  if (!p.usingNative && $('video') && $('video').paused && !sourceDead && !decoderFailure) return false;
   // Play already asked for a quiet remount. A second recovery on top freezes the picture.
   if (p.usingNative && p._nativeResuming && !sourceDead && !decoderFailure) return false;
   if (p._webResuming && !sourceDead && !decoderFailure) return false;
@@ -14446,10 +14460,17 @@ function recoverSamePlaybackSource(reason = '') {
     }
     return true;
   }
-  markPlaybackSourceSwap(p);
-  if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return true;
-  p.usingNative = false;
-  return startSource(kind, at, { quietSeek: true }) || (showPlaybackInterrupted(reason), true);
+  if (p.usingNative) p._nativeResuming = true;
+  else p._webResuming = true;
+  forwardRemuxResumeSec(p, at).then((next) => {
+    if (S.playing !== p || S.view !== 'player') return;
+    at = next;
+    markPlaybackSourceSwap(p);
+    if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return;
+    p.usingNative = false;
+    startSource(kind, at, { quietSeek: true }) || showPlaybackInterrupted(reason);
+  });
+  return true;
 }
 function holdPlaybackAcrossRestart() {
   try { clearPlayerLoadingStages(); } catch {}
@@ -14547,7 +14568,7 @@ async function reMountAndResume(reason = '', attempt = 0) {
     p._restartToast = true;
     toast('Server restarted — picking up where you left off');
   }
-  const at = currentTime();
+  let at = currentTime();
   try {
     const remountBody = playbackRequestBody(p.item, p.name ? { name: p.name } : null);
     const remountDur = (p.duration && isFinite(p.duration) && p.duration) || 0;
@@ -14564,6 +14585,10 @@ async function reMountAndResume(reason = '', attempt = 0) {
     markPlaybackSourceSwap(p);
     p.nativePos = at;
     p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0; p._reMounting = false; p._restartToast = false;
+    if (kind === 'remux' && typeof forwardRemuxResumeSec === 'function') {
+      at = await forwardRemuxResumeSec(p, at);
+      if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; }
+    }
     if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return;
     p.usingNative = false;
     if (!startSource(kind, at, { quietSeek: true })) showPlaybackInterrupted(reason);

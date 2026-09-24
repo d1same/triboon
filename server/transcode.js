@@ -61,7 +61,7 @@ function ffprobeKeyframeAtOrAfter(streamUrl, targetSec, { timeoutMs = 8000 } = {
       let best = Infinity;
       for (const line of out.split(/\r?\n/)) {
         const t = parseFloat(line);
-        if (Number.isFinite(t) && t >= targetSec - 0.02 && t < best) best = t; // smallest keyframe >= target
+        if (Number.isFinite(t) && t >= targetSec && t < best) best = t; // next keyframe at or after the drop, never the one before it
       }
       finish(best !== Infinity ? best : targetSec);
     });
@@ -365,8 +365,11 @@ function audioCopyOk(codec, caps = {}) {
 //    aresample half must stay out.
 //  - frag_duration 500ms: delay_moov waits for the first fragment; a GOP-sized fragment
 //    would stall startup. Short fragments also more than HALVED time-to-first-byte.
+//  - negative_cts_offsets: a copied B-frame movie starts each fragment a little
+//    early. The picture then hops back about a second, over and over, while you
+//    are already watching. This flag keeps the clock moving forward.
 const REMUX_SYNC_FLAGS = ['-avoid_negative_ts', 'make_zero', '-frag_duration', '500000'];
-const REMUX_MOVFLAGS = 'frag_keyframe+empty_moov+default_base_moof+delay_moov';
+const REMUX_MOVFLAGS = 'frag_keyframe+empty_moov+default_base_moof+delay_moov+negative_cts_offsets';
 // safeStereo: the "audio-safe" path (multiview panes, any plain <video>/MSE surface that has no
 // audio-fallback loop) must downmix to STEREO AAC-LC. 5.1 AAC is the least-compatible AAC variant
 // for browser/WebView MediaCodec decoders — it commonly plays as video-with-NO-audio, which is the
