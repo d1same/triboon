@@ -402,23 +402,37 @@ function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudi
 // to a temp dir and the /api/hls route serves the playlist + segments over HTTP Range. hls_flags
 // delete_segments keeps the on-disk footprint bounded (a rolling window) even for a long movie; the
 // route re-spawns from a seek offset when the player seeks past the retained window.
-function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, outDir, playlistName = 'index.m3u8', segmentTime = 4 } = {}) {
+function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, outDir, playlistName = 'index.m3u8', segmentTime = 4, holdSegments = false } = {}) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
   if (!outDir) throw new Error('spawnHls requires an output directory');
+  // A rolling window is right for a live-style player that stays on the newest
+  // pieces. Jellyfin's player seeks to a clock time, so it needs every piece
+  // from the start kept until the watch is over. Throwing the start away makes
+  // the picture stay black at 0:00.
   const args = [
     '-hide_banner', '-loglevel', 'error',
     ...(startSeconds > 0 ? ['-noaccurate_seek', '-ss', String(startSeconds)] : []),
     '-i', streamUrl,
     '-map', '0:v:0', '-map', `0:a:${audioTrack}?`,
-    '-c:v', 'copy',                     // HLS variant: video NEVER re-encoded here (same as remux)
+    // The phone asks for one piece at a time. A copied piece is about as big as
+    // a slow link can move in those two seconds, so the next piece is late and
+    // the spinner shows. A smaller picture arrives early. iOS keeps the copy.
+    ...(holdSegments ? [
+      '-vf', "scale=-2:'min(720,ih)',format=yuv420p",
+      '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
+      '-profile:v', 'high', '-pix_fmt', 'yuv420p',
+      '-force_key_frames', 'expr:gte(t,n_forced*2)',
+      '-b:v', '2500k', '-maxrate', '3000k', '-bufsize', '3000k',
+    ] : ['-c:v', 'copy']),
     ...(transcodeAudio
       ? ['-c:a', 'aac', '-b:a', safeStereo ? '192k' : '384k', '-ac', safeStereo ? '2' : '6']
       : ['-c:a', 'copy']),
     '-f', 'hls',
     '-hls_time', String(segmentTime),
-    '-hls_list_size', '10',                                 // rolling window; bounds disk use
-    '-hls_flags', 'delete_segments+independent_segments+temp_file',
+    '-hls_list_size', holdSegments ? '0' : '10',
+    ...(holdSegments ? ['-hls_playlist_type', 'event'] : []),
+    '-hls_flags', holdSegments ? 'independent_segments+temp_file' : 'delete_segments+independent_segments+temp_file',
     '-hls_segment_type', 'fmp4',                            // fMP4 segments (AirPlay + CAF friendly)
     '-hls_fmp4_init_filename', 'init.mp4',
     '-hls_segment_filename', `${outDir.replace(/\\/g, '/')}/seg%05d.m4s`,

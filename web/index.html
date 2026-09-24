@@ -28906,7 +28906,9 @@ function enterRail() {
   blurTextEntry();
   const btns = visibleRailButtons();
   const i = btns.findIndex((b) => b.classList.contains('active'));
-  focusRail(i >= 0 ? i : (S.railIdx || 0), { suppressPreview: ['detail', 'person'].includes(S.view) });
+  // A hidden section (Music when there is no music downloader) has no menu button.
+  // Focusing the leftover item used to preview that other page, so Back left Music.
+  focusRail(i >= 0 ? i : (S.railIdx || 0), { suppressPreview: i < 0 || ['detail', 'person'].includes(S.view) });
 }
 function drawerRows() {
   return [...document.querySelectorAll('.srcRow')];

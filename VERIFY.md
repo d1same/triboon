@@ -126,6 +126,24 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-24, v3.2.9 ship — Jellyfin phone plays, resumes at the saved
+minute, and home library cards have covers:
+
+- Version contract: `package.json` 3.2.9; Android `versionName` 3.2.9 /
+  `versionCode` 386; Windows client package/Tauri/Cargo(.lock) 3.2.9.
+- The Jellyfin phone gets a smaller picture so it does not spin at every
+  cut. Resume starts the clock at the saved minute. Home Movies, Shows,
+  and library cards use the new covers. An episode with no still uses the
+  show picture. Picking a genre filters the list. Back on Music stays on
+  Music when that menu button is hidden.
+- Gate: `npm.cmd test` 727/727. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.9, household VOD play/seek/resume/CC, household
+  IPTV first-byte + retune, household overlapping Play, Android lint +
+  unit tests + debug build, Android ExoPlayer stress on `emulator-5556`
+  (never the Shield). Windows GPU/HDR was not run. The official Jellyfin
+  phone was played on the phone emulator before this gate.
+
 2026-09-23, v3.2.8 ship — Jellyfin TV stays signed in and plays, library
 tiles have covers, and a long phone-call pause starts the same file again:
 

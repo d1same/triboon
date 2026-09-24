@@ -350,7 +350,8 @@ if ($retarget -and $retarget.retargeted) { $report['retargeted'] = $true }
 # verify token when the operator already set it for :7799. Never print it.
 if (-not [string]::IsNullOrWhiteSpace($env:TRIBOON_TOKEN)) {
   $tokenJson = ConvertTo-Json -Compress -InputObject $env:TRIBOON_TOKEN
-  Invoke-CdpJson "(function(){ try { localStorage.setItem('triboon.token', $tokenJson); location.reload(); return { seeded: true }; } catch (e) { return { seeded: false }; } })()" | Out-Null
+  $profileJson = if ([string]::IsNullOrWhiteSpace($env:TRIBOON_PROFILE)) { 'null' } else { ConvertTo-Json -Compress -InputObject $env:TRIBOON_PROFILE }
+  Invoke-CdpJson "(function(){ try { localStorage.setItem('triboon.token', $tokenJson); if ($profileJson) localStorage.setItem('triboon.profile', $profileJson); location.reload(); return { seeded: true }; } catch (e) { return { seeded: false }; } })()" | Out-Null
   Start-Sleep -Seconds 3
   $report['socket'] = Connect-Devtools
 }

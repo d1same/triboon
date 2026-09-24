@@ -5316,8 +5316,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Movies/TV grid render during rail preview shows the first title hero');
   assert.match(ui, /function focusRail\(i, opts = \{\}\) \{[\s\S]+preview && !opts\.suppressPreview[\s\S]+preview\.run\(\)[\s\S]+!preview && !opts\.suppressPreview[\s\S]+paintRailPreviewHero\(\)/,
     'rail preview should be suppressible for accidental rail entry from detail-style overlays, and already-open Movies/TV still get the first-title hero');
-  assert.match(ui, /function enterRail\(\) \{[\s\S]+focusRail\(i >= 0 \? i : \(S\.railIdx \|\| 0\), \{ suppressPreview: \['detail', 'person'\]\.includes\(S\.view\) \}\);[\s\S]+\}/,
-    'entering the rail from movie/show detail or cast/person should not immediately preview Home');
+  assert.match(ui, /function enterRail\(\) \{[\s\S]+focusRail\(i >= 0 \? i : \(S\.railIdx \|\| 0\), \{ suppressPreview: i < 0 \|\| \['detail', 'person'\]\.includes\(S\.view\) \}\);[\s\S]+\}/,
+    'opening the menu from a hidden section, or from detail/person, must not preview a different page');
   assert.match(ui, /S\.view === 'watchlist' && S\.zone !== 'rail' && focusGrid\(0\)/,
     'Watchlist empty-state rendering must not steal D-pad focus from the open rail');
   assert.match(ui, /const focusCalendarStart = \(\) => requestAnimationFrame\(\(\) => S\.view === 'calendar' && S\.zone !== 'rail' && focusContent\(\)\)/,
@@ -7522,6 +7522,12 @@ test('hls variant: spawnHls copies video, emits fMP4 HLS, and refuses without an
     'spawnHls must copy video and emit fMP4 HLS segments (AirPlay/CAF friendly)');
   assert.match(transcode, /spawnHls[\s\S]+if \(!outDir\) throw new Error\('spawnHls requires an output directory'\)/,
     'spawnHls must refuse to run without an explicit output directory (no path guessing)');
+  assert.match(transcode, /holdSegments \? '0' : '10'/,
+    'Jellyfin keeps every HLS piece from the start; the rolling window stays for everyone else');
+  assert.match(transcode, /holdSegments \? \[[\s\S]*'-maxrate', '3000k'/,
+    'Jellyfin phone pieces stay small enough to arrive before the picture runs out');
+  assert.match(transcode, /-hls_playlist_type', 'event'/,
+    'the kept playlist is an event list so the player can seek to a resume time');
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   // HLS is now a FIRST-CLASS stream-authed output (the iOS Safari playback path) — no longer gated behind
   // the opt-in flag. It stays stream-tier authed + capped + temp-cleaned; the default ladder is untouched
@@ -7532,8 +7538,16 @@ test('hls variant: spawnHls copies video, emits fMP4 HLS, and refuses without an
     'the HLS route stays stream-tier authed (deny-by-default preserved)');
   assert.match(server, /hls: async \(ctx\)[\s\S]+const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+const transcodeAudio = forceAudioSafe \|\| !audioCopyOk\(aud, vf\._caps\);/,
     'the HLS route honors audioSafe=1 to force stereo AAC (iOS Safari can\'t decode AC3/EAC3 in a local <video>, even in HLS)');
-  assert.ok(server.includes("re: /^\\/api\\/hls\\/(\\w+)(?:\\/([\\w.-]+))?$/, auth: 'stream'"),
+  assert.match(server, /\/api\\\/hls\\\/\(\\w\+\)\(\?:\\\/\(\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\)\)\?/,
+    'the HLS route keeps the mount id and allows the movie id the phone reads');
+  assert.match(server, /auth: 'stream', h: H\.hls/,
     'the HLS route must be declared in ROUTES at stream-tier auth');
+  assert.match(server, /const minPieces = jellyfinPlaylist \? 5 : 1/,
+    'Jellyfin waits for several pieces so the phone can load ahead instead of spinning on each one');
+  assert.match(server, /#EXT-X-START:TIME-OFFSET=0,PRECISE=YES/,
+    'Jellyfin starts at the beginning so the phone buffers ahead instead of spinning on the live edge');
+  assert.doesNotMatch(server, /sess\.snap|jellyfinResumePlaylist|EXT-X-GAP|EXT-X-SKIP/,
+    'a frozen short list, fake pieces, or skip tags make the phone spin or fail the first list');
   // The mount payload advertises the HLS URL so the iOS web player can request it.
   assert.match(server, /hlsUrl: detectFfmpeg\(\) \? `\/api\/hls\/\$\{vf\.id\}\?t=\$\{st\}` : null,/,
     'the mount payload exposes hlsUrl for the iOS Safari player');

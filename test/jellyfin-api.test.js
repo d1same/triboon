@@ -8,7 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { httpJson, bootServer, setupAdmin } = require('./helpers');
-const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames } = require('../server/jellyfin-api');
+const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, rememberResumeOrigin, progressSeconds } = require('../server/jellyfin-api');
 const { LibraryDb } = require('../server/library-db');
 
 let srv, admin;
@@ -36,6 +36,26 @@ test('jellyfin sort uses the first key, so release date is not treated as a name
   assert.strictEqual(tmdbSort('movie', { sortBy: 'SortName', asc: true }), 'original_title.asc');
   assert.deepStrictEqual(genreIdsFromNames(['Action'], 'series'), [10759]);
   assert.deepStrictEqual(genreIdsFromNames(['Action'], 'movie'), [28]);
+});
+
+test('jellyfin resume clock reaches the saved minute before the picture', () => {
+  const raw = '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:2.000,\nseg00000.m4s\n';
+  assert.strictEqual(resumeClockPlaylist(raw, 0), raw);
+  const out = resumeClockPlaylist(raw, 5);
+  const durs = [...out.matchAll(/#EXTINF:([0-9.]+),/g)].map((row) => Number(row[1]));
+  assert.ok(Math.abs(durs[0] + durs[1] + durs[2] - 5) < 0.02, 'quiet pieces add up to the saved minute');
+  assert.match(out, /#EXT-X-DISCONTINUITY/);
+  assert.match(out, /seg00000\.m4s/);
+  assert.doesNotMatch(out, /EXT-X-GAP|EXT-X-SKIP/);
+  const early = resumeClockPlaylist('', 4);
+  const earlyDurs = [...early.matchAll(/#EXTINF:([0-9.]+),/g)].map((row) => Number(row[1]));
+  assert.ok(Math.abs(earlyDurs.reduce((sum, n) => sum + n, 0) - 4) < 0.02, 'the clock is ready before the first picture piece');
+  assert.doesNotMatch(early, /EXT-X-GAP|EXT-X-SKIP|DISCONTINUITY/);
+  rememberResumeOrigin('user-1', 'm550', 2400);
+  assert.strictEqual(progressSeconds('user-1', 'm550', 10), 2410, 'a clock that still starts at zero keeps the saved minute');
+  assert.strictEqual(progressSeconds('user-1', 'm550', 2410), 2410, 'a clock that already includes the saved minute is not added twice');
+  rememberResumeOrigin('user-1', 'm550', 0);
+  assert.strictEqual(progressSeconds('user-1', 'm550', 10), 10, 'play from the start stays on the player clock');
 });
 
 test('jellyfin door stays shut until an admin opens it', async () => {
@@ -119,6 +139,20 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   const headerToken = await httpSend(srv.port, 'GET', '/Users/Me', { headers: { 'x-emby-token': token } });
   assert.strictEqual(headerToken.status, 200);
 
+  const speed = await httpSend(srv.port, 'GET', '/Playback/BitrateTest?Size=500000', { headers: { authorization: authz } });
+  assert.strictEqual(speed.status, 200, 'the phone speed check must answer or the app closes');
+  assert.strictEqual(speed.raw.length, 500000);
+  const prefs = await httpSend(srv.port, 'GET', '/DisplayPreferences/usersettings', { headers: { authorization: authz } });
+  assert.strictEqual(prefs.status, 200);
+  assert.strictEqual(prefs.json.RememberSorting, true, 'the phone player needs sort settings or play dies');
+  assert.strictEqual(prefs.json.ScrollDirection, 'Vertical');
+  assert.strictEqual(prefs.json.ShowSidebar, false);
+  const segments = await httpSend(srv.port, 'GET', `/MediaSegments/${me.json.Id}`, { headers: { authorization: authz } });
+  assert.strictEqual(segments.status, 200, 'a missing skip-intro list closes the phone');
+  assert.deepStrictEqual(segments.json.Items, []);
+  const stopEncode = await httpSend(srv.port, 'DELETE', '/Videos/ActiveEncodings', { headers: { authorization: authz } });
+  assert.strictEqual(stopEncode.status, 204, 'stopping a previous play must not be a missing page');
+
   const views = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Views`, { headers: { authorization: authz } });
   assert.strictEqual(views.status, 200);
   assert.deepStrictEqual(views.json.Items.map((row) => row.Name), ['Movies', 'Shows']);
@@ -129,6 +163,13 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(moviesFolder.UserData.Played, false);
   assert.ok(moviesFolder.ImageTags.Primary, 'Movies has a cover the home row can show');
   assert.ok(moviesFolder.ImageTags.Thumb, 'Movies has a wide cover too');
+  const moviesCover = await httpSend(srv.port, 'GET', `/Items/${moviesFolder.Id}/Images/Primary`);
+  assert.strictEqual(moviesCover.status, 200, 'the Movies home card uses its own cover');
+  assert.match(moviesCover.headers['content-type'], /png/);
+  const showsFolder = views.json.Items.find((row) => row.Name === 'Shows');
+  const showsCover = await httpSend(srv.port, 'GET', `/Items/${showsFolder.Id}/Images/Primary`);
+  assert.strictEqual(showsCover.status, 200, 'the Shows home card uses its own cover');
+  assert.match(showsCover.headers['content-type'], /png/);
   const movieByCard = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items/${moviesFolder.Id}`, { headers: { authorization: authz } });
   assert.strictEqual(movieByCard.status, 200);
   assert.strictEqual(movieByCard.json.Name, 'Movies');
@@ -256,7 +297,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
     { idx: 3, kind: 'movie', title: 'Zebra', year: 2020, genres: [35], file: 'C:\\Movies\\Zebra.mkv' },
   ]);
   catalog.replaceLibrary(shows.json.id, Date.now(), [
-    { idx: 0, kind: 'show', title: 'Day Show', year: 2025 },
+    { idx: 0, kind: 'show', title: 'Day Show', year: 2025, poster: '/dayshow.jpg', backdrop: '/dayshow-wide.jpg' },
     { idx: 1, kind: 'episode', title: 'Day Show S01E01', showIdx: 0, s: 1, e: 1, file: 'C:\\Shows\\Day Show\\S01E01.mkv' },
     { idx: 2, kind: 'episode', title: 'Day Show S01E02', showIdx: 0, s: 1, e: 2, file: 'C:\\Shows\\Day Show\\S01E02.mkv' },
   ]);
@@ -269,7 +310,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.ok(diskFolder.ImageTags.Primary, 'a custom library has a cover');
   const libraryCover = await httpSend(srv.port, 'GET', `/Items/${diskFolder.Id}/Images/Primary`);
   assert.strictEqual(libraryCover.status, 200, 'the custom library cover loads');
-  assert.match(libraryCover.headers['content-type'], /jpeg/);
+  assert.match(libraryCover.headers['content-type'], /png/, 'a home folder uses the designed cover');
   assert.ok(withDisk.json.Items.some((row) => row.Name === 'Disk Shows'), 'a show folder shows up too');
   const shelfPath = `/Users/${me.json.Id}/Items?ParentId=l${disk.json.id}&IncludeItemTypes=Movie&Recursive=true&Limit=10`;
   const movieShelf = await httpSend(srv.port, 'GET', shelfPath, { headers: { authorization: authz } });
@@ -286,6 +327,8 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.deepStrictEqual(onlyOld.json.Items.map((row) => row.Name), ['Aardvark'], 'the year filter keeps that year');
   const action = await httpSend(srv.port, 'GET', `${shelfPath}&Genres=Action`, { headers: { authorization: authz } });
   assert.deepStrictEqual(action.json.Items.map((row) => row.Name), ['Aardvark'], 'the genre filter keeps Action');
+  const actionId = await httpSend(srv.port, 'GET', `${shelfPath}&GenreIds=28`, { headers: { authorization: authz } });
+  assert.deepStrictEqual(actionId.json.Items.map((row) => row.Name), ['Aardvark'], 'the app genre number keeps Action');
   const letter = await httpSend(srv.port, 'GET', `${shelfPath}&NameStartsWith=Z`, { headers: { authorization: authz } });
   assert.deepStrictEqual(letter.json.Items.map((row) => row.Name), ['Zebra'], 'the letter filter keeps Z');
   const facets = await httpSend(srv.port, 'GET', `/Items/Filters2?ParentId=l${disk.json.id}`, { headers: { authorization: authz } });
@@ -339,6 +382,13 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   const first = episodes.json.Items.find((row) => row.IndexNumber === 1);
   const second = episodes.json.Items.find((row) => row.IndexNumber === 2);
   assert.ok(first && second, 'the show has two episodes');
+  assert.ok(second.BackdropImageTags && second.BackdropImageTags.length, 'Next Up asks for a wide picture');
+  const episodeStill = await httpSend(srv.port, 'GET', `/Items/${second.Id}/Images/Backdrop`);
+  assert.strictEqual(episodeStill.status, 302, 'an episode with no still uses the show picture');
+  assert.match(episodeStill.headers.location, /dayshow-wide\.jpg/);
+  const episodePoster = await httpSend(srv.port, 'GET', `/Items/${second.Id}/Images/Primary`);
+  assert.strictEqual(episodePoster.status, 302);
+  assert.match(episodePoster.headers.location, /dayshow\.jpg/);
   const watchedEp = await httpSend(srv.port, 'POST', `/Users/${me.json.Id}/PlayedItems/${first.Id}`, { headers: { authorization: authz } });
   assert.strictEqual(watchedEp.json.Played, true);
   const nextUp = await httpSend(srv.port, 'GET', `/Shows/NextUp?UserId=${me.json.Id}`, { headers: { authorization: authz } });
@@ -364,15 +414,19 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   });
   assert.strictEqual(playback.status, 200);
   assert.match(playback.json.MediaSources[0].TranscodingUrl, /\/api\/hls\//, 'Jellyfin plays short pieces so the computer does not hold the whole movie');
-  assert.match(playback.json.MediaSources[0].TranscodingUrl, /\/master\.m3u8\?/, 'the TV app needs a playlist name or it will not play');
+  assert.match(playback.json.MediaSources[0].TranscodingUrl, /\/master\.m3u8\?/, 'the phone only plays a playlist');
+  assert.match(playback.json.MediaSources[0].TranscodingUrl, new RegExp(`/${String(aardvark.Id).toLowerCase()}/master\\.m3u8`), 'the phone reads the movie id from the address or play says source error');
   assert.strictEqual(playback.json.MediaSources[0].Type, 'Default');
   assert.strictEqual(playback.json.MediaSources[0].HasSegments, false);
   assert.strictEqual(playback.json.MediaSources[0].SupportsProbing, true);
   assert.strictEqual(playback.json.MediaSources[0].TranscodingSubProtocol, 'hls');
   const sub = (playback.json.MediaSources[0].MediaStreams || []).find((row) => row.Type === 'Subtitle');
   assert.ok(sub && sub.DeliveryMethod === 'External', 'Jellyfin CC sees the subtitle file beside the movie');
+  assert.match(sub.DeliveryUrl, new RegExp(`^/videos/${aardvark.Id}/`), 'the phone player needs a caption address or play dies');
   assert.strictEqual(sub.IsTextSubtitleStream, true);
   assert.strictEqual(sub.SupportsExternalStream, true);
+  assert.strictEqual(sub.IsDefault, false, 'the phone player needs IsDefault on every track or play dies');
+  assert.ok((playback.json.MediaSources[0].MediaStreams || []).every((row) => typeof row.IsDefault === 'boolean'));
   assert.strictEqual(sub.DisplayTitle, 'English');
   const vtt = await httpSend(srv.port, 'GET', `/Videos/${aardvark.Id}/${playback.json.MediaSources[0].Id}/Subtitles/${sub.Index}/Stream.vtt`, {
     headers: { authorization: authz },

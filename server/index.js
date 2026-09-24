@@ -17,7 +17,7 @@ const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryIte
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors,
-  streamsWithSubtitles,
+  streamsWithSubtitles, resumeClockPlaylist,
 } = require('./jellyfin-api');
 const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch } = require('./pipeline');
 const {
@@ -30,6 +30,40 @@ const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
 const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter } = require('./transcode');
+const { spawn: spawnResumePad } = require('child_process');
+let resumePadReady = null;
+function ensureResumePad() {
+  if (resumePadReady) return resumePadReady;
+  const ff = detectFfmpeg();
+  const dir = path.join(require('os').tmpdir(), 'triboon-hls-pad');
+  const seg = path.join(dir, 'pad.m4s');
+  const init = path.join(dir, 'padinit.mp4');
+  if (!ff) return Promise.resolve(null);
+  resumePadReady = new Promise((resolve) => {
+    try { fs.mkdirSync(dir, { recursive: true }); } catch { resumePadReady = null; return resolve(null); }
+    if (fs.existsSync(seg) && fs.existsSync(init)) return resolve(dir);
+    const p = spawnResumePad(ff.path, [
+      '-y', '-hide_banner', '-loglevel', 'error',
+      '-f', 'lavfi', '-i', 'color=c=black:s=1280x720:r=30:d=2',
+      '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+      '-t', '2', '-shortest',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'ultrafast', '-profile:v', 'high', '-g', '60',
+      '-c:a', 'aac', '-b:a', '32k', '-ac', '2',
+      '-f', 'hls', '-hls_time', '2', '-hls_list_size', '0', '-hls_playlist_type', 'vod',
+      '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'padinit.mp4',
+      '-hls_segment_filename', 'pad%01d.m4s', 'pad.m3u8',
+    ], { cwd: dir, windowsHide: true });
+    const fail = () => { resumePadReady = null; resolve(null); };
+    p.on('error', fail);
+    p.on('close', (code) => {
+      const numbered = path.join(dir, 'pad0.m4s');
+      try { if (!fs.existsSync(seg) && fs.existsSync(numbered)) fs.renameSync(numbered, seg); } catch {}
+      if (code === 0 && fs.existsSync(seg) && fs.existsSync(init) && fs.statSync(seg).size > 0 && fs.statSync(init).size > 0) resolve(dir);
+      else fail();
+    });
+  });
+  return resumePadReady;
+}
 const ytmusic = require('./ytmusic');
 const https = require('https');
 const dns = require('dns').promises;
@@ -3702,7 +3736,7 @@ const MEDIA_CORS_ROUTES = [
   /^\/api\/stream\/\w+$/,
   /^\/api\/remux\/\w+$/,
   /^\/api\/transcode\/\w+$/,
-  /^\/api\/hls\/\w+(?:\/[\w.-]+)?$/,
+  /^\/api\/hls\/\w+(?:\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?(?:\/[\w.-]+)?$/,
   /^\/api\/subtitle\/\w+\/\d+$/,
   /^\/api\/releasesub\/\w+\/[a-z0-9_-]+$/,
   /^\/api\/ossubs\/\w+$/,
@@ -5379,7 +5413,8 @@ const H = {
       if (av !== null && !/^av(0[1-9]|1\d|20)$/.test(av)) return send(ctx.res, 400, { error: 'unknown avatar' });
       const p = auth.setProfileAvatar(ctx.user.id, ctx.m[1], av);
       // Leaving custom (or clearing) drops the stored image so ./data never accumulates orphans.
-      fs.promises.rm(avatarFilePath(ctx.user.id, ctx.m[1]), { force: true }).catch(() => {});
+      // Wait for the delete. The next request otherwise still finds the file and serves it.
+      await fs.promises.rm(avatarFilePath(ctx.user.id, ctx.m[1]), { force: true }).catch(() => {});
       send(ctx.res, 200, profileWithAvatarUrl(ctx.user.id, p));
     } catch (e) { send(ctx.res, 400, { error: e.message }); }
   },
@@ -5447,7 +5482,7 @@ const H = {
       auth.deleteProfile(ctx.user.id, ctx.m[1], b.password);
       limiter.clear(key);
       // The custom avatar image goes with the profile (data/avatars must not accumulate orphans).
-      fs.promises.rm(avatarFilePath(ctx.user.id, ctx.m[1]), { force: true }).catch(() => {});
+      await fs.promises.rm(avatarFilePath(ctx.user.id, ctx.m[1]), { force: true }).catch(() => {});
       // The profile's watch history goes with it — orphaned entries would resurface if a new
       // profile ever reused the id.
       const prefix = `${ctx.user.id}:${ctx.m[1]}:`;
@@ -8896,23 +8931,33 @@ Object.assign(H, {
     const os2 = require('os');
     const startSeconds = parseFloat(ctx.url.searchParams.get('start') || '0') || 0;
     const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;
-    let fileReq = ctx.m[2] ? String(ctx.m[2]) : '';
+    let fileReq = ctx.m[3] ? String(ctx.m[3]) : '';
+    // master.m3u8 is the Jellyfin play link. Keep every piece from the resume
+    // point. A short rolling list that then ends was only the last few seconds
+    // of the file, so the phone sat on a black picture at 0:00.
+    const jellyfinPlaylist = fileReq === 'master.m3u8' || ctx.url.searchParams.get('vod') === '1';
     if (fileReq === 'master.m3u8') fileReq = '';
+    const sessionStart = startSeconds;
 
     // Per-mount HLS sessions, keyed by (start,audio) so a seek spins up its own window.
     vf._hls = vf._hls || new Map();
-    const key = `${Math.floor(startSeconds)}:${audioTrack}`;
+    const key = `${Math.floor(sessionStart)}:${audioTrack}:${jellyfinPlaylist ? 'vod' : 'roll'}`;
 
     // --- segment / init request: serve the file from the session dir with Range + CORS.
     if (fileReq) {
       // Only ever serve the playlist/init/segment filenames this route produces — never traverse.
-      if (!/^(init\.mp4|seg\d{1,6}\.m4s|index\.m3u8)$/.test(fileReq)) {
+      if (!/^(init\.mp4|padinit\.mp4|pad\.m4s|seg\d{1,6}\.m4s|index\.m3u8)$/.test(fileReq)) {
         return send(ctx.res, 404, { error: 'not found' });
       }
       const sess = vf._hls.get(key);
       if (!sess) return send(ctx.res, 404, { error: 'no active HLS session' });
-      const full = path.join(sess.dir, fileReq);
-      if (!full.startsWith(sess.dir)) return send(ctx.res, 403, { error: 'forbidden' });
+      let full = path.join(sess.dir, fileReq);
+      if ((fileReq === 'pad.m4s' || fileReq === 'padinit.mp4') && !fs.existsSync(full)) {
+        full = path.join(require('os').tmpdir(), 'triboon-hls-pad', fileReq);
+      }
+      if (!full.startsWith(sess.dir) && !full.includes(`${path.sep}triboon-hls-pad${path.sep}`)) {
+        return send(ctx.res, 403, { error: 'forbidden' });
+      }
       let stat;
       try { stat = await fsp.stat(full); } catch { return send(ctx.res, 404, { error: 'segment not found' }); }
       const type = fileReq.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl'
@@ -8947,9 +8992,9 @@ Object.assign(H, {
       const transcodeAudio = forceAudioSafe || !audioCopyOk(aud, vf._caps);
       const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
       let ff;
-      // 2 s segments keep time-to-first-frame down (Safari can start after the first segment) — the whole
-      // point on iOS is fast startup, the #1 value; the rolling window bounds disk either way.
-      try { ff = spawnHls(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: true, outDir: dir, segmentTime: 2 }); }
+      // 2 s segments keep time-to-first-frame down (Safari can start after the first segment).
+      // Jellyfin keeps the pieces (holdSegments) so a resume seek still has the start of the list.
+      try { ff = spawnHls(selfUrl, { startSeconds: sessionStart, audioTrack, transcodeAudio, safeStereo: true, outDir: dir, segmentTime: 2, holdSegments: jellyfinPlaylist }); }
       catch (e) { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); return send(ctx.res, 503, { error: e.message }); }
       sess = { dir, ff, createdAt: Date.now() };
       let err = '';
@@ -8964,18 +9009,58 @@ Object.assign(H, {
       }
     }
     const playlistPath = path.join(sess.dir, 'index.m3u8');
-    // Wait (bounded) for ffmpeg to emit the first playlist + init segment.
-    let raw = null;
-    for (let i = 0; i < 100; i++) {
-      try { raw = await fsp.readFile(playlistPath, 'utf8'); if (/\.m4s|EXT-X-ENDLIST|#EXTINF/.test(raw)) break; } catch {}
-      await new Promise((r) => setTimeout(r, 100));
+    // The phone pulls the next piece only when it has caught the end of the
+    // list, which shows up as a spinner every two seconds. Hand it several
+    // pieces before the first list so it can load ahead. Other players still
+    // start on the first piece.
+    const minPieces = jellyfinPlaylist ? 5 : 1;
+    // Resume must answer before the phone gives up (about eight seconds), and the
+    // first list needs several real pieces so playback is not stuck on the newest one.
+    // A later reload uses the last good list. A missing read must not answer 504
+    // and kill a play that already started.
+    const resume = jellyfinPlaylist && sessionStart >= 1;
+    const already = sess.list && /#EXTINF:/.test(sess.list);
+    const waitTicks = resume ? (already ? 1 : 70) : (jellyfinPlaylist ? 200 : 100);
+    let raw = sess.list || null;
+    for (let i = 0; i < waitTicks; i++) {
+      try {
+        const next = await fsp.readFile(playlistPath, 'utf8');
+        if (/#EXTINF:/.test(next)) { raw = next; sess.list = next; }
+        const pieces = raw ? (raw.match(/#EXTINF:/g) || []).length : 0;
+        if (pieces >= minPieces || (raw && /#EXT-X-ENDLIST/.test(raw))) break;
+      } catch {}
+      if (i + 1 < waitTicks) await new Promise((r) => setTimeout(r, 100));
     }
-    if (!raw) return send(ctx.res, 504, { error: 'HLS playlist not ready' });
+    if (!raw || !/#EXTINF:/.test(raw)) {
+      // No picture piece yet. Still answer, with the clock filled, so the phone
+      // does not get "not ready" and give up. The picture joins the next list.
+      if (!resume) return send(ctx.res, 504, { error: 'HLS playlist not ready' });
+      raw = '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-INDEPENDENT-SEGMENTS\n';
+    }
+    // Resume: the picture already starts at the saved minute. Fill the clock
+    // up to that minute so the phone's jump lands on the picture instead of waiting.
+    if (jellyfinPlaylist && sessionStart >= 1 && await ensureResumePad()) raw = resumeClockPlaylist(raw, sessionStart);
+    // A growing list with no end is a live channel to the phone. It then sits
+    // a few seconds from the newest piece and spins whenever that piece is
+    // late. TIME-OFFSET=0 starts at the beginning, so the phone can keep a
+    // pile of pieces ahead. A resume starts at the saved minute. iOS keeps the
+    // rolling list and must not get this.
+    if (jellyfinPlaylist && !/#EXT-X-START:/.test(raw)) {
+      const startAt = sessionStart >= 1 ? String(Math.round(sessionStart * 1000) / 1000) : '0';
+      const tag = startAt === '0'
+        ? '#EXT-X-START:TIME-OFFSET=0,PRECISE=YES'
+        : `#EXT-X-START:TIME-OFFSET=${startAt},PRECISE=YES`;
+      raw = raw.replace(/(#EXTM3U\r?\n)/, `$1${tag}\n`);
+    }
     // Rewrite bare segment/init filenames to tokened, same-scope route URLs the receiver can pull.
     const token = ctx.url.searchParams.get('t') || auth.streamToken(ctx.claims.uid, vf.id);
-    const q = `?t=${encodeURIComponent(token)}&start=${Math.floor(startSeconds)}&audio=${audioTrack}`;
-    const rewritten = raw.replace(/^(init\.mp4|seg\d+\.m4s)$/gm, (m) => `/api/hls/${vf.id}/${m}${q}`)
-      .replace(/URI="(init\.mp4)"/g, (m, f) => `URI="/api/hls/${vf.id}/${f}${q}"`);
+    const vod = jellyfinPlaylist ? '&vod=1' : '';
+    const q = `?t=${encodeURIComponent(token)}&start=${Math.floor(sessionStart)}&audio=${audioTrack}${vod}`;
+    // Keep the movie id on every piece. The phone reads it from the address,
+    // and a piece without one makes play say "source error".
+    const movie = ctx.m[2] ? `/${ctx.m[2]}` : '';
+    const rewritten = raw.replace(/^(init\.mp4|padinit\.mp4|pad\.m4s|seg\d+\.m4s)$/gm, (m) => `/api/hls/${vf.id}${movie}/${m}${q}`)
+      .replace(/URI="(init\.mp4|padinit\.mp4)"/g, (m, f) => `URI="/api/hls/${vf.id}${movie}/${f}${q}"`);
     send(ctx.res, 200, rewritten, { 'content-type': 'application/vnd.apple.mpegurl', 'cache-control': 'no-store' });
   },
 
@@ -10125,7 +10210,9 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/transcode\/(\w+)$/, auth: 'stream', h: H.transcode },
   // HLS output variant (Cast Phase 2, feature-flagged). Group 1 = mount id; group 2 = optional
   // playlist/init/segment filename. Stream-tier auth + scope, same as remux/transcode.
-  { m: 'GET', re: /^\/api\/hls\/(\w+)(?:\/([\w.-]+))?$/, auth: 'stream', h: H.hls },
+  // Group 1 = mount id. Group 2 = optional movie id (the phone reads this).
+  // Group 3 = optional playlist or segment name. The address still ends in .m3u8.
+  { m: 'GET', re: /^\/api\/hls\/(\w+)(?:\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?(?:\/([\w.-]+))?$/, auth: 'stream', h: H.hls },
   { m: 'GET', re: /^\/api\/tracks\/(\w+)$/, auth: 'user', h: H.tracks },
   { m: 'GET', re: /^\/api\/audiobook\/chapters\/(\w+)$/, auth: 'user', h: H.audiobookChapters },
   { m: 'GET', re: /^\/api\/audio\/(\w+)\/(\d+)$/, auth: 'stream', h: H.audioTrack },
