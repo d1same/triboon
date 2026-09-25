@@ -417,6 +417,7 @@ public class MainActivity extends Activity {
     private volatile String currentWebUrl = ""; // WebView URL mirrored on UI thread for JavaBridge checks
     private volatile boolean pageInputFocused; // page reports text-field focus via the JS bridge
     private android.speech.SpeechRecognizer speech; // in-app voice search (created per use)
+    private boolean voiceListening;
     private boolean voicePending;            // mic permission was requested BY a voice tap
     private int focusRecoveryEpoch;
     // Invalidates a delayed WebView suspension if the Activity resumes before the final playback
@@ -532,6 +533,9 @@ public class MainActivity extends Activity {
     }
 
     private void scheduleTvFocusRecovery(String reason) {
+        // The mic session makes the window focus flap. Each flap used to
+        // re-grab the page, so voice search flashed the whole screen.
+        if (voiceListening) return;
         final int epoch = ++focusRecoveryEpoch;
         recoverTvFocus(reason);
         // Mirrored by focusSearchMic() retries in web/index.html (80/220/520/1100/1600).
@@ -545,6 +549,7 @@ public class MainActivity extends Activity {
     }
 
     private void recoverTvFocus(String reason) {
+        if (voiceListening) return;
         if (root == null) return;
         if (setup != null && setup.getVisibility() == View.VISIBLE) {
             if (isTvDevice()) {
@@ -8879,6 +8884,7 @@ public class MainActivity extends Activity {
     // transcript to us, which is exactly the "voice didn't work" symptom. The reliable path
     // is the in-app SpeechRecognizer SERVICE; it needs RECORD_AUDIO granted at runtime.
     private void startVoiceFlow() {
+        voiceListening = true;
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             voicePending = true; // so the grant callback resumes the voice session
@@ -8895,6 +8901,7 @@ public class MainActivity extends Activity {
             startActivityForResult(i, REQ_VOICE);
         } catch (Exception ex) {
             restoreNativePlaybackAfterVoice();
+            voiceListening = false;
             Toast.makeText(this, "Voice input isn't available on this device", Toast.LENGTH_SHORT).show();
             voiceResult("");
         }
@@ -8923,6 +8930,7 @@ public class MainActivity extends Activity {
             @Override public void onPartialResults(Bundle b) {}
             @Override public void onEvent(int type, Bundle b) {}
             private void done() {
+                voiceListening = false;
                 restoreNativePlaybackAfterVoice();
                 if (speech != null) { speech.destroy(); speech = null; }
             }
@@ -8968,6 +8976,7 @@ public class MainActivity extends Activity {
         if (!fromVoiceTap) return;
         if (granted) startVoiceFlow();
         else {
+            voiceListening = false;
             Toast.makeText(this, "Microphone permission is needed for voice search", Toast.LENGTH_SHORT).show();
             voiceResult("");
         }
@@ -8982,6 +8991,7 @@ public class MainActivity extends Activity {
             java.util.ArrayList<String> r = data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);
             if (r != null && !r.isEmpty() && r.get(0) != null) text = r.get(0);
         }
+        voiceListening = false;
         restoreNativePlaybackAfterVoice();
         voiceResult(text);
     }

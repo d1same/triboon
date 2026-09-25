@@ -25734,9 +25734,15 @@ $('searchInput').addEventListener('input', (e) => {
     showSearchSuggest(null); clearSearchResults({ invalidate: true }); return;
   }
   searchSuggestPicked = false;
-  showSearchSuggest(catalogSearchSuggestions(q), q);
-  paintInstantSearch(q);
-  searchTimer = setTimeout(doSearch, 120);
+  // Voice typing sends a new phrase every moment. Painting the posters on each
+  // one wipes the page and the whole screen flashes. Wait until the words pause.
+  searchTimer = setTimeout(() => {
+    const now = $('searchInput').value.trim();
+    if (!now) return;
+    showSearchSuggest(catalogSearchSuggestions(now), now);
+    paintInstantSearch(now);
+    doSearch();
+  }, 420);
 });
 $('searchClearBtn').addEventListener('click', () => clearSearchQuery());
 $('searchSuggest').addEventListener('click', (e) => {

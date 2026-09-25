@@ -168,7 +168,7 @@ test('search close-title: UI shows a Did you mean chip and retries TMDB', () => 
   assert.match(ui, /if \(i === 0\) btn\.id = 'searchSuggestBtn'/);
   assert.match(ui, /function showSearchSuggest\(hint, original\)/);
   assert.match(ui, /function applySearchSuggest\(hint\)/);
-  assert.match(ui, /showSearchSuggest\(catalogSearchSuggestions\(q\), q\)/);
+  assert.match(ui, /showSearchSuggest\(catalogSearchSuggestions\((?:q|now)\), (?:q|now)\)/);
   assert.match(ui, /const closeHit = ok\.some\(\(x\) => searchWholeTitleClose\(q, x\.title \|\| x\.name \|\| ''\)\)/);
   assert.match(ui, /const serverHint = r\.didYouMean \|\| ''/);
   assert.doesNotMatch(ui, /encodeURIComponent\(hintTitle\)/);
@@ -179,7 +179,7 @@ test('search close-title: UI shows a Did you mean chip and retries TMDB', () => 
   assert.match(ui, /liveChannelMatchesQuery\(ch, q\) \{[\s\S]+searchLibraryTitleMatch\(q, \(ch && ch\.name\) \|\| ''\)/);
   assert.match(ui, /const SEARCH_CLOSE_SEEDS = \[[\s\S]+'Frankenstein'[\s\S]+'Odyssey'[\s\S]+'The Longest Yard'/);
   assert.match(ui, /for \(const title of SEARCH_CLOSE_SEEDS\) add\(title\)/);
-  assert.match(ui, /setTimeout\(doSearch, 120\)/);
+  assert.match(ui, /setTimeout\(\(\) => \{[\s\S]+doSearch\(\);[\s\S]+\}, 420\)/, 'voice partials must not repaint the grid on every word');
   assert.match(ui, /function searchSuggestRank\(q, title\)/);
   assert.match(ui, /function searchFuzzLimit\(len\)/);
   assert.match(ui, /function searchCloseWord\(a, b, singleToken, strict = false\) \{[\s\S]+if \(strict && d >= 2 && a\[0\] !== b\[0\]\) return false;[\s\S]+if \(!strict && singleToken && a\.length >= 6 && d <= 3/,

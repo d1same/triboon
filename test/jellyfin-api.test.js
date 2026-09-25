@@ -473,6 +473,16 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(playback.json.MediaSources[0].HasSegments, false);
   assert.strictEqual(playback.json.MediaSources[0].SupportsProbing, true);
   assert.strictEqual(playback.json.MediaSources[0].TranscodingSubProtocol, 'hls');
+  assert.strictEqual(playback.json.MediaSources[0].Protocol, 'File', 'Android TV drops a remote source and then crashes on replay');
+  assert.strictEqual(playback.json.MediaSources[0].IsRemote, false);
+  const replay = await httpSend(srv.port, 'POST', `/Items/${aardvark.Id}/PlaybackInfo`, {
+    headers: { authorization: authz, 'content-type': 'application/json' },
+    body: JSON.stringify({ MediaSourceId: aardvark.Id }),
+  });
+  assert.strictEqual(replay.status, 200);
+  assert.strictEqual(replay.json.MediaSources[0].Id, aardvark.Id, 'replay must hand back the same source id or the TV crashes');
+  assert.strictEqual(replay.json.MediaSources[0].Protocol, 'File');
+  assert.strictEqual(replay.json.MediaSources[0].IsRemote, false);
   const sub = (playback.json.MediaSources[0].MediaStreams || []).find((row) => row.Type === 'Subtitle');
   assert.ok(sub && sub.DeliveryMethod === 'External', 'Jellyfin CC sees the subtitle file beside the movie');
   assert.match(sub.DeliveryUrl, new RegExp(`^/videos/${aardvark.Id}/`), 'the phone player needs a caption address or play dies');

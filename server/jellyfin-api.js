@@ -1837,14 +1837,17 @@ async function handleKind(kind, ctx) {
     const runtimeTicks = spec ? ticks(spec.runtime) : 0;
     const hls = url.includes('/api/hls/');
     const source = completeSource({
-      Id: playedBody.id,
-      Protocol: 'Http',
+      // Android TV 0.19 keeps only File sources that are not remote. Anything
+      // else is dropped, and pressing play again crashes on the empty list.
+      // The id has to be the one the TV sent, or that second press crashes too.
+      Id: String(body.MediaSourceId || body.mediaSourceId || playedBody.id),
+      Protocol: 'File',
       Container: 'mp4',
       Name: (playedBody.candidate && playedBody.candidate.name) || (spec && spec.q) || '',
       SupportsDirectPlay: false,
       SupportsDirectStream: false,
       SupportsTranscoding: true,
-      IsRemote: true,
+      IsRemote: false,
       TranscodingUrl: url,
       TranscodingSubProtocol: hls ? 'hls' : 'http',
       TranscodingContainer: 'mp4',

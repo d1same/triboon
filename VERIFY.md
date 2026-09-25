@@ -126,6 +126,32 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-25, v3.2.14 ship — Jellyfin play again no longer crashes the TV,
+and voice search stops flashing:
+
+- Version contract: `package.json` 3.2.14; Android `versionName` 3.2.14 /
+  `versionCode` 391; Windows client package/Tauri/Cargo(.lock) 3.2.14.
+- Pressing play in Jellyfin Android TV 0.19 was handing back a remote
+  web source. The TV throws that away, and pressing play a second time
+  crashed on the empty list. The source is now a local file with the
+  same id the TV sent. Voice search was wiping the poster grid on every
+  word and the TV was grabbing the page while the mic was open. The
+  posters now paint once when the phrase pauses, and the page stays
+  still while you talk.
+- Gate: `npm.cmd test` 728/728. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.14, household VOD play/seek/resume/CC (house
+  process still reported 3.2.10 because it was started before this bump;
+  Mario ready 5053ms and FROM ready 4659ms were over the 3s budget, SLOW
+  is not a hard fail; both playable, CC 200), household IPTV first-byte
+  + retune (24022 channels; ABC web 1680ms / native 1339ms, ESPN web
+  1403ms / native 1072ms), household overlapping Play (FROM ready 7ms,
+  Mario ready 14ms), Android lint + unit tests + debug build, Android
+  ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260925-142020.json`, never the Shield). Windows
+  GPU/HDR was not run. Office TV replay and voice search were not
+  re-watched on the house after this gate.
+
 2026-09-25, v3.2.13 ship — Jellyfin TV settings answer, and a full
 download account stops opening more lines:
 
