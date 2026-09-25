@@ -126,6 +126,28 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-25, v3.2.15 ship — a movie stays on the streaming connection
+share instead of opening the whole usenet plan:
+
+- Version contract: `package.json` 3.2.15; Android `versionName` 3.2.15 /
+  `versionCode` 392; Windows client package/Tauri/Cargo(.lock) 3.2.15.
+- One movie or show now opens only the handful from Streaming settings,
+  shared across every usenet account. A local library file still plays
+  from disk and does not take those lines. Example: FROM downloaded
+  while Newshosting’s plan allowed 60 lines and this PC kept 4 open.
+- Gate: `npm.cmd test` 729/729. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.15, household VOD play/seek/resume/CC (house
+  process still reported 3.2.14 because it was started before this bump;
+  Mario ready 5351ms and FROM ready 4127ms were over the 3s budget, SLOW
+  is not a hard fail; both playable, CC 200), household IPTV first-byte
+  + retune (8855 channels; ABC web 1296ms / native 1074ms), household
+  overlapping Play (FROM ready 11ms, Mario ready 20ms), Android lint +
+  unit tests + debug build, Android ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260925-153253.json`, never the Shield). Windows
+  GPU/HDR was not run. The connection share was watched on this PC
+  before the gate; Unraid was not updated by this check.
+
 2026-09-25, v3.2.14 ship — Jellyfin play again no longer crashes the TV,
 and voice search stops flashing:
 
