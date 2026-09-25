@@ -425,10 +425,37 @@ class ProviderPool {
   noteAuthLost(conn) {
     const now = Date.now();
     const fresh = conn && conn.connectedAt && now - conn.connectedAt < AUTH_LOST_FRESH_MS;
-    if (!fresh) return;
-    this.authLostAt = this.authLostAt.filter((t) => now - t < AUTH_BROKEN_WINDOW_MS);
-    this.authLostAt.push(now);
-    if (this.authLostAt.length > 20) this.authLostAt.shift();
+    if (fresh) {
+      this.authLostAt = this.authLostAt.filter((t) => now - t < AUTH_BROKEN_WINDOW_MS);
+      this.authLostAt.push(now);
+      if (this.authLostAt.length > 20) this.authLostAt.shift();
+    }
+    // Easynews and Eweka answer 480 when the account is full, not only when a
+    // socket forgot its login. A burst means "stop opening more lines".
+    this._authLostRecent = (this._authLostRecent || []).filter((t) => now - t < AUTH_LOST_FRESH_MS);
+    this._authLostRecent.push(now);
+    if (this._authLostRecent.length > 20) this._authLostRecent.shift();
+    // One forgotten login on a small pool still reconnects. A burst on a large
+    // pool is the account saying it is full — do not reopen the whole plan.
+    if (this._authLostRecent.length >= 2 && this.size > 4) this._markAuthCap();
+  }
+  _markAuthCap() {
+    const now = Date.now();
+    // Already quiet. Another 480 in this window must not reopen the lines we just closed.
+    if (this.authCapped && now - this.capHitAt < CAP_HIT_COOLDOWN_MS) return;
+    // A pile of 480s means these sockets are not downloading. Keep a handful, not the whole plan.
+    const next = Math.min(this.size, 4);
+    if (next < this.size) this.size = next;
+    this.capHitAt = now;
+    this.lastProbeAt = now;
+    this.authCapped = true;
+    for (const c of this.conns) {
+      if (!c.alive || this.busy.has(c)) continue;
+      try { c.close(); } catch {}
+      c.alive = false;
+    }
+    const host = (this.opts && this.opts.host) || 'usenet';
+    debug.fail('buffer', `${host} refused the download, so playback is using ${this.size} connections`);
   }
   authBroken() {
     const now = Date.now();
@@ -466,6 +493,10 @@ class ProviderPool {
 
   _ensure(target = this.size) {
     if (this.closed) return;
+    // A fresh 502 or 480 burst already told us the account is full. Replacing
+    // closed sockets immediately is what keeps Newshosting at 82 and makes
+    // Easynews/Eweka answer 480. Hold still, except one probe when nothing is left.
+    if (this.capHitAt && Date.now() - this.capHitAt < CAP_HIT_COOLDOWN_MS && (this.conns.length > 0 || this.connecting > 0)) return;
     const fullyDark = this.down() || (this.capHitAt && this.conns.length === 0);
     if (fullyDark) {
       // Half-open probe only when this provider has ZERO live sockets. Play already
@@ -671,7 +702,7 @@ class ProviderPool {
           if (e && e.code === 'NNTP_STALL' && this.preferPeerFailover) task.reject(e);
           // Account refusing work: a retry here would only buy another rejected login. Hand the
           // article to the next provider now.
-          else if (e && e.code === 'NNTP_AUTH_LOST' && this.authBroken() && this.preferPeerFailover) task.reject(e);
+          else if (e && e.code === 'NNTP_AUTH_LOST' && this.preferPeerFailover && (this.authBroken() || this.authCapped)) task.reject(e);
           else { task.retried = true; this.queue.push(task); }
         } else task.reject(e);
       })

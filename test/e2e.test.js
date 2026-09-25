@@ -882,7 +882,7 @@ test('nntp: an account that answers 480 on fresh logins trips a breaker — othe
   const good = createMockNntp({ articles });
   const goodPort = await good.listen();
   const pool = new NntpPool([
-    { host: '127.0.0.1', port: badPort, tls: false, user: 'u', pass: 'p', connections: 4 },
+    { host: '127.0.0.1', port: badPort, tls: false, user: 'u', pass: 'p', connections: 8 },
     { host: '127.0.0.1', port: goodPort, tls: false, connections: 4 },
   ], 4);
   const badProvider = pool.providers[0];
@@ -892,6 +892,8 @@ test('nntp: an account that answers 480 on fresh logins trips a breaker — othe
       assert.ok(body.length > 0, `article ${i} still served via the healthy provider`);
     }
     assert.strictEqual(badProvider.authBroken(), true, 'two fresh-login 480s inside the window trip the breaker');
+    assert.strictEqual(badProvider.authCapped, true, 'a burst of 480s stops opening more sockets on that account');
+    assert.ok(badProvider.size <= 4, 'a burst of 480s does not keep the full connection plan');
     assert.strictEqual(badProvider.stats().authBroken, true, 'Status can show "login rejected"');
     const connsBefore = bad.connCount();
     await pool.body(id, 'readAhead');

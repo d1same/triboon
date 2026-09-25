@@ -1479,8 +1479,9 @@ async function handleKind(kind, ctx) {
   }
   if (kind === 'displayPrefs') {
     // The phone player requires every one of these. A missing field closes play.
+    // Android TV also asks for "livetv" by that name. A 404 there is the error it shows.
     return send(ctx.res, 200, {
-      Id: 'usersettings',
+      Id: (ctx.m && ctx.m[1]) || 'usersettings',
       Client: 'emby',
       SortBy: 'SortName',
       SortOrder: 'Ascending',
@@ -2182,13 +2183,16 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/shows\/([a-z0-9-]{1,64})\/seasons$/, auth: 'user', kind: 'seasons', h: serveJellyfin },
   { m: 'GET', re: /^\/shows\/([a-z0-9-]{1,64})\/episodes$/, auth: 'user', kind: 'episodes', h: serveJellyfin },
   { m: 'GET', re: /^\/shows\/nextup$/, auth: 'user', kind: 'nextup', h: serveJellyfin },
+  { m: 'GET', re: /^\/livetv\/programs\/recommended$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
   { m: 'GET', re: /^\/livetv\/programs$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
-  { m: 'GET', re: /^\/displaypreferences\/usersettings$/, auth: 'user', kind: 'displayPrefs', h: serveJellyfin },
+  { m: 'GET', re: /^\/displaypreferences\/([a-z0-9][a-z0-9-]{0,63})$/, auth: 'user', kind: 'displayPrefs', h: serveJellyfin },
+  { m: 'POST', re: /^\/displaypreferences\/([a-z0-9][a-z0-9-]{0,63})$/, auth: 'user', kind: 'ack', h: serveJellyfin },
   { m: 'GET', re: /^\/sessions$/, auth: 'user', kind: 'sessions', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/playing\/progress$/, auth: 'user', kind: 'progress', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/playing\/stopped$/, auth: 'user', kind: 'progress', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/playing$/, auth: 'user', kind: 'ack', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/capabilities\/full$/, auth: 'user', kind: 'capabilities', h: serveJellyfin },
+  { m: 'POST', re: /^\/sessions\/capabilities$/, auth: 'user', kind: 'capabilities', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/logout$/, auth: 'user', kind: 'logout', h: serveJellyfin },
   { m: 'GET', re: /^\/plugins$/, auth: 'user', kind: 'plugins', h: serveJellyfin },
   { m: 'GET', re: /^\/socket$/, auth: 'user', kind: 'socket', h: serveJellyfin },

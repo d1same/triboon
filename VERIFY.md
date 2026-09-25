@@ -126,6 +126,30 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-25, v3.2.13 ship — Jellyfin TV settings answer, and a full
+download account stops opening more lines:
+
+- Version contract: `package.json` 3.2.13; Android `versionName` 3.2.13 /
+  `versionCode` 390; Windows client package/Tauri/Cargo(.lock) 3.2.13.
+- Office TV asks for Live TV settings and a session check. Those two
+  calls now answer instead of “not found.” When Easynews or Eweka says
+  “log in again” on a big pool, the server closes the spare lines and
+  tries the next account. Newshosting saying it is full no longer keeps
+  dialing extra logins for two minutes.
+- Gate: `npm.cmd test` 728/728. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.13, household VOD play/seek/resume/CC (house
+  process still reported 3.2.10 because it was started before this bump;
+  Mario ready 3813ms and FROM ready 3370ms were over the 3s budget, SLOW
+  is not a hard fail; both playable, CC 200), household IPTV first-byte
+  + retune (24022 channels; ABC web 1354ms / native 3ms, ESPN web 1328ms
+  / native 3ms), household overlapping Play (FROM ready 9ms, Mario ready
+  22ms), Android lint + unit tests + debug build, Android ExoPlayer
+  stress on `emulator-5554`
+  (`android-tv-stress-20260925-134358.json`, never the Shield). Windows
+  GPU/HDR was not run. The account backoff was not re-watched on the
+  house providers, and Office TV was not re-opened after this gate.
+
 2026-09-25, v3.2.12 ship — Jellyfin home cards no longer crash the TV,
 and a failure stays in the server log:
 

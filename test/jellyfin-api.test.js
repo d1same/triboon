@@ -194,6 +194,11 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(prefs.json.RememberSorting, true, 'the phone player needs sort settings or play dies');
   assert.strictEqual(prefs.json.ScrollDirection, 'Vertical');
   assert.strictEqual(prefs.json.ShowSidebar, false);
+  const livePrefs = await httpSend(srv.port, 'GET', '/DisplayPreferences/livetv', { headers: { authorization: authz } });
+  assert.strictEqual(livePrefs.status, 200, 'Android TV asks for livetv prefs on open');
+  assert.strictEqual(livePrefs.json.Id, 'livetv');
+  const caps = await httpSend(srv.port, 'POST', '/Sessions/Capabilities?playableMediaTypes=Video', { headers: { authorization: authz } });
+  assert.strictEqual(caps.status, 204, 'Android TV posts session capabilities without /Full');
   const segments = await httpSend(srv.port, 'GET', `/MediaSegments/${me.json.Id}`, { headers: { authorization: authz } });
   assert.strictEqual(segments.status, 200, 'a missing skip-intro list closes the phone');
   assert.deepStrictEqual(segments.json.Items, []);
