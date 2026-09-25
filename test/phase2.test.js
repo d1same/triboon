@@ -4796,6 +4796,19 @@ test('pipeline: standby prefers the same resolution so a swap does not jump 4K t
   assert.strictEqual(next.pickKey, 'c', 'backup stays 4K instead of the higher-ranked 720p');
 });
 
+test('a good search stays fresh for two hours and a bad release is a separate memory', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(src, /const SEARCH_FRESH_MS = 2 \* 60 \* 60 \* 1000/);
+  assert.match(src, /allowStale \? Number\.POSITIVE_INFINITY : SEARCH_FRESH_MS/);
+  assert.match(src, /DEAD_RELEASE_VERDICTS = new Set\(\['missing', 'blocked'\]\)/);
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get() { return null; } }, mounts: new Map(), indexers: () => [],
+  });
+  pipeline.searchCache.set('evening', { at: Date.now() - 90 * 60 * 1000, results: [{ name: 'Movie' }], errors: [] });
+  assert.ok(pipeline._getFreshSearchHit('evening', 2 * 60 * 60 * 1000), 'ninety minutes later the same search is still good');
+  assert.equal(pipeline._getFreshSearchHit('evening', 60000), null, 'the old one-minute window would have searched again');
+});
+
 test('pipeline: prepare warms a standby and advance commits it without a cold walk', async () => {
   const pay1 = seededPayload(90 * 1024, 51);
   const pay2 = seededPayload(90 * 1024, 52);
@@ -4868,6 +4881,62 @@ test('pipeline: with the segment cache on, details save the start instead of onl
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(storeDir, { recursive: true, force: true });
   }
+});
+
+test('pipeline: continue watching still fetches the resume spot on the fast lane', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get() { return null; } }, mounts: new Map(), indexers: () => [],
+  });
+  const reads = [];
+  const vf = {
+    id: 'resume-1',
+    streamable: true,
+    size: 80 * 1024 * 1024,
+    _playWin: { cacheMaxBytes: 32 * 1024 * 1024 },
+    async *read(_from, _to, opts) {
+      reads.push(opts && opts.priority);
+    },
+  };
+  pipeline._startPlaybackWarmup(vf, vf._playWin, 0.5, { hot: false });
+  await new Promise((r) => setTimeout(r, 250));
+  pipeline._startPlaybackWarmup(vf, vf._playWin, 0.5, { hot: true });
+  await new Promise((r) => setTimeout(r, 250));
+  assert.ok(reads.includes('seek'), 'pressing Play moves the saved spot off the slow lane');
+  pipeline.cancelPlaybackWarmups(vf);
+});
+
+test('pipeline: a screen that cannot do Dolby Vision starts the normal copy', () => {
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get() { return null; } }, mounts: new Map(), indexers: () => [],
+  });
+  const dv = { pickKey: 'dv', score: 400, name: 'Movie.2024.2160p.DV.HDR.WEB-DL.HEVC-FLUX' };
+  const plain = { pickKey: 'plain', score: 180, name: 'Movie.2024.2160p.HDR.WEB-DL.HEVC-NTb' };
+  const ordered = pipeline._orderForPicture([dv, plain], { dolbyVision: false });
+  assert.equal(ordered[0].pickKey, 'plain', 'Auto starts the copy that will not paint the picture green');
+  assert.equal(ordered[1].pickKey, 'dv', 'the Dolby Vision file stays available behind it');
+  assert.equal(pipeline._orderForPicture([dv, plain], { dolbyVision: true })[0].pickKey, 'dv',
+    'a TV that can do Dolby Vision keeps that file first');
+  assert.equal(pipeline._orderForPicture([dv], { dolbyVision: false })[0].pickKey, 'dv',
+    'a title that only exists in Dolby Vision still plays');
+});
+
+test('pipeline: a fat file yields to a lighter copy the connection can feed', () => {
+  const pipeline = new Pipeline({
+    pool: () => ({ providers: [{ size: 4, authCapped: true, busy: { size: 0 } }] }),
+    verdicts: { get() { return null; } }, mounts: new Map(), indexers: () => [],
+  });
+  pipeline.performance = () => ({ measuredMbpsPerConn: 8 });
+  const fat = { pickKey: 'fat', score: 200, sizeBytes: 40e9, name: 'Movie.2024.1080p.BluRay.REMUX-FLUX' };
+  const light = { pickKey: 'light', score: 90, sizeBytes: 8e9, name: 'Movie.2024.1080p.WEB-DL.H.264-NTb' };
+  const ordered = pipeline._orderForPipe([fat, light], { wantedRuntimeMin: 120 });
+  assert.equal(ordered[0].pickKey, 'light', 'a 40GB file on 4 lines starts the smaller 1080p instead');
+  const roomy = new Pipeline({
+    pool: () => ({ providers: [{ size: 24, busy: { size: 0 } }] }),
+    verdicts: { get() { return null; } }, mounts: new Map(), indexers: () => [],
+  });
+  roomy.performance = () => ({ measuredMbpsPerConn: 8 });
+  assert.equal(roomy._orderForPipe([fat, light], { wantedRuntimeMin: 120 })[0].pickKey, 'fat',
+    'a fast connection keeps the bigger file');
 });
 
 test('pipeline: next-episode prepare does not mount a standby while another episode is playing', async () => {

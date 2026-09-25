@@ -847,6 +847,13 @@ function heldAllocKind(vf, raw, now, holdMs) {
 
 // A 502 is one account saying it is full. With several providers that is not a
 // household-wide cap — only squeeze Auto grow when every usable provider is at 502.
+function candidateBitrateMbps(candidate, runtimeMin) {
+  const bytes = Number(candidate && candidate.sizeBytes) || 0;
+  const minutes = Number(runtimeMin) || 0;
+  if (!(bytes > 0) || !(minutes > 20)) return 0;
+  return (bytes * 8) / (minutes * 60) / 1e6;
+}
+
 function mbpsPerConnection(perf = {}) {
   const live = Number(perf && perf.liveMbpsPerConn);
   if (Number.isFinite(live) && live > 0) return Math.max(2, Math.min(40, live));
@@ -1375,6 +1382,8 @@ class PlaySession {
     this.released = false;
   }
 }
+
+const SEARCH_FRESH_MS = 2 * 60 * 60 * 1000; // a good search stays for an evening; a bad release is a separate 6h verdict
 
 class Pipeline {
   constructor({
@@ -2064,7 +2073,11 @@ class Pipeline {
         job.timer = null;
         job.promise = (async () => {
           const warmPriority = priority || 'readAhead';
-          for await (const _chunk of vf.read(from, to, { priority: warmPriority, signal: controller.signal })) {
+          for await (const _chunk of vf.read(from, to, {
+            priority: warmPriority,
+            signal: controller.signal,
+            pin: key === 'resume' || key === 'resume:tail',
+          })) {
             // Only a short first-picture slice stays on startup/seek. The old path put the
             // whole 4K head+tail+resume window on that lane, so a 1080p seek next to it waited.
           }
@@ -2100,15 +2113,17 @@ class Pipeline {
       const target = Math.max(0, Math.min(size - 1, Math.floor(size * frac)));
       const previous = vf._warmedResumeRange;
       const safety = Math.max(1, Math.floor(warmBytes * 0.1));
-      const covered = previous && Date.now() - (Number(previous.at) || 0) < RESUME_WARM_COVERAGE_TTL_MS
+      const hot = opts && opts.hot === true;
+      // A details-page disk save uses the slow lane. That must not count as "already
+      // covered", or Play never moves the Continue Watching spot onto the fast lane.
+      const covered = previous && (!hot || previous.hot) && Date.now() - (Number(previous.at) || 0) < RESUME_WARM_COVERAGE_TTL_MS
         && target >= previous.start + safety && target < previous.end - safety;
       if (!covered) {
         vf._warmedResumeFrac = frac;
         const back = Math.floor(warmBytes * 0.3); // start well BEFORE the estimate to absorb VBR time→byte drift
         const start = Math.max(0, Math.min(Math.max(0, size - warmBytes), target - back));
         const end = Math.min(size, start + warmBytes);
-        vf._warmedResumeRange = { start, end, at: Date.now() };
-        const hot = opts && opts.hot === true;
+        vf._warmedResumeRange = { start, end, at: Date.now(), hot };
         if (hot) {
           const urgent = Math.min(end, start + (big ? 16 : 8) * 1024 * 1024);
           warm('resume', start, urgent, 'seek');
@@ -2413,7 +2428,7 @@ class Pipeline {
     const akaQueries = extraQueries.length ? extraQueries.concat(['size-desc']) : extraQueries;
     const key = this._searchCacheKey(params, { wantUhd, akaQueries, widenSearch });
     const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true, wantUhd, akaQueries, widenSearch });
-    const maxAgeMs = allowStale ? Number.POSITIVE_INFINITY : 60000;
+    const maxAgeMs = allowStale ? Number.POSITIVE_INFINITY : SEARCH_FRESH_MS;
     let hit = this._getFreshSearchHit(key, maxAgeMs);
     if (!hit && (params.imdbid || params.tvdbid)) {
       hit = this._getFreshSearchHit(titleKey, maxAgeMs);
@@ -3008,6 +3023,15 @@ class Pipeline {
       const sameName = !params.pickKey && params.pick && ready.candidate && ready.candidate.name === params.pick;
       if (!sameKey && !sameName) ready = null;
     }
+    // A warmed file that is fatter than the pipe would start, then pause. Skip it
+    // so Play opens a lighter copy instead of cutting over mid-movie.
+    const userChose = (params.pickKey || params.pick) && !params.pinnedResume;
+    if (ready && !userChose && !this._fitsPipe(ready.candidate, policy)) ready = null;
+    // A warmed Dolby Vision file paints the picture green on a screen that cannot
+    // decode it. Skip that warmup so Play opens the normal copy. A pin and a
+    // Sources tap keep the file they already chose.
+    if (ready && !userChose && !params.pinnedResume && policy.dolbyVision === false
+        && this._isDolbyVisionRelease(ready.candidate)) ready = null;
     if (ready) {
       this.metrics.titlePrepareJoins++;
       console.log('[play] joined prepared ' + (ready.candidate && ready.candidate.name || ''));
@@ -3066,6 +3090,8 @@ class Pipeline {
       if (wide.candidates && wide.candidates.length) candidates = wide.candidates;
     }
     if (!playable.length) throw new Error('no playable releases found');
+    if (!explicitPick) playable = this._orderForPipe(playable, policy);
+    if (!explicitPick && !params.pinnedResume) playable = this._orderForPicture(playable, policy);
     const session = new PlaySession(params, playable);
     session.policy = policy;
     this.sessions.set(session.id, session);
@@ -3187,6 +3213,61 @@ class Pipeline {
     return (Number(c.score) || 0) > -50000;
   }
 
+  _sustainableMbps() {
+    const perf = (typeof this.performance === 'function' ? this.performance() : this.performance) || {};
+    const per = mbpsPerConnection(perf);
+    let sockets = 0;
+    try {
+      const pool = typeof this.pool === 'function' ? this.pool() : this.pool;
+      for (const provider of (pool && pool.providers) || []) {
+        if (!provider || provider.healthy === false) continue;
+        const open = provider.authCapped ? Math.min(Number(provider.size) || 0, 4) : (Number(provider.size) || 0);
+        const busy = provider.busy && typeof provider.busy.size === 'number' ? provider.busy.size : 0;
+        sockets += Math.max(0, open - busy);
+      }
+    } catch { /* a missing pool still uses the one-viewer cap below */ }
+    if (!(sockets > 0)) sockets = oneViewerOpenCap(perf);
+    return per * Math.max(AUTO_BASE_CONNS, Math.min(sockets, AUTO_HARD_MAX)) * 0.75;
+  }
+
+  _fitsPipe(candidate, policy = {}) {
+    const bitrate = candidateBitrateMbps(candidate, policy.wantedRuntimeMin);
+    if (!(bitrate > 0)) return true;
+    return bitrate <= this._sustainableMbps();
+  }
+
+  _isDolbyVisionRelease(candidate) {
+    const features = candidate && candidate.attributes && Array.isArray(candidate.attributes.features)
+      ? candidate.attributes.features
+      : parseRelease(candidate && candidate.name).features;
+    return features.includes('dovi');
+  }
+
+  // A screen that said it cannot do Dolby Vision starts the normal copy, so the
+  // picture does not come up green. A Sources tap and a Continue Watching pin stay
+  // on the file already chosen. If every copy is Dolby Vision, the order stays put.
+  _orderForPicture(list, policy = {}) {
+    if (!policy || policy.dolbyVision !== false) return list || [];
+    if (!Array.isArray(list) || list.length < 2) return list || [];
+    const plain = [];
+    const dv = [];
+    for (const candidate of list) (this._isDolbyVisionRelease(candidate) ? dv : plain).push(candidate);
+    if (!plain.length || !dv.length) return list;
+    return plain.concat(dv);
+  }
+
+  // Auto and Continue Watching start on a copy the connection can feed. A Sources
+  // tap is left alone. Files we cannot size stay in rank order.
+  _orderForPipe(list, policy = {}) {
+    if (!Array.isArray(list) || list.length < 2) return list || [];
+    if (!(Number(policy.wantedRuntimeMin) > 20)) return list;
+    const fit = [];
+    const fat = [];
+    for (const candidate of list) (this._fitsPipe(candidate, policy) ? fit : fat).push(candidate);
+    if (!fit.length || !fat.length) return list;
+    return fit.concat(fat);
+  }
+
   _orderPlayableFallbacks(list, params = {}) {
     const sort = String(params.sourceSort || '').toLowerCase();
     const sizeOf = (c) => Number(c.sizeBytes) || 0;
@@ -3278,6 +3359,9 @@ class Pipeline {
       if (wide.candidates && wide.candidates.length) candidates = wide.candidates;
     }
     if (!playable.length) throw new Error('no playable releases found');
+    const userChose = (params.pickKey || params.pick) && !params.pinnedResume;
+    if (!userChose) playable = this._orderForPipe(playable, policy);
+    if (!userChose && !params.pinnedResume) playable = this._orderForPicture(playable, policy);
     const attempts = [];
     const started = Date.now();
     const tryList = async (list) => {

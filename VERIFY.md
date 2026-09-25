@@ -126,6 +126,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-25, v3.2.17 ship — a screen that cannot do Dolby Vision starts
+the normal copy, and a fat file yields when the line is tight:
+
+- Version contract: `package.json` 3.2.17; Android `versionName` 3.2.17 /
+  `versionCode` 394; Windows client package/Tauri/Cargo(.lock) 3.2.17.
+- Example: the Windows app cannot do Dolby Vision. Play starts the regular
+  4K copy. The green Dolby Vision file stays in Sources. Continue Watching
+  still resumes the file you already had. A 40 GB file on a tight line
+  starts the smaller copy so it does not begin and then pause.
+- Gate: `npm.cmd test` 745/745. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.17, household VOD play/seek/resume/CC on the
+  house process v3.2.17 (Mario ready 5323ms SLOW, 1stByte 3519ms SLOW,
+  seek 67ms, resume 19ms, CC 200; FROM ready 10959ms SLOW, 1stByte 275ms,
+  seek 107ms, resume 11ms, CC 200; SLOW is not a hard fail, both playable),
+  household IPTV first-byte + retune (8855 channels, 2 video picks),
+  household overlapping Play (FROM ready 6ms, Mario ready 14ms), Android
+  lint + unit tests + debug build, Android ExoPlayer stress on
+  `emulator-5554` (`android-tv-stress-20260925-191620.json`, never the
+  Shield). Windows GPU/HDR was not run. Unraid was not updated by this check.
+
 2026-09-25, v3.2.16 ship — opening a title can save the start, the
 end, and where you left off, and the Android bar shows the loaded stretch:
 

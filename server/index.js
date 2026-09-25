@@ -33,7 +33,7 @@ const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInW
 const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter, recallProbe, rememberProbe, probeCacheKey } = require('./transcode');
 const { spawn: spawnResumePad } = require('child_process');
 let resumePadReady = null;
 function ensureResumePad() {
@@ -8956,8 +8956,16 @@ Object.assign(H, {
     const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
     const transcodeAudio = forceAudioSafe || !audioCopyOk(aud, vf._caps);
     if (!vf._tracks && detectFfprobe() && !vf._probing) {
+      const remembered = recallProbe(probeCacheKey(vf.name, vf.size));
+      if (remembered) vf._tracks = { available: true, ...remembered };
+    }
+    if (!vf._tracks && detectFfprobe() && !vf._probing) {
       vf._probing = true;
-      probeTracks(selfUrl).then((t) => { vf._tracks = { available: true, ...t }; noteRuntimeCheck(vf); }).catch(() => {}).finally(() => { vf._probing = false; });
+      probeTracks(selfUrl).then((t) => {
+        vf._tracks = { available: true, ...t };
+        rememberProbe(probeCacheKey(vf.name, vf.size), t);
+        noteRuntimeCheck(vf);
+      }).catch(() => {}).finally(() => { vf._probing = false; });
     }
     const ff = spawnRemux(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe });
     attachMountFfmpegPipe(vf, ff, ctx.claims && ctx.claims.uid);
@@ -9222,9 +9230,15 @@ Object.assign(H, {
     const releaseSubs = publicReleaseSubs(vf);
     if (!detectFfprobe()) return send(ctx.res, 200, { available: false, audio: [], subs: [], releaseSubs, duration: null });
     if (vf._tracks) return send(ctx.res, 200, vf._tracks);
+    const remembered = recallProbe(probeCacheKey(vf.name, vf.size));
+    if (remembered) {
+      vf._tracks = { available: true, ...remembered, releaseSubs };
+      return send(ctx.res, 200, vf._tracks);
+    }
     try {
       const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}&priority=background`;
       const t = await probeTracks(selfUrl);
+      rememberProbe(probeCacheKey(vf.name, vf.size), t);
       vf._tracks = { available: true, ...t, releaseSubs };
       noteRuntimeCheck(vf);
       send(ctx.res, 200, vf._tracks);

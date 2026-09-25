@@ -38,7 +38,7 @@ Settings -> Streaming performance owns the capacity profile:
 | Per-stream 1080p / 4K connections | Maximum article window for one active stream | Used as the hard ceiling in Custom. Auto sizes from bandwidth + who is behind, but still honors these numbers as a ceiling when set. |
 | Startup reserve | Percentage of usable connections held back | Keeps new starts and seeks responsive. |
 | Device preload | MB of opening bytes an Android TV may pre-cache ahead of press-play (detail open + Up Next) | Direct-play mounts only; `/api/prepare` offers a tokened prefetch target within this budget, the shell stores it in a 100MB on-device LRU, and press-play buffers its first seconds from disk. 0 disables. |
-| Segment cache | Off, or on with a GB lid (default 10) | Off until the owner turns it on. When on, opening a title saves the start, the end, and the Continue Watching spot under `TRIBOON_DATA/segment-cache`, plus any article already fetched. RAM still holds the playhead. Oldest pieces are deleted when the lid is crossed. Clear wipes the folder. |
+| Segment cache | Off, or on with a GB lid (default 10) | Off until the owner turns it on. When on, opening a title saves the start, the end, and the Continue Watching spot under `TRIBOON_DATA/segment-cache`, plus any article already fetched. The spot you stopped, and a skip, stay until newer spots push them out (about a fifth of the lid). RAM still holds the playhead. Oldest unpinned pieces are deleted when the lid is crossed. Clear wipes the folder. A healthy search stays for 2 hours. A missing or blocked release is still ignored for 6 hours and can still appear in Sources. |
 | NNTP pipelining | Article requests each provider connection keeps on the wire for read-ahead/background work | Low lanes only — startup/seek/playback/health never share a socket, and stacking stands down while player work is queued. Rides provider pool opts; saving rebuilds pools live. Bench: ~2.2x per-connection read-ahead throughput at depth 4 on a latency-dominated provider. |
 
 Provider connection limits are saved per usenet account and currently cap at
@@ -373,7 +373,7 @@ path. Cache fills do not open extra NNTP sockets and do not use the playback
 lane. With the segment cache off, a details page still does not download
 the movie. With it on, that page saves the start, the end, and the Continue
 Watching spot into the cache, still on the read-ahead lane and still one file.
-The next Play of the same articles reads disk, then RAM, before asking Usenet. The NZB XML and the
+The next Play of the same articles reads disk, then RAM, before asking Usenet. The place you stopped, and a skip forward or back, is kept ahead of ordinary read-ahead so a full lid does not delete it first. A healthy indexer search is reused for 2 hours. A missing or blocked file is still skipped for 6 hours. Auto and Continue Watching start on a copy the lines can feed, so a fat 1080p or 4K does not begin and then pause. A file chosen in Sources stays the one you tapped. A screen that says it cannot do Dolby Vision starts the normal copy, so the picture does not come up green. That Dolby Vision file stays in Sources. Continue Watching still resumes the file you already had. The NZB XML and the
 RAR/ZIP map are saved beside it (`nzb-cache`, `mount-map`) so a repeat mount
 skips the header walk. Those two stores stay small. They do not assemble a
 movie file on disk.

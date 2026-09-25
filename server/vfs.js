@@ -250,9 +250,14 @@ class NzbFileStream {
     return Math.min(Math.floor(offset / this.partSize), this.segments.length - 1);
   }
 
-  _cachePut(i, buf, { persist = true } = {}) {
+  _cachePut(i, buf, { persist = true, pin = false } = {}) {
     this.sliceCache.delete(i);
-    if (this.cache.has(i)) return;
+    const disk = getSegmentDisk();
+    const msgId = this.segments[i] && this.segments[i].msgId;
+    if (this.cache.has(i)) {
+      if (pin && persist && disk && disk.enabled && msgId) disk.pin(msgId);
+      return;
+    }
     if (this.cache.size === 0 && this.cacheOrder.length === 0 && this.cacheBytes !== 0) {
       this.cacheBytes = 0;
     }
@@ -262,10 +267,8 @@ class NzbFileStream {
     if (this.sharedCacheBudget) this.sharedCacheBudget.add(this, i, buf.length);
     this.trimCache();
     if (!persist) return;
-    const disk = getSegmentDisk();
-    const msgId = this.segments[i] && this.segments[i].msgId;
     if (disk && disk.enabled && msgId) {
-      disk.put(msgId, buf, { size: this.size, partSize: this.partSize });
+      disk.put(msgId, buf, { size: this.size, partSize: this.partSize, pin: pin === true });
     }
   }
 
@@ -308,18 +311,23 @@ class NzbFileStream {
   }
 
   _fetchSegment(i, priority = 'playback', opts = {}) {
-    if (this.cache.has(i)) return Promise.resolve(this.cache.get(i));
-    const signal = opts.signal || null;
-    if (signalAborted(signal)) return Promise.reject(abortError());
+    const pin = opts.pin === true;
     const disk = getSegmentDisk();
     const msgId = this.segments[i] && this.segments[i].msgId;
+    if (this.cache.has(i)) {
+      if (pin && disk && disk.enabled && msgId) disk.pin(msgId);
+      return Promise.resolve(this.cache.get(i));
+    }
+    const signal = opts.signal || null;
+    if (signalAborted(signal)) return Promise.reject(abortError());
     if (disk && disk.enabled && msgId) {
       return disk.get(msgId).then((hit) => {
         if (!hit || !hit.data || !hit.data.length) return this._fetchSegmentNet(i, priority, opts);
         // Return the whole article. read() slices from `from` when the segment is in RAM.
         // Returning a tail here as well would skip those bytes twice.
         this._applyDiskMeta(hit);
-        this._cachePut(i, hit.data, { persist: false });
+        this._cachePut(i, hit.data, { persist: false, pin });
+        if (pin) disk.pin(msgId);
         this.playbackStats.diskHits = (this.playbackStats.diskHits || 0) + 1;
         return hit.data;
       }).catch(() => this._fetchSegmentNet(i, priority, opts));
@@ -471,7 +479,7 @@ class NzbFileStream {
       const waitStart = Date.now();
       try {
         data = await this._fetchSegment(segIdx, activePriority, {
-          signal, skipDecoded: wasCached ? 0 : from,
+          signal, skipDecoded: wasCached ? 0 : from, pin: priority === 'seek' || opts.pin === true,
         });
       } catch (e) {
         if (aborted() || e.code === 'ABORT_ERR') return;

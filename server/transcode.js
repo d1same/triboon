@@ -628,4 +628,37 @@ function spawnSubSync(refPath, inPath, outPath) {
     { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter };
+const PROBE_MEMO_MS = 6 * 3600 * 1000;
+const PROBE_MEMO_MAX = 200;
+const probeMemo = new Map();
+
+function recallProbe(key) {
+  const hit = key && probeMemo.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > PROBE_MEMO_MS) {
+    probeMemo.delete(key);
+    return null;
+  }
+  probeMemo.delete(key);
+  probeMemo.set(key, hit);
+  return hit.probe;
+}
+
+function rememberProbe(key, probe) {
+  if (!key || !probe) return;
+  probeMemo.set(key, { at: Date.now(), probe });
+  while (probeMemo.size > PROBE_MEMO_MAX) {
+    const oldest = probeMemo.keys().next().value;
+    if (oldest === undefined) break;
+    probeMemo.delete(oldest);
+  }
+}
+
+function probeCacheKey(name, size) {
+  const label = String(name || '').slice(0, 180);
+  const bytes = Number(size) || 0;
+  if (!label || !(bytes > 0)) return '';
+  return `${label}|${bytes}`;
+}
+
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, recallProbe, rememberProbe, probeCacheKey };

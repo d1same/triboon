@@ -282,7 +282,12 @@ Required behavior:
   performance). When it is on, opening a details page saves the start, the end,
   and the Continue Watching spot. It also stores decoded articles the server
   already fetched, plus the NZB XML and the RAR/ZIP map, under `TRIBOON_DATA`.
-  It does not download a whole movie, and it does not open extra usenet sockets.
+  The place you stopped is kept ahead of ordinary pieces. A healthy search is
+  reused for 2 hours. A missing or blocked release is still skipped for 6 hours.
+  The same file's probe result is remembered so a second Play does not ask
+  ffprobe again. A screen that says it cannot do Dolby Vision starts the
+  normal copy. The Dolby Vision file stays in Sources, and Continue Watching
+  still resumes the file you already had. It does not download a whole movie, and it does not open extra usenet sockets.
   Repeat Play, skip-back, and Continue Watching of those same pieces read disk
   before Usenet.
 - Health checks keep the 500ms upfront gate. Background triage is lower priority

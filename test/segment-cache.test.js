@@ -99,6 +99,23 @@ test('segment cache returns a decoded article and drops the oldest when the lid 
   assert.equal(cache.stats().bytes, 0);
 });
 
+test('segment cache keeps a pinned spot when the lid drops older pieces', async () => {
+  const dir = tmpDir();
+  const cache = new SegmentDiskCache({ dir, enabled: true, maxBytes: 500 });
+  const old = Buffer.alloc(80, 1);
+  const pinned = Buffer.alloc(80, 2);
+  const newer = Buffer.alloc(80, 3);
+  const newest = Buffer.alloc(280, 4);
+  cache.put('old@test', old);
+  cache.put('spot@test', pinned, { pin: true });
+  cache.put('new@test', newer);
+  cache.put('big@test', newest);
+  await cache.flush();
+  assert.ok(await cache.get('spot@test'), 'the place you stopped stays');
+  assert.equal(await cache.get('old@test'), null, 'an older unpinned piece is the one that goes');
+  await cache.clear();
+});
+
 test('nzb xml is saved without putting the grab url in the filename', async () => {
   const dir = tmpDir();
   const store = new NzbStore(dir);
@@ -188,4 +205,13 @@ test('a cold file stream reads a decoded article from disk instead of usenet', a
     configureNzbStore(null);
     await fs.promises.rm(dir, { recursive: true, force: true });
   }
+});
+
+test('the same movie shape is remembered without probing again', () => {
+  const { recallProbe, rememberProbe, probeCacheKey } = require('../server/transcode');
+  const key = probeCacheKey('Pin.Probe.Movie.mkv', 123456789);
+  const probe = { duration: 90, audio: [{ index: 0 }] };
+  rememberProbe(key, probe);
+  assert.deepEqual(recallProbe(key), probe);
+  assert.equal(recallProbe(probeCacheKey('', 1)), null);
 });

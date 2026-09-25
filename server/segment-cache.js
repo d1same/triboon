@@ -85,6 +85,19 @@ class SegmentDiskCache {
     }
   }
 
+  pin(messageId) {
+    if (!this.enabled) return;
+    const key = articleKey(messageId);
+    if (!key) return;
+    const job = this.queue.find((item) => item.key === key);
+    if (job) job.pin = true;
+    const rec = key && this.index.get(key);
+    if (!rec) return;
+    rec.pin = true;
+    rec.pinAt = Date.now();
+    this._scheduleIndex();
+  }
+
   put(messageId, buf, meta = {}) {
     if (!this.enabled || !buf || !buf.length) return;
     if (buf.length > this.maxBytes) return;
@@ -97,6 +110,7 @@ class SegmentDiskCache {
       prior.buf = buf;
       prior.size = meta.size;
       prior.partSize = meta.partSize;
+      if (meta.pin === true) prior.pin = true;
       this.queuedBytes += buf.length;
     } else {
       this.queue.push({
@@ -104,6 +118,7 @@ class SegmentDiskCache {
         buf,
         size: Number.isFinite(meta.size) ? meta.size : null,
         partSize: Number.isFinite(meta.partSize) ? meta.partSize : null,
+        pin: meta.pin === true,
       });
       this.queuedBytes += buf.length;
     }
@@ -153,6 +168,8 @@ class SegmentDiskCache {
           size: rec.size ?? null,
           partSize: rec.partSize ?? null,
           at: rec.at || 0,
+          pin: rec.pin === true,
+          pinAt: rec.pinAt || 0,
         });
         this.bytes += rec.bytes;
       }
@@ -182,11 +199,14 @@ class SegmentDiskCache {
         await fs.promises.rename(tmp, dest);
         const prior = this.index.get(job.key);
         if (prior) this.bytes -= prior.bytes;
+        const priorPin = prior && prior.pin === true;
         this.index.set(job.key, {
           bytes: job.buf.length,
           size: job.size,
           partSize: job.partSize,
           at: Date.now(),
+          pin: job.pin === true || priorPin,
+          pinAt: job.pin === true ? Date.now() : ((prior && prior.pinAt) || 0),
         });
         this.bytes += job.buf.length;
         this.writes++;
@@ -200,10 +220,26 @@ class SegmentDiskCache {
 
   async _evict() {
     if (this.bytes <= this.maxBytes) return;
-    const ordered = [...this.index.entries()].sort((a, b) => (a[1].at || 0) - (b[1].at || 0));
-    for (const [key] of ordered) {
+    const pinCap = Math.max(1, Math.floor(this.maxBytes * 0.2));
+    let pinned = 0;
+    for (const rec of this.index.values()) if (rec.pin) pinned += rec.bytes;
+    if (pinned > pinCap) {
+      const pins = [...this.index.entries()].filter(([, rec]) => rec.pin)
+        .sort((a, b) => (a[1].pinAt || 0) - (b[1].pinAt || 0));
+      for (const [, rec] of pins) {
+        if (pinned <= pinCap) break;
+        rec.pin = false;
+        pinned -= rec.bytes;
+      }
+    }
+    const ordered = [...this.index.entries()].sort((a, b) => {
+      if (!!a[1].pin !== !!b[1].pin) return a[1].pin ? 1 : -1;
+      return (a[1].at || 0) - (b[1].at || 0);
+    });
+    for (const [key, rec] of ordered) {
       if (this.bytes <= this.maxBytes) break;
       if (this.index.size <= 1) break;
+      if (rec.pin) continue;
       await this._drop(key);
       this.evictions++;
     }

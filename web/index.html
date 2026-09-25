@@ -4993,7 +4993,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         </select></label>
         <label class="settingsControl"><span>Cache size GB</span><input id="perfSegGb" type="number" min="1" max="200" inputmode="numeric" placeholder="10"></label>
       </div>
-      <p class="hint">Off until you turn it on. Opening a movie then saves the start, the end, and where you left off, up to this size, in the appdata folder. When it fills, the oldest pieces are deleted. The next seconds of the movie still live in memory. Example: you stop at 40:00 and come back tomorrow. Play reads the disk copy instead of asking Usenet again.</p>
+      <p class="hint">Off until you turn it on. Opening a movie then saves the start, the end, and where you left off, up to this size, in the appdata folder. The spot you stopped stays even when the folder fills. The next seconds of the movie still live in memory. Example: you stop at 40:00 and come back tomorrow. Play reads the disk copy instead of asking Usenet again.</p>
       <p class="hint" id="perfConnHint">Auto uses only as many sockets as the movie needs for the current Usenet speed. Slow evening sockets add more; a full home download pipe does not. Cache stays inside about 20% of this box's RAM.</p>
     </div>
     <div class="settingsActions">
