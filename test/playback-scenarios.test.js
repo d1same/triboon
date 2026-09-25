@@ -105,7 +105,7 @@ test('playback scenarios: dead prepares and hivecast 503 do not keep hammering',
   assert.match(pipeline, /e\.cachedFail = true;/);
   assert.match(pipeline, /PREPARE_FAIL_RETRY_MS = 45 \* 1000/);
   assert.match(pipeline, /this\.prepareFailUntil\.set\(key, Date\.now\(\) \+ PREPARE_FAIL_RETRY_MS\)/);
-  assert.match(server, /if \(!e\.cachedFail\) debug\.log\('prepare'/);
+  assert.match(server, /if \(!e\.cachedFail\) \{[\s\S]*debug\.log\('prepare'/);
   assert.match(server, /\/\\b\(401\|403\|429\|503\)\\b\//);
   assert.match(server, /reason !== 'idle \(no viewers\)' && reason !== 'playlist sent'/);
 });

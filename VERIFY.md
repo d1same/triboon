@@ -126,6 +126,35 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-25, v3.2.12 ship — Jellyfin home cards no longer crash the TV,
+and a failure stays in the server log:
+
+- Version contract: `package.json` 3.2.12; Android `versionName` 3.2.12 /
+  `versionCode` 389; Windows client package/Tauri/Cargo(.lock) 3.2.12.
+- Home Movies, Shows, and library cards are real photos saved with a
+  `.png` name. Roku and Android TV believed the name and crashed when
+  the row drew. The server now labels them as photos. The live line
+  also sends the id those TV apps require, so opening Jellyfin no longer
+  dies on the hello. A failed shelf, a play that cannot start, and a
+  usenet stall now print a `[fail:]` line even when debug logging is off.
+  Example: Roku opens Movies and the log names that shelf; a stall names
+  the provider and the article it was waiting on.
+- Gate: `npm.cmd test` 728/728. `npm.cmd run verify:full` passed every
+  step except Android stress, which died before the test because that
+  checker could not see the already-running server on port 7777. The
+  same stress command was run again and passed on `emulator-5554`
+  (`android-tv-stress-20260925-130511.json`, never the Shield). The rest
+  of that run: whitespace, JS syntax, web parse, IPTV/P9, VOD/P14,
+  CC/P11, full suite, isolated `/api/server` 3.2.12, household VOD
+  play/seek/resume/CC (house process still reported 3.2.10 because it
+  was started before the bump; Mario ready 4863ms and FROM ready
+  10197ms were over the 3s budget, SLOW is not a hard fail; both
+  playable, CC 200), household IPTV first-byte + retune (24022
+  channels; ABC web 2304ms / native 1149ms, ESPN web 1274ms / native
+  10ms), household overlapping Play (FROM ready 7ms, Mario ready 14ms),
+  Android lint + unit tests + debug build. Windows GPU/HDR was not run.
+  Roku and the living-room Android TV were not re-opened after this gate.
+
 2026-09-24, v3.2.11 ship — a pause stays paused, and a copied movie
 does not hop the picture back about a second:
 

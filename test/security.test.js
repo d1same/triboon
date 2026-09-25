@@ -565,6 +565,18 @@ test('debug log redacts tokens and passwords', () => {
   assert.match(debug.redact('/api/stream/x?t=supersecret'), /\?t=\*\*\*/);
   assert.doesNotMatch(debug.redact('pass=hunter22'), /hunter22/);
   assert.doesNotMatch(debug.redact('apikey: abc123'), /abc123/);
+  const lines = [];
+  const orig = console.error;
+  console.error = (line) => lines.push(String(line));
+  try {
+    debug.fail('jellyfin', 'GET /socket?api_key=SECRET 401 Token="abc"');
+    debug.fail('jellyfin', 'GET /socket?api_key=SECRET 401 Token="abc"');
+    assert.match(lines[0], /^\[fail:jellyfin\] GET \/socket\?api_key=\*\*\*/);
+    assert.doesNotMatch(lines.join('\n'), /SECRET|Token="abc"/);
+    assert.strictEqual(lines.length, 1, 'the same failure is written once');
+  } finally {
+    console.error = orig;
+  }
 });
 
 test('settings: debug logging is opt-in and environment-forced', async () => {

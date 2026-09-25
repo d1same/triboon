@@ -3595,7 +3595,21 @@ async function loadAuthArt() {
 }
 
 // ---------- helpers ----------
+function playFailDetail(e) {
+  const summary = e && e.summary ? ` — ${e.summary}` : '';
+  const names = Array.isArray(e && e.attempts)
+    ? e.attempts.slice(0, 3).map((row) => String((row && row.name) || '').slice(0, 70)).filter(Boolean)
+    : [];
+  const which = names.length ? ` sources: ${names.join(' | ')}` : '';
+  return `${(e && e.message) || 'error'}${summary}${which}`;
+}
+
 function send(res, code, body, headers = {}) {
+  if (code >= 400 && res && res._failScope) {
+    const why = body && typeof body === 'object' && !Buffer.isBuffer(body) && body.error
+      ? ` ${String(body.error).slice(0, 140)}` : '';
+    debug.fail(res._failScope, `${res._failWhat || 'request'} ${code}${why}`);
+  }
   const isObj = typeof body === 'object' && !Buffer.isBuffer(body);
   let out = isObj ? JSON.stringify(body) : body;
   const finalHeaders = {
@@ -5754,7 +5768,7 @@ const H = {
       // A maturity denial outranks a pipeline failure: a restricted profile must see "restricted",
       // not a generic playback error, whichever settled first (and it never leaks a source either way).
       if (!(await maturityAllowed)) return maturityBlockedResponse(ctx);
-      console.log('[play] fail ' + (e.message || 'error') + (body && body.q ? ' q=' + body.q : ''));
+      debug.fail('play', `could not start ${body && body.q || '-'} — ${playFailDetail(e)}`);
       debug.log('play', `fail q=${body && body.q || '-'} ${e.message || 'error'}`);
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
@@ -5824,7 +5838,10 @@ const H = {
       });
       debug.log('prepare', `${prepared ? 'ready' : 'miss'} q=${body.q} ms=${Date.now() - t0} name=${(candidate && candidate.name) || '-'}`);
     } catch (e) {
-      if (!e.cachedFail) debug.log('prepare', `fail q=${body.q} ${e.message || 'error'}`);
+      if (!e.cachedFail) {
+        debug.fail('play', `prepare failed ${body.q || '-'} — ${playFailDetail(e)}`);
+        debug.log('prepare', `fail q=${body.q} ${e.message || 'error'}`);
+      }
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
@@ -5853,6 +5870,7 @@ const H = {
         attempts,
       }));
     } catch (e) {
+      debug.fail('play', `next source failed — ${playFailDetail(e)}`);
       send(ctx.res, e.message.includes('unknown') ? 404 : 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
@@ -10705,6 +10723,30 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.png': 'image/png', '.svg':
   '.json': 'application/json', '.map': 'application/json', '.woff': 'font/woff', '.wasm': 'application/wasm',
   '.webmanifest': 'application/manifest+json', '.gif': 'image/gif', '.webp': 'image/webp', '.ttf': 'font/ttf' };
 
+function jellyfinQueryHint(url) {
+  const q = url && url.searchParams;
+  if (!q) return '';
+  const keys = ['ParentId', 'IncludeItemTypes', 'MediaTypes', 'Filters', 'SortBy', 'Limit', 'StartIndex', 'SeriesId', 'SeasonId'];
+  const bits = [];
+  for (const key of keys) {
+    const value = q.get(key) || q.get(key.charAt(0).toLowerCase() + key.slice(1));
+    if (value) bits.push(`${key}=${String(value).slice(0, 48)}`);
+  }
+  return bits.length ? ` ${bits.join(' ')}` : '';
+}
+
+function jellyfinClientLabel(req) {
+  const hdr = (req && req.headers) || {};
+  const authz = String(hdr.authorization || hdr['x-emby-authorization'] || '');
+  const client = (authz.match(/Client="([^"]{1,40})"/i) || [])[1] || '';
+  const device = (authz.match(/Device="([^"]{1,40})"/i) || [])[1] || '';
+  const version = (authz.match(/Version="([^"]{1,24})"/i) || [])[1] || '';
+  const named = [client, device, version].filter(Boolean).join(' ');
+  if (named) return named;
+  const ua = String(hdr['user-agent'] || '').replace(/\s+/g, ' ').slice(0, 80);
+  return ua || 'unknown app';
+}
+
 function jellyfinClientShell(req) {
   const ua = String(req.headers['user-agent'] || '');
   if (/Triboon/i.test(ua)) return false;
@@ -10802,6 +10844,8 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'OPTIONS') return send(res, 204, '', cors);
       const method = req.method === 'HEAD' ? 'GET' : req.method;
       const pathLower = p.toLowerCase();
+      res._failScope = 'jellyfin';
+      res._failWhat = `${method} ${p}${jellyfinQueryHint(url)} ${jellyfinClientLabel(req)}`;
       const route = JELLYFIN_ROUTES.find((r) => r.m === method && r.re.test(pathLower));
       if (!route) return send(res, 404, { error: 'not found' });
       const ctx = { req, res, url, m: route.re.exec(pathLower), kind: route.kind };

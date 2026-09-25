@@ -212,11 +212,12 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.ok(moviesFolder.ImageTags.Thumb, 'Movies has a wide cover too');
   const moviesCover = await httpSend(srv.port, 'GET', `/Items/${moviesFolder.Id}/Images/Primary`);
   assert.strictEqual(moviesCover.status, 200, 'the Movies home card uses its own cover');
-  assert.match(moviesCover.headers['content-type'], /png/);
+  assert.match(moviesCover.headers['content-type'], /jpeg/, 'a JPEG named .png must not be labeled png or the TV dies');
+  assert.match(moviesCover.raw, /JFIF/);
   const showsFolder = views.json.Items.find((row) => row.Name === 'Shows');
   const showsCover = await httpSend(srv.port, 'GET', `/Items/${showsFolder.Id}/Images/Primary`);
   assert.strictEqual(showsCover.status, 200, 'the Shows home card uses its own cover');
-  assert.match(showsCover.headers['content-type'], /png/);
+  assert.match(showsCover.headers['content-type'], /jpeg/);
   const movieByCard = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items/${moviesFolder.Id}`, { headers: { authorization: authz } });
   assert.strictEqual(movieByCard.status, 200);
   assert.strictEqual(movieByCard.json.Name, 'Movies');
@@ -357,7 +358,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.ok(diskFolder.ImageTags.Primary, 'a custom library has a cover');
   const libraryCover = await httpSend(srv.port, 'GET', `/Items/${diskFolder.Id}/Images/Primary`);
   assert.strictEqual(libraryCover.status, 200, 'the custom library cover loads');
-  assert.match(libraryCover.headers['content-type'], /png/, 'a home folder uses the designed cover');
+  assert.match(libraryCover.headers['content-type'], /jpeg/, 'a home folder uses the designed cover');
   assert.ok(withDisk.json.Items.some((row) => row.Name === 'Disk Shows'), 'a show folder shows up too');
   const shelfPath = `/Users/${me.json.Id}/Items?ParentId=l${disk.json.id}&IncludeItemTypes=Movie&Recursive=true&Limit=10`;
   const movieShelf = await httpSend(srv.port, 'GET', shelfPath, { headers: { authorization: authz } });
@@ -512,6 +513,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   const hello = JSON.parse(live.first);
   assert.strictEqual(hello.MessageType, 'ForceKeepAlive', 'the phone is told how often to check in');
   assert.strictEqual(hello.Data, 60);
+  assert.match(hello.MessageId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, 'Android TV closes if the hello has no id');
   const reply = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('no keepalive')), 3000);
     live.ws.addEventListener('message', (ev) => {
@@ -524,6 +526,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
     live.ws.send(JSON.stringify({ MessageType: 'Play', Data: { ItemIds: ['nope'] } }));
   });
   assert.strictEqual(reply.MessageType, 'KeepAlive');
+  assert.match(reply.MessageId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   assert.strictEqual(srv.mounts.size, mountsBefore, 'a live-line play command does not start a movie');
   await new Promise((resolve) => {
     live.ws.addEventListener('close', () => resolve());

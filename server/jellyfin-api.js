@@ -8,6 +8,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const debug = require('./debug');
 
 // Phone and TV apps accept a Jellyfin version with three numbers.
 // "12.1" has two numbers, so they say the server is unsupported.
@@ -405,6 +406,26 @@ function shelfCoverFile(which) {
   const name = which === 'shows' ? 'shows.png' : which === 'library' ? 'library.png' : 'movies.png';
   const file = path.join(__dirname, '..', 'web', 'jellyfin-covers', name);
   return fs.existsSync(file) ? file : '';
+}
+
+// The home cards are JPEG photos saved with a .png name. Roku and Android TV
+// trust the label and die while drawing the first row. The emulator sniffs
+// the bytes and keeps going. The label has to match the bytes.
+function imageMime(file) {
+  let buf = null;
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      buf = Buffer.alloc(12);
+      fs.readSync(fd, buf, 0, 12, 0);
+    } finally { fs.closeSync(fd); }
+  } catch { buf = null; }
+  if (buf && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg';
+  if (buf && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image/png';
+  if (buf && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  if (/\.png$/i.test(file)) return 'image/png';
+  if (/\.webp$/i.test(file)) return 'image/webp';
+  return 'image/jpeg';
 }
 
 function localPicture(ctx, libId, idx, wide) {
@@ -1627,7 +1648,7 @@ async function handleKind(kind, ctx) {
     const pipeFile = (imgFile) => {
       let stat;
       try { stat = fs.statSync(imgFile); } catch { return false; }
-      const type = /\.png$/i.test(imgFile) ? 'image/png' : /\.webp$/i.test(imgFile) ? 'image/webp' : 'image/jpeg';
+      const type = imageMime(imgFile);
       ctx.res.writeHead(200, { ...cors, 'content-type': type, 'content-length': stat.size, 'cache-control': 'private, max-age=86400' });
       fs.createReadStream(imgFile).pipe(ctx.res);
       return true;
@@ -1684,7 +1705,7 @@ async function handleKind(kind, ctx) {
       else if (img && img.file) {
         let stat;
         try { stat = fs.statSync(img.file); } catch { return send(ctx.res, 404, { error: 'not found' }, cors); }
-        const type = /\.png$/i.test(img.file) ? 'image/png' : /\.webp$/i.test(img.file) ? 'image/webp' : 'image/jpeg';
+        const type = imageMime(img.file);
         ctx.res.writeHead(200, { ...cors, 'content-type': type, 'content-length': stat.size, 'cache-control': 'private, max-age=86400' });
         fs.createReadStream(img.file).pipe(ctx.res);
         return;
@@ -1952,6 +1973,7 @@ function wsFrame(opcode, payload) {
 }
 
 function rejectUpgrade(socket, code, text) {
+  debug.fail('jellyfin', `live line refused ${code} ${text}`);
   const reason = { 401: 'Unauthorized', 404: 'Not Found', 426: 'Upgrade Required', 503: 'Service Unavailable' }[code] || 'Bad Request';
   const body = JSON.stringify({ error: text });
   const head = `HTTP/1.1 ${code} ${reason}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n`;
@@ -2053,7 +2075,14 @@ function openJellyfinSocket(req, socket, head) {
     if (socket.destroyed || socket.__jfEnding) return;
     try { socket.write(wsFrame(1, JSON.stringify(obj))); } catch {}
   };
-  send({ MessageType: 'ForceKeepAlive', Data: 60 });
+  // Android TV reads this the moment the app opens. Without MessageId it
+  // closes. The phone on the emulator does not require the id.
+  const wsNote = (type, data) => {
+    const msg = { MessageType: type, MessageId: crypto.randomUUID() };
+    if (data !== undefined) msg.Data = data;
+    return msg;
+  };
+  send(wsNote('ForceKeepAlive', 60));
   const beat = setInterval(() => {
     if (socket.destroyed) return;
     if (Date.now() - alive > 120000) {
@@ -2063,7 +2092,7 @@ function openJellyfinSocket(req, socket, head) {
       }
       return;
     }
-    send({ MessageType: 'KeepAlive' });
+    send(wsNote('KeepAlive'));
   }, 30000);
   if (typeof beat.unref === 'function') beat.unref();
   const cleanup = () => {
@@ -2094,10 +2123,11 @@ function openJellyfinSocket(req, socket, head) {
       if (opcode !== 1) return false;
       let msg = null;
       try { msg = JSON.parse(payload.toString('utf8')); } catch { return false; }
-      if (msg && msg.MessageType === 'KeepAlive') send({ MessageType: 'KeepAlive' });
+      if (msg && msg.MessageType === 'KeepAlive') send(wsNote('KeepAlive'));
       return false;
     });
     if (next == null) {
+      debug.fail('jellyfin', 'live line closed because the message was not a whole text frame');
       try { if (!socket.destroyed) socket.destroy(); } catch {}
       return;
     }

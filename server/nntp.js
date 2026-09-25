@@ -3,6 +3,7 @@
 
 const net = require('net');
 const tls = require('tls');
+const debug = require('./debug');
 
 // Stall protection — without these, ONE silently-dropped TCP connection (NAT/provider idle
 // kill) makes a BODY wait forever, the mount's Promise.all never settles, and /api/play
@@ -229,6 +230,12 @@ class NntpConnection {
   }
 
   _fail(err) {
+    const msg = String(err && err.message || '');
+    if (err && (err.code === 'NNTP_STALL' || err.code === 'NNTP_AUTH_LOST' || /connect timeout|auth failed|body too large/i.test(msg))) {
+      const host = (this.opts && this.opts.host) || 'usenet';
+      const waiting = (this.waiters || []).map((w) => w && w.cmdName).filter(Boolean).slice(0, 4).join(', ');
+      debug.fail('buffer', `${host}: ${msg || err.code || 'socket stopped'}${waiting ? ` while waiting on ${waiting}` : ''}`);
+    }
     this.alive = false;
     clearTimeout(this._connectTimer);
     const ws = this.waiters; this.waiters = [];
@@ -444,6 +451,8 @@ class ProviderPool {
     this.lastProbeAt = Date.now();
     const next = shrinkSizeFromLive(this.conns.length, learnedConnectionLimit(err));
     if (next < this.size) this.size = next;
+    const host = (this.opts && this.opts.host) || 'usenet';
+    debug.fail('buffer', `${host} is full, so playback is using ${this.size} connections`);
   }
 
   _admitConn(c) {
@@ -478,6 +487,9 @@ class ProviderPool {
         this.connecting--;
         this.lastErr = e;
         this.lastConnectFailAt = Date.now();
+        if (e && /auth failed/i.test(String(e.message || ''))) {
+          debug.fail('buffer', `${(this.opts && this.opts.host) || 'usenet'}: ${e.message}`);
+        }
         try { c.close(); } catch {}
         if (isTooManyConnections(e)) this._markCapHit(e);
         // If every attempt failed and nothing is live, queued work can never run — fail it.
