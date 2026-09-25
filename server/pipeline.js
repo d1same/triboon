@@ -13,6 +13,8 @@ const debug = require('./debug');
 const TOTAL_MEM_MB = Math.floor(os.totalmem() / (1024 * 1024));
 const { fanout, fetchUrl, normTitle, stripSubjectWrapper } = require('./newznab');
 const { CAP_HIT_COOLDOWN_MS } = require('./nntp');
+const { getNzbStore } = require('./nzb-store');
+const { getSegmentDisk } = require('./segment-cache');
 
 // ---- title verification ----
 // Catalog titles carry accents (Shōgun, Amélie, Léon); scene names never do (Shogun, Amelie). The
@@ -869,6 +871,17 @@ function autoStreamCap(vf, perf = {}, { starving = false } = {}) {
   const base = needSocketsFor(streamNeedMbps(vf), mbpsPerConnection(perf));
   const room = starving ? Math.ceil(base * 1.6) : base;
   return Math.max(AUTO_BASE_CONNS, Math.min(AUTO_HARD_MAX, room));
+}
+
+// One person, before we know the file. Health, prepare, and the first article
+// use this — never the sum of the usenet plans (40 + 60 + 40).
+function oneViewerOpenCap(perf = {}) {
+  const custom = perf && perf.connectionMode === 'custom';
+  const configured = custom
+    ? (Number(perf.maxConnPerStream1080) || 12)
+    : autoStreamCap({ size: 2e9 }, perf || {});
+  const n = Math.floor(Number(configured) || 0);
+  return Math.max(AUTO_BASE_CONNS, n);
 }
 
 function playbackRamFraction(totalMemMb = TOTAL_MEM_MB) {
@@ -1768,6 +1781,26 @@ class Pipeline {
   _rememberNzb(url, xml) {
     this.nzbCache.set(url, xml);
     if (this.nzbCache.size > 15) this.nzbCache.delete(this.nzbCache.keys().next().value);
+    const store = getNzbStore();
+    if (store) store.put(url, xml);
+  }
+
+  async _cachedNzb(url) {
+    let xml = this.nzbCache.get(url);
+    if (xml) {
+      this.nzbCache.delete(url);
+      this.nzbCache.set(url, xml);
+      this.metrics.nzbCacheHits++;
+      return xml;
+    }
+    const store = getNzbStore();
+    if (!store) return null;
+    xml = await store.get(url);
+    if (!xml) return null;
+    this.nzbCache.set(url, xml);
+    if (this.nzbCache.size > 15) this.nzbCache.delete(this.nzbCache.keys().next().value);
+    this.metrics.nzbCacheHits++;
+    return xml;
   }
 
   _startNzbFetch(candidate, opts = {}) {
@@ -1935,6 +1968,17 @@ class Pipeline {
 
   _prepareWarmIsHot(exceptVf = null) {
     return this._preparedHouseHasRoom() && !this._hasActiveForeignPlayback(exceptVf);
+  }
+
+  // The segment cache is off until the owner turns it on. When it is on, opening
+  // the details page (or a Continue Watching card) saves the start, the end, and
+  // the resume spot onto disk. Same one-file prepare as before: no second source.
+  _warmPreparedDiskWindows(vf, params) {
+    const disk = getSegmentDisk();
+    if (!disk || !disk.enabled || !vf) return;
+    this._quietOtherPreparedWarms(vf);
+    const frac = Number(params && params.resumeFrac) || 0;
+    this._startPlaybackWarmup(vf, vf._playWin, frac, { hot: false });
   }
 
   _quietOtherPreparedWarms(exceptVf = null) {
@@ -2191,6 +2235,10 @@ class Pipeline {
     const shares = this._allocateStreamConnections(active, perf, { viewerChanged, now });
     let openCap = 0;
     for (const vf of active) openCap += Number(shares.get(vf)) || 0;
+    // No movie playing yet: one login for a details-page or Continue Watching
+    // check. The admin handful (8–12) starts when someone actually presses Play.
+    // 0 used to mean "open the whole plan".
+    if (!(openCap > 0)) openCap = 1;
     // Local library mounts are already left out of `active`. They play from disk.
     this._setUsenetOpenCap(openCap);
     for (const vf of active) this._applyPlaybackWindow(vf, activeCount, perf, shares.get(vf), active);
@@ -2682,10 +2730,8 @@ class Pipeline {
       // episode behind the release-wide NZB/title keys; the current request still fails/advances.
       if (!selectionEpisodeScoped) this._recordVerdict(candidate, verdict, detail);
     };
-    let xml = this.nzbCache.get(candidate.nzbUrl);
-    // LRU touch: a hot NZB (fast replay / multi-user same title) survives eviction by unrelated grabs.
-    if (xml) { this.nzbCache.delete(candidate.nzbUrl); this.nzbCache.set(candidate.nzbUrl, xml); this.metrics.nzbCacheHits++; }
-    else {
+    let xml = await this._cachedNzb(candidate.nzbUrl);
+    if (!xml) {
       const pendingNzb = this.nzbInflight.get(candidate.nzbUrl);
       if (pendingNzb) {
         try {
@@ -3248,14 +3294,9 @@ class Pipeline {
           this.mountByUrl.set(res.vf._mountIdentity || mountIdentity(candidate, mountOpts), res.vf.id);
           this._rememberTitlePrepared(params, this._rememberPolicyForCandidate(policy, candidate), res.vf, candidate);
           this.rebalancePlaybackWindows();
-          this._startPlaybackWarmup(res.vf, res.vf._playWin, params.resumeFrac, {
-            hot: this._prepareWarmIsHot(res.vf),
-          });
-          // Next-episode prepare runs while the current file is still playing. A second
-          // standby mount here steals NNTP slots from that last scene and can remount it.
-          if (!this._hasActiveForeignPlayback(res.vf)) {
-            this._armStandby(params, policy, mountOpts, list, candidate.pickKey, params.resumeFrac, candidate);
-          }
+          // No second backup file. With the segment cache on, this one file's
+          // start, end, and resume spot are saved to disk. Play still warms either way.
+          this._warmPreparedDiskWindows(res.vf, params);
           return { vf: res.vf, candidate };
         }
         attempts.push({ name: candidate.name, fail: res.fail || 'prepare failed' });
@@ -3569,7 +3610,7 @@ module.exports = {
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
   isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, mountNeedsUsenetShare, ACTIVE_PLAYBACK_GRACE_MS,
   allocateStreamConnections, classifyStreamNeed, streamNeedMbps, streamIsUhd, mountAheadBytes, fileIsFullyAhead,
-  needSocketsFor, pipeIsSaturated, mbpsPerConnection,
+  needSocketsFor, pipeIsSaturated, mbpsPerConnection, oneViewerOpenCap,
   householdConnPressure, preparedHouseHasRoom, preparedPeekSockets, autoStreamCap, cacheNeedWeight,
   playbackRamFraction, playbackCacheCapMb,
   AUTO_BASE_CONNS,

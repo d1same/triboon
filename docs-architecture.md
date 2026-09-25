@@ -278,6 +278,13 @@ Required behavior:
 - Read-ahead is adaptive. 1080p and 4K targets are saved as seconds for the
   owner, but the engine enforces them as a bounded article window so starts and
   seeks stay fast for other users.
+- A disk segment cache is optional and off by default (Settings → Streaming
+  performance). When it is on, opening a details page saves the start, the end,
+  and the Continue Watching spot. It also stores decoded articles the server
+  already fetched, plus the NZB XML and the RAR/ZIP map, under `TRIBOON_DATA`.
+  It does not download a whole movie, and it does not open extra usenet sockets.
+  Repeat Play, skip-back, and Continue Watching of those same pieces read disk
+  before Usenet.
 - Health checks keep the 500ms upfront gate. Background triage is lower priority
   and must never starve the segment the player is actively waiting on.
 - Web and native VOD distinguish readiness from real playback. Startup without

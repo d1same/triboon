@@ -14,7 +14,7 @@ const { Store, VerdictCache, scrubOrphanTempDirs } = require('../server/store');
 const {
   Pipeline, GATE_MS, nzbVerdictKey, releaseFingerprint, summarizeAttempts, stubFeatureReason, mountHasActivePlayback, mountNeedsUsenetShare,
   ACTIVE_PLAYBACK_GRACE_MS, allocateStreamConnections, classifyStreamNeed,
-  streamNeedMbps, streamIsUhd, autoStreamCap, cacheNeedWeight, playbackRamFraction, playbackCacheCapMb, preparedPeekSockets,
+  streamNeedMbps, streamIsUhd, autoStreamCap, oneViewerOpenCap, cacheNeedWeight, playbackRamFraction, playbackCacheCapMb, preparedPeekSockets,
   parseWantedTitle, widenSearchQueries, widenSearchJobs,
 } = require('../server/pipeline');
 
@@ -4128,6 +4128,35 @@ test('pipeline: 4K stop then 1080 play drops the other-quality prepared mount', 
   assert.ok(mounts.has('hd-prep'));
 });
 
+test('pipeline: first login stays at the admin share, not the 140-connection plan', () => {
+  assert.equal(oneViewerOpenCap({
+    connectionMode: 'custom', maxConnPerStream1080: 12, usableConnections: 140,
+  }), 12);
+  let cap = null;
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => ({ setPlaybackOpenCap: (n) => { cap = n; } }),
+    performance: () => ({
+      connectionMode: 'custom',
+      maxConnPerStream1080: 12,
+      maxConnPerStream4k: 20,
+      usableConnections: 140,
+      reserveConnections: 20,
+    }),
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+  });
+  pipeline.rebalancePlaybackWindows();
+  assert.equal(cap, 1, 'a details page or Continue Watching card must open one login, not the playback handful');
+  const now = Date.now();
+  mounts.set('m', {
+    id: 'm', streamable: true, size: 2e9, name: 'Movie.2024.1080p.mkv',
+    _playbackTouched: now, _activeStreamReads: 1,
+  });
+  pipeline.rebalancePlaybackWindows(now);
+  assert.ok(cap > 0 && cap <= 12, `one movie asked for ${cap} connections on a 140-line plan`);
+});
+
 test('pipeline: provider 502 pressure shrinks the 4K connection window', () => {
   const pipeline = new Pipeline({
     pool: () => ({ providers: [{ capHitAt: Date.now() }] }),
@@ -4791,22 +4820,54 @@ test('pipeline: prepare warms a standby and advance commits it without a cold wa
 
   const prepared = await pipeline.prepare({ q: 'movie' }, {});
   assert.ok(prepared.prepared && prepared.vf, 'prepare mounts the first healthy source');
-  let standby = null;
-  for (let i = 0; i < 40 && !standby; i++) {
-    standby = pipeline._findTitleStandby({ q: 'movie' }, {});
-    if (!standby) await new Promise((r) => setTimeout(r, 50));
-  }
-  assert.ok(standby && standby.vf && standby.vf.id !== prepared.vf.id,
-    'Details warmup also mounts the next ranked file');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(pipeline._findTitleStandby({ q: 'movie' }, {}), null,
+    'Details must not log into a second file before Play');
   const first = await pipeline.play({ q: 'movie' }, {});
-  assert.ok(first.session.candidates.length >= 2,
-    'a warmed Play keeps the rest of the ranked list for instant failover');
-  const next = await pipeline.advance(first.session.id);
-  assert.strictEqual(next.vf.id, standby.vf.id,
-    'advance uses the already-warm standby instead of finding a source from scratch');
-  assert.strictEqual(next.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-NTb');
+  assert.ok(first.session && first.vf, 'Play still starts from the prepared file');
 
   pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
+test('pipeline: with the segment cache on, details save the start instead of only the header', async () => {
+  const { configureSegmentDisk, getSegmentDisk } = require('../server/segment-cache');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-segprep-'));
+  configureSegmentDisk({ dir, enabled: true, maxBytes: 32 * 1024 * 1024 });
+  const pay = seededPayload(2 * 1024 * 1024, 77);
+  const packed = nzbFor(writeRar4Store([{ name: 'Movie.mkv', data: pay }], { base: 'warm1' }), 30000, 'warm1');
+  const mock = createMockNntp({ articles: packed.articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-FLUX', size: 7e9, nzb: packed.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(storeDir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  const bodies = () => [...packed.articles.keys()].reduce((n, id) => n + mock.bodyCount(id), 0);
+  try {
+    const prepared = await pipeline.prepare({ q: 'movie', resumeFrac: 0.5 }, {});
+    assert.ok(prepared.prepared && prepared.vf, 'prepare still mounts one file');
+    const before = bodies();
+    await new Promise((r) => setTimeout(r, 1500));
+    await getSegmentDisk().flush();
+    assert.ok(bodies() > before, 'opening the page fetches the start, the end, and the resume spot');
+    assert.ok(getSegmentDisk().stats().bytes > 0, 'those pieces land on disk');
+    assert.equal(pipeline._findTitleStandby({ q: 'movie' }, {}), null,
+      'that save still does not open a second file');
+  } finally {
+    pool.close();
+    await mock.close();
+    ix.server.close();
+    store.close();
+    configureSegmentDisk({ enabled: false });
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
 });
 
 test('pipeline: next-episode prepare does not mount a standby while another episode is playing', async () => {

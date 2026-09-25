@@ -126,6 +126,28 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-25, v3.2.16 ship — opening a title can save the start, the
+end, and where you left off, and the Android bar shows the loaded stretch:
+
+- Version contract: `package.json` 3.2.16; Android `versionName` 3.2.16 /
+  `versionCode` 393; Windows client package/Tauri/Cargo(.lock) 3.2.16.
+- Segment cache stays off until Settings → Streaming performance turns it
+  on (10 GB lid). Example: you stop a movie at 40:00. Tomorrow, Continue
+  Watching reads those saved pieces from appdata instead of asking Usenet
+  again. The NZB and the RAR map are saved beside it. No new Unraid setting.
+- The Android seek bar draws the pale loaded stretch ahead of the thumb.
+- Gate: `npm.cmd test` 739/739. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.16, household VOD play/seek/resume/CC (house
+  process still reported 3.2.14 because it was started before this bump;
+  Mario ready 3009ms and FROM ready 10699ms were over the 3s budget, SLOW
+  is not a hard fail; both playable, CC 200), household IPTV first-byte
+  + retune (8855 channels; ABC web 1454ms / native 1113ms), household
+  overlapping Play (FROM ready 6ms, Mario ready 13ms), Android lint +
+  unit tests + debug build, Android ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260925-174211.json`, never the Shield). Windows
+  GPU/HDR was not run. Unraid was not updated by this check.
+
 2026-09-25, v3.2.15 ship — a movie stays on the streaming connection
 share instead of opening the whole usenet plan:
 

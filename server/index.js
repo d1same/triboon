@@ -9,6 +9,9 @@ const fs = require('fs');
 const path = require('path');
 const { NntpPool, NntpConnection } = require('./nntp');
 const { mountNzb } = require('./archive');
+const { configureSegmentDisk, getSegmentDisk } = require('./segment-cache');
+const { configureNzbStore } = require('./nzb-store');
+const { configureMountMap } = require('./mount-map');
 const { Store, VerdictCache, scrubOrphanTempDirs } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
@@ -445,10 +448,25 @@ function normalizeStreamingPerformance(raw = {}) {
     // LOW-LANE work (read-ahead/background only; player lanes never share a socket). 0 = off.
     // Capped at 4 — the bench curve flattens past it and deeper stacks make cancels expensive.
     nntpPipelineDepth: clampInt(raw.nntpPipelineDepth, 0, 0, 4),
+    // Disk copy of articles already downloaded. Off until the owner turns it on,
+    // so a small Unraid appdata drive does not fill by surprise.
+    segmentCacheEnabled: raw.segmentCacheEnabled === true,
+    segmentCacheGb: clampInt(raw.segmentCacheGb, 10, 1, 200),
     measuredMbpsPerConn: Math.max(0, Math.min(1000, Number(raw.measuredMbpsPerConn) || 0)),
     measuredConnCap: clampInt(raw.measuredConnCap, 0, 0, 1000),
     connectionMode: raw.connectionMode === 'custom' ? 'custom' : 'auto',
   };
+}
+
+function applyDurableCaches(perf = normalizeStreamingPerformance(settings.get().streamingPerformance || {})) {
+  configureNzbStore(path.join(DATA_DIR, 'nzb-cache'));
+  configureMountMap(path.join(DATA_DIR, 'mount-map'));
+  const gb = perf.segmentCacheGb > 0 ? perf.segmentCacheGb : 10;
+  configureSegmentDisk({
+    dir: path.join(DATA_DIR, 'segment-cache'),
+    enabled: perf.segmentCacheEnabled === true,
+    maxBytes: gb * 1024 * 1024 * 1024,
+  });
 }
 
 function totalProviderConnections(provs = providerList()) {
@@ -637,17 +655,12 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
   };
 }
 
-// Live provider speed + connection-cap probe (powers the "Test speed" button), using its OWN
-// short-lived connections (separate from the playback pool). It opens connections UP TO the count
-// CONFIGURED for this provider (capped at SPEEDTEST_MAX_CONNS for safety) — so it verifies a real
-// plan of ANY size (16, 40, 100, …) instead of a hardcoded ceiling. Opening is connect-only (cheap
-// TCP+TLS+AUTH, no data); if the provider answers "502 too many connections" before reaching the
-// configured count, THAT is the account's true cap. Throughput is then sampled on a small SUBSET of
-// the open connections (no point pulling data on all 100) and reported per-connection so the
-// recommendation can project total throughput honestly. Everything is closed in finally.
+// Live provider speed probe (the "Test speed" button). It opens its own short-lived
+// connections, separate from playback, and never more than a handful. Dialing the
+// whole plan to "find the cap" is what makes the account answer 480. Closed in finally.
 const SPEEDTEST_GROUPS = ['alt.binaries.boneless', 'alt.binaries.teevee', 'alt.binaries.moovee', 'alt.binaries.hdtv', 'alt.binaries.misc'];
-const SPEEDTEST_MAX_CONNS = 120;     // safety ceiling — a mis-typed huge count can't open thousands
-const SPEEDTEST_SAMPLE_CONNS = 12;   // connections used for the throughput sample (representative, not all)
+const SPEEDTEST_MAX_CONNS = 4;      // a speed test must not log into the whole plan
+const SPEEDTEST_SAMPLE_CONNS = 4;   // throughput sample — same handful, then close them
 const speedTestInFlight = new Set(); // provider indices being speed-tested — one at a time per provider
 function isTooManyConnections(e) { return /too many connection|\b502\b/i.test(String((e && e.message) || e)); }
 async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
@@ -702,8 +715,6 @@ async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
       const secs = Math.max(0.1, (Date.now() - t0) / 1000);
       mbsPerConn = sample.length ? (bytes / 1e6 / secs) / sample.length : 0;
     }
-    // Phase B — now open the REST up to the configured count (connect-only) to confirm the real cap.
-    for (let i = conns.length; i < want; i++) { if (!(await openOne())) break; }
     return {
       ok: true, host: p.host,
       configured,
@@ -731,7 +742,10 @@ function getPool() {
   if (pool) pool.close();
   poolKey = key;
   pool = new NntpPool(list, Math.max(...list.map((p) => providerConnections(p.connections))));
-  pool.warm(4); // first play shouldn't pay the cold TLS+AUTH wall
+  // Nothing is playing yet, so keep a single login. Play raises this to the
+  // admin handful. The account plan stays a ceiling, not the number we dial.
+  try { pool.setPlaybackOpenCap(1); } catch {}
+  pool.warm(1); // one login on the first account; do not AUTH every provider at boot
   return pool;
 }
 
@@ -8352,6 +8366,7 @@ Object.assign(H, {
       effectiveSizeCaps: sizeCaps(), // what's actually applied right now (auto-computed or manual)
       maxProviderConnections: MAX_PROVIDER_CONNECTIONS,
       streamingPerformance: normalizeStreamingPerformance(s.streamingPerformance || {}),
+      segmentCache: getSegmentDisk() ? getSegmentDisk().stats() : { enabled: false, bytes: 0, maxBytes: 0, entries: 0 },
       ...scoringForUi(s),
       // Cast receiver app-id is a PUBLIC identifier (it ships to every sender), not a secret — show
       // the raw value so the owner can confirm/change it. Empty string = using the built-in default.
@@ -8691,6 +8706,13 @@ Object.assign(H, {
       clearAllIptvRuntime();
       scheduleIptvWarmSoon('settings');
     }
+    applyDurableCaches();
+  },
+
+  segmentCacheClear: async (ctx) => {
+    const cache = getSegmentDisk();
+    if (cache) await cache.clear();
+    send(ctx.res, 200, { ok: true, segmentCache: cache ? cache.stats() : { enabled: false, bytes: 0 } });
   },
 
   inviteCreate: async (ctx) => {
@@ -10320,6 +10342,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/mount$/, auth: 'admin', h: H.mount },
   { m: 'GET', re: /^\/api\/settings$/, auth: 'admin', h: H.settingsGet },
   { m: 'POST', re: /^\/api\/settings$/, auth: 'admin', h: H.settingsSet },
+  { m: 'POST', re: /^\/api\/segment-cache\/clear$/, auth: 'admin', h: H.segmentCacheClear },
   { m: 'POST', re: /^\/api\/streaming\/recommend$/, auth: 'admin', h: H.streamingRecommend },
   { m: 'POST', re: /^\/api\/test\/provider$/, auth: 'admin', h: H.testProvider },
   { m: 'POST', re: /^\/api\/test\/provider-speed$/, auth: 'admin', h: H.testProviderSpeed },
@@ -11070,6 +11093,7 @@ if (require.main === module) {
     }
     process.exit(1); // exit non-zero so the service wrapper restarts (and retries once the port frees)
   });
+  try { applyDurableCaches(); } catch (e) { console.error('[boot] durable cache setup failed:', e && e.message); }
   server.listen(PORT, () => {
     console.log(`Triboon → http://localhost:${PORT}`);
     console.log(`[triboon] data dir: ${DATA_DIR}`); // where settings/users/secret live — verify it's persistent (e.g. C:\\ProgramData\\Triboon\\data on Windows), NOT inside the install folder

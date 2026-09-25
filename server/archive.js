@@ -14,6 +14,7 @@ const { NzbFileStream, SharedCacheBudget } = require('./vfs');
 const { parseRarVolumes, rar5VolumeInfo, RAR4_SIG, RAR5_SIG } = require('./rar');
 const { parseZip } = require('./zip');
 const { parseFileDescs, headHash, HEAD_HASH_BYTES } = require('./par2');
+const { getMountMap } = require('./mount-map');
 
 const SIG_7Z = Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]);
 const VIDEO_EXT = /\.(mkv|mp4|avi|m4v|ts|webm|mov)$/i;
@@ -443,6 +444,92 @@ class ArchiveVirtualFile {
   }
 }
 
+function rememberArchiveMap(nzbXml, vf) {
+  const store = getMountMap();
+  if (!store || !vf || !Array.isArray(vf.vols) || !vf.vols.length) return;
+  // A multi-file audiobook needs the full inner list. Replaying one file would drop the chapters.
+  if (vf.audioFiles && vf.audioFiles.length > 1) return;
+  const volumes = [];
+  for (const v of vf.vols) {
+    if (!(v && v.name && v.size > 0 && v.partSize > 0)) return;
+    volumes.push({ name: v.name, size: v.size, partSize: v.partSize });
+  }
+  const inner = vf.extents && vf.extents.length ? {
+    name: vf.name,
+    size: vf.size,
+    method: vf.method,
+    encrypted: !!(vf.tags && vf.tags.includes('encrypted')),
+    extents: vf.extents.map((e) => ({ vol: e.vol, offset: e.offset, length: e.length })),
+  } : null;
+  const releaseSubs = (vf.releaseSubs || []).map((sub) => ({
+    public: {
+      id: sub.id, name: sub.name, ext: sub.ext, lang: sub.lang,
+      forced: !!sub.forced, sdh: !!sub.sdh, size: sub.size || 0, score: sub.score || 0, source: 'release',
+    },
+    source: sub._source && Array.isArray(sub._source.extents) ? {
+      name: sub._source.name,
+      size: sub._source.size,
+      method: sub._source.method,
+      encrypted: !!sub._source.encrypted,
+      extents: sub._source.extents,
+    } : null,
+  })).filter((sub) => sub.source);
+  store.put(nzbXml, {
+    v: 1,
+    container: vf.container,
+    method: vf.method,
+    streamable: !!vf.streamable,
+    tags: Array.isArray(vf.tags) ? vf.tags : [],
+    volumes,
+    inner,
+    releaseSubs,
+  });
+}
+
+async function mountFromSavedMap(pool, nzbXml, candidates, opts, password) {
+  const store = getMountMap();
+  if (!store) return null;
+  const saved = store.get(nzbXml);
+  if (!saved || saved.v !== 1 || !Array.isArray(saved.volumes) || !saved.volumes.length) return null;
+  const byName = new Map();
+  for (const f of candidates) {
+    if (f && f.name && !byName.has(f.name)) byName.set(f.name, f);
+  }
+  const ordered = [];
+  for (const vol of saved.volumes) {
+    const file = byName.get(vol.name);
+    if (!file || !(vol.size > 0) || !(vol.partSize > 0)) return null;
+    ordered.push(file);
+  }
+  const sharedCacheBudget = new SharedCacheBudget(opts.cacheBytes);
+  const vols = ordered.map((f) => new NzbFileStream(pool, f, opts));
+  for (let i = 0; i < vols.length; i++) {
+    vols[i].size = saved.volumes[i].size;
+    vols[i].partSize = saved.volumes[i].partSize;
+    vols[i].setSharedCacheBudget(sharedCacheBudget);
+  }
+  try {
+    await Promise.all(vols.map((v) => v.mount()));
+  } catch {
+    return null;
+  }
+  const inner = saved.inner && Array.isArray(saved.inner.extents) ? saved.inner : null;
+  const releaseSubs = (saved.releaseSubs || []).filter((sub) => sub && sub.public && sub.source).map((sub) => ({
+    ...sub.public,
+    _source: sub.source,
+  }));
+  return new ArchiveVirtualFile({
+    vols,
+    inner,
+    container: saved.container,
+    method: saved.method,
+    streamable: !!saved.streamable,
+    tags: Array.isArray(saved.tags) ? saved.tags : [],
+    password,
+    releaseSubs,
+  });
+}
+
 // Mount any NZB: flat post, RAR set, ZIP, or 7z. Returns a virtual file exposing
 // { id, name, size, container, method, streamable, tags, read(), triage(), segmentCount }.
 async function mountNzb(pool, nzbXml, opts = {}) {
@@ -454,7 +541,14 @@ async function mountNzb(pool, nzbXml, opts = {}) {
     bytes: f.segments.reduce((s, x) => s + x.bytes, 0),
   }));
 
+  const reused = await mountFromSavedMap(pool, nzbXml, candidates, opts, password);
+  if (reused) return reused;
+
   const volumeEntries = orderVolumes(candidates);
+  const doneArchive = (vf) => {
+    rememberArchiveMap(nzbXml, vf);
+    return vf;
+  };
   // Two obfuscation signatures: (a) one or zero named volumes next to several anonymous slices;
   // (b) a hash.NN set whose NN is NOT the volume order (.10 was really part45). Both get the
   // real order proven from the par2 / RAR5 headers before the RAR walk; a plain .partNN.rar set
@@ -497,18 +591,18 @@ async function mountNzb(pool, nzbXml, opts = {}) {
     const media = sniffRawMedia(head);
     if (media && vols.length >= 2) {
       const inner = concatenatedVolumeInner(vols, opts.releaseName || vols[0].name);
-      return new ArchiveVirtualFile({
+      return doneArchive(new ArchiveVirtualFile({
         vols, inner, container: 'flat-split', method: 'store', streamable: true, tags: [], password,
-      });
+      }));
     }
     return mountFlat(pool, nzb, opts); // named like an archive, isn't one
   }
 
   if (kind === '7z') {
-    return new ArchiveVirtualFile({
+    return doneArchive(new ArchiveVirtualFile({
       vols, inner: null, container: '7z', method: null, streamable: false,
       tags: ['unsupported-container'], password,
-    });
+    }));
   }
 
   const parsed = kind === 'zip' ? await parseZip(vols[0]) : await parseRarVolumes(vols);
@@ -526,20 +620,20 @@ async function mountNzb(pool, nzbXml, opts = {}) {
   }
 
   if (parsed.headersEncrypted) {
-    return new ArchiveVirtualFile({
+    return doneArchive(new ArchiveVirtualFile({
       vols, inner: null, container, method: null, streamable: false,
       tags: ['encrypted', 'headers-encrypted'], password,
-    });
+    }));
   }
 
   // Scene posts often wrap a RAR volume set (.rar/.r00) inside another store RAR. The outer
   // members are 50MB slices, not the video — unwrap one nested archive so Play gets the mkv.
   const nested = await unwrapNestedArchive(vols, parsed.files, opts);
   if (nested && nested.unstreamable) {
-    return new ArchiveVirtualFile({
+    return doneArchive(new ArchiveVirtualFile({
       vols, inner: null, container: nested.container, method: null, streamable: false,
       tags: nested.tags, password,
-    });
+    }));
   }
 
   const inner = (nested && nested.inner) || pickInner(parsed.files, opts.wantedEpisode, opts.releaseName);
@@ -556,11 +650,11 @@ async function mountNzb(pool, nzbXml, opts = {}) {
   // Multi-file audiobook packed in the archive → expose every inner audio track as a playlist so the
   // client plays from track 1, not whichever single file pickInner chose (which "started mid-book").
   const audioInner = audioInnerCandidates(pickFiles);
-  return new ArchiveVirtualFile({
+  return doneArchive(new ArchiveVirtualFile({
     vols, inner, container: (nested && nested.container) || container, method: inner.method, streamable, tags, password,
     releaseSubs: releaseSubCandidates(pickFiles, inner.name),
     audioFiles: audioInner.length > 1 ? audioInner : null,
-  });
+  }));
 }
 
 async function unwrapNestedArchive(outerVols, outerFiles, opts = {}) {

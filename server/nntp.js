@@ -377,8 +377,9 @@ class NntpConnection {
 
   async stat(msgId, opts = {}) {
     const r = await this._cmd(`STAT <${msgId.replace(/[<>]/g, '')}>`, false, opts);
-    if (r.status.startsWith('223')) return true;
     if (isAuthLostStatus(r.status)) throw this._authLost('STAT', r.status);
+    this.served = true; // a real answer means this login worked; a 480 before this is the account
+    if (r.status.startsWith('223')) return true;
     // Only "no such article" is a real "missing". Any other reply (500 command unknown, 503
     // fault, 400 shutting down) is the SERVER'S problem and must not be cached as a dead source.
     if (r.status.startsWith('430') || r.status.startsWith('423')) return false;
@@ -391,10 +392,12 @@ class NntpConnection {
     const r = await this._cmd(`BODY <${msgId.replace(/[<>]/g, '')}>`, true, opts);
     if (!r.status.startsWith('222')) {
       if (isAuthLostStatus(r.status)) throw this._authLost('BODY', r.status);
+      this.served = true;
       const err = new Error(`BODY ${msgId}: ${r.status}`);
       err.code = r.status.slice(0, 3);
       throw err;
     }
+    this.served = true;
     return r.body;
   }
 
@@ -483,7 +486,8 @@ class ProviderPool {
   }
 
   _admitConn(c) {
-    if (this.closed || this.conns.length >= this.size) {
+    const limit = this._playbackCap() ? this._openLimit() : this.size;
+    if (this.closed || this.conns.length >= limit) {
       try { c.close(); } catch {}
       return false;
     }
@@ -507,7 +511,8 @@ class ProviderPool {
       target = 1;
       if (this.size < 1) this.size = 1;
     }
-    const want = Math.min(target, this.size);
+    const room = this._playbackCap() ? this._openLimit() : target;
+    const want = Math.min(target, this.size, room);
     while (!this.closed && this.conns.length + this.connecting < want && this.connecting < CONNECT_BURST) {
       this.connecting++;
       const c = new NntpConnection(this.opts);
@@ -607,7 +612,7 @@ class ProviderPool {
       return true;
     });
     if (this.queue.length && this.conns.length === 0 && this.connecting === 0 && this.down()) {
-      this._ensure(); // give the breaker a throttled half-open probe before failing work over
+      this._ensure(this._openLimit()); // give the breaker a throttled half-open probe before failing work over
       if (this.connecting > 0) return; // probing — its resolve (recovered) / reject (still down) re-pumps
       const q = this.queue; this.queue = [];
       const err = this.lastErr || new Error('provider temporarily unavailable');
@@ -628,7 +633,15 @@ class ProviderPool {
       this.conns = this.conns.filter((c) => c.alive);
     }
     const ceiling = this._playbackCap() ? limit : this.size;
-    if (this.queue.length && this.conns.length + this.connecting < ceiling) this._ensure(ceiling);
+    // One queued article is one login. The admin share is the ceiling once that
+    // many articles are actually waiting — not a reason to AUTH 12 sockets for
+    // a single STAT. Opening the whole share on the first command is what made
+    // Easynews and Eweka answer 480 before the movie had started.
+    let pending = 0;
+    for (const t of this.queue) if (!signalAborted(t.signal)) pending++;
+    const openNow = this.conns.length + this.connecting;
+    const need = Math.min(ceiling, Math.max(openNow, pending));
+    if (pending && openNow < need) this._ensure(need);
     // Active-player connection reserve: read-ahead/background must NEVER occupy the last
     // `reserve` idle connections. Otherwise read-ahead (up to maxConnPerStream) saturates the
     // pool and the next-needed PLAYBACK segment waits for a read-ahead fetch to finish to get a
@@ -648,7 +661,10 @@ class ProviderPool {
       // queued work IS active-player work (startup/seek/playback), which may use the whole pool.
       if (reserve > 0 && !this._hasActivePlayerWorkQueued()) {
         const idleFree = this.conns.reduce((n, x) => n + ((x.alive && !this.busy.has(x)) ? 1 : 0), 0);
-        if (idleFree <= reserve) break;
+        const alive = this.conns.reduce((n, x) => n + (x.alive ? 1 : 0), 0);
+        // Keep the spare sockets idle for the player. If every socket is inside
+        // that spare, the article would wait forever — do the work instead.
+        if (idleFree <= reserve && idleFree < alive) break;
       }
       const task = this._shiftTask();
       if (!task) break;
@@ -716,6 +732,9 @@ class ProviderPool {
           if (e && e.code === 'NNTP_STALL' && this.preferPeerFailover) task.reject(e);
           // Account refusing work: a retry here would only buy another rejected login. Hand the
           // article to the next provider now.
+          // A brand-new socket that 480s never finished a command. Logging in
+          // again on the same account is a second strike, not a retry.
+          else if (e && e.code === 'NNTP_AUTH_LOST' && this.preferPeerFailover && !(c && c.served)) task.reject(e);
           else if (e && e.code === 'NNTP_AUTH_LOST' && this.preferPeerFailover && (this.authBroken() || this.authCapped)) task.reject(e);
           else { task.retried = true; this.queue.push(task); }
         } else task.reject(e);
@@ -741,8 +760,9 @@ class ProviderPool {
     return best === -1 ? null : this.queue.splice(best, 1)[0];
   }
 
-  // 0 means nothing is playing, so idle health may still use the account plan.
-  // A positive cap is the household total for every usenet account together.
+  // 0 is tests and tools only: they may use the pool size they passed in.
+  // A real server always sets a positive cap (one viewer's admin share).
+  // That cap is the household total for every usenet account together.
   _playbackCap() {
     if (typeof this.playbackOpenCap !== 'function') return 0;
     const n = Number(this.playbackOpenCap());
@@ -817,8 +837,14 @@ class NntpPool {
     }
   }
 
-  // Warm every provider (combined mode uses them all) — primary a bit deeper than the rest.
-  warm(n = 4) { this.providers.forEach((p, i) => p.warm(i === 0 ? n : Math.min(2, n))); }
+  // One account, one socket, until a movie actually needs more. Warming every
+  // provider at boot (4 + 2 + 2 + 2) left idle logins on Easynews and Eweka
+  // before anyone pressed play. A single-provider pool can still warm `n`.
+  warm(n = 1) {
+    if (!this.providers.length) return;
+    if (this.providers.length === 1) this.providers[0].warm(n);
+    else this.providers[0].warm(1);
+  }
 
   // While a movie or show is playing, this is how many usenet lines the whole
   // house may hold open. Local library files never set it. 0 clears the cap.
@@ -829,6 +855,11 @@ class NntpPool {
     for (const p of this.providers) {
       p.playbackOpenCap = () => self._playbackOpenCap;
       p.householdOpen = () => self.providers.reduce((sum, x) => sum + x.conns.length + (x.connecting || 0), 0);
+    }
+    // Drop idle logins that are already over the new share. Waiting for the
+    // next article is how a previous play left 40 sockets up.
+    for (const p of this.providers) {
+      try { p._pump(); } catch {}
     }
   }
 
@@ -891,7 +922,11 @@ class NntpPool {
   }
 
   _parallelStat(msgId, priority, opts = {}) {
-    const providers = this._ordered(opts.needSlots).filter((p) => !this.missCache.has(p, msgId));
+    const ordered = this._ordered(opts.needSlots).filter((p) => !this.missCache.has(p, msgId));
+    const alreadyIn = ordered.filter((p) => (p.conns || []).some((c) => c.alive));
+    // Reuse logins we already hold. A cold check opens one new login, not one
+    // per account. Four simultaneous AUTHs for one STAT is a throttle.
+    const providers = alreadyIn.length ? alreadyIn : ordered.slice(0, 1);
     if (!providers.length) return Promise.resolve(false);
     // The caller's abort only stops WAITING. The STATs themselves run to completion: a STAT
     // answers in one round trip, hard-aborting the losers would destroy their connections
@@ -975,12 +1010,17 @@ class NntpPool {
       const armHedge = () => {
         clearHedge();
         if (idx >= ordered.length) return; // no more providers to speculate onto
+        // Only player lanes reach this function. Health and read-ahead stay on
+        // one provider until it actually fails, so a slow check does not log in next.
         hedgeTimer = setTimeout(() => { hedgeTimer = null; startNext(); }, hedgeMs);
         if (hedgeTimer && hedgeTimer.unref) hedgeTimer.unref();
       };
-      const startNext = () => {
+      const startNext = (allowNewLogin = true) => {
         if (settled) return;
         while (idx < ordered.length && this.missCache.has(ordered[idx], msgId)) idx++;
+        if (!allowNewLogin) {
+          while (idx < ordered.length && !(ordered[idx].conns || []).some((c) => c.alive)) idx++;
+        }
         if (idx >= ordered.length) {
           if (pending === 0) settle(() => reject(lastErr || new Error('no usenet provider could serve the article')));
           return;

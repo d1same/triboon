@@ -38,13 +38,21 @@ Settings -> Streaming performance owns the capacity profile:
 | Per-stream 1080p / 4K connections | Maximum article window for one active stream | Used as the hard ceiling in Custom. Auto sizes from bandwidth + who is behind, but still honors these numbers as a ceiling when set. |
 | Startup reserve | Percentage of usable connections held back | Keeps new starts and seeks responsive. |
 | Device preload | MB of opening bytes an Android TV may pre-cache ahead of press-play (detail open + Up Next) | Direct-play mounts only; `/api/prepare` offers a tokened prefetch target within this budget, the shell stores it in a 100MB on-device LRU, and press-play buffers its first seconds from disk. 0 disables. |
+| Segment cache | Off, or on with a GB lid (default 10) | Off until the owner turns it on. When on, opening a title saves the start, the end, and the Continue Watching spot under `TRIBOON_DATA/segment-cache`, plus any article already fetched. RAM still holds the playhead. Oldest pieces are deleted when the lid is crossed. Clear wipes the folder. |
 | NNTP pipelining | Article requests each provider connection keeps on the wire for read-ahead/background work | Low lanes only — startup/seek/playback/health never share a socket, and stacking stands down while player work is queued. Rides provider pool opts; saving rebuilds pools live. Bench: ~2.2x per-connection read-ahead throughput at depth 4 on a latency-dominated provider. |
 
 Provider connection limits are saved per usenet account and currently cap at
 150. A 100-connection plan should be entered as 100; Triboon still decides how
-many to use per stream. While a movie or show is playing, open sockets across
-every account together stay at that stream share. A local library file is read
-from disk and does not open usenet lines or take a share.
+many to use per stream. That per-stream share is the open-socket ceiling once someone presses Play.
+One queued article opens one login. The share fills only when that many
+articles are actually waiting. Looking at a details page or a Continue
+Watching card does not download the movie and does not log into every
+account. With nothing playing, only one login may be open. Boot logs into
+the first account once. A slow health or read-ahead check does not log into
+the next account. A movie that is waiting still may, so one slow provider
+does not hold the picture. While a movie or show is playing, open sockets across every account
+together stay at that stream share. A local library file is read from disk
+and does not open usenet lines or take a share.
 
 ## Runtime Flow
 
@@ -359,8 +367,16 @@ segments are not a fixed size, so a segment-only cache can be safe on one
 release and dangerous on a large 4K remux.
 
 This keeps hot streams buffered while preserving connection room for another
-user's first frame or seek. A future disk-backed multi-minute buffer is allowed,
-but it must preserve the same reserve and priority rules.
+user's first frame or seek. The disk segment cache, when the owner turns it on,
+stores decoded articles after they arrive in RAM. Writes are behind the play
+path. Cache fills do not open extra NNTP sockets and do not use the playback
+lane. With the segment cache off, a details page still does not download
+the movie. With it on, that page saves the start, the end, and the Continue
+Watching spot into the cache, still on the read-ahead lane and still one file.
+The next Play of the same articles reads disk, then RAM, before asking Usenet. The NZB XML and the
+RAR/ZIP map are saved beside it (`nzb-cache`, `mount-map`) so a repeat mount
+skips the header walk. Those two stores stay small. They do not assemble a
+movie file on disk.
 
 Normal completed HTTP ranges keep their warm read-ahead alive. This matters for
 Android ExoPlayer and browsers that request sequential ranges: treating every

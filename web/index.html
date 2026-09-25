@@ -4986,6 +4986,14 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <div class="settingsRow">
         <label class="settingsControl"><span>Start/seek reserve</span><input id="perfReserve" type="number" min="10" max="50" inputmode="numeric" placeholder="% of connections"></label>
       </div>
+      <div class="settingsRow">
+        <label class="settingsControl"><span>Segment cache</span><select id="perfSegCache">
+          <option value="off">Off</option>
+          <option value="on">On — keep watched pieces on disk</option>
+        </select></label>
+        <label class="settingsControl"><span>Cache size GB</span><input id="perfSegGb" type="number" min="1" max="200" inputmode="numeric" placeholder="10"></label>
+      </div>
+      <p class="hint">Off until you turn it on. Opening a movie then saves the start, the end, and where you left off, up to this size, in the appdata folder. When it fills, the oldest pieces are deleted. The next seconds of the movie still live in memory. Example: you stop at 40:00 and come back tomorrow. Play reads the disk copy instead of asking Usenet again.</p>
       <p class="hint" id="perfConnHint">Auto uses only as many sockets as the movie needs for the current Usenet speed. Slow evening sockets add more; a full home download pipe does not. Cache stays inside about 20% of this box's RAM.</p>
     </div>
     <div class="settingsActions">
@@ -4993,6 +5001,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <button class="btn ghost" id="perfSpeed" title="Measures real per-connection speed and your provider's connection cap. Best run when nobody is watching.">Test provider speed</button>
       <button class="btn ghost" id="perfApply" disabled>Apply recommendation</button>
       <button class="btn ghost" id="perfSave">Save custom</button>
+      <button class="btn ghost" id="perfSegClear" type="button">Clear segment cache</button>
     </div>
     <div class="hint settingsStatus" id="perfStatus"></div>
     <div class="hint settingsStatus" id="perfSpeedResult"></div>
@@ -6924,7 +6933,7 @@ function maybeRepaintHomeNextUp(items) {
   if (!missing && (!pendingKey || have.has(pendingKey))) return;
   publishHomeRows(homeRowsFromWatch(cachedWatchRowsForHome(), false), { preserveFocus: true, focusSnapshot: homeFocusSnapshot() });
   for (const it of (items || [])) {
-    if (it && it._nextEp) preparePlaybackSource(it, 0);
+    if (it && it._nextEp) preparePlaybackSource(it, 900);
   }
 }
 // Build the Continue Watching cards from a /api/watch payload (next-episode bumps only when
@@ -8425,10 +8434,11 @@ function preparePlaybackSource(it, delay = 900) {
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
   startLocalPlaybackLookup(it);
+  if (playbackIsWarmed(it, qRank)) return;
   if (delay <= 0) markPlaybackPrepared(it, qRank);
   clearTimeout(prepareTimer);
   prepareTimer = setTimeout(() => {
-    if (delay > 0) markPlaybackPrepared(it, qRank);
+    markPlaybackPrepared(it, qRank);
     api('/api/prepare', { method: 'POST', body: playbackRequestBody(it, null, qRank) }).then(maybeNativePrefetch).catch(() => {});
   }, delay);
 }
@@ -26442,6 +26452,8 @@ function perfFormValues() {
     devicePreloadMb: (() => { const v = parseInt($('perfPreload').value, 10); return Number.isFinite(v) ? Math.max(0, Math.min(64, v)) : 12; })(),
     // Read-ahead requests each provider connection keeps on the wire (0 = classic one-at-a-time).
     nntpPipelineDepth: (() => { const v = parseInt($('perfPipeline').value, 10); return Number.isFinite(v) ? Math.max(0, Math.min(4, v)) : 0; })(),
+    segmentCacheEnabled: !!($('perfSegCache') && $('perfSegCache').value === 'on'),
+    segmentCacheGb: (() => { const v = parseInt($('perfSegGb') && $('perfSegGb').value, 10); return Number.isFinite(v) ? Math.max(1, Math.min(200, v)) : 10; })(),
   };
 }
 function setPerfForm(p = {}) {
@@ -26460,6 +26472,8 @@ function setPerfForm(p = {}) {
   syncConnModeUi();
   $('perfPreload').value = p.devicePreloadMb ?? 12;
   $('perfPipeline').value = p.nntpPipelineDepth ?? 0;
+  if ($('perfSegCache')) $('perfSegCache').value = p.segmentCacheEnabled ? 'on' : 'off';
+  if ($('perfSegGb')) $('perfSegGb').value = p.segmentCacheGb ?? 10;
 }
 function perfSetApplyEnabled(on) {
   const b = $('perfApply');
@@ -27220,6 +27234,11 @@ $('perfApply').addEventListener('click', async () => {
   S.perfRecommendation = null;
   perfSetApplyEnabled(false);
   toast('Streaming recommendation applied');
+  refreshSettings({ force: true });
+});
+if ($('perfSegClear')) $('perfSegClear').addEventListener('click', async () => {
+  await api('/api/segment-cache/clear', { method: 'POST', body: {} });
+  toast('Segment cache cleared');
   refreshSettings({ force: true });
 });
 $('perfSave').addEventListener('click', async () => {
@@ -28293,16 +28312,9 @@ function focusCard(ri, ci, opts = {}) {
     else if (view.hasHero) setHero(it);
     else { S.focusedItem = it; setBackdrop(it.backdrop || it.poster); setBdInfo(it); }
   }
-  // Resume should feel like a local file: when a resumable card (Continue Watching / next
-  // episode / has a saved position) settles under focus, warm the best source all the way to a
-  // MOUNTED state — not just the search. Scene TV releases are almost always multi-volume RARs,
-  // and parseRarVolumes walks every volume's header before the mount returns (measured multiple
-  // seconds at real provider RTT; see bench/resume-latency.js), so search-only warming still left
-  // a long press-play→start gap. preparePlaybackSource searches AND mounts the top candidate;
-  // pressing OK (or resuming from the card menu) then reuses that live mount instantly. Debounced
-  // to the settled card (single shared prepareTimer → only one mount in flight), and play() joins
-  // an in-flight prepare rather than duplicating it. Skipped when a local copy already fits.
-  // Never start a usenet mount under the Android TV splash — wait until bootReady.
+  // A focused Continue Watching / resume card warms immediately so press-play
+  // reuses the mount. The server does not log into usenet until Play, and it
+  // does not download the movie. Never start that under the splash.
   if (!S._booting && it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) preparePlaybackSource(it, 0);
   maybeLoadMoreHomeRow(view.root, ri);
 }

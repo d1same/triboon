@@ -7,6 +7,7 @@
 const { decode } = require('./yenc');
 const { parseNzb, pickPrimaryFile, fileNameFromSubject } = require('./nzb');
 const { streamStartupNeedSlots } = require('./nntp');
+const { getSegmentDisk } = require('./segment-cache');
 const crypto = require('crypto');
 
 const DEFAULT_CACHE_BYTES = 128 * 1024 * 1024;
@@ -249,7 +250,7 @@ class NzbFileStream {
     return Math.min(Math.floor(offset / this.partSize), this.segments.length - 1);
   }
 
-  _cachePut(i, buf) {
+  _cachePut(i, buf, { persist = true } = {}) {
     this.sliceCache.delete(i);
     if (this.cache.has(i)) return;
     if (this.cache.size === 0 && this.cacheOrder.length === 0 && this.cacheBytes !== 0) {
@@ -260,6 +261,17 @@ class NzbFileStream {
     this.cacheOrder.push(i);
     if (this.sharedCacheBudget) this.sharedCacheBudget.add(this, i, buf.length);
     this.trimCache();
+    if (!persist) return;
+    const disk = getSegmentDisk();
+    const msgId = this.segments[i] && this.segments[i].msgId;
+    if (disk && disk.enabled && msgId) {
+      disk.put(msgId, buf, { size: this.size, partSize: this.partSize });
+    }
+  }
+
+  _applyDiskMeta(hit) {
+    if (hit && this.size == null && Number.isFinite(hit.size) && hit.size > 0) this.size = hit.size;
+    if (hit && this.partSize == null && Number.isFinite(hit.partSize) && hit.partSize > 0) this.partSize = hit.partSize;
   }
 
   _cacheDrop(i, { fromSharedBudget = false } = {}) {
@@ -296,6 +308,26 @@ class NzbFileStream {
   }
 
   _fetchSegment(i, priority = 'playback', opts = {}) {
+    if (this.cache.has(i)) return Promise.resolve(this.cache.get(i));
+    const signal = opts.signal || null;
+    if (signalAborted(signal)) return Promise.reject(abortError());
+    const disk = getSegmentDisk();
+    const msgId = this.segments[i] && this.segments[i].msgId;
+    if (disk && disk.enabled && msgId) {
+      return disk.get(msgId).then((hit) => {
+        if (!hit || !hit.data || !hit.data.length) return this._fetchSegmentNet(i, priority, opts);
+        // Return the whole article. read() slices from `from` when the segment is in RAM.
+        // Returning a tail here as well would skip those bytes twice.
+        this._applyDiskMeta(hit);
+        this._cachePut(i, hit.data, { persist: false });
+        this.playbackStats.diskHits = (this.playbackStats.diskHits || 0) + 1;
+        return hit.data;
+      }).catch(() => this._fetchSegmentNet(i, priority, opts));
+    }
+    return this._fetchSegmentNet(i, priority, opts);
+  }
+
+  _fetchSegmentNet(i, priority = 'playback', opts = {}) {
     if (this.cache.has(i)) return Promise.resolve(this.cache.get(i));
     const signal = opts.signal || null;
     if (signalAborted(signal)) return Promise.reject(abortError());

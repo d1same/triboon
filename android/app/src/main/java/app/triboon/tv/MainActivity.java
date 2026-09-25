@@ -29,7 +29,9 @@ import android.graphics.Color;
 import android.graphics.Outline;
 import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
 import android.media.AudioManager;
@@ -3309,8 +3311,7 @@ public class MainActivity extends Activity {
         nativeSeek.setFocusable(true);
         nativeSeek.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         nativeSeek.setPadding(dp(4), 0, dp(4), 0);
-        nativeSeek.setProgressTintList(ColorStateList.valueOf(0xFFC13BD6));
-        nativeSeek.setProgressBackgroundTintList(ColorStateList.valueOf(0x55F3EFF7));
+        styleNativeSeekTrack();
         nativeSeek.setThumbTintList(ColorStateList.valueOf(0xFFF9F4FF));
         nativeSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -5833,6 +5834,11 @@ public class MainActivity extends Activity {
             nativeSeek.setVisibility(isLive ? View.GONE : View.VISIBLE);
             nativeSeek.setProgress(!isLive && dur > 0 ? (int) Math.min(1000, Math.max(0, (pos * 1000) / dur)) : 0);
         }
+        // Lighter stretch ahead of the thumb. ExoPlayer already knows this; stats show it as
+        // "Ns ahead". Primary progress stays the watched point. Secondary is the loaded end.
+        int loaded = isLive ? 0 : nativeBufferedSeekProgress();
+        if (loaded < nativeSeek.getProgress()) loaded = nativeSeek.getProgress();
+        nativeSeek.setSecondaryProgress(loaded);
         boolean isVideo = "video".equals(nativeMode);
         if (nativeGuideBtn != null) nativeGuideBtn.setVisibility(View.VISIBLE);
         if (nativeAboutBtn != null) nativeAboutBtn.setVisibility(isLive || !nativeAboutAvailable ? View.GONE : View.VISIBLE);
@@ -7828,6 +7834,47 @@ public class MainActivity extends Activity {
         long buf = nativePlayer.getBufferedPosition();
         if (pos == C.TIME_UNSET || buf == C.TIME_UNSET || buf < pos) return 0L;
         return Math.max(0L, buf - pos);
+    }
+
+    // Magenta is the watched point. The pale stretch is how far the TV has loaded.
+    // A custom track is required: the device theme's seek bar often hides secondary progress.
+    private void styleNativeSeekTrack() {
+        float radius = dp(2);
+        GradientDrawable background = nativeSeekTrack(0x55F3EFF7, radius);
+        GradientDrawable loaded = nativeSeekTrack(0xCCF3EFF7, radius);
+        GradientDrawable played = nativeSeekTrack(0xFFC13BD6, radius);
+        ClipDrawable loadedClip = new ClipDrawable(loaded, android.view.Gravity.START, ClipDrawable.HORIZONTAL);
+        ClipDrawable playedClip = new ClipDrawable(played, android.view.Gravity.START, ClipDrawable.HORIZONTAL);
+        LayerDrawable layers = new LayerDrawable(new android.graphics.drawable.Drawable[] { background, loadedClip, playedClip });
+        layers.setId(0, android.R.id.background);
+        layers.setId(1, android.R.id.secondaryProgress);
+        layers.setId(2, android.R.id.progress);
+        int insetV = dp(12);
+        layers.setLayerInset(0, 0, insetV, 0, insetV);
+        layers.setLayerInset(1, 0, insetV, 0, insetV);
+        layers.setLayerInset(2, 0, insetV, 0, insetV);
+        nativeSeek.setProgressDrawable(layers);
+        nativeSeek.setSplitTrack(false);
+    }
+
+    private GradientDrawable nativeSeekTrack(int color, float radius) {
+        GradientDrawable track = new GradientDrawable();
+        track.setShape(GradientDrawable.RECTANGLE);
+        track.setColor(color);
+        track.setCornerRadius(radius);
+        return track;
+    }
+
+    // 0–1000 on the same clock as the thumb. Remux playback adds the file start
+    // offset, because ExoPlayer's buffer is measured from the remux, not the movie.
+    private int nativeBufferedSeekProgress() {
+        if (nativePlayer == null) return 0;
+        long durMs = nativeDurationMs();
+        if (durMs <= 0L || durMs == C.TIME_UNSET) return 0;
+        long buf = nativePlayer.getBufferedPosition();
+        if (buf == C.TIME_UNSET || buf < 0L) return 0;
+        long displayBufMs = Math.max(nativeDisplayPositionMs(), nativeStartOffsetMs + buf);
+        return (int) Math.min(1000L, Math.max(0L, (displayBufMs * 1000L) / durMs));
     }
 
     private long nativeBandwidthEstimate() {

@@ -908,6 +908,67 @@ test('nntp: an account that answers 480 on fresh logins trips a breaker — othe
   }
 });
 
+test('nntp: a cold startup probe logs into one account, not every account', async () => {
+  const { articles } = makeRelease('Probe.One.mkv', 64 * 1024, 64 * 1024);
+  const id = [...articles.keys()][0];
+  const a = createMockNntp({ articles: new Map(), latencyMs: 200 });
+  const b = createMockNntp({ articles });
+  const [pa, pb] = await Promise.all([a.listen(), b.listen()]);
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: pa, tls: false, connections: 20 },
+    { host: '127.0.0.1', port: pb, tls: false, connections: 20 },
+  ], 20);
+  try {
+    const pending = pool.stat(id, 'startup', { parallel: true });
+    await new Promise((r) => setTimeout(r, 80));
+    assert.ok(a.connCount() <= 1, `first account opened ${a.connCount()} logins for one STAT`);
+    assert.strictEqual(b.connCount(), 0, 'the second account must stay logged out until the first misses');
+    await pending;
+  } finally {
+    pool.close();
+    await a.close();
+    await b.close();
+  }
+});
+
+test('nntp: one article does not log into the whole stream share', async () => {
+  const { articles } = makeRelease('One.Login.mkv', 64 * 1024, 64 * 1024);
+  const id = [...articles.keys()][0];
+  const mock = createMockNntp({ articles, latencyMs: 300 });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 40);
+  pool.setPlaybackOpenCap(12);
+  try {
+    const job = pool.body(id, 'playback');
+    await new Promise((r) => setTimeout(r, 120));
+    assert.ok(mock.connCount() <= 1, `one article opened ${mock.connCount()} logins`);
+    await job;
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('nntp: boot warms one account, not every plan', async () => {
+  const a = createMockNntp({ articles: new Map() });
+  const b = createMockNntp({ articles: new Map() });
+  const [pa, pb] = await Promise.all([a.listen(), b.listen()]);
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: pa, tls: false, connections: 40 },
+    { host: '127.0.0.1', port: pb, tls: false, connections: 60 },
+  ], 60);
+  try {
+    pool.warm(4);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(a.connCount() <= 1, `boot opened ${a.connCount()} logins on the first account`);
+    assert.strictEqual(b.connCount(), 0, 'boot must not log into the second account');
+  } finally {
+    pool.close();
+    await a.close();
+    await b.close();
+  }
+});
+
 test('nntp: the startup probe STATs every provider at once — one round trip decides, losers are not aborted', async () => {
   const { articles } = makeRelease('Probe.Fast.mkv', 64 * 1024, 64 * 1024);
   const id = [...articles.keys()][0];

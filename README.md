@@ -95,6 +95,12 @@ This is the usual home-server path.
 3. Map `/data` -> `/mnt/user/appdata/triboon`.
 4. Open `http://<unraid-ip>:7777` and create the owner account.
 
+No extra Unraid setting is required for the segment cache. It stays off until
+you turn it on under Settings → Streaming performance. When it is on, opening
+a movie saves the start, the end, and where you left off in that same `/data`
+folder, up to the size you set (10 GB is the starting lid). The oldest pieces
+are deleted when it fills.
+
 Optional: map a media share to `/media` as read-only for local libraries.
 
 Recommended environment:
