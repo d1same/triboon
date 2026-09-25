@@ -42,7 +42,9 @@ Settings -> Streaming performance owns the capacity profile:
 
 Provider connection limits are saved per usenet account and currently cap at
 150. A 100-connection plan should be entered as 100; Triboon still decides how
-many to use per stream.
+many to use per stream. While a movie or show is playing, open sockets across
+every account together stay at that stream share. A local library file is read
+from disk and does not open usenet lines or take a share.
 
 ## Runtime Flow
 

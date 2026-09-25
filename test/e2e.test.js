@@ -1201,6 +1201,24 @@ test('nntp: read-ahead never takes the last connection — the active player alw
   await mock.close();
 });
 
+test('nntp: a playing movie stays at the stream share instead of the account plan', async () => {
+  const { articles } = makeRelease('Cap.Test.mkv', 20 * 64 * 1024, 64 * 1024);
+  const ids = [...articles.keys()];
+  const mock = createMockNntp({ articles, latencyMs: 400 });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 40);
+  pool.setPlaybackOpenCap(8);
+  try {
+    const jobs = ids.slice(0, 20).map((id) => pool.body(id, 'playback'));
+    await new Promise((r) => setTimeout(r, 700));
+    assert.ok(mock.connCount() <= 8, `one movie opened ${mock.connCount()} lines on a 40-line account`);
+    await Promise.all(jobs);
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
 test('nntp: connections dropped while idle are replaced transparently on the next read', async () => {
   const { data, articles, nzb } = makeRelease('Idle.Test.mkv', 128 * 1024, 64 * 1024);
   const mock = createMockNntp({ articles });

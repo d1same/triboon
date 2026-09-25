@@ -614,7 +614,21 @@ class ProviderPool {
       for (const t of q) { if (typeof t.cleanupAbort === 'function') t.cleanupAbort(); t.reject(err); }
       return;
     }
-    if (this.queue.length && this.conns.length + this.connecting < this.size) this._ensure();
+    // A movie follows Streaming settings, not the account maximum. One title
+    // used to dial every line the plan allows (50 on Eweka, 40 on the next
+    // account) because any queued article grew the pool to this.size.
+    const limit = this._openLimit();
+    if (this._playbackCap() && this.conns.length > limit) {
+      for (const c of this.conns) {
+        if (this.conns.filter((x) => x.alive).length <= limit) break;
+        if (!c.alive || this.busy.has(c)) continue;
+        try { c.close(); } catch {}
+        c.alive = false;
+      }
+      this.conns = this.conns.filter((c) => c.alive);
+    }
+    const ceiling = this._playbackCap() ? limit : this.size;
+    if (this.queue.length && this.conns.length + this.connecting < ceiling) this._ensure(ceiling);
     // Active-player connection reserve: read-ahead/background must NEVER occupy the last
     // `reserve` idle connections. Otherwise read-ahead (up to maxConnPerStream) saturates the
     // pool and the next-needed PLAYBACK segment waits for a read-ahead fetch to finish to get a
@@ -727,6 +741,24 @@ class ProviderPool {
     return best === -1 ? null : this.queue.splice(best, 1)[0];
   }
 
+  // 0 means nothing is playing, so idle health may still use the account plan.
+  // A positive cap is the household total for every usenet account together.
+  _playbackCap() {
+    if (typeof this.playbackOpenCap !== 'function') return 0;
+    const n = Number(this.playbackOpenCap());
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  _openLimit() {
+    const cap = this._playbackCap();
+    if (!cap) return this.size;
+    const open = typeof this.householdOpen === 'function'
+      ? this.householdOpen()
+      : (this.conns.length + this.connecting);
+    const others = Math.max(0, open - this.conns.length - this.connecting);
+    return Math.min(this.size, Math.max(0, cap - others));
+  }
+
   _pipelineDepth() {
     const v = this.opts.pipelineDepth != null
       ? +this.opts.pipelineDepth
@@ -787,6 +819,18 @@ class NntpPool {
 
   // Warm every provider (combined mode uses them all) — primary a bit deeper than the rest.
   warm(n = 4) { this.providers.forEach((p, i) => p.warm(i === 0 ? n : Math.min(2, n))); }
+
+  // While a movie or show is playing, this is how many usenet lines the whole
+  // house may hold open. Local library files never set it. 0 clears the cap.
+  setPlaybackOpenCap(n) {
+    const cap = Math.max(0, Math.floor(Number(n) || 0));
+    this._playbackOpenCap = cap;
+    const self = this;
+    for (const p of this.providers) {
+      p.playbackOpenCap = () => self._playbackOpenCap;
+      p.householdOpen = () => self.providers.reduce((sum, x) => sum + x.conns.length + (x.connecting || 0), 0);
+    }
+  }
 
   // COMBINED multi-provider mode: each article goes to the healthiest provider with room.
   // Score is used/size. A provider at ≥85% (or a fresh 502) is pushed back so a new Play

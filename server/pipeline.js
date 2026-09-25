@@ -2167,6 +2167,13 @@ class Pipeline {
     this.clearPlaybackExpiryRebalance();
   }
 
+  _setUsenetOpenCap(n) {
+    try {
+      const pool = typeof this.pool === 'function' ? this.pool() : this.pool;
+      if (pool && typeof pool.setPlaybackOpenCap === 'function') pool.setPlaybackOpenCap(n);
+    } catch {}
+  }
+
   rebalancePlaybackWindows(now = Date.now()) {
     const perf = this.performance() || {};
     for (const vf of this.mounts.values()) {
@@ -2182,6 +2189,10 @@ class Pipeline {
     const viewerChanged = this._allocActiveCount !== active.length;
     this._allocActiveCount = active.length;
     const shares = this._allocateStreamConnections(active, perf, { viewerChanged, now });
+    let openCap = 0;
+    for (const vf of active) openCap += Number(shares.get(vf)) || 0;
+    // Local library mounts are already left out of `active`. They play from disk.
+    this._setUsenetOpenCap(openCap);
     for (const vf of active) this._applyPlaybackWindow(vf, activeCount, perf, shares.get(vf), active);
     this.rebalancePreparedWindows(now);
     this.metrics.windowRebalances++;
