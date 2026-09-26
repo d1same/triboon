@@ -465,6 +465,18 @@ them when the table is reorganized:
   `ProviderPool.noteAuthLost`/`authBroken`, `NntpPool._ordered`;
   `web/index.html` `connRowHtml`. Verification: the 480 rebuild, breaker, and
   STAT-status tests in `test/e2e.test.js`.
+- **P14 - a 480 burst pauses new logins and keeps the plan.** Two 480s mean
+  the account is refusing more work, not only that one socket forgot its
+  login. For two minutes that account does not open a new login. Lines
+  already open keep downloading. The configured plan stays, so six people
+  are not cut to 4 lines for the rest of the night. After two minutes each
+  movie can take its normal share again, a few logins at a time. A 480 on
+  one line moves that piece to another line that is already signed in. The
+  piece is not handed to the other account when that one also just refused
+  and has no open line. A real 502 still shrinks that account and does not
+  snap back to the typed plan. Code: `server/nntp.js` `_markAuthCap`,
+  `refusingNewLogins`, `_ordered`. Verification: the 480 pause, both-accounts,
+  and two-minute restore tests in `test/e2e.test.js`.
 - **P14 - the first-article probe asks every account at once.** The 800ms
   press-play STAT used to walk providers one 430 at a time (~4 round trips on a
   four-account box), so most dead copies timed out the probe and fell through to

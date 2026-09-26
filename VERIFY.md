@@ -126,6 +126,30 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-25, v3.2.19 ship — a provider that says no pauses new
+logins for two minutes and keeps the plan:
+
+- Version contract: `package.json` 3.2.19; Android `versionName` 3.2.19 /
+  `versionCode` 396; Windows client package/Tauri/Cargo(.lock) 3.2.19.
+- Example: six people are watching. Easynews refuses one extra login.
+  The lines already open keep downloading. The house is not cut to 4
+  lines for the rest of the night. Two minutes later each movie can
+  take its normal share again, a few logins at a time. A real "too many
+  connections" still shrinks that one account until restart.
+- Docs: `docs-streaming-performance.md`, `docs-architecture.md`, and
+  player contract P14. Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 754/754. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.19, household VOD play/seek/resume/CC on the
+  house process v3.2.19 (Mario ready 3559ms SLOW, 1stByte 96ms, seek
+  364ms, resume 25ms, CC 200; FROM ready 2434ms, 1stByte 23ms, seek
+  134ms, resume 11ms, CC 200; both playable), household IPTV first-byte
+  + retune (8855 channels, 2 video picks), household overlapping Play
+  (FROM ready 5ms, Mario ready 13ms), Android lint + unit tests + debug
+  build, Android ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260925-230157.json`, never the Shield). Windows
+  GPU/HDR was not run. Unraid was not updated by this check.
+
 2026-09-25, v3.2.18 ship — a movie that is already playing stays on
 the current moment instead of replaying the previous second:
 

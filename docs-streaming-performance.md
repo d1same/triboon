@@ -204,7 +204,14 @@ Sources fan-out in half. A live provider `502 too many connections` follows the
 InfiniDysk model: Play does not wait. The pool learns the real cap, shrinks
 with ~10% teardown headroom, keeps every live socket working, and the next
 article spills to another provider immediately. It does not snap back to the
-typed plan or AUTH-spam. In-flight extras that complete after the 502 are
+typed plan or AUTH-spam. Easynews and Eweka answer 480 when the account is full.
+After two of those, that account keeps the lines already open and does not get
+a new login for two minutes. The plan stays, so six people are not stuck
+sharing 4 lines for the rest of the night. After two minutes each movie can
+take its normal share again (about 4 lines to start, more if the house still
+has room). A 480 on one line moves that piece to another line that is already
+signed in, so the picture does not wait on a new login. The same piece is not
+handed to the other account when that one just said no too. In-flight extras that complete after the 502 are
 closed. Parallel connects stay at 4. Indexers that return HTTP 429/503 or
 Newznab limit codes 500/501 are skipped for 60s — the other indexers still
 answer so search does not stall.

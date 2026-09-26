@@ -231,7 +231,10 @@ class NntpConnection {
 
   _fail(err) {
     const msg = String(err && err.message || '');
-    if (err && (err.code === 'NNTP_STALL' || err.code === 'NNTP_AUTH_LOST' || /connect timeout|auth failed|body too large/i.test(msg))) {
+    // The "refused a new login" line already explained a 480 burst.
+    // Later refusals on that same quiet window must not fill the log again.
+    const alreadyTold = err && err.code === 'NNTP_AUTH_LOST' && this.pool && this.pool._authCapAnnounced;
+    if (!alreadyTold && err && (err.code === 'NNTP_STALL' || err.code === 'NNTP_AUTH_LOST' || /connect timeout|auth failed|body too large/i.test(msg))) {
       const host = (this.opts && this.opts.host) || 'usenet';
       const waiting = (this.waiters || []).map((w) => w && w.cmdName).filter(Boolean).slice(0, 4).join(', ');
       const line = `${host}: ${msg || err.code || 'socket stopped'}${waiting ? ` while waiting on ${waiting}` : ''}`;
@@ -440,27 +443,41 @@ class ProviderPool {
     this._authLostRecent = (this._authLostRecent || []).filter((t) => now - t < AUTH_LOST_FRESH_MS);
     this._authLostRecent.push(now);
     if (this._authLostRecent.length > 20) this._authLostRecent.shift();
-    // One forgotten login on a small pool still reconnects. A burst on a large
-    // pool is the account saying it is full — do not reopen the whole plan.
+    // One forgotten login on a small pool still reconnects. A burst means
+    // "do not open more lines for two minutes." The plan (the 100) stays,
+    // so six people are not stuck on 4 lines after the pause.
     if (this._authLostRecent.length >= 2 && this.size > 4) this._markAuthCap();
+  }
+  // Easynews or Eweka already said the account is full. For two minutes, do not
+  // open a new login. Lines that are already up keep downloading.
+  refusingNewLogins() {
+    return !!(this.authCapped && this.capHitAt && (Date.now() - this.capHitAt < CAP_HIT_COOLDOWN_MS));
+  }
+  hasLiveSocket() {
+    return (this.conns || []).some((c) => c && c.alive);
+  }
+  _peerCanTakeOver() {
+    return typeof this.peerCanTakeOver === 'function' && this.peerCanTakeOver();
   }
   _markAuthCap() {
     const now = Date.now();
-    // Already quiet. Another 480 in this window must not reopen the lines we just closed.
-    if (this.authCapped && now - this.capHitAt < CAP_HIT_COOLDOWN_MS) return;
-    // A pile of 480s means these sockets are not downloading. Keep a handful, not the whole plan.
-    const next = Math.min(this.size, 4);
-    if (next < this.size) this.size = next;
+    // Already quiet. Another 480 in this window must not open a new login.
+    if (this.authCapped && now - this.capHitAt < CAP_HIT_COOLDOWN_MS) {
+      this._authCapAnnounced = true;
+      return;
+    }
+    // A 480 burst is a pause, not a new plan of 4. Easynews and Eweka still
+    // allow the lines that are already signed in. Two minutes later the
+    // normal share (about 4 per person, more if the house has room) comes back.
     this.capHitAt = now;
     this.lastProbeAt = now;
     this.authCapped = true;
-    for (const c of this.conns) {
-      if (!c.alive || this.busy.has(c)) continue;
-      try { c.close(); } catch {}
-      c.alive = false;
-    }
+    this._authCapAnnounced = true;
+    const open = (this.conns || []).filter((c) => c && c.alive).length;
     const host = (this.opts && this.opts.host) || 'usenet';
-    const refused = `${host} refused the download, so playback is using ${this.size} connections`;
+    const refused = open > 0
+      ? `${host} refused a new login, so playback is staying on the ${open} lines already open`
+      : `${host} refused a new login, so playback will not open another line for two minutes`;
     debug.fail('buffer', refused);
     debug.issue(`connection dropped — reason: ${refused}`);
   }
@@ -507,6 +524,9 @@ class ProviderPool {
     // closed sockets immediately is what keeps Newshosting at 82 and makes
     // Easynews/Eweka answer 480. Hold still, except one probe when nothing is left.
     if (this.capHitAt && Date.now() - this.capHitAt < CAP_HIT_COOLDOWN_MS && (this.conns.length > 0 || this.connecting > 0)) return;
+    // Quiet window: no new login at all, even a single probe. The lines already
+    // open keep working. A probe here is what asked Easynews and Eweka again.
+    if (this.refusingNewLogins() && !this.hasLiveSocket()) return;
     const fullyDark = this.down() || (this.capHitAt && this.conns.length === 0);
     if (fullyDark) {
       // Half-open probe only when this provider has ZERO live sockets. Play already
@@ -522,6 +542,7 @@ class ProviderPool {
     while (!this.closed && this.conns.length + this.connecting < want && this.connecting < CONNECT_BURST) {
       this.connecting++;
       const c = new NntpConnection(this.opts);
+      c.pool = this;
       c.connect().then(() => {
         this.connecting--;
         if (this._admitConn(c)) this._pump();
@@ -530,9 +551,16 @@ class ProviderPool {
         this.lastErr = e;
         this.lastConnectFailAt = Date.now();
         if (e && /auth failed/i.test(String(e.message || ''))) {
-          const authLine = `${(this.opts && this.opts.host) || 'usenet'}: ${e.message}`;
-          debug.fail('buffer', authLine);
-          debug.issue(`connection dropped — reason: ${authLine}`);
+          const authLost = /48[012]/.test(String(e.message || ''));
+          // Login itself got 480. That is the same full account as a STAT 480.
+          // Say it once, then stop opening sockets.
+          if (authLost) {
+            if (!this._authCapAnnounced) this._markAuthCap();
+          } else {
+            const authLine = `${(this.opts && this.opts.host) || 'usenet'}: ${e.message}`;
+            debug.fail('buffer', authLine);
+            debug.issue(`connection dropped — reason: ${authLine}`);
+          }
         }
         try { c.close(); } catch {}
         if (isTooManyConnections(e)) this._markCapHit(e);
@@ -616,7 +644,9 @@ class ProviderPool {
     const idleMs = this.opts.idleRecycleMs || IDLE_RECYCLE_MS;
     this.conns = this.conns.filter((c) => {
       if (!c.alive) return false;
-      if (!this.busy.has(c) && now - c.lastUsed > idleMs) { c.close(); return false; }
+      // During the quiet window an idle line is still a good login. Closing it
+      // would force a new AUTH, and that AUTH is what gets the next 480.
+      if (!this.busy.has(c) && !this.refusingNewLogins() && now - c.lastUsed > idleMs) { c.close(); return false; }
       return true;
     });
     if (this.queue.length && this.conns.length === 0 && this.connecting === 0 && this.down()) {
@@ -646,7 +676,7 @@ class ProviderPool {
     // a single STAT. Opening the whole share on the first command is what made
     // Easynews and Eweka answer 480 before the movie had started.
     let pending = 0;
-    for (const t of this.queue) if (!signalAborted(t.signal)) pending++;
+    for (const t of this.queue) if (!signalAborted(t.signal) && !t.stayOnLive) pending++;
     const openNow = this.conns.length + this.connecting;
     const need = Math.min(ceiling, Math.max(openNow, pending));
     if (pending && openNow < need) this._ensure(need);
@@ -738,13 +768,20 @@ class ProviderPool {
           // One dead socket must not sink a solo-provider mount. With a second provider ready,
           // leave immediately so the stall window is paid once, on the next host — not twice here.
           if (e && e.code === 'NNTP_STALL' && this.preferPeerFailover) task.reject(e);
-          // Account refusing work: a retry here would only buy another rejected login. Hand the
-          // article to the next provider now.
+          // The piece was on a line the provider just forgot. Another line is
+          // already signed in. Move the piece there. Signing in again is the wait.
+          else if (e && e.code === 'NNTP_AUTH_LOST' && this.hasLiveSocket()) {
+            task.stayOnLive = true;
+            this.queue.push(task);
+          }
           // A brand-new socket that 480s never finished a command. Logging in
           // again on the same account is a second strike, not a retry.
-          else if (e && e.code === 'NNTP_AUTH_LOST' && this.preferPeerFailover && !(c && c.served)) task.reject(e);
-          else if (e && e.code === 'NNTP_AUTH_LOST' && this.preferPeerFailover && (this.authBroken() || this.authCapped)) task.reject(e);
-          else { task.retried = true; this.queue.push(task); }
+          // Once the account is quiet, only a peer that can still take the piece
+          // gets it. If that peer also said no, do not open a login on either.
+          else if (e && e.code === 'NNTP_AUTH_LOST' && this._peerCanTakeOver()
+              && (!(c && c.served) || this.authBroken() || this.authCapped || this.refusingNewLogins())) task.reject(e);
+          else if (e && e.code === 'NNTP_AUTH_LOST' && this.refusingNewLogins()) task.reject(e);
+          else { task.retried = true; task.stayOnLive = false; this.queue.push(task); }
         } else task.reject(e);
       })
       .finally(() => {
@@ -839,9 +876,18 @@ class NntpPool {
     this.missCache = new ArticleMissCache();
     this.meter = new TransferMeter();
     const preferPeerFailover = this.providers.length > 1;
+    const self = this;
     for (const p of this.providers) {
       p.preferPeerFailover = preferPeerFailover;
       p.meter = this.meter;
+      // A peer can take the piece when it is not in the two-minute quiet window,
+      // or when it still has a line that is already logged in.
+      p.peerCanTakeOver = () => self.providers.some((o) => {
+        if (o === p) return false;
+        if (typeof o.authBroken === 'function' && o.authBroken()) return false;
+        if (typeof o.refusingNewLogins === 'function' && o.refusingNewLogins() && !o.hasLiveSocket()) return false;
+        return true;
+      });
     }
   }
 
@@ -883,8 +929,24 @@ class NntpPool {
     // An account that rejects logins (480 on fresh sockets) is skipped outright while any other
     // provider is usable: trying it "last" would still cost connect+TLS+AUTH on every article the
     // healthy accounts do not have. It rejoins by itself when its breaker window passes.
-    const usable = this.providers.filter((p) => !(typeof p.authBroken === 'function' && p.authBroken()));
-    const list = usable.length ? usable : this.providers;
+    const broken = (p) => typeof p.authBroken === 'function' && p.authBroken();
+    const refusing = (p) => typeof p.refusingNewLogins === 'function' && p.refusingNewLogins();
+    const live = (p) => typeof p.hasLiveSocket === 'function' && p.hasLiveSocket();
+    const usable = this.providers.filter((p) => !broken(p));
+    let list;
+    if (usable.length) {
+      // An account that just refused new logins is not dialed again while
+      // another account can take the piece. A line it already has stays usable.
+      const keep = usable.filter((p) => !refusing(p) || live(p));
+      // No open line on a full account means do not dial it. One "just in case"
+      // login was enough to get another 480 on the next episode.
+      list = keep;
+    } else {
+      // Every account said no. Keep downloading on a line that is already open.
+      // If none is open, dialing all of them again is what filled the log.
+      const stillUp = this.providers.filter(live);
+      list = stillUp.length ? stillUp : [];
+    }
     return [...list].sort((a, b) => {
       const ha = providerHeadroom(a);
       const hb = providerHeadroom(b);
@@ -904,10 +966,19 @@ class NntpPool {
   // first-article probe has an 800ms budget; walking four accounts one 430 at a time (~4 RTT) blew
   // it on most dead copies, so those fell through to the far slower BODY mount chain instead of
   // being skipped in one round trip. Health triage keeps the sequential, load-friendly walk.
+  _nobodyCanAnswer() {
+    const e = new Error('no usenet provider reachable');
+    e.code = 'NO_PROVIDER';
+    return e;
+  }
+
   async stat(msgId, priority = 'health', opts = {}) {
     if (opts.parallel && this.providers.length > 1) return this._parallelStat(msgId, priority, opts);
+    const ordered = this._ordered(opts.needSlots);
+    // Both accounts refused. That is not "this file is missing".
+    if (!ordered.length && this.providers.length) throw this._nobodyCanAnswer();
     let reachedAny = false; // did at least one provider actually ANSWER (vs. all connections failing)?
-    for (const p of this._ordered(opts.needSlots)) {
+    for (const p of ordered) {
       if (this.missCache.has(p, msgId)) continue;
       try {
         const ok = await p.stat(msgId, priority, opts);
@@ -931,6 +1002,7 @@ class NntpPool {
 
   _parallelStat(msgId, priority, opts = {}) {
     const ordered = this._ordered(opts.needSlots).filter((p) => !this.missCache.has(p, msgId));
+    if (!ordered.length && this.providers.length) return Promise.reject(this._nobodyCanAnswer());
     const alreadyIn = ordered.filter((p) => (p.conns || []).some((c) => c.alive));
     // Reuse logins we already hold. A cold check opens one new login, not one
     // per account. Four simultaneous AUTHs for one STAT is a throttle.
@@ -974,7 +1046,7 @@ class NntpPool {
 
   async body(msgId, priority = 'playback', opts = {}) {
     const ordered = this._ordered(opts.needSlots);
-    if (!ordered.length) throw new Error('no usenet providers configured');
+    if (!ordered.length) throw this.providers.length ? this._nobodyCanAnswer() : new Error('no usenet providers configured');
     // Plain sequential failover for single-provider setups and non-critical work (no speculative
     // double-fetch): a 430/connection error advances immediately to the next provider.
     if (ordered.length === 1 || !HEDGE_PRIORITIES.has(priority)) {
@@ -1023,9 +1095,12 @@ class NntpPool {
         hedgeTimer = setTimeout(() => { hedgeTimer = null; startNext(); }, hedgeMs);
         if (hedgeTimer && hedgeTimer.unref) hedgeTimer.unref();
       };
+      const quietWithNoLine = (p) => p && typeof p.refusingNewLogins === 'function' && p.refusingNewLogins()
+        && !(typeof p.hasLiveSocket === 'function' && p.hasLiveSocket());
       const startNext = (allowNewLogin = true) => {
         if (settled) return;
         while (idx < ordered.length && this.missCache.has(ordered[idx], msgId)) idx++;
+        while (idx < ordered.length && quietWithNoLine(ordered[idx])) idx++;
         if (!allowNewLogin) {
           while (idx < ordered.length && !(ordered[idx].conns || []).some((c) => c.alive)) idx++;
         }

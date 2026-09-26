@@ -8,7 +8,8 @@ const crypto = require('crypto');
 const http = require('http');
 const { encodePart, decode, crc32 } = require('../server/yenc');
 const { parseNzb, pickPrimaryFile } = require('../server/nzb');
-const { NntpPool, ProviderPool, NntpConnection, CONNECT_BURST, shrinkSizeFromLive } = require('../server/nntp');
+const { NntpPool, ProviderPool, NntpConnection, CONNECT_BURST, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS } = require('../server/nntp');
+const debug = require('../server/debug');
 const { VirtualFile, SharedCacheBudget } = require('../server/vfs');
 const { createMockNntp } = require('./mock-nntp');
 
@@ -873,6 +874,37 @@ test('nntp: a connection that lost its login (480) is destroyed and the article 
   }
 });
 
+test('nntp: a 480 on one open line moves the piece to another open line', async () => {
+  const orig = NntpConnection.prototype.connect;
+  let connects = 0;
+  NntpConnection.prototype.connect = async () => {
+    connects++;
+    throw new Error('should not open a login');
+  };
+  try {
+    const pool = new ProviderPool({ host: 'easynews.example' }, 4);
+    const bad = { alive: true, served: true, lastUsed: Date.now(), close() {} };
+    const good = { alive: true, served: true, lastUsed: Date.now(), close() {} };
+    pool.conns.push(bad, good);
+    const err = new Error('BODY: 480 Authentication Required (connection lost its login; reconnecting)');
+    err.code = 'NNTP_AUTH_LOST';
+    let usedGood = false;
+    const result = await pool.run((c) => {
+      if (c === bad) {
+        bad.alive = false;
+        return Promise.reject(err);
+      }
+      usedGood = true;
+      return Promise.resolve('ok');
+    }, 'playback');
+    assert.strictEqual(result, 'ok', 'the piece is fetched on a line that is already signed in');
+    assert.strictEqual(usedGood, true);
+    assert.strictEqual(connects, 0, 'that move does not open a new login');
+  } finally {
+    NntpConnection.prototype.connect = orig;
+  }
+});
+
 test('nntp: an account that answers 480 on fresh logins trips a breaker — other providers take the article without paying its handshakes', async () => {
   const { articles } = makeRelease('Auth.Broken.mkv', 64 * 1024, 64 * 1024);
   const id = [...articles.keys()][0];
@@ -893,7 +925,7 @@ test('nntp: an account that answers 480 on fresh logins trips a breaker — othe
     }
     assert.strictEqual(badProvider.authBroken(), true, 'two fresh-login 480s inside the window trip the breaker');
     assert.strictEqual(badProvider.authCapped, true, 'a burst of 480s stops opening more sockets on that account');
-    assert.ok(badProvider.size <= 4, 'a burst of 480s does not keep the full connection plan');
+    assert.strictEqual(badProvider.size, 8, 'a 480 pause keeps the plan instead of cutting the house to 4 lines');
     assert.strictEqual(badProvider.stats().authBroken, true, 'Status can show "login rejected"');
     const connsBefore = bad.connCount();
     await pool.body(id, 'readAhead');
@@ -905,6 +937,169 @@ test('nntp: an account that answers 480 on fresh logins trips a breaker — othe
     pool.close();
     await bad.close();
     await good.close();
+  }
+});
+
+test('nntp: when both accounts refuse logins, the next piece does not open another login', async () => {
+  const { articles } = makeRelease('Both.Full.mkv', 64 * 1024, 64 * 1024);
+  const id = [...articles.keys()][0];
+  const a = createMockNntp({ articles, requireAuth: true, authThenReject: true });
+  const b = createMockNntp({ articles, requireAuth: true, authThenReject: true });
+  const [pa, pb] = await Promise.all([a.listen(), b.listen()]);
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: pa, tls: false, user: 'u', pass: 'p', connections: 8 },
+    { host: '127.0.0.1', port: pb, tls: false, user: 'u', pass: 'p', connections: 8 },
+  ], 4);
+  const origFail = debug.fail;
+  const origIssue = debug.issue;
+  let logged = 0;
+  debug.fail = (scope, msg) => {
+    if (/480|refused a new login/i.test(String(msg))) logged++;
+    return origFail(scope, msg);
+  };
+  debug.issue = (msg) => {
+    if (/480|refused a new login/i.test(String(msg))) logged++;
+    return origIssue(msg);
+  };
+  try {
+    for (let i = 0; i < 4; i++) await pool.body(id, 'readAhead').catch(() => {});
+    assert.strictEqual(pool.providers[0].authBroken(), true, 'the first account stops taking new logins');
+    assert.strictEqual(pool.providers[1].authBroken(), true, 'the second account stops taking new logins');
+    assert.strictEqual(pool.providers[0].authCapped, true);
+    assert.strictEqual(pool.providers[1].authCapped, true);
+    const beforeA = a.connCount();
+    const beforeB = b.connCount();
+    logged = 0;
+    for (let i = 0; i < 3; i++) {
+      await assert.rejects(pool.body(id, 'readAhead'), (err) => err && err.code === 'NO_PROVIDER');
+      await assert.rejects(
+        pool.stat(id, 'startup', { throwIfUnreachable: true, parallel: true }),
+        (err) => err && err.code === 'NO_PROVIDER',
+      );
+    }
+    assert.strictEqual(a.connCount(), beforeA, 'Easynews is not dialed again after it said no');
+    assert.strictEqual(b.connCount(), beforeB, 'Eweka is not dialed again after it said no');
+    assert.strictEqual(logged, 0, 'the same 480 is not written again on every piece');
+    assert.strictEqual(pool._ordered().length, 0);
+  } finally {
+    debug.fail = origFail;
+    debug.issue = origIssue;
+    pool.close();
+    await a.close();
+    await b.close();
+  }
+});
+
+test('nntp: a full account that still has an open line keeps that line', () => {
+  const pool = new NntpPool([
+    { host: 'easynews.example', connections: 8 },
+    { host: 'eweka.example', connections: 8 },
+  ], 4);
+  const [easy, eweka] = pool.providers;
+  const now = Date.now();
+  for (const p of pool.providers) {
+    p.authCapped = true;
+    p.capHitAt = now;
+    p._authCapAnnounced = true;
+    p.authLostAt = [now, now];
+  }
+  assert.strictEqual(pool._ordered().length, 0, 'no open line means no new login on either account');
+  easy.conns.push({ alive: true, lastUsed: now, close() {} });
+  assert.deepStrictEqual(pool._ordered(), [easy], 'the line that is already open keeps downloading');
+  assert.strictEqual(eweka.conns.length, 0, 'the other account is not dialed');
+});
+
+test('nntp: a full account that is not login-broken is still not dialed with no open line', () => {
+  const pool = new NntpPool([
+    { host: 'easynews.example', connections: 8 },
+    { host: 'eweka.example', connections: 8 },
+  ], 4);
+  for (const p of pool.providers) {
+    p.authCapped = true;
+    p.capHitAt = Date.now();
+  }
+  assert.strictEqual(pool.providers[0].authBroken(), false, 'an old session 480 is not the fresh-login breaker');
+  assert.strictEqual(pool._ordered().length, 0, 'the next episode must not log in to either account');
+});
+
+test('nntp: a full account keeps an idle line instead of logging in again', () => {
+  const pool = new ProviderPool({ host: 'eweka.example', idleRecycleMs: 1 }, 8);
+  pool.authCapped = true;
+  pool.capHitAt = Date.now();
+  const sock = { alive: true, lastUsed: Date.now() - 60_000, close() { sock.alive = false; } };
+  pool.conns.push(sock);
+  pool._pump();
+  assert.strictEqual(pool.conns.length, 1, 'the idle login stays up during the quiet window');
+  assert.strictEqual(sock.alive, true);
+});
+
+test('nntp: a 480 pause keeps the plan and opens lines again after two minutes', async () => {
+  const orig = NntpConnection.prototype.connect;
+  let attempts = 0;
+  NntpConnection.prototype.connect = () => new Promise(() => { attempts++; });
+  try {
+    const pool = new ProviderPool({ host: 'easynews.example' }, 20);
+    pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });
+    pool._markAuthCap();
+    assert.strictEqual(pool.size, 20, 'six people still have the plan, not 4 lines');
+    assert.strictEqual(pool.conns.filter((c) => c.alive).length, 1, 'the open line stays signed in');
+    const during = attempts;
+    pool._ensure(20);
+    assert.strictEqual(attempts, during, 'no new login during the two quiet minutes');
+    pool.capHitAt = Date.now() - (CAP_HIT_COOLDOWN_MS + 1);
+    assert.strictEqual(pool.refusingNewLogins(), false);
+    pool._ensure(6);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.ok(attempts > during, 'after two minutes the normal share can open lines again');
+    assert.ok(attempts - during <= CONNECT_BURST, 'it does not sign in the whole plan at once');
+  } finally {
+    NntpConnection.prototype.connect = orig;
+  }
+});
+
+test('nntp: a 480 during the login itself stops the next login', async () => {
+  const orig = NntpConnection.prototype.connect;
+  let attempts = 0;
+  NntpConnection.prototype.connect = async () => {
+    attempts++;
+    throw new Error('NNTP auth failed: 480 Authentication Required');
+  };
+  try {
+    const pool = new ProviderPool({ host: 'easynews.example' }, 20);
+    pool._ensure(20);
+    await new Promise((r) => setTimeout(r, 40));
+    const first = attempts;
+    assert.ok(first > 0 && first <= CONNECT_BURST, 'the first wave does not AUTH the whole plan');
+    assert.strictEqual(pool.authCapped, true, 'a 480 at login is the same full account as a 480 on STAT');
+    pool._ensure(20);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(attempts, first, 'the quiet window does not open another login');
+  } finally {
+    NntpConnection.prototype.connect = orig;
+  }
+});
+
+test('nntp: play does not hedge onto an account that already refused', async () => {
+  const { articles } = makeRelease('Hedge.Quiet.mkv', 64 * 1024, 64 * 1024);
+  const id = [...articles.keys()][0];
+  const good = createMockNntp({ articles });
+  const bad = createMockNntp({ articles, requireAuth: true, authThenReject: true });
+  const [pg, pb] = await Promise.all([good.listen(), bad.listen()]);
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: pg, tls: false, connections: 4 },
+    { host: '127.0.0.1', port: pb, tls: false, user: 'u', pass: 'p', connections: 8 },
+  ], 4);
+  pool.providers[1].authCapped = true;
+  pool.providers[1].capHitAt = Date.now();
+  pool.providers[1]._authCapAnnounced = true;
+  try {
+    const body = await pool.body(id, 'playback');
+    assert.ok(body.length > 0, 'play uses the account that is still working');
+    assert.strictEqual(bad.connCount(), 0, 'a slow play does not log into the account that already said no');
+  } finally {
+    pool.close();
+    await good.close();
+    await bad.close();
   }
 });
 
