@@ -1519,14 +1519,7 @@ public class MainActivity extends Activity {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> {
                     if (nativePlayer == null || !nativePlayerOpen()) return;
-                    // playWhenReady, not isPlaying(): a remux/transcode remount is not "playing"
-                    // yet, and using isPlaying() here turns the next Pause into another Play.
-                    if (nativePlayer.getPlayWhenReady()
-                            && nativePlayer.getPlaybackState() != Player.STATE_IDLE
-                            && nativePlayer.getPlaybackState() != Player.STATE_ENDED) {
-                        nativePlayer.pause();
-                        markNativeUserPaused();
-                    } else resumeNativeVideoInPlace();
+                    nativeTogglePlayPause();
                     updateNativeChrome();
                 });
             }
@@ -4616,7 +4609,10 @@ public class MainActivity extends Activity {
                             applyNativeStartSeekIfReady();
                             if (nativeQuietSeekHoldPlay && nativePlayer != null) {
                                 nativeQuietSeekHoldPlay = false;
-                                if (!nativePlayer.getPlayWhenReady()) nativePlayer.play();
+                                if (!nativePlayer.getPlayWhenReady()
+                                        && AutoResume.shouldStartHeldPlayback(nativeUserPausedAtMs)) {
+                                    nativePlayer.play();
+                                }
                             }
                             if (!nativePercentResumePending) {
                                 rememberNativeVideoPosition();
@@ -4724,7 +4720,8 @@ public class MainActivity extends Activity {
                     } else if ("video".equals(nativeMode) && nativeVideoStarted
                             && nativePlayer != null
                             && nativePlayer.getPlaybackState() == Player.STATE_READY
-                            && !nativePlayer.getPlayWhenReady() && !nativePercentResumePending) {
+                            && !nativePlayer.getPlayWhenReady()
+                            && (!nativePercentResumePending || nativeUserPausedAtMs > 0L)) {
                         markNativeUserPaused();
                         rememberNativeVideoPosition();
                         web.evaluateJavascript("window.__tvNativeVideoPaused && __tvNativeVideoPaused("
@@ -5115,6 +5112,19 @@ public class MainActivity extends Activity {
         nativeUserPausedAtMs = SystemClock.elapsedRealtime();
     }
 
+    // A quiet remount and a percent resume hold play off, then press Play when ready.
+    // The on-screen button still says Pause during that wait. Honor it.
+    private boolean nativeHoldWillAutoPlay() {
+        return AutoResume.shouldStartHeldPlayback(nativeUserPausedAtMs)
+                && (nativeQuietSeekHoldPlay || nativePercentResumePending);
+    }
+
+    private void nativeUserPause() {
+        markNativeUserPaused();
+        nativeQuietSeekHoldPlay = false;
+        if (nativePlayer != null) nativePlayer.pause();
+    }
+
     // playWhenReady, not isPlaying(): a remux remount has playWhenReady=false and isPlaying=false.
     // Treating that as "paused" turns the next Play into a second remount (two 4K pipes).
     private boolean nativeWantsPause() {
@@ -5126,12 +5136,8 @@ public class MainActivity extends Activity {
 
     private void nativeTogglePlayPause() {
         if (nativePlayer == null) return;
-        if (nativeWantsPause()) {
-            nativePlayer.pause();
-            markNativeUserPaused();
-        } else {
-            resumeNativeVideoInPlace();
-        }
+        if (nativeWantsPause() || nativeHoldWillAutoPlay()) nativeUserPause();
+        else resumeNativeVideoInPlace();
     }
 
     private void resumeNativeVideoInPlace() {
@@ -5283,7 +5289,8 @@ public class MainActivity extends Activity {
             rememberNativeVideoPosition();
             web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
                     + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
-        } else if (nativePlayer != null && !nativePlayer.getPlayWhenReady()) {
+        } else if (nativePlayer != null && !nativePlayer.getPlayWhenReady()
+                && AutoResume.shouldStartHeldPlayback(nativeUserPausedAtMs)) {
             // The eventual onIsPlayingChanged(true) callback owns the boundary in this path.
             nativePlayer.play();
         }
@@ -5323,7 +5330,8 @@ public class MainActivity extends Activity {
             return;
         }
         nativeSeekToDisplayPosition(target);
-        if (nativePercentResumePending && nativePlayer != null && !nativePlayer.getPlayWhenReady()) nativePlayer.play();
+        if (nativePercentResumePending && nativePlayer != null && !nativePlayer.getPlayWhenReady()
+                && AutoResume.shouldStartHeldPlayback(nativeUserPausedAtMs)) nativePlayer.play();
         updateNativeChrome();
     }
 
@@ -8701,10 +8709,7 @@ public class MainActivity extends Activity {
                         case KeyEvent.KEYCODE_MEDIA_PLAY:
                             if (!repeat) resumeNativeVideoInPlace(); return true;
                         case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                            if (!repeat) {
-                                nativePlayer.pause();
-                                markNativeUserPaused();
-                            }
+                            if (!repeat) nativeUserPause();
                             return true;
                         case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
                             nativeSeekBy(30000);
@@ -8740,10 +8745,7 @@ public class MainActivity extends Activity {
                     case KeyEvent.KEYCODE_MEDIA_PLAY:
                         if (!repeat) resumeNativeVideoInPlace(); return true;
                     case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                        if (!repeat) {
-                            nativePlayer.pause();
-                            markNativeUserPaused();
-                        }
+                        if (!repeat) nativeUserPause();
                         return true;
                     case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
                         nativeSeekBy(30000);
@@ -8890,8 +8892,7 @@ public class MainActivity extends Activity {
                 resumeNativeVideoInPlace();
                 return true;
             case "pause":
-                nativePlayer.pause();
-                markNativeUserPaused();
+                nativeUserPause();
                 return true;
             case "fast_forward":
                 nativeSeekBy(30000L);
@@ -9131,8 +9132,8 @@ public class MainActivity extends Activity {
         if (nativePlayer != null && !inPip) {
             // Remember the moment a call or home-press stopped the show, so Play
             // after a long gap starts a fresh stream instead of the dead one.
-            if (nativeWantsPause()) markNativeUserPaused();
-            nativePlayer.pause();
+            if (nativeWantsPause() || nativeHoldWillAutoPlay()) nativeUserPause();
+            else nativePlayer.pause();
         }
         if (web != null) {
             // Update the hidden WebView with ExoPlayer's exact position, then issue keepalive watch

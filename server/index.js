@@ -9466,6 +9466,12 @@ Object.assign(H, {
     let searchImdbId = imdbId;
     let searchSeason = hasEpisode ? seasonParam : null;
     let searchEpisode = hasEpisode ? episodeParam : null;
+    // Ranking keeps the episode the player is watching. The search below may
+    // drop season/episode once an episode-level IMDb id is known (Wyzie returns
+    // nothing if those ride along). Dropping them from the rank too let a
+    // popular other-episode file win.
+    const rankSeason = searchSeason;
+    const rankEpisode = searchEpisode;
     let subQuery = vf._subQuery || vf._q || releaseName || vf.name;
     let clientGone = false;
     ctx.req.once('close', () => { if (!ctx.req.complete) clientGone = true; });
@@ -9532,10 +9538,13 @@ Object.assign(H, {
             // With Wyzie disabled there is no wyErr to relay — an empty OpenSubtitles result is a
             // clean title-level miss, not a provider failure.
             if (!combined.length) throw (wyErr || Object.assign(new Error('No subtitles found for this title'), { noSubtitles: true }));
-            const ranked = rankSubs(combined, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration, sdhPref, preferProvider });
+            const ranked = rankSubs(combined, releaseName, {
+              durationSeconds: vf._tracks && vf._tracks.duration, sdhPref, preferProvider,
+              season: rankSeason, episode: rankEpisode,
+            });
             // Trim wrong-episode / non-text rows so the menu only advertises subtitles that can
             // actually play for this file (the "House shows many options but most don't work" fix).
-            const variants = usableVariants(ranked, { releaseName }).slice(0, 12);
+            const variants = usableVariants(ranked, { releaseName, season: rankSeason, episode: rankEpisode }).slice(0, 12);
             vf._osSearchCache.set(searchKey, variants); capMap(vf._osSearchCache, 8);
             return variants;
           })().finally(() => vf._osSearchInflight.delete(searchKey));
@@ -9605,11 +9614,15 @@ Object.assign(H, {
           // did NOT pick a specific version and nothing in the list is a confident match for this
           // file (right episode or generic), treat it as a clean no-subtitles miss instead of
           // feeding the wrong episode's dialogue. Explicit picks bypass this.
-          if (!variant && !hasConfidentAutoPick(variants, { releaseName })) {
+          if (!variant && !hasConfidentAutoPick(variants, { releaseName, season: rankSeason, episode: rankEpisode })) {
             const e = new Error('No subtitles found for this title'); e.noSubtitles = true; e.permanent = true; throw e;
           }
           const chosen = variant ? variants.find((v) => v.id === variant) : variants[0];
           if (!chosen || !chosen.raw) throw new Error(variant ? 'that subtitle version is no longer available' : 'online subtitles failed');
+          try {
+            const lab = String(chosen.label || chosen.display || '').replace(/\s+/g, ' ').slice(0, 90);
+            console.log(`[subs] pick ${variant ? 'menu' : 'auto'} s${rankSeason == null ? '-' : rankSeason}e${rankEpisode == null ? '-' : rankEpisode} ${lab}`);
+          } catch {}
           if (chosen.raw._provider === 'opensubtitles') {
             try {
               const vtt = await downloadOpenSubtitles(chosen.raw._osFileId);
@@ -9635,10 +9648,10 @@ Object.assign(H, {
                   try {
                     const wy = await searchOnlineSubs(subOpts);
                     if (Array.isArray(wy) && wy.length) {
-                      const wRanked = usableVariants(rankSubs(wy, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration, sdhPref, preferProvider: 'wyzie' }), { releaseName });
+                      const wRanked = usableVariants(rankSubs(wy, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration, sdhPref, preferProvider: 'wyzie', season: rankSeason, episode: rankEpisode }), { releaseName, season: rankSeason, episode: rankEpisode });
                       if (wRanked.length) {
                         const { vtt: wVtt, served: wServed } = await downloadBestSubtitle(wRanked.map((v) => v.raw).filter((d) => d && !d._provider), {
-                          key, releaseName, durationSeconds: vf._tracks && vf._tracks.duration, ...(base ? { base } : {}), attempts: 3, retryDelayMs: 900,
+                          key, releaseName, durationSeconds: vf._tracks && vf._tracks.duration, season: rankSeason, episode: rankEpisode, ...(base ? { base } : {}), attempts: 3, retryDelayMs: 900,
                         });
                         console.log('[subs] OpenSubtitles download failed — served a free Wyzie subtitle as a last-resort fallback');
                         vf._subSyncState.set(cacheKey, subtitleLooksSynced(wServed, releaseName)); capMap(vf._subSyncState, 24);
@@ -9662,6 +9675,8 @@ Object.assign(H, {
             key,
             releaseName,
             durationSeconds: vf._tracks && vf._tracks.duration,
+            season: rankSeason,
+            episode: rankEpisode,
             preferredId: chosen.raw._provider ? undefined : chosen.id,
             ...(base ? { base } : {}),
             attempts: 3,

@@ -312,10 +312,27 @@ function publicReleaseSub(sub, idx, videoName) {
   };
 }
 
+function releaseEpisodeKey(name) {
+  const x = String(name || '').toLowerCase();
+  const se = /\bs(\d{1,2})\s?e(\d{1,3})\b/i.exec(x);
+  if (se) return `s${String(+se[1]).padStart(2, '0')}e${String(+se[2]).padStart(2, '0')}`;
+  const xe = /\b(\d{1,2})x(\d{1,3})\b/i.exec(x);
+  if (xe) return `s${String(+xe[1]).padStart(2, '0')}e${String(+xe[2]).padStart(2, '0')}`;
+  return '';
+}
+
 function releaseSubCandidates(files, videoName = '') {
+  const videoEpisode = releaseEpisodeKey(videoName);
   return (files || [])
     .filter((f) => f && TEXT_SUB_EXT.test(f.name || '') && String(f.name || '') !== String(videoName || ''))
     .filter((f) => !f.method || (f.method === 'store' && !f.encrypted))
+    // A season pack can carry every episode's sidecar. Episode 10 must not
+    // auto-play episode 1's words. A file with no episode tag can still be this one.
+    .filter((f) => {
+      if (!videoEpisode) return true;
+      const subEpisode = releaseEpisodeKey(f.name);
+      return !subEpisode || subEpisode === videoEpisode;
+    })
     .map((f, idx) => ({ ...publicReleaseSub(f, idx, videoName), _source: f }))
     .sort((a, b) => b.score - a.score || String(a.name).localeCompare(String(b.name)));
 }

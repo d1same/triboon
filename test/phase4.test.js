@@ -2632,8 +2632,8 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'automatic subtitle startup should skip same-release and embedded built-in choices when the admin disables them');
   assert.match(ui, /function autoSubtitleRelFor\(p\) \{[\s\S]+if \(builtInSubtitlesEnabled\(\) && p && p\.tracksUrl && !p\.tracks\) return '';[\s\S]+return osTrackRel\(preferredAutoSubtitleLang\(\)\);[\s\S]+\}/,
     'online subtitles should not wait for the track probe while built-in subtitles are disabled by settings');
-  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(saved === 'off'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+const builtIn = bestBuiltInSubtitleRel\(\);[\s\S]+if \(builtIn\) return builtIn;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
-    'manual subtitle mode should not auto-enable saved captions while always mode can reuse saved online choices');
+  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(saved === 'off'\) return '';[\s\S]+const episodePlay = !!\(ep && ep\.episode > 0\);[\s\S]+const savedBuiltIn = typeof saved === 'string' && \(saved\.startsWith\('em:'\) \|\| saved\.startsWith\('rs:'\)\);[\s\S]+if \(subtitleRelPlayable\(p, saved\) && !\(episodePlay && savedBuiltIn\)\) return saved;[\s\S]+if \(episodePlay\) \{[\s\S]+const online = autoSubtitleRelFor\(p\);[\s\S]+if \(online\) return online;[\s\S]+\}[\s\S]+const builtIn = bestBuiltInSubtitleRel\(\);[\s\S]+if \(builtIn\) return builtIn;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
+    'a TV episode auto-picks the online subtitle for that episode; movies still try the file first');
   assert.match(webHousekeeping, /loadTracks\(\);[\s\S]+if \(!applyStartupSubtitlePref\(\)\) \{/,
     'web player should try to enable always-mode subtitles before entering online warmup');
   assert.ok(webHousekeeping.includes('fetch(`/api/ossubs/${mount.id}?${subtitleRequestParams(it, code2, mount.streamToken).toString()}`).catch(() => {});'),
@@ -2666,8 +2666,8 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'LANG_3TO2 (web/index.html) and ISO6392_TO_1 (server/opensubs.js) must stay identical — they are kept in sync by hand');
   assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
     'always-mode subtitles should be applied without waiting for the track probe to finish');
-  assert.match(webHousekeeping, /await fetchPlayerTracks\(p, 1400\)[\s\S]+if \(bestBuiltInSubtitleRel\(\) && prefSubtitleMode\(\) === 'always'\) \{[\s\S]+applyStartupSubtitlePref\(\);[\s\S]+return;[\s\S]+\}[\s\S]+if \(prefSubtitleMode\(\) === 'always' && applyStartupSubtitlePref\(\)\) return;[\s\S]+\/api\/ossubs/,
-    'web startup should still retain the built-in-first branch for when built-ins are re-enabled');
+  assert.match(webHousekeeping, /await fetchPlayerTracks\(p, 1400\)[\s\S]+const episodePlay = !!\(ep && ep\.episode > 0\);[\s\S]+if \(!episodePlay && bestBuiltInSubtitleRel\(\) && prefSubtitleMode\(\) === 'always'\) \{[\s\S]+applyStartupSubtitlePref\(\);[\s\S]+return;[\s\S]+\}[\s\S]+if \(prefSubtitleMode\(\) === 'always' && applyStartupSubtitlePref\(\)\) return;[\s\S]+\/api\/ossubs/,
+    'movies can still start on a built-in subtitle; a TV episode continues on to the online subtitle');
   assert.match(ui, /const releaseSubs = visibleReleaseSubChoices\(\);[\s\S]+releaseSubs\.slice\(0, 6\)\.forEach[\s\S]+releaseSubLabel\(sub\)/,
     'CC menu should list same-release subtitles ahead of online subtitle choices');
   assert.match(ui, /function releaseSubChoices\(\) \{\s+if \(!builtInSubtitlesEnabled\(\)\) return \[\];[\s\S]+return \(p && p\.tracks && Array\.isArray\(p\.tracks\.releaseSubs\)\) \? p\.tracks\.releaseSubs : \[\];[\s\S]+\}/,
@@ -2891,8 +2891,10 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'Play after a crash must hide the circles; remux Play uses leftover when live and remounts only a dead pipe; a second Play while remounting is ignored');
   assert.match(android, /NATIVE_LONG_PAUSE_REMOUNT_MS = 45000L[\s\S]+pausedForMs >= NATIVE_LONG_PAUSE_REMOUNT_MS[\s\S]+nativeRemuxBufferLooksLive\(\)/,
     'a phone-call length pause remounts the same file instead of playing a dead leftover');
-  assert.match(android, /protected void onPause\(\) \{[\s\S]+nativeWantsPause\(\)[\s\S]+markNativeUserPaused\(\)[\s\S]+nativePlayer\.pause\(\)/,
+  assert.match(android, /protected void onPause\(\) \{[\s\S]+nativeWantsPause\(\) \|\| nativeHoldWillAutoPlay\(\)\) nativeUserPause\(\)/,
     'leaving the app, including a phone call, remembers when playback stopped');
+  assert.match(android, /private void nativeUserPause\(\) \{[\s\S]+markNativeUserPaused\(\);[\s\S]+nativeQuietSeekHoldPlay = false;[\s\S]+nativePlayer != null\) nativePlayer\.pause\(\)/,
+    'pause during the opening wait must stay paused when the picture becomes ready');
   assert.match(ui, /window\.__tvNativeVideoResuming = \(pos, dur, token\) => \{[\s\S]+p\.nativePaused = false;/,
     'user Play must clear nativePaused so a dead remux pipe can recover');
   assert.match(ui, /function remuxResumeLooksLive\(v\) \{[\s\S]+ranges\.end\(i\) > t \+ 0\.4[\s\S]+function togglePlay\(\) \{[\s\S]+p\.usingRemux \|\| p\.usingTranscode[\s\S]+if \(p\._webResuming\) \{ updPP\(\); return; \}[\s\S]+if \(remuxResumeLooksLive\(v\)\) \{[\s\S]+requestVideoPlay\(v\)[\s\S]+remountWebRemuxResume\(p\)/,
@@ -4128,7 +4130,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native playback should not allow provider redirects to switch protocols after URL validation');
   assert.match(android, /setAudioAttributes\(new AudioAttributes\.Builder\(\)[\s\S]+setUsage\(C\.USAGE_MEDIA\)[\s\S]+setHandleAudioBecomingNoisy\(true\)/,
     'Android ExoPlayer should request media audio focus and pause on noisy-device changes');
-  assert.match(android, /protected void onPause\(\) \{[\s\S]+boolean inPip = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.N && isInPictureInPictureMode\(\);[\s\S]+if \(nativePlayer != null && !inPip\) \{[\s\S]+nativeWantsPause\(\)[\s\S]+markNativeUserPaused\(\)[\s\S]+nativePlayer\.pause\(\);[\s\S]+__tvNativeVideoProgress[\s\S]+__tvPlaybackBackgrounded[\s\S]+document\.querySelectorAll\('video'\)\.forEach\(v=>v\.pause\(\)\)[\s\S]+if \(!inPip && !musicPlaying\) \{[\s\S]+web\.evaluateJavascript\(checkpoint, ignored -> suspendWeb\.run\(\)\);[\s\S]+web\.postDelayed\(suspendWeb, 250L\);/,
+  assert.match(android, /protected void onPause\(\) \{[\s\S]+boolean inPip = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.N && isInPictureInPictureMode\(\);[\s\S]+if \(nativePlayer != null && !inPip\) \{[\s\S]+nativeWantsPause\(\) \|\| nativeHoldWillAutoPlay\(\)\) nativeUserPause\(\);[\s\S]+else nativePlayer\.pause\(\);[\s\S]+__tvNativeVideoProgress[\s\S]+__tvPlaybackBackgrounded[\s\S]+document\.querySelectorAll\('video'\)\.forEach\(v=>v\.pause\(\)\)[\s\S]+if \(!inPip && !musicPlaying\) \{[\s\S]+web\.evaluateJavascript\(checkpoint, ignored -> suspendWeb\.run\(\)\);[\s\S]+web\.postDelayed\(suspendWeb, 250L\);/,
     'Android backgrounding should remember a phone-call pause, then checkpoint exact native progress before pausing playback/WebView timers, while keeping system PiP playback and background music alive');
   assert.doesNotMatch(android, /protected void onPause\(\) \{[\s\S]{0,240}closeNativePlayback\(true\);/,
     'Android onPause must not close native playback; that caused resume/PiP churn');
@@ -4677,9 +4679,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'online subtitle lookup should use the episode-aware query captured during play');
   assert.match(server, /function subtitleReleaseName\(vf\) \{[\s\S]+vf\._releaseName[\s\S]+const releaseName = subtitleReleaseName\(vf\) \|\| vf\.name;[\s\S]+subQuery = vf\._subQuery \|\| vf\._q \|\| releaseName \|\| vf\.name[\s\S]+rankSubs\(combined, releaseName[\s\S]+downloadBestSubtitle\([\s\S]+releaseName,/,
     'online subtitle lookup should rank and download using the selected source release name (Wyzie + OpenSubtitles merged)');
-  assert.match(server, /const ranked = rankSubs\(combined, releaseName[\s\S]+const variants = usableVariants\(ranked, \{ releaseName \}\)\.slice\(0, 12\);/,
+  assert.match(server, /const ranked = rankSubs\(combined, releaseName[\s\S]+season: rankSeason, episode: rankEpisode[\s\S]+const variants = usableVariants\(ranked, \{ releaseName, season: rankSeason, episode: rankEpisode \}\)\.slice\(0, 12\);/,
     'the displayed subtitle variant list must be trimmed by usableVariants (hide wrong-episode / non-text rows)');
-  assert.match(server, /if \(!variant && !hasConfidentAutoPick\(variants, \{ releaseName \}\)\) \{[\s\S]+e\.noSubtitles = true;[\s\S]+throw e;/,
+  assert.match(server, /if \(!variant && !hasConfidentAutoPick\(variants, \{ releaseName, season: rankSeason, episode: rankEpisode \}\)\) \{[\s\S]+e\.noSubtitles = true;[\s\S]+throw e;/,
     'the automatic subtitle pick must refuse to serve a confirmed wrong-episode sub (report no-subtitles instead)');
   assert.match(server, /if \(wantsList\) \{[\s\S]+const menu = distinctVariants\(variants\);[\s\S]+variants: menu\.map\(/,
     'the subtitle menu list must collapse mirror-duplicate rows via distinctVariants (full set kept for download fallback)');
@@ -4705,8 +4707,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'transcode of a ripped movie must feed ffmpeg the file path');
   assert.match(server, /function beginMountPlayerRead\(vf, now = Date\.now\(\)\) \{[\s\S]+if \(vf\._local\) return true;[\s\S]+pipeline\.rebalancePlaybackWindows\(now\);/,
     'playing a local file must not rebalance usenet sockets');
-  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(saved === 'off'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+const builtIn = bestBuiltInSubtitleRel\(\);[\s\S]+if \(builtIn\) return builtIn;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
-    'startup subtitles should stay off in manual mode and prefer online subtitles while built-ins are disabled');
+  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(saved === 'off'\) return '';[\s\S]+const episodePlay = !!\(ep && ep\.episode > 0\);[\s\S]+const savedBuiltIn = typeof saved === 'string' && \(saved\.startsWith\('em:'\) \|\| saved\.startsWith\('rs:'\)\);[\s\S]+if \(subtitleRelPlayable\(p, saved\) && !\(episodePlay && savedBuiltIn\)\) return saved;[\s\S]+if \(episodePlay\) \{[\s\S]+const online = autoSubtitleRelFor\(p\);[\s\S]+if \(online\) return online;[\s\S]+\}[\s\S]+const builtIn = bestBuiltInSubtitleRel\(\);[\s\S]+if \(builtIn\) return builtIn;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
+    'startup subtitles should stay off in manual mode and a TV episode should use the online subtitle for that episode');
   assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
     'native playback should use the shared startup subtitle contract');
   assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
@@ -8134,8 +8136,8 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
   // primary provider passed into the combined ranking as a tie-breaking preference.
   assert.match(server, /const \[wySettled, osData\] = await Promise\.all\(\[\s*wyzieActive \? searchOnlineSubs\(subOpts\)\.then\(\(d\) => \(\{ d \}\), \(e\) => \(\{ e \}\)\) : Promise\.resolve\(\{ d: \[\] \}\),\s*osActive \? openSubtitlesVariantsForMount\(/,
     'both ACTIVE subtitle providers are queried in parallel (policy-gated)');
-  assert.match(server, /const ranked = rankSubs\(combined, releaseName, \{ durationSeconds: vf\._tracks && vf\._tracks\.duration, sdhPref, preferProvider \}\);/,
-    'the combined ranking receives the primary-provider preference');
+  assert.match(server, /const ranked = rankSubs\(combined, releaseName, \{[\s\S]+durationSeconds: vf\._tracks && vf\._tracks\.duration, sdhPref, preferProvider,[\s\S]+season: rankSeason, episode: rankEpisode,/,
+    'the combined ranking receives the primary-provider preference and the episode being watched');
   // FOUND-BUT-WON'T-LOAD: an OpenSubtitles download failure (login/quota/dead file) must fall
   // back to the Wyzie ladder when Wyzie rows exist, and rethrow an ACTIONABLE message when they
   // don't (opensubtitles-only) — never a bare "could not load" after a successful search.
@@ -8164,7 +8166,7 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
   // (7) The sync-state (skip-alass-when-matched) is stamped from the sub ACTUALLY SERVED — a
   // stale top link silently falls back, and stamping from the chosen pick froze fallback subs
   // as synced forever (drifting CC + dead Fix-sync).
-  assert.match(server, /const \{ vtt: dlVtt, served \} = await downloadBestSubtitle\([\s\S]{0,400}vf\._subSyncState\.set\(cacheKey, subtitleLooksSynced\(served, releaseName\)\)/,
+  assert.match(server, /const \{ vtt: dlVtt, served \} = await downloadBestSubtitle\([\s\S]{0,520}season: rankSeason,[\s\S]{0,280}vf\._subSyncState\.set\(cacheKey, subtitleLooksSynced\(served, releaseName\)\)/,
     'Wyzie downloads stamp sync-state from the served variant, after the download');
 });
 

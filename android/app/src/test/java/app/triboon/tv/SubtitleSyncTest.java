@@ -41,6 +41,24 @@ public class SubtitleSyncTest {
     }
 
     @Test
+    public void onceThePictureReachesTheSkipTheWordsFollowIt() {
+        long minute = 12 * 60 * 1000L;
+        SubtitleSync.Sample sample = SubtitleSync.step(
+                minute + 2000L, true, minute, 1000L, 3000L, 0L, minute, 20000L);
+        assertEquals(minute + 2000L, sample.mediaMs);
+        assertEquals(0L, sample.slipMs);
+    }
+
+    @Test
+    public void aTickThatMatchesTheWaitFollowsThePicture() {
+        long minute = 20 * 60 * 1000L;
+        SubtitleSync.Sample sample = SubtitleSync.step(
+                minute + 3000L, true, minute, 1000L, 4000L, 0L, -1L, 0L);
+        assertEquals(minute + 3000L, sample.mediaMs);
+        assertEquals(0L, sample.slipMs);
+    }
+
+    @Test
     public void steadyPlayFollowsThePicture() {
         SubtitleSync.Sample sample = SubtitleSync.step(
                 20 * 60 * 1000L + 250L, true, 20 * 60 * 1000L, 1000L, 1250L, 0L, -1L, 0L);

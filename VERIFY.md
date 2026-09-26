@@ -126,6 +126,28 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-26, v3.2.21 ship — a TV episode uses the subtitle that matches
+the Amazon file, and pause during the opening wait stays paused:
+
+- Version contract: `package.json` 3.2.21; Android `versionName` 3.2.21 /
+  `versionCode` 398; Windows client package/Tauri/Cargo(.lock) 3.2.21.
+- Example: you play FROM Season 1 Episode 10. The picture is the Amazon
+  1080p file. The words are the Amazon copy of that episode, not a
+  smaller web rip that shows up a few seconds late. You hit pause while
+  the picture is still starting. It stays paused.
+- Docs: player contract P1. Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 757/757. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.21, household VOD play/seek/resume/CC on the
+  house process v3.2.21 (Mario ready 2992ms, 1stByte 50ms, seek 203ms,
+  resume 28ms, CC 200; FROM ready 2589ms, 1stByte 117ms, seek 154ms,
+  resume 20ms, CC 200; both playable), household IPTV first-byte + retune
+  (8855 channels, 2 video picks), household overlapping Play (FROM ready
+  11ms, Mario ready 21ms), Android lint + unit tests + debug build, Android
+  ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260926-111657.json`, never the Shield). Windows
+  GPU/HDR was not run. Unraid was not updated by this check.
+
 2026-09-25, v3.2.20 ship — a skip stays on the minute you chose,
 and a buffer keeps the subtitle on that frozen picture:
 

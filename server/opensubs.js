@@ -248,6 +248,17 @@ function episodeKey(s) {
   if (xe) return `s${String(+xe[1]).padStart(2, '0')}e${String(+xe[2]).padStart(2, '0')}`;
   return '';
 }
+// The player knows the episode even when the file name is a hash. That episode wins over
+// whatever SxxExx happens to be inside the release name, so episode 5 cannot inherit
+// episode 1's dialogue just because the nzb was obfuscated.
+function requestedEpisodeKey(releaseName, { season = null, episode = null } = {}) {
+  const s = Number(season);
+  const e = Number(episode);
+  if (Number.isInteger(s) && s >= 0 && Number.isInteger(e) && e > 0) {
+    return `s${String(s).padStart(2, '0')}e${String(e).padStart(2, '0')}`;
+  }
+  return episodeKey(releaseName);
+}
 function subtitleMatchText(d) {
   return [
     d && d.display,
@@ -365,17 +376,38 @@ function cleanReleaseDisplay(s) {
 // tie-breakers (≤~112) but BELOW every correctness signal — partial release containment (220),
 // episode match (260), full release (650), moviehash (1000) — so the primary provider wins
 // between otherwise-comparable subs and can never beat a better-matched one.
+// Same episode is not the same clock. A 720p WEB rip sits a few seconds behind an
+// Amazon WEB-DL. Prefer the store and the WEB-DL/resolution the file actually is.
+function sourceFitBonus(releaseName, relText) {
+  const mine = String(releaseName || '').toLowerCase();
+  const rel = String(relText || '').toLowerCase();
+  if (!mine || !rel) return 0;
+  let s = 0;
+  const mineAmzn = /\bamzn\b|\bamazon\b/.test(mine);
+  const relAmzn = /\bamzn\b|\bamazon\b/.test(rel);
+  if (mineAmzn && relAmzn) s += 160;
+  else if (mineAmzn && /web/.test(rel) && !relAmzn) s -= 30;
+  const mineWebDl = /web[-.\s]?dl/.test(mine);
+  const relWebDl = /web[-.\s]?dl/.test(rel);
+  if (mineWebDl && relWebDl) s += 70;
+  else if (mineWebDl && /web[-.\s]?rip/.test(rel)) s -= 30;
+  const height = (name) => (String(name).match(/\b(2160|1080|720|480)p\b/) || [])[1] || '';
+  const mh = height(mine);
+  const rh = height(rel);
+  if (mh && rh) s += mh === rh ? 40 : -20;
+  return s;
+}
 function providerBonus(d, preferProvider) {
   if (!preferProvider) return 0;
   return ((d && d._provider) || 'wyzie') === preferProvider ? 120 : 0;
 }
-function pickSub(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid', preferProvider = '' } = {}) {
+function pickSub(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid', preferProvider = '', season = null, episode = null } = {}) {
   const mine = String(releaseName).toLowerCase();
   const myReleaseKey = releaseKey(releaseName);
   const myWeb = /\bweb[-. ]?(dl|rip)?\b|amzn|nf(?=[. ])|hulu|atvp|dsnp/i.test(mine);
   const myBlu = /blu-?ray|bd(rip|remux)?\b|remux/i.test(mine);
   const myGroup = (/-([a-z0-9]+)(?:\.(mkv|mp4|avi))?$/i.exec(mine) || [])[1];
-  const myEpisode = episodeKey(mine);
+  const myEpisode = requestedEpisodeKey(releaseName, { season, episode });
   const myEdition = editionTags(mine);
   const inferredEdition = inferredEditionFromDuration(durationSeconds);
   if (inferredEdition) myEdition.add(inferredEdition);
@@ -403,6 +435,7 @@ function pickSub(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid
     if (myWeb && /web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) s += 100;
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
     if ((myWeb && /blu|bd|remux/.test(rel)) || (myBlu && /web/.test(rel))) s -= 80; // wrong cut
+    s += sourceFitBonus(releaseName, rel);
     if (subtitleIsForced(d)) s -= 700; // forced/foreign-only is never the full-CC auto-pick
     s += popularityBonus(d); // tie-breaker only — capped below release/episode signals
     s += sdhBias(d, sdhPref);
@@ -593,15 +626,15 @@ async function wyzieSearchResults({ key, tmdbId, imdbId, query, lang = 'en', rel
   }
 }
 
-function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid', preferProvider = '' } = {}) {
-  const picked = pickSub(data, releaseName, { durationSeconds, sdhPref, preferProvider });
+function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid', preferProvider = '', season = null, episode = null } = {}) {
+  const picked = pickSub(data, releaseName, { durationSeconds, sdhPref, preferProvider, season, episode });
   const bestKey = picked && (picked.id != null ? String(picked.id) : String(picked.url || ''));
   const mine = String(releaseName).toLowerCase();
   const myReleaseKey = releaseKey(releaseName);
   const myWeb = /\bweb[-. ]?(dl|rip)?\b|amzn|nf(?=[. ])|hulu|atvp|dsnp/i.test(mine);
   const myBlu = /blu-?ray|bd(rip|remux)?\b|remux/i.test(mine);
   const myGroup = (/-([a-z0-9]+)(?:\.(mkv|mp4|avi))?$/i.exec(mine) || [])[1];
-  const myEpisode = episodeKey(mine);
+  const myEpisode = requestedEpisodeKey(releaseName, { season, episode });
   const myEdition = editionTags(mine);
   const inferredEdition = inferredEditionFromDuration(durationSeconds);
   if (inferredEdition) myEdition.add(inferredEdition);
@@ -631,6 +664,7 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoi
     if (myWeb && /web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) s += 100;
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
     if ((myWeb && /blu|bd|remux/.test(rel)) || (myBlu && /web/.test(rel))) s -= 80;
+    s += sourceFitBonus(releaseName, rel);
     if (subtitleIsForced(d)) s -= 700; // forced/foreign-only stays in the list but never auto-picks
     s += popularityBonus(d); // tie-breaker only — capped below release/episode/hash signals
     s += sdhBias(d, sdhPref);
@@ -686,9 +720,9 @@ function dedupeVariantLabels(ranked) {
 // frequently the only correctly-synced option for a given release. If filtering would empty the
 // list (e.g. the provider only returned wrong-episode hits) we return the ranked list unchanged
 // so we degrade to best-effort rather than to a bare "no subtitles".
-function usableVariants(ranked, { releaseName = '' } = {}) {
+function usableVariants(ranked, { releaseName = '', season = null, episode = null } = {}) {
   const list = Array.isArray(ranked) ? ranked.filter(Boolean) : [];
-  const myEpisode = episodeKey(releaseName);
+  const myEpisode = requestedEpisodeKey(releaseName, { season, episode });
   const playable = list.filter((v) => {
     if (!/^(srt|vtt|)$/i.test(String(v.format || ''))) return false; // bitmap can't render as text
     if (myEpisode) {
@@ -732,11 +766,11 @@ function distinctVariants(variants, { max = 8 } = {}) {
 // file) qualifies; a confirmed DIFFERENT episode does not. When this is false for a TV target we
 // would rather report "no subtitles" than silently feed the viewer the wrong episode's dialogue
 // (which reads as "CC is broken"). Explicit user picks bypass this — only the automatic path uses it.
-function hasConfidentAutoPick(variants, { releaseName = '' } = {}) {
+function hasConfidentAutoPick(variants, { releaseName = '', season = null, episode = null } = {}) {
   const list = Array.isArray(variants) ? variants.filter(Boolean) : [];
   if (!list.length) return false;
   const isText = (v) => /^(srt|vtt|)$/i.test(String(v.format || ''));
-  const myEpisode = episodeKey(releaseName);
+  const myEpisode = requestedEpisodeKey(releaseName, { season, episode });
   if (!myEpisode) return list.some(isText);
   return list.some((v) => {
     if (!isText(v)) return false;
@@ -756,8 +790,8 @@ function subtitleDownloadCanFallback(e) {
 }
 
 async function downloadBestSubtitle(data, { key, releaseName = '', durationSeconds = 0, preferredId = '',
-  base = DEFAULT_BASE, attempts = 2, retryDelayMs = 700 } = {}) {
-  const ranked = rankSubs(data, releaseName, { durationSeconds });
+  season = null, episode = null, base = DEFAULT_BASE, attempts = 2, retryDelayMs = 700 } = {}) {
+  const ranked = rankSubs(data, releaseName, { durationSeconds, season, episode });
   if (!ranked.length) throw permanent(`no usable subtitle file in the results`);
   let ordered = ranked;
   if (preferredId) {

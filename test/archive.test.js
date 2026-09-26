@@ -602,6 +602,20 @@ test('e2e: release sidecar subtitles are discovered without changing the picked 
   });
 });
 
+test('e2e: a season pack sidecar for another episode is not offered', async () => {
+  const wrong = Buffer.from('1\r\n00:00:01,000 --> 00:00:02,000\r\nEpisode one\r\n');
+  const right = Buffer.from('1\r\n00:00:01,000 --> 00:00:02,000\r\nEpisode ten\r\n');
+  const zip = writeZipStore([
+    { name: 'FROM.S01E01.English.srt', data: wrong },
+    { name: 'FROM.S01E10.Oh.the.Places.Well.Go.English.srt', data: right },
+    { name: 'FROM.S01E10.Oh.the.Places.Well.Go.mkv', data: PAYLOAD },
+  ]);
+  await withMockMount([{ name: 'release.zip', data: zip }], async (vf) => {
+    assert.strictEqual(vf.name, 'FROM.S01E10.Oh.the.Places.Well.Go.mkv');
+    assert.deepStrictEqual(vf.releaseSubs.map((s) => s.name), ['FROM.S01E10.Oh.the.Places.Well.Go.English.srt']);
+  });
+});
+
 test('e2e: compressed, encrypted, and 7z mounts are honest about not streaming (yet)', async () => {
   const cases = [
     { vols: [{ name: 'c.rar', data: loadFix('comp5.rar') }], tags: ['compressed', '🐢'] },

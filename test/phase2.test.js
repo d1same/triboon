@@ -1190,6 +1190,12 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
   ];
   const forWeb = pickSub(data, 'Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb.mkv');
   assert.strictEqual(forWeb.id, 2, 'WEB-DL source picks the WEB-DL sub');
+  const fromCuts = [
+    { id: 'cakes', url: 'http://x/cakes.srt', format: 'srt', display: 'From.S01E10.720p.WEB.H264-CAKES', release: 'From.S01E10.720p.WEB.H264-CAKES' },
+    { id: 'amzn', url: 'http://x/amzn.srt', format: 'srt', display: 'From.S01E10.1080p.AMZN.WEB-DL.x265-t3nzin', release: 'From (2022) - S01E10 (1080p AMZN WEB-DL x265 t3nzin)' },
+  ];
+  assert.strictEqual(pickSub(fromCuts, 'FROM.S01E10.Oh.the.Places.Well.Go.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX.mkv', { season: 1, episode: 10 }).id, 'amzn',
+    'an Amazon WEB-DL episode must not auto-pick a 720p WEB rip that sits behind the picture');
   const exactFile = [
     { id: 'generic', url: 'http://x/generic.srt', format: 'srt', display: 'Show.S01E01.1080p.WEB-DL' },
     { id: 'exact', url: 'http://x/exact.srt', format: 'srt', fileName: 'Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb.srt' },
@@ -1211,6 +1217,14 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
   ];
   assert.strictEqual(pickSub(rookie, 'The.Rookie.S01E03.1080p.WEB-DL-GRP.mkv').id, 'e3',
     'TV subtitles must prefer the exact episode over same-show/wrong-episode files');
+  const hashed = [
+    { id: 'e1', url: 'http://x/e1.srt', format: 'srt', display: 'The.Rookie.S01E01.1080p.WEB-DL-GRP' },
+    { id: 'e5', url: 'http://x/e5.srt', format: 'srt', display: 'The.Rookie.S01E05.1080p.WEB-DL-GRP' },
+  ];
+  assert.strictEqual(pickSub(hashed, 'a4f91c0e8b.mkv', { season: 1, episode: 5 }).id, 'e5',
+    'a hashed episode file still picks the episode the player is watching');
+  assert.notStrictEqual(pickSub(hashed, 'a4f91c0e8b.mkv', { season: 1, episode: 5 }).id, 'e1',
+    'episode 5 must not inherit episode 1 dialogue');
   const rookieRanked = rankSubs(rookie, 'The.Rookie.S01E03.1080p.WEB-DL-GRP.mkv');
   assert.strictEqual(rookieRanked[0].id, 'e3', 'the exact episode is the selected subtitle variant');
   assert.match(rookieRanked[0].label, /S01E03 - WEB-DL - GRP/,
@@ -1350,6 +1364,12 @@ test('subs: hasConfidentAutoPick guards the automatic pick against wrong-episode
   ], release);
   assert.ok(!hasConfidentAutoPick(allWrong, { releaseName: release }),
     'when EVERY result is a confirmed different episode there is no confident auto-pick (report no-subs, do not feed wrong dialogue)');
+  const hashedName = 'a4f91c0e8b.mkv';
+  const hashedWrong = rankSubs([
+    { id: 'a', url: 'http://x/a.srt', format: 'srt', display: 'House.S01E01.WEB-DL-GRP' },
+  ], hashedName, { season: 2, episode: 5 });
+  assert.ok(!hasConfidentAutoPick(hashedWrong, { releaseName: hashedName, season: 2, episode: 5 }),
+    'a hashed file still refuses another episode when the player said which episode this is');
   const movie = rankSubs([{ id: 'm', url: 'http://x/m.srt', format: 'srt', display: 'Some.Movie.2024.WEB-DL' }], 'Some.Movie.2024.WEB-DL.mkv');
   assert.ok(hasConfidentAutoPick(movie, { releaseName: 'Some.Movie.2024.WEB-DL.mkv' }), 'movies (no episode) auto-pick any text sub');
 });

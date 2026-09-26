@@ -469,8 +469,10 @@ them when the table is reorganized:
   the bar, or skipping back or forward, used to snap the picture back to the
   minute already playing. The phone holds the minute you picked until the
   picture arrives there, and the bar does not paint the old minute back.
-  Subtitles move to that same minute. A buffer keeps the line on the frozen
-  frame, and the clock jump from the wait is not a new minute.
+  Subtitles move to that same minute, then follow the picture once it arrives.
+  A hashed episode file uses the episode the player is watching, so episode 5
+  does not inherit episode 1's words. A buffer keeps the line on the frozen
+  frame. A tick that simply matches the wait follows the picture.
   Code: `android/.../SeekLanding.java`, `android/.../SubtitleSync.java`,
   `MainActivity` `nativeSubtitleMediaMs`, `web/index.html`
   `subtitleMediaNow`. Verification: `SeekLandingTest` and `SubtitleSyncTest`.

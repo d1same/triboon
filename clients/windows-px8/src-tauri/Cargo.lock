@@ -3643,7 +3643,7 @@ dependencies = [
 
 [[package]]
 name = "triboon-px8"
-version = "3.2.20"
+version = "3.2.21"
 dependencies = [
  "libmpv2",
  "native-tls",

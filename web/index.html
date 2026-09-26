@@ -12925,7 +12925,9 @@ function startWebPlayerHousekeeping(mount, it) {
       // warm online subtitles immediately instead of inserting a 1.4-second wait first.
       if (builtInSubtitlesEnabled()) await fetchPlayerTracks(p, 1400).catch(() => null);
       if (!S.playing || S.playing !== p || p.subTrack) return;
-      if (bestBuiltInSubtitleRel() && prefSubtitleMode() === 'always') {
+      const ep = p.item && episodeKeyParts(p.item);
+      const episodePlay = !!(ep && ep.episode > 0);
+      if (!episodePlay && bestBuiltInSubtitleRel() && prefSubtitleMode() === 'always') {
         applyStartupSubtitlePref();
         return;
       }
@@ -16986,11 +16988,21 @@ function concreteSubtitleRel(rel) {
 }
 function startupSubtitleRelFor(p, saved = loadSubChoice()) {
   if (!p || p._subtitleDisabledThisSession) return '';
-  // Manual mode is truly manual at startup; Always mode can reuse a saved online
-  // or local choice, otherwise it picks built-in subtitles before online subtitles.
+  // Manual mode is truly manual at startup. Always mode can reuse a saved online pick.
   if (prefSubtitleMode() !== 'always') return '';
   if (saved === 'off') return '';
-  if (subtitleRelPlayable(p, saved)) return saved;
+  // A TV episode's file often carries another episode's sidecar, or Amazon
+  // captions timed for a different cut. A remembered built-in from last time
+  // must not stick. Rank the online subtitle to the episode that is playing.
+  // Movies still try the file's own subtitles first. A saved online pick stays.
+  const ep = p.item && episodeKeyParts(p.item);
+  const episodePlay = !!(ep && ep.episode > 0);
+  const savedBuiltIn = typeof saved === 'string' && (saved.startsWith('em:') || saved.startsWith('rs:'));
+  if (subtitleRelPlayable(p, saved) && !(episodePlay && savedBuiltIn)) return saved;
+  if (episodePlay) {
+    const online = autoSubtitleRelFor(p);
+    if (online) return online;
+  }
   const builtIn = bestBuiltInSubtitleRel();
   if (builtIn) return builtIn;
   return autoSubtitleRelFor(p);
@@ -17771,7 +17783,9 @@ function subtitleMediaNow(p) {
   if (p._subFrozen && p._subShown != null && p._subShownWall) {
     const wallSec = Math.max(0, (Date.now() - p._subShownWall) / 1000);
     const jump = raw - p._subShown;
-    if (jump > 2 && (Math.abs(jump - wallSec) < 2 || jump > wallSec + 1.5)) {
+    // A late tick while the movie kept playing has jump ≈ wall. Follow it.
+    // Only a clock that leaps past the wait is a stall, not a new minute.
+    if (jump > 2 && jump > wallSec + 1.5) {
       p._subSlip = (p._subSlip || 0) + jump;
     }
   }
