@@ -126,6 +126,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-26, v3.2.24 ship — a pause stays paused, and Watching now keeps one row:
+
+- Version contract: `package.json` 3.2.24; Android `versionName` 3.2.24 /
+  `versionCode` 401; Windows client package/Tauri/Cargo(.lock) 3.2.24.
+- Example: you pause Unabomber at 55:33. A dropped line does not start the
+  picture again. Watching now shows one bar for that TV, not two copies a
+  few seconds apart. A play line says `why=viewer` or `why=remount`, and a
+  login refusal says `login refused`.
+- Docs: player contract P1. Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 757/757. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.24, household VOD play/seek/resume/CC on the
+  house process v3.2.24 (Mario ready 160ms, 1stByte 8ms, seek 123ms,
+  resume 17ms, CC 200; FROM ready 192ms, 1stByte 13ms, seek 68ms,
+  resume 7ms, CC 200; both playable), household IPTV first-byte + retune
+  (8855 channels, 2 video picks), household overlapping Play (FROM ready
+  7ms, Mario ready 19ms), Android lint + unit tests + debug build, Android
+  ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260926-164022.json`, never the Shield). Windows
+  GPU/HDR was not run. Unraid was not updated by this check.
+
 2026-09-26, v3.2.23 ship — a bug line shows the clock, and the other open file is named:
 
 - Version contract: `package.json` 3.2.23; Android `versionName` 3.2.23 /

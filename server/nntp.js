@@ -239,7 +239,8 @@ class NntpConnection {
       const waiting = (this.waiters || []).map((w) => w && w.cmdName).filter(Boolean).slice(0, 4).join(', ');
       const line = `${host}: ${msg || err.code || 'socket stopped'}${waiting ? ` while waiting on ${waiting}` : ''}`;
       debug.fail('buffer', line);
-      debug.issue(`connection dropped — reason: ${line}`);
+      const loginRefused = err && (err.code === 'NNTP_AUTH_LOST' || /48[012]|auth failed/i.test(msg));
+      debug.issue(`${loginRefused ? 'login refused' : 'connection dropped'} — reason: ${line}`);
     }
     this.alive = false;
     clearTimeout(this._connectTimer);
@@ -479,7 +480,7 @@ class ProviderPool {
       ? `${host} refused a new login, so playback is staying on the ${open} lines already open`
       : `${host} refused a new login, so playback will not open another line for two minutes`;
     debug.fail('buffer', refused);
-    debug.issue(`connection dropped — reason: ${refused}`);
+    debug.issue(`login refused — reason: ${refused}`);
   }
   authBroken() {
     const now = Date.now();
@@ -505,7 +506,7 @@ class ProviderPool {
     const host = (this.opts && this.opts.host) || 'usenet';
     const full = `${host} is full, so playback is using ${this.size} connections`;
     debug.fail('buffer', full);
-    debug.issue(`connection dropped — reason: ${full}`);
+    debug.issue(`account full — reason: ${full}`);
   }
 
   _admitConn(c) {
@@ -559,7 +560,7 @@ class ProviderPool {
           } else {
             const authLine = `${(this.opts && this.opts.host) || 'usenet'}: ${e.message}`;
             debug.fail('buffer', authLine);
-            debug.issue(`connection dropped — reason: ${authLine}`);
+            debug.issue(`login refused — reason: ${authLine}`);
           }
         }
         try { c.close(); } catch {}

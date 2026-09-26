@@ -356,6 +356,7 @@ public class MainActivity extends Activity {
     private boolean nativeIssuePauseNoted;
     private long nativeResumeGraceUntilMs;
     private long nativeUserPausedAtMs;
+    private boolean nativeStayedPausedNoted;
     private boolean nativeVideoStarted;
     private boolean nativeVideoMemoryTrimmedDuringBuffer;
     private boolean nativeVideoErrorNotified;
@@ -4448,7 +4449,11 @@ public class MainActivity extends Activity {
             } else {
                 nativeResumeGraceUntilMs = 0L;
             }
-            nativeUserPausedAtMs = 0L;
+            // A new movie may start. A quiet rebuild of the one already on screen must
+            // keep a pause, or the picture presses Play by itself a couple of minutes later.
+            if (!AutoResume.keepPauseOnQuietRemount(nativeUserPausedAtMs, reuseQuietVideo)) {
+                nativeUserPausedAtMs = 0L;
+            }
             nativeVideoMemoryTrimmedDuringBuffer = false;
             nativeVideoErrorNotified = false;
             // Reset the reconnect budget only for a genuinely NEW mount. A quiet-seek reuse re-mount IS
@@ -4568,6 +4573,12 @@ public class MainActivity extends Activity {
                             return;
                         }
                         if (nativeVideoStarted && nativeLastVideoDisplayMs > 0L
+                                && isNativeRecoverableIoError(error)
+                                && !AutoResume.mayReconnectWhilePaused(nativeUserPausedAtMs)) {
+                            noteStayedPaused("a dropped line wanted to start the picture");
+                            return;
+                        }
+                        if (nativeVideoStarted && nativeLastVideoDisplayMs > 0L
                                 && isNativeRecoverableIoError(error) && nativeAllowReconnectResume()) {
                             // Resume at the FRESH live position (not the up-to-1s-stale sample) so the
                             // reconnect lands on the true drop point, not ~1s behind it.
@@ -4634,7 +4645,11 @@ public class MainActivity extends Activity {
                     }
                     if (state == Player.STATE_ENDED && "video".equals(nativeMode)) {
                         if (nativePercentResumePending) return;
-                        if (nativePlayer != null && !nativePlayer.getPlayWhenReady()) {
+                        if (nativePlayer != null && (!nativePlayer.getPlayWhenReady()
+                                || !AutoResume.mayReconnectWhilePaused(nativeUserPausedAtMs))) {
+                            if (!AutoResume.mayReconnectWhilePaused(nativeUserPausedAtMs)) {
+                                noteStayedPaused("the pipe ended and wanted to start the picture");
+                            }
                             Log.w(TAG, "Native VOD ENDED while paused; keeping player, no remount");
                             return;
                         }
@@ -4772,9 +4787,11 @@ public class MainActivity extends Activity {
             // resolved. Direct play begins after its seek; server-seek modes begin after remount.
             nativeQuietSeekHoldPlay = reuseQuietVideo && "video".equals(mode)
                     && nativeServerSeekMode() && !nativePercentResumePending;
-            if (nativePercentResumePending || nativeQuietSeekHoldPlay) nativePlayer.setPlayWhenReady(false);
+            if (nativePercentResumePending || nativeQuietSeekHoldPlay
+                    || AutoResume.keepPauseOnQuietRemount(nativeUserPausedAtMs, true)) nativePlayer.setPlayWhenReady(false);
             else nativePlayer.play();
-            if (reuseQuietVideo && "video".equals(mode) && web != null) {
+            if (reuseQuietVideo && "video".equals(mode) && web != null
+                    && AutoResume.mayReconnectWhilePaused(nativeUserPausedAtMs)) {
                 web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
                         + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
             }
@@ -5024,6 +5041,11 @@ public class MainActivity extends Activity {
                 boolean bigRestart = backwardsBy > 60000L;
                 if (!bigRestart && ++nativeBackwardTicks < 2) return; // small regression — wait one more tick
                 long now = SystemClock.elapsedRealtime();
+                if (!AutoResume.mayReconnectWhilePaused(nativeUserPausedAtMs)) {
+                    noteStayedPaused("the picture jumped and wanted to start again");
+                    nativeBackwardTicks = 0;
+                    return;
+                }
                 if ((nativeLastAutoResumeSeekMs <= 0L || now - nativeLastAutoResumeSeekMs >= 1500L)
                         && nativeAllowReconnectResume()) {
                     nativeLastAutoResumeSeekMs = now;
@@ -5110,6 +5132,15 @@ public class MainActivity extends Activity {
 
     private void markNativeUserPaused() {
         nativeUserPausedAtMs = SystemClock.elapsedRealtime();
+        nativeStayedPausedNoted = false;
+    }
+
+    // One line per pause. A dropped line must not fill the log while the picture stays still.
+    private void noteStayedPaused(String why) {
+        if (nativeStayedPausedNoted || web == null) return;
+        nativeStayedPausedNoted = true;
+        reportNativePlaybackIssue("trace", "stayed paused — " + (why == null ? "the player wanted to start" : why),
+                Math.max(0L, nativePosSeconds()));
     }
 
     // A quiet remount and a percent resume hold play off, then press Play when ready.

@@ -8381,6 +8381,7 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   // the same window server-side.
   const traktResumeFrac = traktResumeFractionForItem(it);
   if (body.resumeFrac === undefined && traktResumeFrac > 0) body.resumeFrac = traktResumeFrac;
+  if (!body.why) body.why = 'viewer';
   return body;
 }
 function maybePrepareFocusedHomeCard() {
@@ -9222,6 +9223,7 @@ async function play(it, pick, opts = {}) {
       return;
     }
     const body = playbackRequestBody(it, picked, qRank);
+    body.why = 'viewer';
     if (preferredRank !== null) it.qualityRank = preferredRank;
     const r = await api('/api/play', { method: 'POST', body });
     if (S._playTicket !== playTicket) return;
@@ -14060,7 +14062,8 @@ function applyNativeVideoProgress(pos, dur, opts = {}) {
   }
   if (landing) p._seekLandUntil = 0;
   if (!keepPrev && prev > 1 && incoming - prev > 3 && !(p.suppressSeekLoaderUntil && appMs() < p.suppressSeekLoaderUntil)) {
-    notePlaybackTrace('clock jumped forward ' + (incoming - prev).toFixed(2) + 's from ' + prev.toFixed(3) + ' to ' + incoming.toFixed(3));
+    notePlaybackTrace('clock jumped forward ' + (incoming - prev).toFixed(2) + 's from ' + prev.toFixed(3) + ' to ' + incoming.toFixed(3)
+      + (p.nativePaused ? ' while the movie was paused' : ''));
   }
   if (!keepPrev) notePictureHop(p, prev, incoming);
   p.nativePos = keepPrev ? prev : incoming;
@@ -14107,7 +14110,7 @@ window.__tvNativeVideoPlaying = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   const wasPaused = !!p.nativePaused;
   applyNativeVideoProgress(pos, dur);
-  if (wasPaused) notePlaybackTrace('resumed at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's');
+  if (wasPaused && p._pausedAt) notePlaybackTrace('started again after pause at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's — the player pressed play');
   p.nativePaused = false;
   p._nativeResuming = false;
   clearPauseIdleExit();
@@ -14120,6 +14123,7 @@ window.__tvNativeVideoPlaying = (pos, dur, token) => {
 window.__tvNativeVideoResuming = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
+  if (p.nativePaused && p._pausedAt) notePlaybackTrace('resumed at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's — the viewer pressed play');
   p.nativePaused = false;
   p._nativeResuming = true;
   p._pausedAt = 0;
@@ -14705,10 +14709,12 @@ async function reMountAndResume(reason = '', attempt = 0) {
   let at = currentTime();
   try {
     const remountBody = playbackRequestBody(p.item, p.name ? { name: p.name } : null);
+    remountBody.why = 'remount';
     const remountDur = (p.duration && isFinite(p.duration) && p.duration) || 0;
     if (at > 0 && remountDur > 0) remountBody.resumeFrac = Math.max(0, Math.min(0.98, at / remountDur));
     const r = await api('/api/play', { method: 'POST', body: remountBody });
     if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; } // user moved on / replaced playback
+    if (r.sessionId && r.sessionId !== p.sessionId) stopNamedActivity(p.sessionId);
     // Adopt the new mount (same field set autoAdvance maps), then resume the current source kind.
     p.sessionId = r.sessionId; p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl; p.hlsUrl = r.hlsUrl;
     p.encoder = r.encoder; p.tracksUrl = r.tracksUrl; p.subtitleBase = r.subtitleBase; p.streamToken = r.streamToken;
@@ -15802,6 +15808,18 @@ function activityPayload(state = 'watching') {
     device: navigator.userAgent || '',
     deviceName: deviceFriendlyName(),
   };
+}
+function stopNamedActivity(sessionId) {
+  if (!sessionId) return;
+  const headers = { 'content-type': 'application/json' };
+  const tok = tokenStore.get();
+  if (tok) headers.authorization = 'Bearer ' + tok;
+  fetch('/api/activity', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ sessionId, state: 'stopped' }),
+    keepalive: true,
+  }).catch(() => {});
 }
 function sendActivity(state = 'watching', opts = {}) {
   const payload = activityPayload(state);

@@ -5744,7 +5744,7 @@ const H = {
     const maturityAllowed = maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType)
       .catch(() => true);
     const t0 = Date.now();
-    debug.log('play', `request q=${body.q} tmdb=${body.tmdbId || '-'} s${body.season || '-'}e${body.ep || '-'}`);
+    debug.log('play', `request q=${body.q} tmdb=${body.tmdbId || '-'} s${body.season || '-'}e${body.ep || '-'} why=${String(body.why || '-').replace(/[^\w-]/g, '').slice(0, 24) || '-'}`);
     // HD/UHD toggle: a per-play resolution preference may tighten the cap DOWNWARD, never
     // above the admin-set cap (Plex semantics — user picks within their ceiling).
     Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType, body.season, body.ep));
@@ -5779,19 +5779,20 @@ const H = {
       const __prof = streamingRuntimeProfile();
       const bufferGoalSec = (streamIsUhd(vf) ? __prof.buffer4kSec : __prof.buffer1080Sec) || 0;
       const mountMs = Date.now() - t0;
-      debug.log('play', `ok "${candidate.name}" mount=${vf.id} session=${session.id} ms=${mountMs} live=${mounts.size}`);
+      const others = [];
+      for (const m of mounts.values()) {
+        if (!m || m === vf) continue;
+        const label = m._local
+          ? `disk ${m.name || 'file'}`
+          : (m._releaseName || m.name || 'usenet file');
+        others.push(String(label).replace(/[\r\n]+/g, ' ').slice(0, 80));
+        if (others.length >= 3) break;
+      }
+      const also = others.length ? ` also="${others.join('; ')}"` : '';
+      debug.log('play', `ok "${candidate.name}" mount=${vf.id} session=${session.id} ms=${mountMs} live=${mounts.size}${also}`);
       if (vf._lastPlayOkAt && Date.now() - vf._lastPlayOkAt < 20000) {
-        const others = [];
-        for (const m of mounts.values()) {
-          if (!m || m === vf) continue;
-          const label = m._local
-            ? `disk ${m.name || 'file'}`
-            : (m._releaseName || m.name || 'usenet file');
-          others.push(String(label).replace(/[\r\n]+/g, ' ').slice(0, 80));
-          if (others.length >= 3) break;
-        }
-        const also = others.length ? ` (${others.join('; ')})` : '';
-        debug.issue(`started again in ${mountMs}ms — "${candidate.name}" — reason: the same file was opened again while ${mounts.size} files were already open${also}`);
+        const named = others.length ? ` (${others.join('; ')})` : '';
+        debug.issue(`started again in ${mountMs}ms — "${candidate.name}" — reason: the same file was opened again while ${mounts.size} files were already open${named}`);
       }
       vf._lastPlayOkAt = Date.now();
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
@@ -8231,6 +8232,16 @@ Object.assign(H, {
       return send(ctx.res, 200, { ok: true });
     }
     const row = normalizeActivityRow(ctx, b, id, existing || {});
+    // One TV playing one movie is one row. A second play session (a reconnect,
+    // or Play asked again) used to leave the older bar up next to the new one.
+    for (const [otherId, other] of activitySessions) {
+      if (otherId === id || !other || other.userId !== row.userId) continue;
+      const sameDevice = (other.deviceName || other.device || '') === (row.deviceName || row.device || '');
+      const sameTitle = (other.key || other.title || '') && (other.key || other.title || '') === (row.key || row.title || '');
+      if (!sameDevice || !sameTitle) continue;
+      activitySessions.delete(otherId);
+      debug.log('activity', `watching now kept one row — "${row.title}" on ${row.deviceName || 'this device'} replaced session ${otherId}`);
+    }
     activitySessions.set(id, row);
     // Heartbeats tick every 10s. Rewriting history.json on each tick was extra disk
     // load on Unraid. Keep the live row in RAM; persist history on a new title only.

@@ -319,12 +319,42 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   assert.ok(visible.json.history.some((s) => s.title === 'The Test Movie' && s.userName === 'fam' && s.poster === 'https://image.tmdb.org/t/p/w342/mock-poster.jpg'),
     'activity history keeps a compact recent watch row with cover art');
   const again = await httpJson(srv.port, 'POST', '/api/activity', {
-    sessionId, state: 'watching', title: 'The Test Movie', type: 'movie', position: 700, duration: 6000,
+    sessionId, state: 'watching', title: 'The Test Movie', type: 'movie', deviceName: 'NVIDIA SHIELD', position: 700, duration: 6000,
   }, user);
   assert.strictEqual(again.status, 200);
   const afterTick = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
   assert.strictEqual(afterTick.json.history.filter((s) => s.title === 'The Test Movie').length, 1,
     'a 10s heartbeat on the same title does not grow history');
+  const second = await httpJson(srv.port, 'POST', '/api/activity', {
+    sessionId: 'test-session-activity-2',
+    state: 'watching',
+    title: 'The Test Movie',
+    type: 'movie',
+    deviceName: 'NVIDIA SHIELD',
+    position: 900,
+    duration: 6000,
+  }, user);
+  assert.strictEqual(second.status, 200);
+  const folded = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  const shieldRows = folded.json.sessions.filter((s) => s.title === 'The Test Movie' && s.deviceName === 'NVIDIA SHIELD');
+  assert.strictEqual(shieldRows.length, 1, 'one TV and one movie stay one Watching now row');
+  assert.strictEqual(shieldRows[0].sessionId, 'test-session-activity-2');
+  assert.strictEqual(shieldRows[0].position, 900);
+  const phone = await httpJson(srv.port, 'POST', '/api/activity', {
+    sessionId: 'test-session-activity-phone',
+    state: 'watching',
+    title: 'The Test Movie',
+    type: 'movie',
+    deviceName: 'Phone',
+    position: 10,
+    duration: 6000,
+  }, user);
+  assert.strictEqual(phone.status, 200);
+  const bothDevices = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  assert.strictEqual(bothDevices.json.sessions.filter((s) => s.title === 'The Test Movie').length, 2,
+    'the same movie on a second device stays its own row');
+  await httpJson(srv.port, 'POST', '/api/activity', { sessionId: 'test-session-activity-phone', state: 'stopped' }, user);
+  await httpJson(srv.port, 'POST', '/api/activity', { sessionId: 'test-session-activity-2', state: 'stopped' }, user);
 
   const stopped = await httpJson(srv.port, 'POST', '/api/activity', { sessionId, state: 'stopped' }, user);
   assert.strictEqual(stopped.status, 200);
@@ -597,6 +627,10 @@ test('playback issue lines include the reason', () => {
     assert.match(lines[0], /^\[debug:issue\] \d{2}:\d{2}:\d{2} buffered 8s at 56:42/);
     assert.match(server, /disk \$\{m\.name \|\| 'file'\}/,
       'a second open file is named, and a disk movie is marked disk so it is not a usenet login');
+    assert.match(server, /why=\$\{String\(body\.why/,
+      'a play line says whether the viewer pressed play or a remount asked again');
+    assert.match(server, /also="\$\{others\.join/,
+      'a play line names the other open files');
     assert.match(lines[0], /reason: the picture waited for bytes/);
   } finally {
     console.log = orig;

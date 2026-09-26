@@ -16,4 +16,17 @@ public class AutoResumeTest {
     public void pauseDuringTheOpeningWaitStaysPaused() {
         assertFalse(AutoResume.shouldStartHeldPlayback(1_500L));
     }
+
+    @Test
+    public void aQuietRemountKeepsThePause() {
+        assertTrue(AutoResume.keepPauseOnQuietRemount(1_500L, true));
+        assertFalse(AutoResume.keepPauseOnQuietRemount(0L, true));
+        assertFalse(AutoResume.keepPauseOnQuietRemount(1_500L, false));
+    }
+
+    @Test
+    public void aDroppedLineDoesNotStartAPausedMovie() {
+        assertFalse(AutoResume.mayReconnectWhilePaused(1_500L));
+        assertTrue(AutoResume.mayReconnectWhilePaused(0L));
+    }
 }
