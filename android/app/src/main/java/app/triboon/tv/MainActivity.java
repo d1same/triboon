@@ -4617,7 +4617,7 @@ public class MainActivity extends Activity {
                             if (!nativePercentResumePending) {
                                 rememberNativeVideoPosition();
                                 web.evaluateJavascript("window.__tvNativeVideoReady && __tvNativeVideoReady("
-                                        + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
+                                        + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
                             }
                         } else if ("live".equals(nativeMode)) {
                             nativeLiveStarted = true;
@@ -4715,7 +4715,7 @@ public class MainActivity extends Activity {
                         if (!nativePercentResumePending) {
                             rememberNativeVideoPosition();
                             web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
-                                    + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
+                                    + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
                         }
                     } else if ("video".equals(nativeMode) && nativeVideoStarted
                             && nativePlayer != null
@@ -4725,7 +4725,7 @@ public class MainActivity extends Activity {
                         markNativeUserPaused();
                         rememberNativeVideoPosition();
                         web.evaluateJavascript("window.__tvNativeVideoPaused && __tvNativeVideoPaused("
-                                + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
+                                + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
                     }
                     scheduleNativeChromeHide();
                 }
@@ -4776,7 +4776,7 @@ public class MainActivity extends Activity {
             else nativePlayer.play();
             if (reuseQuietVideo && "video".equals(mode) && web != null) {
                 web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
-                        + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                        + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
             }
             if ("video".equals(mode) && nativeHasWyzieSubtitle && !nativeSubtitleUrl.isEmpty()) {
                 disableNativeTextTracks();
@@ -5168,7 +5168,7 @@ public class MainActivity extends Activity {
         // User hit Play — recovery must be allowed even if PLAYING never fires on a dead pipe.
         if (web != null) {
             web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
-                    + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                    + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
         }
         if ("video".equals(nativeMode) && (state == Player.STATE_IDLE || state == Player.STATE_ENDED)) {
             long at = nativeResumePositionMs();
@@ -5250,7 +5250,7 @@ public class MainActivity extends Activity {
         nativeResumeGraceUntilMs = SystemClock.elapsedRealtime()
                 + (nativeServerSeekMode() ? NATIVE_VIDEO_REMUX_RESUME_GRACE_MS : NATIVE_VIDEO_RESUME_GRACE_MS);
         web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
-                + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
         // Pass FRACTIONAL seconds (ms precision): the server -ss and the &start= URL both accept a
         // fractional start, so a resume no longer floors to the whole second (was up to ~1s backward).
         // Transcode (accurate -ss) becomes frame-exact; `resume` (a reconnect, not a user seek) tells the
@@ -5288,7 +5288,7 @@ public class MainActivity extends Activity {
             if (!nativeGuideMode) showNativeChrome(true);
             rememberNativeVideoPosition();
             web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
-                    + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                    + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
         } else if (nativePlayer != null && !nativePlayer.getPlayWhenReady()
                 && AutoResume.shouldStartHeldPlayback(nativeUserPausedAtMs)) {
             // The eventual onIsPlayingChanged(true) callback owns the boundary in this path.

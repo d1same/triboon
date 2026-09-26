@@ -2037,10 +2037,10 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
   const seekWindow = {};
   const callbackMatches = (p, token) => !token || !p.playbackToken || Number(token) === Number(p.playbackToken);
   const nativeSeek = new Function('window', 'S', 'appMs', '$', 'currentPlayerKind', 'fetch', 'tryNativeVideoPlayer',
-    'nativePlaybackCallbackMatches', 'applyReportedDuration',
+    'nativePlaybackCallbackMatches', 'applyReportedDuration', 'notePlaybackTrace',
     `${seekSource}\nreturn window.__tvNativeVideoSeek;`)(
       seekWindow, seekState, () => 1000, () => ({ classList: { remove() {} } }), () => 'remux',
-      () => seekGate.promise, (...args) => seekCalls.push(args), callbackMatches, () => {});
+      () => seekGate.promise, (...args) => seekCalls.push(args), callbackMatches, () => {}, () => {});
   const staleSeekJob = nativeSeek(120, 2400, true, 31);
   seekState.playing = { usingNative: true, item: { key: 'episode-b', type: 'episode' } };
   seekGate.resolve({ json: async () => ({ k: 121 }) });
@@ -6448,6 +6448,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer should use decoder fallback plumbing, seeded bandwidth, and exact seeking so a hiccup does not replay the previous second');
   assert.match(android, /private String nativePosSecondsPrecise\(\) \{[\s\S]+"%.3f"[\s\S]+__tvNativeVideoProgress[\s\S]+nativePosSecondsPrecise\(\)/,
     'native progress reports fractions of a second so a clock twitch is not logged as a full second');
+  assert.doesNotMatch(android, /__tvNativeVideo(?:Ready|Playing|Paused|Resuming)\("\s*\+\s*nativePosSeconds\(\)/,
+    'pause, buffer, and skip must not report a whole second or the movie steps back by the leftover fraction');
+  assert.match(android, /__tvNativeVideoReady\("\s*\+\s*nativePosSecondsPrecise\(\)/);
+  assert.match(android, /__tvNativeVideoPlaying\("\s*\+\s*nativePosSecondsPrecise\(\)/);
+  assert.match(android, /__tvNativeVideoPaused\("\s*\+\s*nativePosSecondsPrecise\(\)/);
+  assert.match(android, /__tvNativeVideoResuming\("\s*\+\s*nativePosSecondsPrecise\(\)/);
   assert.match(android, /private DefaultRenderersFactory nativeRenderersFactory\(\) \{[\s\S]+setEnableDecoderFallback\(true\)[\s\S]+setEnableAudioOutputPlaybackParameters\(true\)/,
     'Android native playback should retry another decoder when hardware init fails');
   assert.match(android, /private DefaultBandwidthMeter nativeBandwidthMeterForMode\(String mode\) \{[\s\S]+"live"\.equals\(mode\)[\s\S]+5_000_000L[\s\S]+12_000_000L[\s\S]+22_000_000L[\s\S]+80_000_000L[\s\S]+setInitialBitrateEstimate\(estimate\)/,

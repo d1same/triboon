@@ -126,6 +126,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-26, v3.2.22 ship — a pause or a buffer keeps the exact second:
+
+- Version contract: `package.json` 3.2.22; Android `versionName` 3.2.22 /
+  `versionCode` 399; Windows client package/Tauri/Cargo(.lock) 3.2.22.
+- Example: Mario is at 55:16.460. The picture buffers, then keeps playing
+  at 55:16.460. It does not step back to 55:16. Exact seek, audio offload
+  off, pause-stays-paused, the Amazon subtitle pick, and a skip that stays
+  put are still in place.
+- Docs: player contract P1. Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 757/757. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.22, household VOD play/seek/resume/CC on the
+  house process v3.2.22 (Mario ready 152ms, 1stByte 5ms, seek 152ms,
+  resume 20ms, CC 200; FROM ready 146ms, 1stByte 4ms, seek 133ms,
+  resume 7ms, CC 200; both playable), household IPTV first-byte + retune
+  (8855 channels, 2 video picks), household overlapping Play (FROM ready
+  6ms, Mario ready 17ms), Android lint + unit tests + debug build, Android
+  ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260926-130951.json`, never the Shield). Windows
+  GPU/HDR was not run. Unraid was not updated by this check.
+
 2026-09-26, v3.2.21 ship — a TV episode uses the subtitle that matches
 the Amazon file, and pause during the opening wait stays paused:
 

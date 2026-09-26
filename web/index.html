@@ -12796,10 +12796,28 @@ function notePictureHop(p, prev, incoming) {
   if (p._hopAt && appMs() - p._hopAt < (twitch ? 60000 : 12000)) return;
   p._hopAt = appMs();
   const jumped = (Math.round(back * 100) / 100).toFixed(2).replace(/\.?0+$/, '');
-  const detail = twitch
+  const from = ((Math.round((+prev || 0) * 1000) / 1000).toFixed(3));
+  const to = ((Math.round((+incoming || 0) * 1000) / 1000).toFixed(3));
+  // A whole-second report chops 55:16.460 down to 55:16.000. That is the clock, not a replay.
+  const fraction = (+prev || 0) - Math.floor(+prev || 0);
+  const wholeSecond = Math.abs((+incoming || 0) - Math.round(+incoming || 0)) < 0.001;
+  const choppedClock = wholeSecond && back < 1 && Math.abs(back - fraction) < 0.02;
+  const why = choppedClock ? 'a whole-second report cut the fraction off' : 'the player clock moved backward';
+  const detail = (twitch
     ? 'the clock twitched back ' + jumped + 's'
-    : 'the picture jumped back ' + jumped + 's and played that part again';
+    : 'the picture jumped back ' + jumped + 's and played that part again')
+    + ' from ' + from + ' to ' + to + ' (' + why + ')';
   notePlaybackIssue('hop', detail, twitch ? 0 : Math.max(1, Math.round(back)));
+}
+function notePlaybackTrace(detail) {
+  const p = S.playing;
+  if (!p || (p.item && p.item.type === 'live')) return;
+  const key = String(detail || '').slice(0, 48);
+  const now = appMs();
+  if (p._traceAt && p._traceKey === key && now - p._traceAt < 8000) return;
+  p._traceAt = now;
+  p._traceKey = key;
+  notePlaybackIssue('trace', detail, 0);
 }
 function markPictureWait(p, why) {
   if (!p || !vodPlaybackStarted(p) || p._issueWaitAt) return;
@@ -14041,6 +14059,9 @@ function applyNativeVideoProgress(pos, dur, opts = {}) {
     return p.nativePos;
   }
   if (landing) p._seekLandUntil = 0;
+  if (!keepPrev && prev > 1 && incoming - prev > 3 && !(p.suppressSeekLoaderUntil && appMs() < p.suppressSeekLoaderUntil)) {
+    notePlaybackTrace('clock jumped forward ' + (incoming - prev).toFixed(2) + 's from ' + prev.toFixed(3) + ' to ' + incoming.toFixed(3));
+  }
   if (!keepPrev) notePictureHop(p, prev, incoming);
   p.nativePos = keepPrev ? prev : incoming;
   applyReportedDuration(p, dur);
@@ -14084,7 +14105,9 @@ window.__tvNativeVideoReady = (pos, dur, token) => {
 };
 window.__tvNativeVideoPlaying = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  const wasPaused = !!p.nativePaused;
   applyNativeVideoProgress(pos, dur);
+  if (wasPaused) notePlaybackTrace('resumed at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's');
   p.nativePaused = false;
   p._nativeResuming = false;
   clearPauseIdleExit();
@@ -14105,6 +14128,7 @@ window.__tvNativeVideoResuming = (pos, dur, token) => {
 window.__tvNativeVideoPaused = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
+  notePlaybackTrace('paused at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's');
   p.nativePaused = true;
   p._pausedAt = Date.now();
   bumpPlayClock(p);
@@ -14145,6 +14169,7 @@ window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   const seekGen = p._nativeSeekGen;
   const current = () => S.playing === p && S.view === 'player' && p.usingNative && p._nativeSeekGen === seekGen;
   const at = Math.max(0, +pos || 0);
+  notePlaybackTrace('seek to ' + at.toFixed(3) + 's ' + (percentResume ? 'resume' : resume ? 'reconnect' : 'skip'));
   applyReportedDuration(p, dur);
   // A percent-only startup has not resumed until the replacement stream is mounted. Do not publish
   // the computed target as observed progress before that token-guarded remount actually starts.

@@ -5813,6 +5813,7 @@ const H = {
       drop: 'connection dropped',
       live: 'live tv stalled',
       hop: 'jumped back',
+      trace: 'playback note',
     };
     if (!allowed[kind]) return send(ctx.res, 400, { error: 'kind required' });
     if (throttleUserRoute(ctx, 'playback-issue', { max: 40, windowMs: 60000 })) return;
