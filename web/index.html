@@ -14029,6 +14029,16 @@ function applyNativeVideoProgress(pos, dur, opts = {}) {
   const incoming = Math.max(0, +pos || 0);
   const prev = Math.max(0, +p.nativePos || 0);
   const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;
+  // The bar just moved. The player is still reporting the old minute until the
+  // new spot starts. Do not paint that old minute back onto the bar.
+  const landUntil = Number(p._seekLandUntil) || 0;
+  const landAt = Number(p._seekLandAt);
+  const landing = landUntil > appMs() && Number.isFinite(landAt);
+  if (landing && Math.abs(incoming - landAt) > 4) {
+    applyReportedDuration(p, dur);
+    return p.nativePos;
+  }
+  if (landing) p._seekLandUntil = 0;
   if (!keepPrev) notePictureHop(p, prev, incoming);
   p.nativePos = keepPrev ? prev : incoming;
   applyReportedDuration(p, dur);
@@ -14137,6 +14147,10 @@ window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   // A percent-only startup has not resumed until the replacement stream is mounted. Do not publish
   // the computed target as observed progress before that token-guarded remount actually starts.
   if (!percentResume) p.nativePos = at;
+  if (!percentResume) {
+    p._seekLandUntil = appMs() + 20000;
+    p._seekLandAt = at;
+  }
   p.suppressSeekLoaderUntil = appMs() + 4500;
   $('playerLoader').classList.remove('show');
   const kind = currentPlayerKind(p);
@@ -16561,6 +16575,8 @@ function seekTo(seconds) {
     startJellyfinDesktopPlayback(p, seconds);
   } else if (p.usingNative && canUseNativeVideoPlayer()) {
     p.suppressSeekLoaderUntil = appMs() + 4500;
+    p._seekLandUntil = appMs() + 20000;
+    p._seekLandAt = seconds;
     clearTimeout(S._waitT);
     $('playerLoader').classList.remove('show');
     // Native ExoPlayer/libmpv owns the clock. startSource() bails when usingNative, and

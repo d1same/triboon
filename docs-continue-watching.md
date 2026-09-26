@@ -134,6 +134,18 @@ flowchart LR
   same row. It should not jump into Live TV unless the Continue Watching row no
   longer exists.
 
+## Jellyfin Home
+
+Jellyfin reads the same default-profile watch rows as the Triboon app.
+
+- Continue Watching is the movie or episode you paused, past 30 seconds, and
+  not finished. A finished episode leaves that row.
+- Play Next is the following episode. The card says the show name. The episode
+  you are in the middle of stays on Continue Watching, not on Play Next.
+- A pause in either app is the same minute. Pressing play in Jellyfin warms
+  that minute. While the picture is not ready, the screen shows a Loading card
+  instead of a frozen black frame. Play from the start still starts at 0.
+
 ## Change Checklist
 
 When changing Continue Watching, verify:

@@ -465,6 +465,22 @@ them when the table is reorganized:
   `ProviderPool.noteAuthLost`/`authBroken`, `NntpPool._ordered`;
   `web/index.html` `connRowHtml`. Verification: the 480 rebuild, breaker, and
   STAT-status tests in `test/e2e.test.js`.
+- **P1 - a skip on the seek bar stays on the minute you picked.** Dragging
+  the bar, or skipping back or forward, used to snap the picture back to the
+  minute already playing. The phone holds the minute you picked until the
+  picture arrives there, and the bar does not paint the old minute back.
+  Subtitles move to that same minute. A buffer keeps the line on the frozen
+  frame, and the clock jump from the wait is not a new minute.
+  Code: `android/.../SeekLanding.java`, `android/.../SubtitleSync.java`,
+  `MainActivity` `nativeSubtitleMediaMs`, `web/index.html`
+  `subtitleMediaNow`. Verification: `SeekLandingTest` and `SubtitleSyncTest`.
+- **Jellyfin home matches the Triboon watch row.** Continue Watching is the
+  paused title. Play Next is the next episode, with the show name on the card.
+  A pause in either app is the same minute on the default profile. Resume warms
+  that minute. While the picture is not ready, Jellyfin shows a Loading card
+  instead of a frozen black frame. Code: `server/jellyfin-api.js`
+  `resumeFracFor`, `loadingCardPng`, `nextUpItems`; `server/index.js`
+  `jellyfinPlay`. Verification: `test/jellyfin-api.test.js`.
 - **P14 - a 480 burst pauses new logins and keeps the plan.** Two 480s mean
   the account is refusing more work, not only that one socket forgot its
   login. For two minutes that account does not open a new login. Lines

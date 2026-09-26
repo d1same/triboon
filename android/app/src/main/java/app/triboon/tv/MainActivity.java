@@ -345,6 +345,8 @@ public class MainActivity extends Activity {
     private boolean nativePercentResumePending;
     private boolean nativeQuietSeekHoldPlay;
     private long nativeSeekHoldDisplayMs;
+    private long nativeUserSeekTargetMs = -1L;
+    private long nativeUserSeekUntilMs;
     private long nativeStartSeekIssuedAtMs;
     private long nativeStartOffsetMs;
     private long nativeLiveUnhealthySinceMs;
@@ -4489,6 +4491,12 @@ public class MainActivity extends Activity {
             // Resetting this made 4K remux Play use the 12s startup watchdog and recover-loop.
             if (!(reuseQuietVideo && nativeVideoStarted)) nativeVideoStarted = false;
             nativeLastVideoDisplayMs = "video".equals(mode) ? Math.max(startMs, startOffsetMs) : 0L;
+            if (!quietSeek) {
+                nativeUserSeekTargetMs = -1L;
+                nativeUserSeekUntilMs = 0L;
+            } else if ("video".equals(mode)) {
+                armNativeUserSeek(nativeLastVideoDisplayMs);
+            }
             nativeLastAutoResumeSeekMs = 0L;
             nativeHasNext = hasNext;
             nativeHasQualityChoices = hasQualityChoices;
@@ -4975,8 +4983,36 @@ public class MainActivity extends Activity {
         return Math.max(0L, nativeStartOffsetMs + nativeRawPositionMs());
     }
 
+    private void armNativeUserSeek(long targetMs) {
+        nativeUserSeekTargetMs = Math.max(0L, targetMs);
+        nativeUserSeekUntilMs = SystemClock.elapsedRealtime() + 20000L;
+        nativeLastVideoDisplayMs = nativeUserSeekTargetMs;
+        nativeBackwardTicks = 0;
+    }
+
+    private boolean nativeUserSeekLanding() {
+        if (nativeUserSeekTargetMs < 0L) return false;
+        boolean holdingOldClock = nativeSeekHoldDisplayMs > 0L
+                && (nativeQuietSeekHoldPlay || nativePlayer == null
+                || nativePlayer.getPlaybackState() != Player.STATE_READY);
+        boolean arrived = !holdingOldClock
+                && nativePlayer != null
+                && nativePlayer.getPlaybackState() == Player.STATE_READY
+                && nativePlayer.isPlaying();
+        long reported = holdingOldClock ? nativeSeekHoldDisplayMs : nativeDisplayPositionMs();
+        boolean ignore = SeekLanding.ignoreStaleClock(
+                nativeUserSeekTargetMs, reported, SystemClock.elapsedRealtime(), nativeUserSeekUntilMs, arrived);
+        if (!ignore) {
+            if (arrived) nativeLastVideoDisplayMs = nativeDisplayPositionMs();
+            nativeUserSeekTargetMs = -1L;
+            nativeBackwardTicks = 0;
+        }
+        return ignore;
+    }
+
     private void rememberNativeVideoPosition() {
         if (!"video".equals(nativeMode) || nativePlayer == null) return;
+        if (nativeUserSeekLanding()) return;
         long pos = nativeDisplayPositionMs();
         if (nativeServerSeekMode() && nativeVideoStarted && nativeLastVideoDisplayMs > 0L) {
             long backwardsBy = nativeLastVideoDisplayMs - pos;
@@ -5054,7 +5090,7 @@ public class MainActivity extends Activity {
         long target = Math.max(0L, displayMs);
         long d = nativeDurationMs();
         if (d > 0 && d != C.TIME_UNSET) target = Math.min(d, target);
-        nativeLastVideoDisplayMs = target;
+        armNativeUserSeek(target);
         if (nativeServerSeekMode()) {
             nativePendingServerSeekMs = target;
             nativeSeekHandler.removeCallbacks(nativeServerSeekFlush);
@@ -5068,6 +5104,9 @@ public class MainActivity extends Activity {
     // beats the 1s-sampled nativeLastVideoDisplayMs, cutting up to ~1s of backward hop on a reconnect.
     // Guarded by the last confirmed sample so a transient 0/dip can never resume BEHIND where we were.
     private long nativeResumePositionMs() {
+        if (nativeUserSeekTargetMs >= 0L && SystemClock.elapsedRealtime() <= nativeUserSeekUntilMs) {
+            return nativeUserSeekTargetMs;
+        }
         long live = nativeDisplayPositionMs();
         return live > 0L ? Math.max(live, nativeLastVideoDisplayMs) : nativeLastVideoDisplayMs;
     }
@@ -6529,24 +6568,21 @@ public class MainActivity extends Activity {
         }
     }
 
-    // While the picture is frozen, captions stay on that frame. A buffer that makes
-    // ExoPlayer's clock jump by about the wait is ignored. A real seek clears the slip.
+    // A skip moves the words to that minute. A buffer does not: the picture is
+    // frozen, so the line stays, and the clock jump from the wait is ignored.
     private long nativeSubtitleMediaMs() {
         long live = nativeDisplayPositionMs();
         boolean moving = nativePlayer != null && nativePlayer.isPlaying();
-        if (!moving) {
-            if (nativeSubtitleShownMs < 0L) nativeSubtitleShownMs = live;
-            return Math.max(0L, nativeSubtitleShownMs - nativeSubtitleSlipMs);
-        }
         long now = SystemClock.elapsedRealtime();
-        if (nativeSubtitleShownMs >= 0L && nativeSubtitleShownWallMs > 0L && live - nativeSubtitleShownMs > 2000L) {
-            long wall = Math.max(0L, now - nativeSubtitleShownWallMs);
-            long jump = live - nativeSubtitleShownMs;
-            if (Math.abs(jump - wall) < 2000L || jump > wall + 1500L) nativeSubtitleSlipMs += jump;
-        }
-        nativeSubtitleShownMs = live;
-        nativeSubtitleShownWallMs = now;
-        return Math.max(0L, live - nativeSubtitleSlipMs);
+        long seekTarget = nativeUserSeekTargetMs >= 0L && now <= nativeUserSeekUntilMs
+                ? nativeUserSeekTargetMs : -1L;
+        SubtitleSync.Sample sample = SubtitleSync.step(
+                live, moving, nativeSubtitleShownMs, nativeSubtitleShownWallMs, now,
+                nativeSubtitleSlipMs, seekTarget, seekTarget >= 0L ? nativeUserSeekUntilMs : 0L);
+        nativeSubtitleShownMs = sample.shownMs;
+        nativeSubtitleSlipMs = sample.slipMs;
+        if (moving || seekTarget >= 0L) nativeSubtitleShownWallMs = now;
+        return sample.mediaMs;
     }
 
     private void updateNativeSubtitleOverlay() {

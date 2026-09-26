@@ -21,7 +21,7 @@ const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors,
   attachJellyfinSocket, closeJellyfinSockets,
-  streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist,
+  streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist, loadingCardPng, loadingHoldPlaylist,
 } = require('./jellyfin-api');
 const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch } = require('./pipeline');
 const {
@@ -42,15 +42,22 @@ function ensureResumePad() {
   const dir = path.join(require('os').tmpdir(), 'triboon-hls-pad');
   const seg = path.join(dir, 'pad.m4s');
   const init = path.join(dir, 'padinit.mp4');
+  const stamp = path.join(dir, 'loading-card');
   if (!ff) return Promise.resolve(null);
   resumePadReady = new Promise((resolve) => {
     try { fs.mkdirSync(dir, { recursive: true }); } catch { resumePadReady = null; return resolve(null); }
-    if (fs.existsSync(seg) && fs.existsSync(init)) return resolve(dir);
+    if (fs.existsSync(seg) && fs.existsSync(init) && fs.existsSync(stamp)) return resolve(dir);
+    try {
+      fs.rmSync(seg, { force: true });
+      fs.rmSync(init, { force: true });
+      fs.writeFileSync(path.join(dir, 'loading.png'), loadingCardPng());
+    } catch { resumePadReady = null; return resolve(null); }
     const p = spawnResumePad(ff.path, [
       '-y', '-hide_banner', '-loglevel', 'error',
-      '-f', 'lavfi', '-i', 'color=c=black:s=1280x720:r=30:d=2',
+      '-loop', '1', '-i', 'loading.png',
       '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
       '-t', '2', '-shortest',
+      '-vf', 'scale=1280:720,format=yuv420p',
       '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'ultrafast', '-profile:v', 'high', '-g', '60',
       '-c:a', 'aac', '-b:a', '32k', '-ac', '2',
       '-f', 'hls', '-hls_time', '2', '-hls_list_size', '0', '-hls_playlist_type', 'vod',
@@ -62,8 +69,10 @@ function ensureResumePad() {
     p.on('close', (code) => {
       const numbered = path.join(dir, 'pad0.m4s');
       try { if (!fs.existsSync(seg) && fs.existsSync(numbered)) fs.renameSync(numbered, seg); } catch {}
-      if (code === 0 && fs.existsSync(seg) && fs.existsSync(init) && fs.statSync(seg).size > 0 && fs.statSync(init).size > 0) resolve(dir);
-      else fail();
+      if (code === 0 && fs.existsSync(seg) && fs.existsSync(init) && fs.statSync(seg).size > 0 && fs.statSync(init).size > 0) {
+        try { fs.writeFileSync(stamp, 'loading'); } catch {}
+        resolve(dir);
+      } else fail();
     });
   });
   return resumePadReady;
@@ -5116,7 +5125,7 @@ async function nextWatchEpisodes(uid, profile = 'default') {
           qualityRank: [3, 4].includes(Number(top.w.meta && top.w.meta.qualityRank)) ? Number(top.w.meta.qualityRank) : undefined,
           updatedAt: top.w.updatedAt || 0,
           _nextEp: true, _newEp: new Date(`${next.air_date}T00:00:00Z`).getTime() > (top.w.updatedAt || 0),
-          season: s.season_number, episode: next.episode_number,
+          season: s.season_number, episode: next.episode_number, episodeName: next.name || '',
         });
         break;
       }
@@ -9209,11 +9218,24 @@ Object.assign(H, {
         const next = await fsp.readFile(playlistPath, 'utf8');
         if (/#EXTINF:/.test(next)) { raw = next; sess.list = next; }
         const pieces = raw ? (raw.match(/#EXTINF:/g) || []).length : 0;
+        const realPieces = raw ? (raw.match(/seg\d+\.m4s/g) || []).length : 0;
         if (pieces >= minPieces || (raw && /#EXT-X-ENDLIST/.test(raw))) break;
+        // No picture yet. Answer with the Loading card instead of holding the
+        // phone on a frozen poster until the movie opens.
+        if (jellyfinPlaylist && sessionStart < 1 && realPieces === 0 && (sess.loadHold || i >= 8)) break;
+        if (jellyfinPlaylist && sessionStart < 1 && sess.loadHold && realPieces < minPieces) break;
       } catch {}
       if (i + 1 < waitTicks) await new Promise((r) => setTimeout(r, 100));
     }
-    if (!raw || !/#EXTINF:/.test(raw)) {
+    const realPieces = raw ? (raw.match(/seg\d+\.m4s/g) || []).length : 0;
+    if (jellyfinPlaylist && sessionStart < 1 && realPieces < minPieces && (sess.loadHold || realPieces === 0)) {
+      if (await ensureResumePad()) {
+        sess.loadHold = Math.min(40, (sess.loadHold || 0) + 2);
+        raw = loadingHoldPlaylist(sess.loadHold);
+      } else if (!raw || !/#EXTINF:/.test(raw)) {
+        return send(ctx.res, 504, { error: 'HLS playlist not ready' });
+      }
+    } else if (!raw || !/#EXTINF:/.test(raw)) {
       // No picture piece yet. Still answer, with the clock filled, so the phone
       // does not get "not ready" and give up. The picture joins the next list.
       if (!resume) return send(ctx.res, 504, { error: 'HLS playlist not ready' });
@@ -10436,7 +10458,7 @@ async function jellyfinPlay(ctx, body) {
     const policy = playbackPolicyFor(ctx.user, { ...body, maxResolutionRank: JELLYFIN_MAX_RANK });
     policy.noResolutionWiden = true;
     const { session, vf, candidate, attempts } = await pipeline.play(
-      { ...playSearchParams(body), resumeFrac: 0 },
+      { ...playSearchParams(body), resumeFrac: Math.max(0, Math.min(0.98, Number(body.resumeFrac) || 0)) },
       policy
     );
     if (!(await maturityAllowed)) { discardDeniedMount(session, vf); return { status: 403, body: { error: 'restricted' } }; }
@@ -10656,6 +10678,7 @@ function jellyfinWatchResume(ctx) {
   if (!ctx || !ctx.user) return [];
   return watchRowsForProfileFromAll(store.read('watch', {}), ctx.user.id, 'default')
     .filter((row) => row && !row.watched && !row.hidden && (row.position || 0) > 30
+      && !/^tmdb:tv:\d+$/.test(String(row.key || ''))
       && !String(row.key).startsWith('live:') && !String(row.key).startsWith('audiobook:'));
 }
 

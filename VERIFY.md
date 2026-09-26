@@ -126,6 +126,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-25, v3.2.20 ship — a skip stays on the minute you chose,
+and a buffer keeps the subtitle on that frozen picture:
+
+- Version contract: `package.json` 3.2.20; Android `versionName` 3.2.20 /
+  `versionCode` 397; Windows client package/Tauri/Cargo(.lock) 3.2.20.
+- Example: you skip a movie from 40:00 back to 12:00. The picture stays at
+  12:00. The words jump to 12:00 with it. If the picture then sticks for
+  8 seconds while it buffers, the line stays on that 12:00 sentence.
+  Jellyfin Continue Watching and Play Next use the same watch row as
+  Triboon. Resume warms that saved minute. Play shows a Loading card
+  until the picture is ready.
+- Docs: `docs-architecture.md`, `docs-continue-watching.md`, and player
+  contract P1. Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 756/756. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.20, household VOD play/seek/resume/CC on the
+  house process v3.2.20 (Mario ready 14ms, 1stByte 4ms, seek 2ms, resume
+  12ms, CC 200; FROM ready 112ms, 1stByte 2ms, seek 83ms, resume 5ms,
+  CC 200; both playable), household IPTV first-byte + retune (8855
+  channels, 2 video picks), household overlapping Play (FROM ready 4ms,
+  Mario ready 12ms), Android lint + unit tests + debug build, Android
+  ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260926-000445.json`, never the Shield). Windows
+  GPU/HDR was not run. Unraid was not updated by this check.
+
 2026-09-25, v3.2.19 ship — a provider that says no pauses new
 logins for two minutes and keeps the plan:
 

@@ -8,7 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { httpJson, bootServer, setupAdmin } = require('./helpers');
-const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds } = require('../server/jellyfin-api');
+const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor, loadingCardPng, loadingHoldPlaylist } = require('../server/jellyfin-api');
 const { LibraryDb } = require('../server/library-db');
 
 let srv, admin;
@@ -103,6 +103,31 @@ test('jellyfin seek bar is the whole movie, and a drag is a later piece not a sk
     'a drag past the loaded minute restarts there; normal look-ahead must not skip');
   assert.match(api, /&dur=\$\{dur\}/,
     'play tells the phone the real runtime');
+});
+
+test('jellyfin resume warms the saved minute, same as Continue Watching', () => {
+  assert.strictEqual(resumeFracFor(0, 120), 0, 'play from the start still warms the opening');
+  const frac = resumeFracFor(600, 100);
+  assert.ok(Math.abs(frac - 0.1) < 0.001, 'ten minutes into a 100 minute movie warms that spot');
+  assert.ok(resumeFracFor(50 * 60, 40) === 0, 'a start past the runtime does not invent a fraction');
+  const play = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(play, /resumeFrac: Math\.max\(0, Math\.min\(0\.98, Number\(body\.resumeFrac\) \|\| 0\)\)/,
+    'a Jellyfin resume uses the same warm window as the Triboon app');
+});
+
+test('jellyfin shows a Loading card instead of a frozen picture', () => {
+  const png = loadingCardPng();
+  assert.strictEqual(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.strictEqual(png.readUInt32BE(16), 1280);
+  assert.strictEqual(png.readUInt32BE(20), 720);
+  const first = loadingHoldPlaylist(2);
+  const next = loadingHoldPlaylist(4);
+  assert.strictEqual((first.match(/pad\.m4s/g) || []).length, 2);
+  assert.strictEqual((next.match(/pad\.m4s/g) || []).length, 4, 'a later list is longer so the phone keeps the card');
+  assert.doesNotMatch(first, /seg\d+/);
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /loadingCardPng\(\)/);
+  assert.doesNotMatch(server, /color=c=black:s=1280x720/);
 });
 
 test('jellyfin door stays shut until an admin opens it', async () => {
@@ -446,7 +471,24 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(watchedEp.json.Played, true);
   const nextUp = await httpSend(srv.port, 'GET', `/Shows/NextUp?UserId=${me.json.Id}`, { headers: { authorization: authz } });
   assert.strictEqual(nextUp.status, 200);
-  assert.ok(nextUp.json.Items.some((row) => row.Id === second.Id), 'finishing episode 1 offers episode 2');
+  const nextCard = nextUp.json.Items.find((row) => row.Id === second.Id);
+  assert.ok(nextCard, 'finishing episode 1 offers episode 2 on Play Next');
+  assert.strictEqual(nextCard.SeriesName, 'Day Show', 'Play Next says the show name');
+  assert.strictEqual(nextCard.ParentIndexNumber, 1);
+  assert.strictEqual(nextCard.IndexNumber, 2);
+  const pausedEp = await httpSend(srv.port, 'POST', '/Sessions/Playing/Progress', {
+    headers: { authorization: authz, 'content-type': 'application/json' },
+    body: JSON.stringify({ ItemId: second.Id, PositionTicks: 90 * 10000000 }),
+  });
+  assert.strictEqual(pausedEp.status, 204);
+  const homeAfterPause = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items/Resume`, { headers: { authorization: authz } });
+  const pausedCard = homeAfterPause.json.Items.find((row) => row.Id === second.Id);
+  assert.ok(pausedCard, 'the paused episode is on Continue Watching');
+  assert.strictEqual(pausedCard.SeriesName, 'Day Show');
+  assert.strictEqual(pausedCard.UserData.PlaybackPositionTicks, 90 * 10000000);
+  assert.ok(!homeAfterPause.json.Items.some((row) => row.Id === first.Id), 'a finished episode leaves Continue Watching');
+  const nextAfterPause = await httpSend(srv.port, 'GET', `/Shows/NextUp?UserId=${me.json.Id}`, { headers: { authorization: authz } });
+  assert.ok(!nextAfterPause.json.Items.some((row) => row.Id === second.Id), 'a paused episode is not also Play Next');
 
   const localId = mahour.Id;
   const progressBody = JSON.stringify({ ItemId: localId, PositionTicks: 120 * 10000000 });
@@ -481,6 +523,12 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   });
   assert.strictEqual(replay.status, 200);
   assert.strictEqual(replay.json.MediaSources[0].Id, aardvark.Id, 'replay must hand back the same source id or the TV crashes');
+  const dragged = await httpSend(srv.port, 'POST', `/Items/${aardvark.Id}/PlaybackInfo`, {
+    headers: { authorization: authz, 'content-type': 'application/json' },
+    body: JSON.stringify({ MediaSourceId: aardvark.Id, StartTimeTicks: 600 * 10000000 }),
+  });
+  assert.strictEqual(dragged.status, 200);
+  assert.match(dragged.json.MediaSources[0].TranscodingUrl, /start=600/, 'a Jellyfin seek bar drag starts at that minute');
   assert.strictEqual(replay.json.MediaSources[0].Protocol, 'File');
   assert.strictEqual(replay.json.MediaSources[0].IsRemote, false);
   const sub = (playback.json.MediaSources[0].MediaStreams || []).find((row) => row.Type === 'Subtitle');

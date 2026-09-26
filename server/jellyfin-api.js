@@ -8,6 +8,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const debug = require('./debug');
 
 // Phone and TV apps accept a Jellyfin version with three numbers.
@@ -1015,9 +1016,10 @@ function itemFromWatchRow(ctx, row) {
   }
   const ep = /^tmdb:tv:(\d+):s(\d+)e(\d+)$/.exec(row.key);
   if (ep) {
+    const showName = seriesLabel(meta.title);
     return baseItem({
       id: `e${ep[1]}s${ep[2]}e${ep[3]}`,
-      name: meta.title || `Episode ${ep[3]}`,
+      name: meta.episodeTitle || `Episode ${ep[3]}`,
       type: 'Episode',
       poster: 'tmdb',
       thumb: 'tmdb',
@@ -1028,6 +1030,7 @@ function itemFromWatchRow(ctx, row) {
       extra: {
         ...extra,
         SeriesId: `t${ep[1]}`,
+        SeriesName: showName || meta.title || '',
         ParentIndexNumber: Number(ep[2]),
         IndexNumber: Number(ep[3]),
       },
@@ -1077,10 +1080,13 @@ function localJellyItem(row, libId) {
       extra: { IsFolder: true, CommunityRating: Number(row.rating) > 0 ? Number(row.rating) : undefined },
     });
   }
-    if (kind === 'episode') {
+  if (kind === 'episode') {
     const season = Number(row.s || row.season) || 1;
+    const episodeNumber = Number(row.e || row.episode) || null;
+    const showName = seriesLabel(row.title);
     return baseItem({
       ...common,
+      name: row.epTitle || (episodeNumber ? `Episode ${episodeNumber}` : row.title || ''),
       type: 'Episode',
       thumb: common.poster || common.backdrop || hasArt ? 'local' : '',
       backdrop: common.backdrop || (hasArt ? 'local' : ''),
@@ -1090,9 +1096,10 @@ function localJellyItem(row, libId) {
         MediaType: 'Video',
         LocationType: 'File',
         SeriesId: localId(libId, row.showIdx),
+        SeriesName: showName || row.title || '',
         SeasonId: `${localId(libId, row.showIdx)}s${season}`,
         ParentIndexNumber: season,
-        IndexNumber: Number(row.e || row.episode) || null,
+        IndexNumber: episodeNumber,
         CommunityRating: Number(row.rating) > 0 ? Number(row.rating) : undefined,
       },
     });
@@ -1121,38 +1128,48 @@ function episodeOrder(season, episode) {
   return (Number(season) || 0) * 10000 + (Number(episode) || 0);
 }
 
+function seriesLabel(title) {
+  return String(title || '').replace(/\s*(?:·\s*)?S\d+E\d+.*$/i, '').replace(/\s*[—-]\s*S\d+E\d+.*$/i, '').trim();
+}
+
 async function nextUpItems(ctx) {
   const q = ctx.url && ctx.url.searchParams;
   const series = parseItemId((q && (q.get('SeriesId') || q.get('seriesId'))) || '');
   const parent = parseItemId((q && (q.get('ParentId') || q.get('parentId'))) || '');
   const parentRaw = internalItemId(String((q && (q.get('ParentId') || q.get('parentId'))) || ''));
   const rows = typeof deps.jellyfinWatchRows === 'function' ? deps.jellyfinWatchRows(ctx) : [];
-  const items = [];
+  const ranked = [];
   const catalogOk = parentRaw !== 'viewmovies' && (!parent || parent.type !== 'locallib') && (!series || series.type === 'series');
   if (catalogOk && typeof deps.jellyfinNextCatalog === 'function') {
       const catalog = await deps.jellyfinNextCatalog(ctx);
       for (const row of catalog || []) {
         if (series && series.type === 'series' && Number(row.tmdbId) !== series.tmdbId) continue;
-        items.push(baseItem({
-          id: `e${row.tmdbId}s${row.season}e${row.episode}`,
-          name: `Episode ${row.episode}`,
-          type: 'Episode',
-          poster: row.tmdbId ? 'tmdb' : '',
-          thumb: row.tmdbId ? 'tmdb' : '',
-          backdrop: row.tmdbId ? 'tmdb' : '',
-          runtime: 0,
-          aspect: 1.7777778,
-          extra: {
-            MediaType: 'Video',
-            SeriesId: `t${row.tmdbId}`,
-            SeriesName: row.title || '',
-            ParentIndexNumber: row.season,
-            IndexNumber: row.episode,
-          },
-        }));
+        ranked.push({
+          at: row.updatedAt || 0,
+          item: baseItem({
+            id: `e${row.tmdbId}s${row.season}e${row.episode}`,
+            name: row.episodeName || `Episode ${row.episode}`,
+            overview: row.overview || '',
+            type: 'Episode',
+            poster: row.tmdbId ? 'tmdb' : '',
+            thumb: row.tmdbId ? 'tmdb' : '',
+            backdrop: row.tmdbId ? 'tmdb' : '',
+            runtime: 0,
+            aspect: 1.7777778,
+            extra: {
+              MediaType: 'Video',
+              SeriesId: `t${row.tmdbId}`,
+              SeriesName: row.title || '',
+              ParentIndexNumber: row.season,
+              IndexNumber: row.episode,
+            },
+          }),
+        });
     }
   }
-  if (parentRaw === 'viewshows' || parentRaw === 'viewmovies') return items;
+  if (parentRaw === 'viewshows' || parentRaw === 'viewmovies') {
+    return ranked.sort((a, b) => b.at - a.at).map((row) => row.item);
+  }
   const busy = new Set();
   const byShow = new Map();
   for (const row of rows) {
@@ -1184,9 +1201,9 @@ async function nextUpItems(ctx) {
       ? deps.jellyfinWatchGet(ctx, `local:${top.libId}:${next.row.idx}`) : null;
     if (saved && (saved.watched || Number(saved.position) > 30)) continue;
     const item = localJellyItem(next.row, top.libId);
-    if (item) items.push(item);
+    if (item) ranked.push({ at: top.updatedAt || 0, item });
   }
-  return items;
+  return ranked.sort((a, b) => b.at - a.at).map((row) => row.item);
 }
 
 function trimCatalog(ctx, page, view) {
@@ -1385,6 +1402,15 @@ function streamStart(ctx, body) {
   return start > 0 ? Math.min(10 * 86400, Math.round(start)) : 0;
 }
 
+// Same fraction the Triboon app sends on Continue Watching. The mount warms
+// that minute before the first picture, instead of the opening of the file.
+function resumeFracFor(startSeconds, runtimeMinutes) {
+  const start = Math.max(0, Number(startSeconds) || 0);
+  const runtime = Math.max(0, Number(runtimeMinutes) || 0) * 60;
+  if (!(start >= 1) || !(runtime > start + 1)) return 0;
+  return Math.min(0.98, start / runtime);
+}
+
 function itemUuid(id) {
   const s = String(id || '').toLowerCase();
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s) ? s : '';
@@ -1530,7 +1556,8 @@ async function handleKind(kind, ctx) {
         const item = await itemById(itemId, ctx);
         if (item) {
           if (!duration && item.RunTimeTicks) duration = Math.round(item.RunTimeTicks / 10000000);
-          if (!meta.title) meta.title = item.Name || '';
+          if (item.SeriesName) meta.title = item.SeriesName;
+          else if (!meta.title) meta.title = item.Name || '';
           if (!meta.year && item.ProductionYear) meta.year = item.ProductionYear;
           const parsed = parseItemId(itemId);
           if (parsed && parsed.type === 'movie') { meta.type = 'movie'; meta.tmdbId = parsed.tmdbId; }
@@ -1808,6 +1835,7 @@ async function handleKind(kind, ctx) {
       spec = await playSpec(parsed);
       if (!spec) return send(ctx.res, 404, { error: 'not found' }, cors);
       if (typeof deps.jellyfinPlay !== 'function') return send(ctx.res, 404, { error: 'not found' }, cors);
+      spec.resumeFrac = resumeFracFor(streamStart(null, body), spec.runtime);
       const played = await deps.jellyfinPlay(ctx, spec);
       if (played && played.sent) return;
       if (!played || played.status !== 200) {
@@ -2201,9 +2229,118 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/socket$/, auth: 'user', kind: 'socket', h: serveJellyfin },
 ];
 
+const LOADING_GLYPHS = {
+  L: ['10000', '10000', '10000', '10000', '10000', '10000', '11111'],
+  o: ['01110', '10001', '10001', '10001', '10001', '10001', '01110'],
+  a: ['00000', '00000', '01110', '00001', '01111', '10001', '01111'],
+  d: ['00001', '00001', '01111', '10001', '10001', '10001', '01110'],
+  i: ['00100', '00000', '01100', '00100', '00100', '00100', '01110'],
+  n: ['00000', '00000', '11001', '10101', '10011', '10001', '10001'],
+  g: ['00000', '00000', '01111', '10001', '10001', '01111', '00001', '01110'],
+};
+
+function pngChunk(type, data) {
+  const body = Buffer.concat([Buffer.from(type), data]);
+  const out = Buffer.alloc(12 + data.length);
+  out.writeUInt32BE(data.length, 0);
+  body.copy(out, 4);
+  out.writeUInt32BE(zlib.crc32(body) >>> 0, 8 + data.length);
+  return out;
+}
+
+function paintLoadingCard(raw, w, h) {
+  const put = (x, y, r, g, b) => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    const i = y * (w * 3 + 1) + 1 + x * 3;
+    raw[i] = r;
+    raw[i + 1] = g;
+    raw[i + 2] = b;
+  };
+  const cx = 640;
+  const cy = 300;
+  for (let y = cy - 54; y <= cy + 54; y++) {
+    for (let x = cx - 54; x <= cx + 54; x++) {
+      const d = Math.hypot(x - cx, y - cy);
+      if (d < 36 || d > 48) continue;
+      const ang = Math.atan2(y - cy, x - cx);
+      if (ang > -0.2 && ang < 1.1) continue;
+      put(x, y, 255, 122, 144);
+    }
+  }
+  const text = 'Loading';
+  const scale = 8;
+  const gap = 10;
+  const textW = text.length * (5 * scale + gap) - gap;
+  let pen = Math.round((w - textW) / 2);
+  const top = 390;
+  for (const ch of text) {
+    const rows = LOADING_GLYPHS[ch];
+    if (!rows) { pen += 5 * scale + gap; continue; }
+    rows.forEach((bits, gy) => {
+      for (let gx = 0; gx < bits.length; gx++) {
+        if (bits[gx] !== '1') continue;
+        for (let py = 0; py < scale; py++) {
+          for (let px = 0; px < scale; px++) put(pen + gx * scale + px, top + gy * scale + py, 255, 255, 255);
+        }
+      }
+    });
+    pen += 5 * scale + gap;
+  }
+}
+
+// A still card the player can show while the movie picture is not ready.
+// A black frame looks like the show froze.
+function loadingCardPng() {
+  const w = 1280;
+  const h = 720;
+  const stride = w * 3 + 1;
+  const raw = Buffer.alloc(stride * h);
+  for (let y = 0; y < h; y++) {
+    const row = y * stride;
+    raw[row] = 0;
+    for (let x = 0; x < w; x++) {
+      const i = row + 1 + x * 3;
+      raw[i] = 20;
+      raw[i + 1] = 8;
+      raw[i + 2] = 24;
+    }
+  }
+  paintLoadingCard(raw, w, h);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+// A short event list of that card. Each reload is longer, so the phone keeps
+// the card on screen instead of treating the wait as a stuck movie.
+function loadingHoldPlaylist(count) {
+  const n = Math.max(2, Math.min(40, Number(count) || 2));
+  const lines = [
+    '#EXTM3U',
+    '#EXT-X-VERSION:7',
+    '#EXT-X-TARGETDURATION:2',
+    '#EXT-X-MEDIA-SEQUENCE:0',
+    '#EXT-X-PLAYLIST-TYPE:EVENT',
+    '#EXT-X-INDEPENDENT-SEGMENTS',
+    '#EXT-X-START:TIME-OFFSET=0,PRECISE=YES',
+    '#EXT-X-MAP:URI="padinit.mp4"',
+  ];
+  for (let i = 0; i < n; i++) lines.push('#EXTINF:2.000,', 'pad.m4s');
+  return `${lines.join('\n')}\n`;
+}
+
 module.exports = {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors,
   attachJellyfinSocket, closeJellyfinSockets,
   mediaStreamsFromProbe, streamsWithSubtitles, tmdbSort, genreIdsFromNames,
-  resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds,
+  resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor,
+  loadingCardPng, loadingHoldPlaylist,
 };
