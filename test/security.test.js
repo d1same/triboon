@@ -571,7 +571,7 @@ test('debug log redacts tokens and passwords', () => {
   try {
     debug.fail('jellyfin', 'GET /socket?api_key=SECRET 401 Token="abc"');
     debug.fail('jellyfin', 'GET /socket?api_key=SECRET 401 Token="abc"');
-    assert.match(lines[0], /^\[fail:jellyfin\] GET \/socket\?api_key=\*\*\*/);
+    assert.match(lines[0], /^\[fail:jellyfin\] \d{2}:\d{2}:\d{2} GET \/socket\?api_key=\*\*\*/);
     assert.doesNotMatch(lines.join('\n'), /SECRET|Token="abc"/);
     assert.strictEqual(lines.length, 1, 'the same failure is written once');
   } finally {
@@ -594,7 +594,9 @@ test('playback issue lines include the reason', () => {
   console.log = (line) => lines.push(String(line));
   try {
     debug.issue('buffered 8s at 56:42 — "Mortdecai" — reason: the picture waited for bytes');
-    assert.match(lines[0], /^\[debug:issue\] buffered 8s at 56:42/);
+    assert.match(lines[0], /^\[debug:issue\] \d{2}:\d{2}:\d{2} buffered 8s at 56:42/);
+    assert.match(server, /disk \$\{m\.name \|\| 'file'\}/,
+      'a second open file is named, and a disk movie is marked disk so it is not a usenet login');
     assert.match(lines[0], /reason: the picture waited for bytes/);
   } finally {
     console.log = orig;

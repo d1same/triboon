@@ -5781,7 +5781,17 @@ const H = {
       const mountMs = Date.now() - t0;
       debug.log('play', `ok "${candidate.name}" mount=${vf.id} session=${session.id} ms=${mountMs} live=${mounts.size}`);
       if (vf._lastPlayOkAt && Date.now() - vf._lastPlayOkAt < 20000) {
-        debug.issue(`started again in ${mountMs}ms — "${candidate.name}" — reason: the same file was opened again while ${mounts.size} files were already open`);
+        const others = [];
+        for (const m of mounts.values()) {
+          if (!m || m === vf) continue;
+          const label = m._local
+            ? `disk ${m.name || 'file'}`
+            : (m._releaseName || m.name || 'usenet file');
+          others.push(String(label).replace(/[\r\n]+/g, ' ').slice(0, 80));
+          if (others.length >= 3) break;
+        }
+        const also = others.length ? ` (${others.join('; ')})` : '';
+        debug.issue(`started again in ${mountMs}ms — "${candidate.name}" — reason: the same file was opened again while ${mounts.size} files were already open${also}`);
       }
       vf._lastPlayOkAt = Date.now();
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {

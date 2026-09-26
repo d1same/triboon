@@ -126,6 +126,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-26, v3.2.23 ship — a bug line shows the clock, and the other open file is named:
+
+- Version contract: `package.json` 3.2.23; Android `versionName` 3.2.23 /
+  `versionCode` 400; Windows client package/Tauri/Cargo(.lock) 3.2.23.
+- Example: the movie waits 4 seconds at minute 42. The log says
+  `14:08:31` next to that line, so you can match it to the wall clock.
+  If a second file is already open, the line names it, and a disk movie
+  is marked `disk` so it is not mistaken for a Usenet login.
+- Docs: player contract P1. Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 757/757. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.23, household VOD play/seek/resume/CC on the
+  house process v3.2.23 (Mario ready 3003ms SLOW, 1stByte 130ms, seek
+  355ms, resume 20ms, CC 200; FROM ready 2006ms, 1stByte 31ms, seek
+  288ms, resume 10ms, CC 200; both playable), household IPTV first-byte
+  + retune (8855 channels, 2 video picks), household overlapping Play
+  (FROM ready 5ms, Mario ready 14ms), Android lint + unit tests + debug
+  build, Android ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260926-141544.json`, never the Shield). Windows
+  GPU/HDR was not run. Unraid was not updated by this check.
+
 2026-09-26, v3.2.22 ship — a pause or a buffer keeps the exact second:
 
 - Version contract: `package.json` 3.2.22; Android `versionName` 3.2.22 /

@@ -27,9 +27,17 @@ function tagOf(scope) {
   return String(scope || 'server').replace(/[^\w:-]/g, '').slice(0, 24) || 'server';
 }
 
+// Wall clock on the box, so a buffer at 42:04 of the movie can be matched
+// to 1:46:02 PM in the log.
+function clock() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 function log(scope, msg) {
   if (!enabled()) return;
-  console.log(`[debug:${tagOf(scope)}] ${redact(msg)}`);
+  console.log(`[debug:${tagOf(scope)}] ${clock()} ${redact(msg)}`);
 }
 
 // Playback problems the owner can read next to the play lines: a pause, a skip
@@ -60,7 +68,7 @@ function fail(scope, msg) {
   }
   const extra = prev && prev.n > 1 ? ` (same failure ${prev.n - 1} more times)` : '';
   failSeen.set(key, { at: now, n: 1 });
-  try { console.error(`[fail:${tag}] ${text}${extra}`); } catch {}
+  try { console.error(`[fail:${tag}] ${clock()} ${text}${extra}`); } catch {}
 }
 
 module.exports = { bindSettings, envForced, enabled, log, issue, fail, redact };
