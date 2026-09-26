@@ -126,6 +126,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-25, v3.2.18 ship — a movie that is already playing stays on
+the current moment instead of replaying the previous second:
+
+- Version contract: `package.json` 3.2.18; Android `versionName` 3.2.18 /
+  `versionCode` 395; Windows client package/Tauri/Cargo(.lock) 3.2.18.
+- Example: Utopia S02E02 is 20 minutes in. The picture used to hop back
+  about one second and play that second again. It stays put. The phone and
+  TV seek bar is tall enough to see. With debug logging on, a tiny clock
+  twitch writes the fraction (0.06s). A real replay writes how far it jumped.
+- Emulator watch, not the Shield: 30 minutes of that Utopia remux on
+  `emulator-5554` after the player fix. Clock 173s to 1952.9s, 1785 samples,
+  no step back of 0.03s or more. Startup only: an 11s wait and one 0.06s
+  clock twitch.
+- Gate: `npm.cmd test` 746/746. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.18, household VOD play/seek/resume/CC on the
+  house process v3.2.18 (Mario ready 15ms, 1stByte 3ms, seek 2ms, resume
+  12ms, CC 200; FROM ready 228ms, 1stByte 7ms, seek 131ms, resume 8ms,
+  CC 200; both playable), household IPTV first-byte + retune (8855
+  channels, 2 video picks), household overlapping Play (FROM ready 6ms,
+  Mario ready 15ms), Android lint + unit tests + debug build, Android
+  ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260925-214658.json`, never the Shield). Windows
+  GPU/HDR was not run. Unraid was not updated by this check.
+
 2026-09-25, v3.2.17 ship — a screen that cannot do Dolby Vision starts
 the normal copy, and a fat file yields when the line is tight:
 

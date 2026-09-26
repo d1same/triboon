@@ -523,10 +523,14 @@ When changing persistence, update:
 ### Android TV
 
 - Owns native Media3/ExoPlayer playback for VOD and Live TV. The fullscreen
-  path uses a `SurfaceView` player surface, decoder fallback, closest-sync
-  seeks, seeded bandwidth, byte-bounded VOD buffers, short back buffers, live
-  target-offset tuning, conservative-device HLS caps, and audio offload where
-  Android supports it. `STATE_READY` does not count as started until ExoPlayer
+  path uses a `SurfaceView` player surface, decoder fallback, exact seeks,
+  seeded bandwidth, byte-bounded VOD buffers, short back buffers, live
+  target-offset tuning, and conservative-device HLS caps. Audio offload stays
+  off. A nearest-frame seek or that sound shortcut used to replay about one
+  second in the middle of a movie. The seek bar track stays tall enough to
+  see on a phone and a TV. Progress reports fractions of a second. With debug
+  logging on, a backward clock writes how far it moved and why. A pause is
+  not written down. A wait for bytes, a dropped connection, and a crash are. `STATE_READY` does not count as started until ExoPlayer
   actually plays. Sustained post-start VOD stalls trim UI caches and retry the
   same source at the last trustworthy timestamp once; a confirmed dead source
   or repeated stall advances releases without changing episode or position.

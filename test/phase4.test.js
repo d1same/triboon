@@ -5455,6 +5455,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player should explicitly move between the seek bar and button row with D-pad up/down');
   assert.match(android, /private boolean focusNativeSeekControl\(\) \{[\s\S]+showNativeChrome\(false\);[\s\S]+updateNativeChrome\(\);[\s\S]+nativeSeek\.isEnabled\(\)[\s\S]+nativeSeek\.requestFocus\(\);[\s\S]+nativeSeek\.postDelayed\(focusSeek, 60\);[\s\S]+\}/,
     'native seek-bar focus should open chrome, refresh seekability, and retry focus after layout settles');
+  assert.match(android, /private void styleNativeSeekTrack\(\) \{[\s\S]+setLayerHeight\(i, track\)[\s\S]+setMaxHeight\(dp\(40\)\)[\s\S]+setProgressDrawable\(layers\)/,
+    'native seek bar keeps a real track so the line between the times stays visible');
+  assert.doesNotMatch(android, /setLayerInset\(0, 0, insetV/,
+    'native seek bar must not inset the theme track down to nothing');
   assert.match(android, /private boolean nativeCanSeekVod\(\) \{[\s\S]+"video"\.equals\(nativeMode\)[\s\S]+nativeVodSeekable\(\) \|\| nativeServerSeekMode\(\)/,
     'native VOD seekability should include server-side remux/transcode seek mode');
   assert.match(android, /boolean canSeek = !isLive && nativeCanSeekVod\(\);/,
@@ -6438,14 +6442,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player reads the server-sent bufferGoalSec for this stream');
   assert.match(server, /const bufferGoalSec = \(streamIsUhd\(vf\) \? __prof\.buffer4kSec : __prof\.buffer1080Sec\) \|\| 0/,
     'server buffer goal uses 4K-by-name, not file-bigger-than-4GB');
-  assert.match(android, /new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)[\s\S]+setBandwidthMeter\(nativeBandwidthMeterForMode\(mode\)\)[\s\S]+setSeekParameters\(SeekParameters\.CLOSEST_SYNC\)/,
-    'native ExoPlayer should use decoder fallback plumbing, seeded bandwidth, and closest-sync seeking');
+  assert.match(android, /new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)[\s\S]+setBandwidthMeter\(nativeBandwidthMeterForMode\(mode\)\)[\s\S]+setSeekParameters\(SeekParameters\.EXACT\)/,
+    'native ExoPlayer should use decoder fallback plumbing, seeded bandwidth, and exact seeking so a hiccup does not replay the previous second');
+  assert.match(android, /private String nativePosSecondsPrecise\(\) \{[\s\S]+"%.3f"[\s\S]+__tvNativeVideoProgress[\s\S]+nativePosSecondsPrecise\(\)/,
+    'native progress reports fractions of a second so a clock twitch is not logged as a full second');
   assert.match(android, /private DefaultRenderersFactory nativeRenderersFactory\(\) \{[\s\S]+setEnableDecoderFallback\(true\)[\s\S]+setEnableAudioOutputPlaybackParameters\(true\)/,
     'Android native playback should retry another decoder when hardware init fails');
   assert.match(android, /private DefaultBandwidthMeter nativeBandwidthMeterForMode\(String mode\) \{[\s\S]+"live"\.equals\(mode\)[\s\S]+5_000_000L[\s\S]+12_000_000L[\s\S]+22_000_000L[\s\S]+80_000_000L[\s\S]+setInitialBitrateEstimate\(estimate\)/,
     'Android native playback should seed live and VOD bandwidth differently for budget and high-end devices');
-  assert.match(android, /private void applyNativeTrackSelectionDefaults\(boolean isLiveMode\) \{[\s\S]+setPreferredAudioLanguages\(wantedAudioLang\.isEmpty\(\)[\s\S]+new String\[\]\{"en"\} : new String\[\]\{wantedAudioLang, "en"\}\)[\s\S]+setViewportSizeToPhysicalDisplaySize\(true\)[\s\S]+params\.setMaxVideoSize\(1920, 1080\)[\s\S]+setMaxVideoBitrate\(10_000_000\)[\s\S]+AudioOffloadPreferences/,
-    'Android track selection should honor the wanted audio language (manual/pref, then English), cap Live HLS on conservative devices, and enable VOD audio offload where supported');
+  assert.match(android, /private void applyNativeTrackSelectionDefaults\(boolean isLiveMode\) \{[\s\S]+setPreferredAudioLanguages\(wantedAudioLang\.isEmpty\(\)[\s\S]+new String\[\]\{"en"\} : new String\[\]\{wantedAudioLang, "en"\}\)[\s\S]+setViewportSizeToPhysicalDisplaySize\(true\)[\s\S]+params\.setMaxVideoSize\(1920, 1080\)[\s\S]+setMaxVideoBitrate\(10_000_000\)[\s\S]+AUDIO_OFFLOAD_MODE_DISABLED/,
+    'Android track selection should honor the wanted audio language (manual/pref, then English), cap Live HLS on conservative devices, and keep VOD audio offload off');
   assert.match(android, /media\.setLiveConfiguration\(new MediaItem\.LiveConfiguration\.Builder\(\)[\s\S]+setTargetOffsetMs\(nativeConservativePlaybackDevice\(\) \? 8000L : 5000L\)[\s\S]+setMaxPlaybackSpeed\(1\.03f\)/,
     'native Live TV media items should carry target-offset and catch-up speed hints');
   assert.match(android, /setTargetBufferBytes\(targetBytes\)[\s\S]+setBackBuffer\(backBufferMs, false\)/,

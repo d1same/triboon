@@ -350,6 +350,8 @@ public class MainActivity extends Activity {
     private long nativeLiveUnhealthySinceMs;
     private long nativeLiveLastRecoveryMs;
     private long nativeVideoUnhealthySinceMs;
+    private long nativeIssuePauseAtMs;
+    private boolean nativeIssuePauseNoted;
     private long nativeResumeGraceUntilMs;
     private long nativeUserPausedAtMs;
     private boolean nativeVideoStarted;
@@ -3328,7 +3330,7 @@ public class MainActivity extends Activity {
                 scheduleNativeChromeHide();
             }
         });
-        seekRow.addView(nativeSeek, new LinearLayout.LayoutParams(0, dp(28), 1));
+        seekRow.addView(nativeSeek, new LinearLayout.LayoutParams(0, dp(40), 1));
 
         nativeTime = new TextView(this);
         nativeTime.setTextColor(0xC8F3EFF7);
@@ -4520,7 +4522,9 @@ public class MainActivity extends Activity {
                         .setMediaSourceFactory(nativeMediaSourceFactory())
                         .setLoadControl(nativeLoadControlForMode(mode))
                         .setBandwidthMeter(nativeBandwidthMeterForMode(mode))
-                        .setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                        // Exact, not the nearest earlier frame. The nearest frame is about a
+                        // second behind, so a hiccup made the picture play that second again.
+                        .setSeekParameters(SeekParameters.EXACT)
                         .build();
                 nativePlayer.setAudioAttributes(new AudioAttributes.Builder()
                         .setUsage(C.USAGE_MEDIA)
@@ -4591,6 +4595,11 @@ public class MainActivity extends Activity {
                 @Override public void onPlaybackStateChanged(int state) {
                     if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
                     updateNativeChrome();
+                    if ("video".equals(nativeMode) && nativeVideoStarted && state == Player.STATE_BUFFERING
+                            && nativePlayer != null && nativePlayer.getPlayWhenReady() && nativeIssuePauseAtMs == 0L) {
+                        nativeIssuePauseAtMs = SystemClock.elapsedRealtime();
+                        nativeIssuePauseNoted = false;
+                    }
                     if (state == Player.STATE_READY) {
                         if ("video".equals(nativeMode)) {
                             // READY only proves that ExoPlayer can begin; it can still be waiting on
@@ -4683,6 +4692,12 @@ public class MainActivity extends Activity {
                     if ("live".equals(nativeMode) && isPlaying) nativeLiveUnhealthySinceMs = 0L;
                     if ("live".equals(nativeMode) && isPlaying) nativeLiveStarted = true;
                     if ("video".equals(nativeMode) && isPlaying) {
+                        if (nativeIssuePauseAtMs > 0L) {
+                            long waited = (SystemClock.elapsedRealtime() - nativeIssuePauseAtMs) / 1000L;
+                            nativeIssuePauseAtMs = 0L;
+                            nativeIssuePauseNoted = false;
+                            if (waited >= 2L) reportNativePlaybackIssue("buffer", "the picture waited for bytes", waited);
+                        }
                         nativeSeekHoldDisplayMs = 0L;
                         nativeVideoStarted = true;
                         widenNativeReadTimeoutAfterFirstFrame();
@@ -4927,6 +4942,11 @@ public class MainActivity extends Activity {
 
     private long nativePosSeconds() {
         return nativeDisplayPositionMs() / 1000;
+    }
+
+    // Whole seconds hide a twitch. 60:13.04 and 60:12.98 must not look like a one-second replay.
+    private String nativePosSecondsPrecise() {
+        return String.format(java.util.Locale.US, "%.3f", Math.max(0L, nativeDisplayPositionMs()) / 1000.0);
     }
 
     private long nativeDurSeconds() {
@@ -5278,7 +5298,7 @@ public class MainActivity extends Activity {
     private void openNativeLiveGuide() {
         if (nativePlayer != null && "video".equals(nativeMode) && !nativePercentResumePending) {
             web.evaluateJavascript("window.__tvNativeVideoProgress && __tvNativeVideoProgress("
-                    + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                    + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
         }
         enterNativeGuideMode();
         web.evaluateJavascript("window.__tvNativeLiveGuide && window.__tvNativeLiveGuide("
@@ -5932,9 +5952,11 @@ public class MainActivity extends Activity {
             params.clearVideoSizeConstraints();
         }
         if (!isLiveMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Offload holds about a second of sound. When that buffer hiccups, the
+            // movie plays that second again. Video keeps the normal sound path.
             params.setAudioOffloadPreferences(
                     new androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences.Builder()
-                            .setAudioOffloadMode(androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED)
+                            .setAudioOffloadMode(androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED)
                             .build());
         }
         nativePlayer.setTrackSelectionParameters(params.build());
@@ -6266,6 +6288,7 @@ public class MainActivity extends Activity {
         if (now - nativeLiveLastRecoveryMs < NATIVE_LIVE_RECOVERY_COOLDOWN_MS) return;
         if (tryNativeLiveFallback()) return;
         nativeLiveLastRecoveryMs = now;
+        reportNativePlaybackIssue("live", reason == null ? "live tv stalled" : reason, 0L);
         nativeLiveUnhealthySinceMs = 0L;
         nativePlayer.stop();
         nativePlayer.clearMediaItems();
@@ -6274,9 +6297,18 @@ public class MainActivity extends Activity {
         nativePlayer.play();
     }
 
+    private void reportNativePlaybackIssue(String kind, String detail, long sec) {
+        if (web == null || kind == null) return;
+        web.evaluateJavascript("window.__tvPlaybackIssue && __tvPlaybackIssue("
+                + org.json.JSONObject.quote(kind) + ","
+                + org.json.JSONObject.quote(detail == null ? "" : detail) + ","
+                + Math.max(0L, sec) + ")", null);
+    }
+
     private void notifyNativeVideoError(String msg, long pos, long dur) {
         if (nativeVideoErrorNotified) return;
         nativeVideoErrorNotified = true;
+        reportNativePlaybackIssue("crash", msg == null || msg.isEmpty() ? "the player stopped" : msg, 0L);
         String title = nativePlaybackTitle;
         String backdropUrl = nativePlaybackBackdropUrl;
         String kind = nativeKind;
@@ -7838,10 +7870,13 @@ public class MainActivity extends Activity {
 
     // Magenta is the watched point. The pale stretch is how far the TV has loaded.
     // A custom track is required: the device theme's seek bar often hides secondary progress.
+    // The theme track is only a few pixels tall. Insetting that track again wiped the bar
+    // out on the phone and the TV, so the line between the times disappeared.
     private void styleNativeSeekTrack() {
-        float radius = dp(2);
-        GradientDrawable background = nativeSeekTrack(0x55F3EFF7, radius);
-        GradientDrawable loaded = nativeSeekTrack(0xCCF3EFF7, radius);
+        int track = dp(6);
+        float radius = track / 2f;
+        GradientDrawable background = nativeSeekTrack(0x99F3EFF7, radius);
+        GradientDrawable loaded = nativeSeekTrack(0xE6F3EFF7, radius);
         GradientDrawable played = nativeSeekTrack(0xFFC13BD6, radius);
         ClipDrawable loadedClip = new ClipDrawable(loaded, android.view.Gravity.START, ClipDrawable.HORIZONTAL);
         ClipDrawable playedClip = new ClipDrawable(played, android.view.Gravity.START, ClipDrawable.HORIZONTAL);
@@ -7849,12 +7884,17 @@ public class MainActivity extends Activity {
         layers.setId(0, android.R.id.background);
         layers.setId(1, android.R.id.secondaryProgress);
         layers.setId(2, android.R.id.progress);
-        int insetV = dp(12);
-        layers.setLayerInset(0, 0, insetV, 0, insetV);
-        layers.setLayerInset(1, 0, insetV, 0, insetV);
-        layers.setLayerInset(2, 0, insetV, 0, insetV);
+        for (int i = 0; i < 3; i++) {
+            layers.setLayerHeight(i, track);
+            layers.setLayerGravity(i, android.view.Gravity.CENTER_VERTICAL);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            nativeSeek.setMinHeight(track);
+            nativeSeek.setMaxHeight(dp(40));
+        }
         nativeSeek.setProgressDrawable(layers);
         nativeSeek.setSplitTrack(false);
+        nativeSeek.setMinimumHeight(dp(40));
     }
 
     private GradientDrawable nativeSeekTrack(int color, float radius) {
@@ -7958,7 +7998,7 @@ public class MainActivity extends Activity {
                     if (!nativePercentResumePending) {
                         rememberNativeVideoPosition();
                         web.evaluateJavascript("window.__tvNativeVideoProgress && __tvNativeVideoProgress("
-                                + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                                + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
                     }
                 }
                 long now = SystemClock.elapsedRealtime();
@@ -8026,6 +8066,10 @@ public class MainActivity extends Activity {
                 return;
             }
             long elapsed = now - nativeVideoUnhealthySinceMs;
+            if (elapsed >= 8000L && nativeIssuePauseAtMs > 0L && !nativeIssuePauseNoted) {
+                nativeIssuePauseNoted = true;
+                reportNativePlaybackIssue("buffer", "still waiting for bytes", elapsed / 1000L);
+            }
             if (!nativeVideoMemoryTrimmedDuringBuffer && elapsed >= NATIVE_VIDEO_REBUFFER_TRIM_MS) {
                 nativeVideoMemoryTrimmedDuringBuffer = true;
                 Log.w(TAG, "Native VOD rebuffer still waiting after " + elapsed + "ms; trimming UI caches");
@@ -9061,7 +9105,7 @@ public class MainActivity extends Activity {
             if (nativePlayer != null && "video".equals(nativeMode) && !nativePercentResumePending) {
                 rememberNativeVideoPosition();
                 checkpoint = "window.__tvNativeVideoProgress&&__tvNativeVideoProgress("
-                        + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ");";
+                        + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ");";
             }
             checkpoint += "window.__tvPlaybackBackgrounded&&window.__tvPlaybackBackgrounded();"
                     + "document.querySelectorAll('video').forEach(v=>v.pause())";

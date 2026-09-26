@@ -234,7 +234,9 @@ class NntpConnection {
     if (err && (err.code === 'NNTP_STALL' || err.code === 'NNTP_AUTH_LOST' || /connect timeout|auth failed|body too large/i.test(msg))) {
       const host = (this.opts && this.opts.host) || 'usenet';
       const waiting = (this.waiters || []).map((w) => w && w.cmdName).filter(Boolean).slice(0, 4).join(', ');
-      debug.fail('buffer', `${host}: ${msg || err.code || 'socket stopped'}${waiting ? ` while waiting on ${waiting}` : ''}`);
+      const line = `${host}: ${msg || err.code || 'socket stopped'}${waiting ? ` while waiting on ${waiting}` : ''}`;
+      debug.fail('buffer', line);
+      debug.issue(`connection dropped — reason: ${line}`);
     }
     this.alive = false;
     clearTimeout(this._connectTimer);
@@ -458,7 +460,9 @@ class ProviderPool {
       c.alive = false;
     }
     const host = (this.opts && this.opts.host) || 'usenet';
-    debug.fail('buffer', `${host} refused the download, so playback is using ${this.size} connections`);
+    const refused = `${host} refused the download, so playback is using ${this.size} connections`;
+    debug.fail('buffer', refused);
+    debug.issue(`connection dropped — reason: ${refused}`);
   }
   authBroken() {
     const now = Date.now();
@@ -482,7 +486,9 @@ class ProviderPool {
     const next = shrinkSizeFromLive(this.conns.length, learnedConnectionLimit(err));
     if (next < this.size) this.size = next;
     const host = (this.opts && this.opts.host) || 'usenet';
-    debug.fail('buffer', `${host} is full, so playback is using ${this.size} connections`);
+    const full = `${host} is full, so playback is using ${this.size} connections`;
+    debug.fail('buffer', full);
+    debug.issue(`connection dropped — reason: ${full}`);
   }
 
   _admitConn(c) {
@@ -524,7 +530,9 @@ class ProviderPool {
         this.lastErr = e;
         this.lastConnectFailAt = Date.now();
         if (e && /auth failed/i.test(String(e.message || ''))) {
-          debug.fail('buffer', `${(this.opts && this.opts.host) || 'usenet'}: ${e.message}`);
+          const authLine = `${(this.opts && this.opts.host) || 'usenet'}: ${e.message}`;
+          debug.fail('buffer', authLine);
+          debug.issue(`connection dropped — reason: ${authLine}`);
         }
         try { c.close(); } catch {}
         if (isTooManyConnections(e)) this._markCapHit(e);

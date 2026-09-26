@@ -579,6 +579,30 @@ test('debug log redacts tokens and passwords', () => {
   }
 });
 
+test('playback issue lines include the reason', () => {
+  const debug = require('../server/debug');
+  const server = fs.readFileSync(require('path').join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /buffer: 'buffered'[\s\S]+crash: 'player crashed'[\s\S]+drop: 'connection dropped'[\s\S]+hop: 'jumped back'[\s\S]+reason: \$\{reason\}/,
+    'a buffer, a crash, a drop, and a hop each keep a reason');
+  const html = fs.readFileSync(require('path').join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(html, /function notePictureHop\(p, prev, incoming\)[\s\S]+the picture jumped back/,
+    'a backward clock writes how far the picture jumped');
+  const lines = [];
+  const orig = console.log;
+  const prev = process.env.TRIBOON_DEBUG;
+  process.env.TRIBOON_DEBUG = '1';
+  console.log = (line) => lines.push(String(line));
+  try {
+    debug.issue('buffered 8s at 56:42 — "Mortdecai" — reason: the picture waited for bytes');
+    assert.match(lines[0], /^\[debug:issue\] buffered 8s at 56:42/);
+    assert.match(lines[0], /reason: the picture waited for bytes/);
+  } finally {
+    console.log = orig;
+    if (prev == null) delete process.env.TRIBOON_DEBUG;
+    else process.env.TRIBOON_DEBUG = prev;
+  }
+});
+
 test('settings: debug logging is opt-in and environment-forced', async () => {
   const originalDebug = process.env.TRIBOON_DEBUG;
   const originalData = process.env.TRIBOON_DATA;

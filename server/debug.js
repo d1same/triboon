@@ -32,6 +32,12 @@ function log(scope, msg) {
   console.log(`[debug:${tagOf(scope)}] ${redact(msg)}`);
 }
 
+// Playback problems the owner can read next to the play lines: a pause, a skip
+// that waited, a file that died, a player error. Only when debug logging is on.
+function issue(msg) {
+  log('issue', msg);
+}
+
 // Failures are always written. Debug stays off so a quiet box does not fill
 // Unraid with play-by-play lines. The same failure is written once a minute.
 const failSeen = new Map();
@@ -57,4 +63,4 @@ function fail(scope, msg) {
   try { console.error(`[fail:${tag}] ${text}${extra}`); } catch {}
 }
 
-module.exports = { bindSettings, envForced, enabled, log, fail, redact };
+module.exports = { bindSettings, envForced, enabled, log, issue, fail, redact };

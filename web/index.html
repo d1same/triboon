@@ -12758,6 +12758,73 @@ function webVodStallRecoveryMs(p, established) {
   if (!established) return webVodHeavy(p) ? 18000 : 10000;
   return webVodHeavy(p) ? 45000 : 30000;
 }
+function notePlaybackIssue(kind, detail, sec) {
+  const p = S.playing;
+  if (!p) return;
+  const atSec = Math.max(0, Math.floor(Number(typeof currentTime === 'function' ? currentTime() : 0) || 0));
+  const h = Math.floor(atSec / 3600);
+  const m = Math.floor((atSec % 3600) / 60);
+  const s = atSec % 60;
+  const at = h > 0
+    ? h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0')
+    : m + ':' + String(s).padStart(2, '0');
+  const title = (p.item && (p.item.title || p.item.name)) || '';
+  const file = (p.candidate && p.candidate.name) || '';
+  api('/api/playback-issue', {
+    method: 'POST',
+    body: {
+      kind, detail: String(detail || '').slice(0, 160), sec: Math.round(Number(sec) || 0),
+      title: String(title).slice(0, 80), file: String(file).slice(0, 140), at,
+    },
+  }).catch(() => {});
+}
+function issueKindFor(why) {
+  return String(why || '').indexOf('skip') === 0 ? 'seek' : 'buffer';
+}
+// A one-second replay is the picture, not a skip. Log how far the clock stepped back.
+// Do not remount: restarting the file for this blink used to make a worse jump.
+function notePictureHop(p, prev, incoming) {
+  if (!p || (p.item && p.item.type === 'live') || !vodPlaybackStarted(p)) return;
+  if (p.nativePaused || p._nativeResuming) return;
+  if (!p.startedAt || appMs() - p.startedAt < 8000) return;
+  if (p.suppressSeekLoaderUntil && appMs() < p.suppressSeekLoaderUntil) return;
+  const v = $('video');
+  if (!p.usingNative && v && (v.seeking || v.paused)) return;
+  const back = (+prev || 0) - (+incoming || 0);
+  if (!(back >= 0.03 && back <= 8)) return;
+  const twitch = back < 0.4;
+  if (p._hopAt && appMs() - p._hopAt < (twitch ? 60000 : 12000)) return;
+  p._hopAt = appMs();
+  const jumped = (Math.round(back * 100) / 100).toFixed(2).replace(/\.?0+$/, '');
+  const detail = twitch
+    ? 'the clock twitched back ' + jumped + 's'
+    : 'the picture jumped back ' + jumped + 's and played that part again';
+  notePlaybackIssue('hop', detail, twitch ? 0 : Math.max(1, Math.round(back)));
+}
+function markPictureWait(p, why) {
+  if (!p || !vodPlaybackStarted(p) || p._issueWaitAt) return;
+  p._issueWaitAt = appMs();
+  p._issueWaitWhy = why || 'the picture waited for bytes';
+  p._issueWaitNoted = false;
+  clearTimeout(p._issueWaitT);
+  p._issueWaitT = setTimeout(() => {
+    if (!p._issueWaitAt || S.playing !== p || p._issueWaitNoted) return;
+    const waited = Math.round((appMs() - p._issueWaitAt) / 1000);
+    if (waited < 2) return;
+    p._issueWaitNoted = true;
+    notePlaybackIssue(issueKindFor(p._issueWaitWhy), 'still waiting for bytes', waited);
+  }, 8000);
+}
+function markPictureMoving(p) {
+  if (!p || !p._issueWaitAt) return;
+  const waited = Math.round((appMs() - p._issueWaitAt) / 1000);
+  const why = p._issueWaitWhy || 'the picture waited for bytes';
+  clearTimeout(p._issueWaitT);
+  p._issueWaitAt = 0;
+  p._issueWaitT = null;
+  p._issueWaitNoted = false;
+  if (waited >= 2) notePlaybackIssue(issueKindFor(why), why, waited);
+}
 function armWebRebufferRecovery(v, p) {
   if (S._webRebufferT || !v || !p || p.usingNative
       || !p.item || p.item.type === 'live' || v.paused || v.seeking
@@ -12807,6 +12874,7 @@ function stopActivePlaybackForReplacement(opts = {}) {
   updatePlayerControlAvailability();
   return stopP;
 }
+window.__tvPlaybackIssue = (kind, detail, sec) => notePlaybackIssue(kind, detail, sec);
 function startNativePlayerHousekeeping(it) {
   stopWebVideoElement();
   // Native ExoPlayer used to disable source triage entirely. That left a Continue Watching resume
@@ -12833,6 +12901,12 @@ function startWebPlayerHousekeeping(mount, it) {
       const err = v.error, pl = playingRef;
       if (err) console.warn('[vod] <video> error code=' + err.code + ' kind=' + currentPlayerKind(pl)
         + ' aacRemux=' + !!(pl && pl.forceAacRemux) + (err.message ? ' msg=' + err.message : ''));
+      const code = err && err.code;
+      const why = code === 3 ? 'the decoder rejected the picture'
+        : code === 2 ? 'the connection dropped while reading'
+        : code === 4 ? 'the player could not open this file'
+        : 'the player reported an error';
+      notePlaybackIssue(code === 2 ? 'drop' : 'crash', why + (err && err.message ? ': ' + err.message : ''), 0);
     } catch {}
     failover();
   };
@@ -12995,6 +13069,7 @@ async function openPlayer(it, mount, opts = {}) {
   };
   v.onplaying = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
+    markPictureMoving(playingRef);
     clearWebRebufferRecovery(); clearPauseIdleExit(); cancelPauseWarmAhead(); playingRef._pausedAt = 0; playingRef._webResuming = false; markVodPlaybackStarted(playingRef);
     bumpPlayClock(playingRef);
     clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame();
@@ -13016,6 +13091,10 @@ async function openPlayer(it, mount, opts = {}) {
   v.onwaiting = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
     const pWait = playingRef;
+    if (pWait && vodPlaybackStarted(pWait) && !v.paused && !v.seeking) {
+      const skipping = pWait.suppressSeekLoaderUntil && appMs() < pWait.suppressSeekLoaderUntil;
+      markPictureWait(pWait, skipping ? 'skip did not get the next bytes' : 'the picture waited for bytes');
+    }
     if (pWait) armWebRebufferRecovery(v, pWait);
     if (S.view !== 'player' || (pWait && (pWait.started || (pWait.suppressSeekLoaderUntil && appMs() < pWait.suppressSeekLoaderUntil)))) return;
     clearTimeout(S._waitT);
@@ -13030,6 +13109,7 @@ async function openPlayer(it, mount, opts = {}) {
   v.ontimeupdate = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
     if (v.currentTime === lastTu) return;
+    if (!(playingRef.item && playingRef.item.type === 'live')) notePictureHop(playingRef, lastTu, v.currentTime);
     lastTu = v.currentTime;
     const rebufferWatch = S._webRebufferWatch;
     if (rebufferWatch && rebufferWatch.playing === playingRef
@@ -13949,6 +14029,7 @@ function applyNativeVideoProgress(pos, dur, opts = {}) {
   const incoming = Math.max(0, +pos || 0);
   const prev = Math.max(0, +p.nativePos || 0);
   const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;
+  if (!keepPrev) notePictureHop(p, prev, incoming);
   p.nativePos = keepPrev ? prev : incoming;
   applyReportedDuration(p, dur);
   maybePrepareNextEpisode(p.nativePos, totalDuration());
@@ -14448,6 +14529,8 @@ function recoverSamePlaybackSource(reason = '') {
   // Server restart / swept mount: do not replay the dead URL (that flickers Preparing).
   // Wait, remount the same title, resume. Decoder failures stay on the codec path.
   const mountGone = playbackServerGone(reason) && !decoderFailure;
+  const issueKind = decoderFailure ? 'crash' : (sourceDead ? 'source' : (mountGone ? 'drop' : 'buffer'));
+  notePlaybackIssue(issueKind, reason || 'playback interrupted', 0);
   if (mountGone && p._reMounting) {
     // Leftover on-TV buffer ran out while we wait for a new mount. Freeze the last frame.
     if (typeof holdPlaybackAcrossRestart === 'function') holdPlaybackAcrossRestart();

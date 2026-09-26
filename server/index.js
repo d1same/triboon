@@ -5771,6 +5771,10 @@ const H = {
       const bufferGoalSec = (streamIsUhd(vf) ? __prof.buffer4kSec : __prof.buffer1080Sec) || 0;
       const mountMs = Date.now() - t0;
       debug.log('play', `ok "${candidate.name}" mount=${vf.id} session=${session.id} ms=${mountMs} live=${mounts.size}`);
+      if (vf._lastPlayOkAt && Date.now() - vf._lastPlayOkAt < 20000) {
+        debug.issue(`started again in ${mountMs}ms — "${candidate.name}" — reason: the same file was opened again while ${mounts.size} files were already open`);
+      }
+      vf._lastPlayOkAt = Date.now();
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
         sessionId: session.id, mountMs,
         candidate: { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer, reasons: candidate.reasons, attributes: candidate.attributes },
@@ -5783,9 +5787,38 @@ const H = {
       // not a generic playback error, whichever settled first (and it never leaks a source either way).
       if (!(await maturityAllowed)) return maturityBlockedResponse(ctx);
       debug.fail('play', `could not start ${body && body.q || '-'} — ${playFailDetail(e)}`);
+      debug.issue(`could not start — "${body && body.q || 'playback'}" — reason: ${playFailDetail(e)}`);
       debug.log('play', `fail q=${body && body.q || '-'} ${e.message || 'error'}`);
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
+  },
+
+  playbackIssue: async (ctx) => {
+    const body = await readJson(ctx.req).catch(() => ({}));
+    const kind = String(body.kind || '').toLowerCase();
+    const allowed = {
+      buffer: 'buffered',
+      seek: 'skip waited',
+      source: 'source problem',
+      crash: 'player crashed',
+      drop: 'connection dropped',
+      live: 'live tv stalled',
+      hop: 'jumped back',
+    };
+    if (!allowed[kind]) return send(ctx.res, 400, { error: 'kind required' });
+    if (throttleUserRoute(ctx, 'playback-issue', { max: 40, windowMs: 60000 })) return;
+    const clip = (v, n) => String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);
+    const sec = Math.max(0, Math.min(3600, Math.round(Number(body.sec) || 0)));
+    const title = clip(body.title, 80);
+    const file = clip(body.file, 140);
+    const at = clip(body.at, 16);
+    const reason = clip(body.detail, 180) || allowed[kind];
+    const where = at ? ` at ${at}` : '';
+    const howLong = sec > 0 ? ` ${sec}s` : '';
+    const name = file || title || 'playback';
+    const who = title && file ? ` (${title})` : '';
+    debug.issue(`${allowed[kind]}${howLong}${where} — "${name}"${who} — reason: ${reason}`);
+    send(ctx.res, 204);
   },
 
   playStop: async (ctx) => {
@@ -10277,6 +10310,7 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/search$/, auth: 'user', h: H.search },
   { m: 'POST', re: /^\/api\/play$/, auth: 'user', h: H.play },
   { m: 'POST', re: /^\/api\/play\/stop$/, auth: 'user', h: H.playStop },
+  { m: 'POST', re: /^\/api\/playback-issue$/, auth: 'user', h: H.playbackIssue },
   { m: 'POST', re: /^\/api\/prepare$/, auth: 'user', h: H.prepare },
   { m: 'POST', re: /^\/api\/advance\/(\w+)$/, auth: 'user', h: H.advance },
   { m: 'GET', re: /^\/api\/art$/, auth: 'user', h: H.artProxy },

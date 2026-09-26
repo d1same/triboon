@@ -3670,6 +3670,7 @@ class Pipeline {
     // release-wide verdict from one episode's stall must not blacklist a season pack's healthy
     // siblings (the existing post-mount judgment contract).
     if (session.activeCandidate) {
+      debug.issue(`file died — "${session.activeCandidate.name || ''}" — reason: playback failed, trying another copy`);
       this._recordPlaybackFailed(session.activeCandidate, { episodeScoped: !!_we });
       this._clearTitleStandby(session.query || {}, session.policy || {}, session.activeCandidate.pickKey);
       session.activeCandidate = null;
