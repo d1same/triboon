@@ -643,7 +643,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'trailer Play uses the details target and never returns focus to the details page');
   assert.match(ui, /function closeTrailer\(opts = \{\}\) \{[\s\S]+if \(opts\.keepFocus \|\| S\.view === 'player'\)/,
     'closing a trailer during Play must not steal focus back to details');
-  assert.match(ui, /function playNextEpisode\(\) \{[\s\S]+play\(ne\.item, null, \{ directHandoff: true \}\)/,
+  assert.match(ui, /function playNextEpisode\(\) \{[\s\S]+play\(ne\.item, null, \{ directHandoff: true, why: 'next' \}\)/,
     'Play Next keeps the player surface and joins the last-two-minute prepare');
   assert.match(ui, /function playNextEpisode\(\) \{[\s\S]+if \(!ne\) \{[\s\S]+toast\('Next episode is still loading'\)[\s\S]+closePlayer\(\)/,
     'Play Next with no next episode must leave Preparing instead of sitting there with credits audio');
@@ -1983,7 +1983,7 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   playNext();
   playNext();
   assert.deepStrictEqual(nextEvents.filter((event) => Array.isArray(event)), [
-    ['play', 'tmdb:tv:9:s1e2', { directHandoff: true }],
+    ['play', 'tmdb:tv:9:s1e2', { directHandoff: true, why: 'next' }],
     ['toast', 'Next episode is still loading'],
   ], 'queued EOF/countdown/manual triggers must consume one next episode and mount it only once');
   assert.ok(nextEvents.includes('close'),
@@ -2370,7 +2370,7 @@ test('autoplay with no Next click plays the same warmed next episode', () => {
   assert.strictEqual(playCalls.length, 1, 'autoplay/click share one handoff');
   assert.strictEqual(playCalls[0].it, item, 'autoplay must play the prepared next-episode object');
   assert.ok(playCalls[0].it._preparedAt, 'that object still carries the last-two-minute warmup');
-  assert.deepStrictEqual(playCalls[0].opts, { directHandoff: true },
+  assert.deepStrictEqual(playCalls[0].opts, { directHandoff: true, why: 'next' },
     'autoplay stays in the player instead of opening details');
   assert.strictEqual(S.nextEp, null, 'the handoff is consumed once so a later ended tick cannot remount');
 });
@@ -2730,8 +2730,8 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'web subtitles should attach the already-fetched VTT text through a blob URL');
   assert.match(ui, /function applyTrackPrefs\(\) \{[\s\S]+if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) return;[\s\S]+applyStartupSubtitlePref\(\);[\s\S]+if \(!p\.tracks\) \{ updateSrndBtn\(\); return; \}/,
     'track preference setup should still apply startup subtitles when tracks are not available yet');
-  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
-    'native ExoPlayer startup should use the same subtitle startup contract as web playback');
+  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+[\s\S]+if \(p && typeof p\.subTrack === 'string' && p\.subTrack && !p\._subtitleDisabledThisSession\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(p\.subTrack\) \};\s+\}\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
+    'native ExoPlayer keeps the subtitle already on for this play, and otherwise uses the web startup contract');
   assert.match(ui, /function nativeSubtitlePayload\(p, rel, mode = 'startup'\) \{[\s\S]+subtitleUrlForRel\(p, chosen, \{ mode \}\)[\s\S]+nativeSubtitleLabel\(chosen\)[\s\S]+\}/,
     'native subtitle payloads should be built from the same rel, URL, label and shift helpers as the web player');
   assert.match(ui, /async function nativeStartupSubtitleRelAfterPreflight\(p, rel\) \{[\s\S]+fetch\(payload\.url\)[\s\S]+if \(r\.ok\) return rel;[\s\S]+return canAutoSubtitle\(p\) \? onlineFallbackRelForBuiltIn\(rel\) : '';/,
@@ -3839,10 +3839,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'theme picker cards should react to native focus as well as D-pad focus classes');
   assert.match(ui, /#setTabs button,#prefTabs button\{\s*background:transparent!important;box-shadow:none!important[\s\S]+body:not\(\.tv\) #setTabs button:hover,body:not\(\.tv\) #prefTabs button:hover,[\s\S]+#setTabs button:focus-visible,#prefTabs button:focus-visible\{[\s\S]+background:var\(--btnHover\)!important;color:var\(--btnFocusText\)!important[\s\S]+#setTabs button\.on\.focus,#prefTabs button\.on\.focus,[\s\S]+#setTabs button\.on:focus-visible,#prefTabs button\.on:focus-visible\{[\s\S]+background:var\(--btnHover\)!important;color:var\(--btnFocusText\)!important/,
     'Settings and Preferences side tabs stay a text list at rest; the focused row is a solid fill with contrasting text');
-  assert.match(ui, /#setTabs button,#prefTabs button\{opacity:\.72;color:rgba\(var\(--fg\),\s*\.82\)!important\}[\s\S]+#setTabs button\.on,#prefTabs button\.on\{opacity:\.80;color:rgba\(var\(--fg\),\s*\.88\)!important\}[\s\S]+body\.tv #setTabs button,body\.tv #prefTabs button\{opacity:\.56[\s\S]+opacity:1;color:var\(--btnFocusText\)!important\}[\s\S]+body\.tv #setTabs button:hover:not\(:focus\):not\(\.focus\)/,
-    'unfocused Settings tabs stay readable but quieter; the focused row is full strength with contrasting text');
-  assert.match(ui, /body:not\(\.tv\) #setTabs button,body:not\(\.tv\) #prefTabs button\{opacity:\.78\}[\s\S]+button\.on\{opacity:\.86\}[\s\S]+button\.on:focus-visible\{opacity:1\}/,
-    'browser, phone, and Android phone Settings tabs stay readable; focus is full strength');
+  assert.match(ui, /#setTabs button,#prefTabs button\{opacity:\.72;color:rgba\(var\(--fg\),\s*\.82\)!important\}[\s\S]+#setTabs button\.on,#prefTabs button\.on\{opacity:1;color:var\(--btnFocusText\)!important\}[\s\S]+body\.tv #setTabs button,body\.tv #prefTabs button\{opacity:\.56[\s\S]+opacity:1;color:var\(--btnFocusText\)!important\}[\s\S]+body\.tv #setTabs button:hover:not\(:focus\):not\(\.focus\)/,
+    'unfocused Settings tabs stay readable but quieter; the open tab is full strength and the focused row uses contrasting text');
+  assert.match(ui, /body:not\(\.tv\) #setTabs button,body:not\(\.tv\) #prefTabs button\{opacity:\.78\}[\s\S]+button\.on\{opacity:1\}[\s\S]+button\.on:focus-visible\{opacity:1\}/,
+    'browser, phone, and Android phone Settings tabs stay readable; the open tab and the focused row are full strength');
   assert.match(ui, /body\.mobileNav \.railBtn,body\.mobileShell\.mobileNav \.railBtn,\s*\nbody\.mobileNav #railUser,body\.mobileShell\.mobileNav #railUser\{color:var\(--text\)\}/,
     'open phone drawer menu rows and the profile name use normal text color, not the muted compact-rail gray');
   assert.match(ui, /#settings \.ghostMini,#prefs \.ghostMini,#prefs \.profileAction,#prefs \.profileAddBtn\{\s*\n\s*min-height:44px;border-radius:10px/,
@@ -3870,8 +3870,8 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(ui, /\.prefTabDivider\{margin:8px 0 2px;padding:4px 12px 2px;border:0/,
     'Server settings is a label only — no hairline above or below, same as Dashboard');
   assert.ok(ui.includes('>Libraries</span>') && !ui.includes('Libraries &amp; Rules')
-    && ui.includes('>TV sources</span>') && ui.includes('id="prefTabLive"') && ui.includes('>Live TV</span>'),
-    'admin house IPTV is TV sources; personal Live TV stays a separate tab; scoring left Libraries');
+    && ui.includes('>House TV</span>') && ui.includes('id="prefTabLive"') && ui.includes('>Live TV</span>'),
+    'admin house IPTV is House TV; personal Live TV stays a separate tab; scoring left Libraries');
   assert.match(ui, /data-stab="catalog" hidden>[\s\S]+<h2>Scoring<\/h2>[\s\S]+id="scSave"/,
     'release scoring lives with Catalog (how titles are picked), not Libraries');
   assert.match(ui, /data-ptab="profiles" hidden>[\s\S]+id="apkUpdate"[\s\S]+data-ptab="connect"/,
@@ -4709,8 +4709,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'playing a local file must not rebalance usenet sockets');
   assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(saved === 'off'\) return '';[\s\S]+const episodePlay = !!\(ep && ep\.episode > 0\);[\s\S]+const savedBuiltIn = typeof saved === 'string' && \(saved\.startsWith\('em:'\) \|\| saved\.startsWith\('rs:'\)\);[\s\S]+if \(subtitleRelPlayable\(p, saved\) && !\(episodePlay && savedBuiltIn\)\) return saved;[\s\S]+if \(episodePlay\) \{[\s\S]+const online = autoSubtitleRelFor\(p\);[\s\S]+if \(online\) return online;[\s\S]+\}[\s\S]+const builtIn = bestBuiltInSubtitleRel\(\);[\s\S]+if \(builtIn\) return builtIn;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
     'startup subtitles should stay off in manual mode and a TV episode should use the online subtitle for that episode');
-  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
-    'native playback should use the shared startup subtitle contract');
+  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+[\s\S]+if \(p && typeof p\.subTrack === 'string' && p\.subTrack && !p\._subtitleDisabledThisSession\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(p\.subTrack\) \};\s+\}\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
+    'a native skip should keep the subtitle already on, and a fresh play should use the startup contract');
   assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
     'web playback should auto-start the profile subtitle choice when subtitle mode is always');
   assert.match(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur, token\) => \{[\s\S]+saveSubChoice\(rel, subtitleDisplayName\(rel\)\)[\s\S]+p\.usingNative = true;[\s\S]+\};/,
@@ -6448,8 +6448,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer should use decoder fallback plumbing, seeded bandwidth, and exact seeking so a hiccup does not replay the previous second');
   assert.match(android, /private String nativePosSecondsPrecise\(\) \{[\s\S]+"%.3f"[\s\S]+__tvNativeVideoProgress[\s\S]+nativePosSecondsPrecise\(\)/,
     'native progress reports fractions of a second so a clock twitch is not logged as a full second');
-  assert.doesNotMatch(android, /__tvNativeVideo(?:Ready|Playing|Paused|Resuming)\("\s*\+\s*nativePosSeconds\(\)/,
-    'pause, buffer, and skip must not report a whole second or the movie steps back by the leftover fraction');
+  assert.doesNotMatch(android, /__tvNativeVideo(?:Ready|Playing|Paused|Resuming|Ended|Next|Error)\("\s*\+\s*nativePosSeconds\(\)/,
+    'pause, buffer, skip, end, and errors must not report a whole second or the movie steps back by the leftover fraction');
   assert.match(android, /__tvNativeVideoReady\("\s*\+\s*nativePosSecondsPrecise\(\)/);
   assert.match(android, /__tvNativeVideoPlaying\("\s*\+\s*nativePosSecondsPrecise\(\)/);
   assert.match(android, /__tvNativeVideoPaused\("\s*\+\s*nativePosSecondsPrecise\(\)/);
@@ -6493,8 +6493,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'private long safeNativeVideoPosSeconds(long reportedSeconds) {',
     'if (reportedMs <= 1000L && nativeLastVideoDisplayMs > 30000L) {',
     'return nativeLastVideoDisplayMs / 1000L;',
-    'long safePos = safeNativeVideoPosSeconds(pos);',
-    '+ "," + safePos + "," + dur + "," + playbackToken + ")", null);',
+    'private String nativeSafePosPrecise() {',
+    'if (ms <= 1000L && nativeLastVideoDisplayMs > 30000L) {',
+    '+ "," + nativeSafePosPrecise() + "," + dur + "," + playbackToken + ")", null);',
   ].every((s) => android.includes(s)),
     'native movie and episode fallback should preserve the last good position if Exo reports zero during an error');
   assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+String title = nativePlaybackTitle;[\s\S]+String backdropUrl = nativePlaybackBackdropUrl;[\s\S]+if \(nativeVideoStarted\) hideNativeLoading\(\);[\s\S]+else showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,
@@ -7480,6 +7481,13 @@ test('web shell avoids known TV paint/focus regressions', () => {
   // Phase 3: Max release size controls live inside the Streaming Performance panel now (one capacity panel).
   assert.match(ui, /Streaming performance<\/h2>[\s\S]+id="perfSpeedResult"[\s\S]+>Max release size<\/h3>[\s\S]+id="szMode"[\s\S]+id="szSave"/,
     'Max release size controls are folded into the Streaming Performance panel');
+  assert.match(ui, /data-tab="performance"[\s\S]+<span>Performance<\/span>[\s\S]+data-stab="performance" hidden>/,
+    'Performance is its own admin tab, not stacked under Status');
+  {
+    const statusPage = ui.slice(ui.indexOf('data-stab="server"'), ui.indexOf('data-stab="performance"'));
+    assert.ok(statusPage && !statusPage.includes('Streaming performance'),
+      'Status stays the live server page; speed settings live on Performance');
+  }
   assert.match(ui, /Delete the <b>CAM<\/b> line if you want theater rips in Sources[\s\S]+id="scKeywords"[\s\S]+scoringReset: true/,
     'Scoring shows editable defaults and Reset restores the built-in CAM rule');
   assert.match(ui, /if \(!r\.candidates\.length\) \{[\s\S]+r\.camOnly[\s\S]+Not available yet\.[\s\S]+No releases found\./,

@@ -126,6 +126,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-27, v3.2.25 ship — captions stay on the minute you are watching:
+
+- Version contract: `package.json` 3.2.25; Android `versionName` 3.2.25 /
+  `versionCode` 402; Windows client package/Tauri/Cargo(.lock) 3.2.25.
+- Example: you turn captions on at minute 26. The words match that minute,
+  not the opening line. A skip keeps the caption instead of wiping it.
+  The log says why the caption was picked, and a login refusal says
+  `login refused` without shrinking the connection plan.
+- Docs: player contract P1. Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 760/760. `npm.cmd run verify:full` PASS —
+  whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite,
+  isolated `/api/server` 3.2.25, household VOD play/seek/resume/CC on the
+  house process v3.2.25 (Mario ready 481ms, 1stByte 6ms, seek 260ms,
+  resume 19ms, CC 200; FROM ready 193ms, 1stByte 25ms, seek 80ms,
+  resume 5ms, CC 200; both playable), household IPTV first-byte + retune
+  (8855 channels, 2 video picks), household overlapping Play (FROM ready
+  6ms, Mario ready 14ms), Android lint + unit tests + debug build, Android
+  ExoPlayer stress on `emulator-5554`
+  (`android-tv-stress-20260927-100604.json`, never the Shield). Windows
+  GPU/HDR was not run. Unraid was not updated by this check.
+
 2026-09-26, v3.2.24 ship — a pause stays paused, and Watching now keeps one row:
 
 - Version contract: `package.json` 3.2.24; Android `versionName` 3.2.24 /

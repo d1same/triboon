@@ -4,6 +4,7 @@
 const net = require('net');
 const tls = require('tls');
 const debug = require('./debug');
+const story = require('./playback-log');
 
 // Stall protection — without these, ONE silently-dropped TCP connection (NAT/provider idle
 // kill) makes a BODY wait forever, the mount's Promise.all never settles, and /api/play
@@ -241,6 +242,7 @@ class NntpConnection {
       debug.fail('buffer', line);
       const loginRefused = err && (err.code === 'NNTP_AUTH_LOST' || /48[012]|auth failed/i.test(msg));
       debug.issue(`${loginRefused ? 'login refused' : 'connection dropped'} — reason: ${line}`);
+      story.noteOpen(`${loginRefused ? 'login refused' : 'connection dropped'} — reason: ${line}`);
     }
     this.alive = false;
     clearTimeout(this._connectTimer);
@@ -481,6 +483,7 @@ class ProviderPool {
       : `${host} refused a new login, so playback will not open another line for two minutes`;
     debug.fail('buffer', refused);
     debug.issue(`login refused — reason: ${refused}`);
+    story.noteOpen(`login refused — reason: ${refused}`);
   }
   authBroken() {
     const now = Date.now();
@@ -507,6 +510,7 @@ class ProviderPool {
     const full = `${host} is full, so playback is using ${this.size} connections`;
     debug.fail('buffer', full);
     debug.issue(`account full — reason: ${full}`);
+    story.noteOpen(`account full — reason: ${full}`);
   }
 
   _admitConn(c) {
@@ -561,6 +565,7 @@ class ProviderPool {
             const authLine = `${(this.opts && this.opts.host) || 'usenet'}: ${e.message}`;
             debug.fail('buffer', authLine);
             debug.issue(`login refused — reason: ${authLine}`);
+            story.noteOpen(`login refused — reason: ${authLine}`);
           }
         }
         try { c.close(); } catch {}

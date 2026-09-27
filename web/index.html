@@ -534,11 +534,11 @@ body[data-spotlight] .mbBar.focus{box-shadow:0 0 0 3px var(--focus) !important}
 /* Settings/Preferences SELECTED tab: a text list, not a capsule. Spotlight used to force a
    solid amber chip (readable when tabs were filled); with transparent tabs that chip is the
    whole problem. Keep brighter type + the inset accent bar. */
-/* Open tab keeps the gold bar. Bright type only while the tab itself has focus —
-   otherwise Right into Change password leaves Profile looking selected. */
+/* The open tab keeps the fill. Hover and focus use the same fill only while
+   that row is under the pointer or the D-pad, then it drops. */
 body[data-spotlight] #setTabs button.on,
 body[data-spotlight] #prefTabs button.on{
-  background:transparent!important;box-shadow:none!important}
+  background:var(--btnHover)!important;color:var(--btnFocusText)!important;box-shadow:none!important}
 body[data-spotlight] #setTabs button.on.focus,
 body[data-spotlight] #prefTabs button.on.focus,
 body[data-spotlight] #setTabs button.on:focus,
@@ -3334,7 +3334,7 @@ body:not(.tv) #setTabs button:hover,body:not(.tv) #prefTabs button:hover,
   background:var(--btnHover)!important;color:var(--btnFocusText)!important;border-color:transparent!important;
   box-shadow:none!important;outline:none!important;transform:none}
 #setTabs button.on,#prefTabs button.on{
-  background:transparent!important;border-color:transparent!important;color:var(--muted)!important;box-shadow:none!important}
+  background:var(--btnHover)!important;border-color:transparent!important;color:var(--btnFocusText)!important;box-shadow:none!important}
 #setTabs button.on.focus,#prefTabs button.on.focus,
 #setTabs button.on:focus,#prefTabs button.on:focus,
 #setTabs button.on:focus-visible,#prefTabs button.on:focus-visible{
@@ -3345,9 +3345,9 @@ body.tv #setTabs button,body.tv #prefTabs button{border-radius:0;box-shadow:none
    On TV, :hover can stay latched after Right into the panel — do not use hover to light
    the tab, or Profile stays "on" while you are editing the password. */
 #setTabs button,#prefTabs button{opacity:.72;color:rgba(var(--fg),.82)!important}
-#setTabs button.on,#prefTabs button.on{opacity:.80;color:rgba(var(--fg),.88)!important}
+#setTabs button.on,#prefTabs button.on{opacity:1;color:var(--btnFocusText)!important}
 body.tv #setTabs button,body.tv #prefTabs button{opacity:.56;color:rgba(var(--fg),.68)!important}
-body.tv #setTabs button.on,body.tv #prefTabs button.on{opacity:.64;color:rgba(var(--fg),.76)!important}
+body.tv #setTabs button.on,body.tv #prefTabs button.on{opacity:1;color:var(--btnFocusText)!important}
 #setTabs button.focus,#prefTabs button.focus,
 #setTabs button:focus,#prefTabs button:focus,
 #setTabs button:focus-visible,#prefTabs button:focus-visible,
@@ -3368,7 +3368,7 @@ body.tv #setTabs button.on:hover:not(:focus):not(.focus),
 body.tv #prefTabs button.on:hover:not(:focus):not(.focus){opacity:.64;color:rgba(var(--fg),.76)!important}
 /* Browser, phone, and Android phone share one recede. Focus is full-strength. */
 body:not(.tv) #setTabs button,body:not(.tv) #prefTabs button{opacity:.78}
-body:not(.tv) #setTabs button.on,body:not(.tv) #prefTabs button.on{opacity:.86}
+body:not(.tv) #setTabs button.on,body:not(.tv) #prefTabs button.on{opacity:1}
 body:not(.tv) #setTabs button:hover,body:not(.tv) #prefTabs button:hover,
 body:not(.tv) #setTabs button.focus,body:not(.tv) #prefTabs button.focus,
 body:not(.tv) #setTabs button:focus,body:not(.tv) #prefTabs button:focus,
@@ -4904,19 +4904,27 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <div id="setTabs">
     <button data-tab="server" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg><span>Status</span></button>
     <button data-tab="activity" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h4l2-5 4 10 2-5h4"/><circle cx="19" cy="6" r="2"/></svg><span>Now Watching</span></button>
+    <button data-tab="logs" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg><span>Logs</span></button>
+    <button data-tab="performance" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14a8 8 0 1 1 16 0"/><path d="M12 14l4-4"/><path d="M8 18h8"/></svg><span>Performance</span></button>
     <button data-tab="sources" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="2"/></svg><span>Providers</span></button>
-    <button data-tab="catalog" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><span>Catalog</span></button>
     <button data-tab="rules" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5h12M6 12h12M6 19h12"/><path d="M9 5v14"/></svg><span>Libraries</span></button>
-    <button data-tab="livetv" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>TV sources</span></button>
+    <button data-tab="livetv" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>House TV</span></button>
+    <button data-tab="catalog" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><span>Catalog</span></button>
     <button data-tab="users" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M4 19c.9-3.2 2.6-5 5-5s4.1 1.8 5 5"/><path d="M17 10v6M14 13h6"/></svg><span>Users</span></button>
     <button data-tab="security" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 19 6v5c0 4.4-2.8 7.7-7 9.4-4.2-1.7-7-5-7-9.4V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg><span>Security</span></button>
     <button data-tab="display" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Appearance</span></button>
   </div>
 
   <div class="setGrid" data-stab="server">
-  <div class="panel"><h2>Engine</h2><p>Live status from the Triboon server.</p><div id="engineStatus"><div class="kv"><span>Engine</span><span>Checking...</span></div></div>
-    <h3 style="font:800 15px 'Sora';margin:22px 0 2px;color:var(--text)">Debug logging</h3>
-    <p>Off by default. When on, the server writes extra <code>[debug]</code> lines for Play, prepare, stop, and idle-file sweep. Use this when you want to paste a log. Tokens and passwords are never written.</p>
+  <div class="panel"><h2>Engine</h2><p>Live status from the Triboon server. The play-by-play is on Logs.</p><div id="engineStatus"><div class="kv"><span>Engine</span><span>Checking...</span></div></div>
+  </div>
+  </div>
+
+  <div class="setGrid" data-stab="logs" hidden>
+  <div class="panel"><h2>Logs</h2>
+    <p>The last few plays on this account. Each block is one movie or episode: play, skip, buffer, subtitles, and remount. Passwords are not included. This clears when the server restarts.</p>
+    <h3 style="font:800 15px 'Sora';margin:8px 0 2px;color:var(--text)">Debug logging</h3>
+    <p>Off by default. When on, the Unraid log also gets extra Play, prepare, and sweep lines. Tokens and passwords are never written.</p>
     <div class="field">
       <select id="debugLoggingMode" style="max-width:320px">
         <option value="off">Off - quiet server log</option>
@@ -4925,18 +4933,15 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <button class="btn primary focusable" id="debugLoggingSave">Save debug logging</button>
     </div>
     <div class="hint" id="debugLoggingStatus"></div>
-    <h3 style="font:800 15px 'Sora';margin:22px 0 2px;color:var(--text)">4K transcode</h3>
-    <p>A 4K re-encode on the CPU makes the picture stutter and the server go slow. Leave this on unless this box has a working GPU encoder.</p>
-    <div class="field">
-      <select id="transcode4kMode" style="max-width:420px">
-        <option value="hw">GPU only — never software-transcode 4K</option>
-        <option value="sw">Allow software 4K transcode (CPU, last resort)</option>
-      </select>
-      <button class="btn primary focusable" id="transcode4kSave">Save 4K transcode</button>
+    <div class="field" style="margin-top:18px">
+      <button class="btn primary focusable" id="playbackStoryRefresh">Refresh</button>
+      <button class="btn focusable" id="copyPlaybackStory">Copy</button>
     </div>
-    <div class="hint" id="transcode4kStatus"></div>
+    <textarea id="playbackStory" readonly rows="18" style="width:100%;margin-top:10px;font:12px/1.45 'JetBrains Mono',monospace;background:var(--raise);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:12px">Nothing has played since this server started.</textarea>
+  </div>
   </div>
 
+  <div class="setGrid" data-stab="performance" hidden>
   <div class="panel"><h2>Streaming performance</h2>
     <p>Triboon sizes connections from your provider, this server's network, and how many people watch
        at once. Speeds are <strong>Mbps</strong>. Auto grows a slow stream and gives extra sockets away
@@ -5021,13 +5026,23 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     </div>
     <button class="btn primary" id="szSave">Save size limit</button>
     <div class="hint" id="szStatus"></div>
+    <h3 style="font:800 15px 'Sora';margin:22px 0 2px;color:var(--text)">4K transcode</h3>
+    <p>A 4K re-encode on the CPU makes the picture stutter and the server go slow. Leave this on unless this box has a working GPU encoder.</p>
+    <div class="field">
+      <select id="transcode4kMode" style="max-width:420px">
+        <option value="hw">GPU only — never software-transcode 4K</option>
+        <option value="sw">Allow software 4K transcode (CPU, last resort)</option>
+      </select>
+      <button class="btn primary focusable" id="transcode4kSave">Save 4K transcode</button>
+    </div>
+    <div class="hint" id="transcode4kStatus"></div>
   </div>
   </div>
 
   <div class="setGrid" data-stab="activity" hidden>
   <div class="panel activityPanel">
     <div class="activityTop">
-      <div class="activityTitle"><h2>Activity</h2><p id="activitySummary" class="activitySummary"></p></div>
+      <div class="activityTitle"><h2>Now Watching</h2><p id="activitySummary" class="activitySummary"></p></div>
       <button class="btn primary focusable" id="activityRefresh">Refresh</button>
     </div>
     <div class="activitySectionHead" id="activityConnHead" hidden><span>Usenet connections</span><small id="activityConnStatus"></small></div>
@@ -9223,7 +9238,7 @@ async function play(it, pick, opts = {}) {
       return;
     }
     const body = playbackRequestBody(it, picked, qRank);
-    body.why = 'viewer';
+    body.why = opts.why || 'viewer';
     if (preferredRank !== null) it.qualityRank = preferredRank;
     const r = await api('/api/play', { method: 'POST', body });
     if (S._playTicket !== playTicket) return;
@@ -12777,6 +12792,7 @@ function notePlaybackIssue(kind, detail, sec) {
     body: {
       kind, detail: String(detail || '').slice(0, 160), sec: Math.round(Number(sec) || 0),
       title: String(title).slice(0, 80), file: String(file).slice(0, 140), at,
+      sessionId: String(p.sessionId || '').slice(0, 40),
     },
   }).catch(() => {});
 }
@@ -12832,7 +12848,9 @@ function markPictureWait(p, why) {
     const waited = Math.round((appMs() - p._issueWaitAt) / 1000);
     if (waited < 2) return;
     p._issueWaitNoted = true;
-    notePlaybackIssue(issueKindFor(p._issueWaitWhy), 'still waiting for bytes', waited);
+    const ahead = Math.round(clientBufferedAheadSec(p) || 0);
+    const why = p._issueWaitWhy || 'the picture waited for bytes';
+    notePlaybackIssue(issueKindFor(why), why + (ahead ? ', ' + ahead + 's already ahead' : ', nothing ahead'), waited);
   }, 8000);
 }
 function markPictureMoving(p) {
@@ -13367,7 +13385,27 @@ function nativeVideoRequired(it) {
   return !!(it && it.type !== 'live' && canUseNativeVideoPlayer());
 }
 function nativeVideoSubtitleRel(p) {
+  // A skip remounts ExoPlayer. Manual mode has no startup pick, so that remount
+  // used to send an empty subtitle URL and the TV wiped the line already on screen.
+  if (p && typeof p.subTrack === 'string' && p.subTrack && !p._subtitleDisabledThisSession) {
+    return { blocked: false, rel: concreteSubtitleRel(p.subTrack) };
+  }
   return { blocked: false, rel: concreteSubtitleRel(startupSubtitleRelFor(p)) };
+}
+function pushNativeActiveSubtitle(p, rel) {
+  if (!p || !p.usingNative || !rel || !(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) return;
+  const payload = nativeSubtitlePayload(p, rel, 'manual');
+  if (!payload.url) return;
+  try {
+    window.TriboonTV.updateActiveSubtitle(JSON.stringify({
+      subtitleRel: payload.rel,
+      subtitleUrl: payload.url,
+      subtitleLang: payload.lang,
+      subtitleLabel: payload.label,
+      subtitleShift: payload.shift,
+    }));
+  } catch {}
+  autoSyncNative(p, rel);
 }
 function nativeSubtitlePayload(p, rel, mode = 'startup') {
   const chosen = rel || '';
@@ -14046,6 +14084,13 @@ function applyReportedDuration(p, dur) {
   p.duration = incoming;
   if (incoming > (p._lastKnownDuration || 0)) p._lastKnownDuration = incoming;
 }
+function wholeSecondChopped(prev, incoming) {
+  const back = (+prev || 0) - (+incoming || 0);
+  if (!(back > 0 && back < 1)) return false;
+  const fraction = (+prev || 0) - Math.floor(+prev || 0);
+  const wholeSecond = Math.abs((+incoming || 0) - Math.round(+incoming || 0)) < 0.001;
+  return wholeSecond && Math.abs(back - fraction) < 0.02;
+}
 function applyNativeVideoProgress(pos, dur, opts = {}) {
   const p = S.playing; if (!p || !p.usingNative) return;
   const incoming = Math.max(0, +pos || 0);
@@ -14061,6 +14106,13 @@ function applyNativeVideoProgress(pos, dur, opts = {}) {
     return p.nativePos;
   }
   if (landing) p._seekLandUntil = 0;
+  // 42:48.314 reported again as 42:48.000 is a chopped clock, not a replay.
+  // Leave the bar where the precise tick put it.
+  if (!keepPrev && prev > 1 && wholeSecondChopped(prev, incoming)) {
+    notePlaybackTrace('ignored a whole-second report from ' + prev.toFixed(3) + ' to ' + incoming.toFixed(3) + ' — the bar stayed');
+    applyReportedDuration(p, dur);
+    return p.nativePos;
+  }
   if (!keepPrev && prev > 1 && incoming - prev > 3 && !(p.suppressSeekLoaderUntil && appMs() < p.suppressSeekLoaderUntil)) {
     notePlaybackTrace('clock jumped forward ' + (incoming - prev).toFixed(2) + 's from ' + prev.toFixed(3) + ' to ' + incoming.toFixed(3)
       + (p.nativePaused ? ' while the movie was paused' : ''));
@@ -14710,6 +14762,7 @@ async function reMountAndResume(reason = '', attempt = 0) {
   try {
     const remountBody = playbackRequestBody(p.item, p.name ? { name: p.name } : null);
     remountBody.why = 'remount';
+    remountBody.reason = String(reason || 'playback session expired').replace(/\s+/g, ' ').trim().slice(0, 80);
     const remountDur = (p.duration && isFinite(p.duration) && p.duration) || 0;
     if (at > 0 && remountDur > 0) remountBody.resumeFrac = Math.max(0, Math.min(0.98, at / remountDur));
     const r = await api('/api/play', { method: 'POST', body: remountBody });
@@ -15548,7 +15601,7 @@ function playNextEpisode() {
   S.nextEp = null;
   updateNextEpisodeButton();
   hideUpNextUi();
-  play(ne.item, null, { directHandoff: true });
+  play(ne.item, null, { directHandoff: true, why: 'next' });
 }
 $('unPlay').addEventListener('click', playNextEpisode);
 // An explicit dismiss is sticky for THIS episode: the card stays hidden and autoplay never arms
@@ -16611,7 +16664,12 @@ function seekTo(seconds) {
   clearWebRebufferRecovery();
   hideSeekThumb(); // the preview's job ends when the real seek commits
   const v = $('video'); const p = S.playing; if (!p) return;
+  const from = Math.max(0, Number(typeof currentTime === 'function' ? currentTime() : 0) || 0);
   seconds = Math.max(0, seconds);
+  const delta = Math.round((seconds - from) * 10) / 10;
+  if (Math.abs(delta) >= 1) {
+    notePlaybackIssue('skip', `skip ${delta >= 0 ? 'forward' : 'back'} from ${from.toFixed(1)}s to ${seconds.toFixed(1)}s`, Math.abs(Math.round(delta)));
+  }
   resetSubtitleClock(p, (p.usingRemux || p.usingTranscode) ? Math.max(0, seconds - (p.startOffset || 0)) : seconds);
   if (p.castingActive) { // seek the TV, not the idle local element
     if (_castRp && _castRpc) { try { _castRp.currentTime = seconds; _castRpc.seek(); p.castPos = seconds; } catch {} }
@@ -17630,6 +17688,9 @@ async function setSubtitle(rel, opts = {}) {
   const subSignal = beginSubtitleFetch(p);
   const subGen = p._subFetchGen;
   const manualChoice = !opts.startup && !opts.builtInRetry && !opts.autoFallback;
+  if (manualChoice) {
+    notePlaybackIssue('subs', rel == null ? 'subtitle turned off' : `subtitle requested ${String(rel).slice(0, 80)}`, 0);
+  }
   if (rel === null) {
     p.subTrack = rel; p._subShift = 0;
     p._subtitleDisabledThisSession = true;
@@ -17768,6 +17829,7 @@ async function setSubtitle(rel, opts = {}) {
   }
   if (manualChoice) saveSubChoice(rel, subtitleDisplayName(rel));
   applySubtitleTrack();
+  pushNativeActiveSubtitle(p, rel);
 }
 let _subPrepT = 0;
 // Sync nudge: shifts every cue of the active track (the server picks a release-matched sub,
@@ -24880,10 +24942,15 @@ function mergeServerSettingsIntoPrefs() {
   div.id = 'prefServerDivider'; div.className = 'prefTabDivider'; div.setAttribute('aria-hidden', 'true');
   div.innerHTML = '<span>Server settings</span>';
   prefTabs.appendChild(div);
-  [...setTabs.querySelectorAll('button')].forEach((b) => {
-    b.dataset.srv = b.dataset.tab; delete b.dataset.tab; // tab keyed by data-srv (panel = data-stab)
-    b.classList.remove('on'); b.classList.add('srvTab');
-    prefTabs.appendChild(b);
+  [...setTabs.children].forEach((el) => {
+    if (el.matches && el.matches('button')) {
+      const b = el;
+      b.dataset.srv = b.dataset.tab; delete b.dataset.tab; // tab keyed by data-srv (panel = data-stab)
+      b.classList.remove('on'); b.classList.add('srvTab');
+      prefTabs.appendChild(b);
+    } else if (el.classList && el.classList.contains('prefTabDivider')) {
+      prefTabs.appendChild(el);
+    }
   });
   [...settings.querySelectorAll('.setGrid[data-stab]')].forEach((p) => { p.hidden = true; prefs.appendChild(p); });
 }
@@ -24907,6 +24974,13 @@ function accountTabButton(key) {
 }
 function activateAccountTab(b) {
   if (!b || !b.matches || !b.matches('button')) return;
+  const tabList = b.closest('#prefTabs, #setTabs');
+  if (tabList) {
+    tabList.querySelectorAll('button').forEach((x) => {
+      x.classList.remove('focus');
+      if (x !== b && document.activeElement === x) x.blur();
+    });
+  }
   const isSrv = !!b.dataset.srv;
   const key = isSrv ? b.dataset.srv : b.dataset.tab;
   const visible = key && document.querySelector(isSrv
@@ -24927,6 +25001,7 @@ function activateAccountTab(b) {
   if (isSrv && !S._srvSettingsLoaded) { S._srvSettingsLoaded = true; refreshSettings(); }
   if (isSrv && key === 'activity') { refreshActivity(); startActivityLive(); }
   else stopActivityLive();
+  if (isSrv && key === 'logs') loadPlaybackStory();
   if (isSrv && (key === 'users' || key === 'livetv' || key === 'catalog')) ensureAdminUsers();
   if (isSrv && key === 'security') refreshSecurity();
   if (isSrv && key === 'livetv') refreshIptvSyncStatus();
@@ -27815,6 +27890,33 @@ $('debugLoggingSave').addEventListener('click', async () => {
       : 'off — server log stays quiet';
     toast(effective ? 'Debug logging on' : 'Debug logging off');
   } catch (e) { $('debugLoggingStatus').textContent = 'Save failed: ' + e.message; }
+});
+async function loadPlaybackStory() {
+  const box = $('playbackStory');
+  if (!box) return '';
+  const result = await api('/api/playback-story');
+  const text = (result && result.text) || '';
+  box.value = text || 'Nothing has played since this server started.';
+  return text;
+}
+$('playbackStoryRefresh').addEventListener('click', async () => {
+  try { await loadPlaybackStory(); }
+  catch (e) { toast('Could not load the log'); }
+});
+$('copyPlaybackStory').addEventListener('click', async () => {
+  const box = $('playbackStory');
+  try {
+    const text = await loadPlaybackStory();
+    if (!text) { toast('No log yet'); return; }
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Log copied');
+    } catch {
+      box.focus();
+      box.select();
+      toast('Log is on screen. Select it and copy.');
+    }
+  } catch (e) { toast('Could not load the log'); }
 });
 $('viewerGeoSave').addEventListener('click', async () => {
   const enabled = $('viewerGeoMode').value === 'on';

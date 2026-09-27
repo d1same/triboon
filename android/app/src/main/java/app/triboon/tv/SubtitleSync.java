@@ -45,7 +45,10 @@ public final class SubtitleSync {
             long jump = liveMs - shownMs;
             // A late tick while the movie kept playing has jump ≈ wall. Follow it.
             // Only a clock that leaps past the wait is a stall, not a new minute.
-            if (jump > wall + 1500L) slipMs += jump;
+            // A jump of many minutes is subtitles turning on late, or a missed
+            // seek. Holding that as slip paints the opening line half an hour later.
+            if (jump > wall + 1500L && jump <= 30_000L) slipMs += jump;
+            else if (jump > 30_000L) slipMs = 0L;
         }
         return new Sample(Math.max(0L, liveMs - slipMs), liveMs, slipMs);
     }

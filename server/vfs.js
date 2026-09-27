@@ -521,7 +521,7 @@ class NzbFileStream {
           offset += hole;
           continue;
         }
-        throw new Error(`read out of range: seg ${segIdx} off ${offset}`);
+        throw new Error(`read out of range: seg ${segIdx} off ${offset} size=${this.size} part=${this.partSize} piece=${data ? data.length : 0} from=${from}`);
       }
       this.playbackStats.segmentsServed++;
       this.playbackStats.readBytes += want;

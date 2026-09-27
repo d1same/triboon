@@ -126,6 +126,7 @@ store.flushIntervals = {
   'audible-chapters': 30000, // audiobook chapter cache (effectively immutable)
 };
 const debug = require('./debug');
+const story = require('./playback-log');
 const auth = new Auth(store, process.env.TRIBOON_SECRET);
 const settings = new SecureSettings(store, auth.secret);
 debug.bindSettings(() => settings.get());
@@ -5744,7 +5745,9 @@ const H = {
     const maturityAllowed = maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType)
       .catch(() => true);
     const t0 = Date.now();
-    debug.log('play', `request q=${body.q} tmdb=${body.tmdbId || '-'} s${body.season || '-'}e${body.ep || '-'} why=${String(body.why || '-').replace(/[^\w-]/g, '').slice(0, 24) || '-'}`);
+    const playWhy = String(body.why || '-').replace(/[^\w-]/g, '').slice(0, 24) || '-';
+    const playReason = String(body.reason || '').replace(/[^\w .:-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+    debug.log('play', `request q=${body.q} tmdb=${body.tmdbId || '-'} s${body.season || '-'}e${body.ep || '-'} why=${playWhy}${playReason ? ` reason="${playReason}"` : ''}`);
     // HD/UHD toggle: a per-play resolution preference may tighten the cap DOWNWARD, never
     // above the admin-set cap (Plex semantics — user picks within their ceiling).
     Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType, body.season, body.ep));
@@ -5790,6 +5793,11 @@ const H = {
       }
       const also = others.length ? ` also="${others.join('; ')}"` : '';
       debug.log('play', `ok "${candidate.name}" mount=${vf.id} session=${session.id} ms=${mountMs} live=${mounts.size}${also}`);
+      story.bindMount(vf.id, ctx.user.id, session.id, {
+        title: body.q,
+        file: candidate.name,
+        text: `play why=${playWhy}${playReason ? ` reason="${playReason}"` : ''} file=${candidate.name}`,
+      });
       if (vf._lastPlayOkAt && Date.now() - vf._lastPlayOkAt < 20000) {
         const named = others.length ? ` (${others.join('; ')})` : '';
         debug.issue(`started again in ${mountMs}ms — "${candidate.name}" — reason: the same file was opened again while ${mounts.size} files were already open${named}`);
@@ -5819,6 +5827,8 @@ const H = {
     const allowed = {
       buffer: 'buffered',
       seek: 'skip waited',
+      skip: 'skipped',
+      subs: 'subtitle',
       source: 'source problem',
       crash: 'player crashed',
       drop: 'connection dropped',
@@ -5834,12 +5844,20 @@ const H = {
     const file = clip(body.file, 140);
     const at = clip(body.at, 16);
     const reason = clip(body.detail, 180) || allowed[kind];
+    const sessionId = clip(body.sessionId, 40);
     const where = at ? ` at ${at}` : '';
     const howLong = sec > 0 ? ` ${sec}s` : '';
     const name = file || title || 'playback';
     const who = title && file ? ` (${title})` : '';
-    debug.issue(`${allowed[kind]}${howLong}${where} — "${name}"${who} — reason: ${reason}`);
+    const line = `${allowed[kind]}${howLong}${where} — "${name}"${who} — reason: ${reason}`;
+    debug.issue(line);
+    if (sessionId) story.note(ctx.user.id, sessionId, line, { title, at, file });
+    else story.noteOpen(line);
     send(ctx.res, 204);
+  },
+
+  playbackStory: async (ctx) => {
+    send(ctx.res, 200, { text: story.recentText(ctx.user.id) });
   },
 
   playStop: async (ctx) => {
@@ -5852,6 +5870,8 @@ const H = {
       return send(ctx.res, 200, { ok: true, evicted: false });
     }
     const result = releasePlaySession(session, ctx.user.id, { keepPrepared: !!body.keepPrepared });
+    story.note(ctx.user.id, id, `stop evicted=${!!result.evicted} keepPrepared=${!!body.keepPrepared}`);
+    story.markStopped(ctx.user.id, id);
     console.log('[play] stop evicted=' + !!result.evicted);
     debug.log('play', `stop session=${id} evicted=${!!result.evicted} keepPrepared=${!!body.keepPrepared} live=${mounts.size}`);
     send(ctx.res, 200, { ok: true, evicted: !!result.evicted });
@@ -8950,7 +8970,10 @@ Object.assign(H, {
       completedRead = !readSignal.aborted && !ctx.res.destroyed;
       if (completedRead) vf._streamHighWaterEnd = Math.max(Number(vf._streamHighWaterEnd || 0), end);
     } catch (e) {
-      if (!readSignal.aborted) console.error(`[stream ${vf.id}]`, e.message);
+      if (!readSignal.aborted) {
+        console.error(`[stream ${vf.id}]`, e.message);
+        story.noteMount(vf.id, e.message);
+      }
     } finally {
       ctx.req.off('close', stopReqRead);
       ctx.res.off('close', stopResRead);
@@ -9643,7 +9666,10 @@ Object.assign(H, {
           if (!chosen || !chosen.raw) throw new Error(variant ? 'that subtitle version is no longer available' : 'online subtitles failed');
           try {
             const lab = String(chosen.label || chosen.display || '').replace(/\s+/g, ' ').slice(0, 90);
-            console.log(`[subs] pick ${variant ? 'menu' : 'auto'} s${rankSeason == null ? '-' : rankSeason}e${rankEpisode == null ? '-' : rankEpisode} ${lab}`);
+            const synced = subtitleLooksSynced(chosen.raw, releaseName);
+            const why = synced ? 'release match, so audio sync is skipped' : 'name did not match this file, so audio sync will try';
+            console.log(`[subs] pick ${variant ? 'menu' : 'auto'} s${rankSeason == null ? '-' : rankSeason}e${rankEpisode == null ? '-' : rankEpisode} ${lab} — ${why}`);
+            story.noteMount(vf.id, `subtitle pick ${variant ? 'menu' : 'auto'} s${rankSeason == null ? '-' : rankSeason}e${rankEpisode == null ? '-' : rankEpisode} ${lab} — ${why}`);
           } catch {}
           if (chosen.raw._provider === 'opensubtitles') {
             try {
@@ -9747,7 +9773,11 @@ Object.assign(H, {
       if (!vf._osCache.has(syncKey)) {
         if (!vf._osInflight.has(syncKey)) {
           const work = onDemandSubSync(vf, vtt, ctx.claims.uid)
-            .then((synced) => { vf._osCache.set(syncKey, synced); capMap(vf._osCache, 12); vf._subSyncFail.delete(syncKey); return synced; })
+            .then((synced) => {
+              vf._osCache.set(syncKey, synced); capMap(vf._osCache, 12); vf._subSyncFail.delete(syncKey);
+              story.noteMount(vf.id, 'subtitle sync corrected the words');
+              return synced;
+            })
             .finally(() => vf._osInflight.delete(syncKey));
           vf._osInflight.set(syncKey, work);
         }
@@ -9757,6 +9787,7 @@ Object.assign(H, {
           vf._subSyncFail.set(syncKey, { tries: prev.tries + 1, timedOut: prev.timedOut || /timed out/i.test(msg), at: Date.now() });
           capMap(vf._subSyncFail, 24);
           console.error(`[subsync ${vf.id}] ${msg.slice(0, 160)}`);
+          story.noteMount(vf.id, `subtitle sync failed — ${msg.slice(0, 160)}`);
         }
       }
       const synced = vf._osCache.get(syncKey);
@@ -10370,6 +10401,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/play$/, auth: 'user', h: H.play },
   { m: 'POST', re: /^\/api\/play\/stop$/, auth: 'user', h: H.playStop },
   { m: 'POST', re: /^\/api\/playback-issue$/, auth: 'user', h: H.playbackIssue },
+  { m: 'GET', re: /^\/api\/playback-story$/, auth: 'user', h: H.playbackStory },
   { m: 'POST', re: /^\/api\/prepare$/, auth: 'user', h: H.prepare },
   { m: 'POST', re: /^\/api\/advance\/(\w+)$/, auth: 'user', h: H.advance },
   { m: 'GET', re: /^\/api\/art$/, auth: 'user', h: H.artProxy },
@@ -10509,6 +10541,11 @@ async function jellyfinPlay(ctx, body) {
     armRuntimeCheck(vf, policy, candidate, body);
     rememberMountOwner(vf, ctx.user.id);
     trimUserMounts(ctx.user.id, vf.id);
+    story.bindMount(vf.id, ctx.user.id, session.id, {
+      title: body.q,
+      file: candidate.name,
+      text: `jellyfin play file=${candidate.name}`,
+    });
     return {
       status: 200,
       body: mountPayload(vf, ctx.user.id, {

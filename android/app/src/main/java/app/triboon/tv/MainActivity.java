@@ -314,6 +314,9 @@ public class MainActivity extends Activity {
     private String nativePreferredAudioLang = "";
     private String nativeManualAudioLang = "";
     private final java.util.ArrayList<NativeCue> nativeSubtitleCues = new java.util.ArrayList<>();
+    // Path of the file whose cues are on screen. A refresh of that same file
+    // keeps the line up until the new copy arrives.
+    private String nativeSubtitleLoadedKey = "";
     private final Handler nativeSubtitleHandler = new Handler(Looper.getMainLooper());
     private int nativeSubtitleLoadToken;
     private final Object nativeSubtitleFetchLock = new Object();
@@ -322,6 +325,7 @@ public class MainActivity extends Activity {
     private long nativeSubtitleShownMs = -1L;
     private long nativeSubtitleShownWallMs;
     private long nativeSubtitleSlipMs;
+    private long nativeSubtitleSlipLogAt;
     private boolean nativeHasWyzieSubtitle;
     private boolean nativeLiveStarted;
     private boolean nativeUserSeeking;
@@ -4680,11 +4684,11 @@ public class MainActivity extends Activity {
                                   + "var loader=document.getElementById('playerLoader');if(loader)loader.classList.remove('show');}"
                                 : "";
                         web.evaluateJavascript("window.__tvNativeVideoEnded ? __tvNativeVideoEnded("
-                                + pos + "," + dur + "," + listenerPlaybackToken + ") : "
+                                + nativePosSecondsPrecise() + "," + dur + "," + listenerPlaybackToken + ") : "
                                 + "(function(){"
                                 + "if(window.TriboonTV&&window.TriboonTV.closeVideo)window.TriboonTV.closeVideo();"
                                 + "var result=window.__tvNativeVideoClosed&&__tvNativeVideoClosed("
-                                + pos + "," + dur + ",true," + listenerPlaybackToken + ");"
+                                + nativePosSecondsPrecise() + "," + dur + ",true," + listenerPlaybackToken + ");"
                                 + legacyNextShell
                                 + "return result;})()", null);
                     } else if (state == Player.STATE_ENDED && "live".equals(nativeMode)) {
@@ -4969,6 +4973,15 @@ public class MainActivity extends Activity {
     // Whole seconds hide a twitch. 60:13.04 and 60:12.98 must not look like a one-second replay.
     private String nativePosSecondsPrecise() {
         return String.format(java.util.Locale.US, "%.3f", Math.max(0L, nativeDisplayPositionMs()) / 1000.0);
+    }
+
+    // A report of 0 while the movie is already deep in is a lie. Keep the last real minute.
+    private String nativeSafePosPrecise() {
+        long ms = nativeDisplayPositionMs();
+        if (ms <= 1000L && nativeLastVideoDisplayMs > 30000L) {
+            return String.format(java.util.Locale.US, "%.3f", nativeLastVideoDisplayMs / 1000.0);
+        }
+        return nativePosSecondsPrecise();
     }
 
     private long nativeDurSeconds() {
@@ -6392,7 +6405,6 @@ public class MainActivity extends Activity {
         String kind = nativeKind;
         String quality = nativeQualityLabel;
         long startOffsetMs = nativeStartOffsetMs;
-        long safePos = safeNativeVideoPosSeconds(pos);
         long playbackToken = nativePlaybackToken;
         // Keep ExoPlayer alive so a quiet same-source remount can reuse it. Releasing here forced
         // a full 4K rebuild (~30s) on pause/resume IO. After a real start, do not show the
@@ -6402,7 +6414,7 @@ public class MainActivity extends Activity {
         else showNativeLoading(title, backdropUrl);
         web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
                 + org.json.JSONObject.quote(msg == null || msg.isEmpty() ? "native startup stalled" : msg)
-                + "," + safePos + "," + dur + "," + playbackToken + ")", null);
+                + "," + nativeSafePosPrecise() + "," + dur + "," + playbackToken + ")", null);
     }
 
     private float nativeShiftFromUrl(String url) {
@@ -6439,13 +6451,28 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static String subtitleOverlayKey(String url) {
+        if (url == null || url.isEmpty()) return "";
+        int q = url.indexOf('?');
+        return q < 0 ? url : url.substring(0, q);
+    }
+
     private void loadNativeSubtitleOverlay(String url, boolean silent) {
         final String cleanUrl = stripNativeQueryParam(url, "shift");
         final int token = bumpNativeSubtitleLoadToken();
-        nativeSubtitleCues.clear();
-        if (nativeSubtitleOverlay != null) {
-            nativeSubtitleOverlay.setText("");
-            nativeSubtitleOverlay.setVisibility(View.GONE);
+        final String key = subtitleOverlayKey(cleanUrl);
+        // Same caption file, just a fresher copy (auto-sync or a remount).
+        // Leave the current line up. Blanking here is why the words vanished
+        // a minute after you picked them, and stayed gone if the new file failed.
+        final boolean sameTrack = !key.isEmpty() && key.equals(nativeSubtitleLoadedKey)
+                && !nativeSubtitleCues.isEmpty();
+        if (!sameTrack) {
+            nativeSubtitleCues.clear();
+            nativeSubtitleLoadedKey = "";
+            if (nativeSubtitleOverlay != null) {
+                nativeSubtitleOverlay.setText("");
+                nativeSubtitleOverlay.setVisibility(View.GONE);
+            }
         }
         if (cleanUrl.isEmpty()) return;
         final ValidatedNativeUrl subtitleUrl;
@@ -6453,7 +6480,7 @@ public class MainActivity extends Activity {
             subtitleUrl = validateNativeSubtitleOverlayUrl(cleanUrl, nativeSubtitleHostHeader);
         } catch (Exception e) {
             Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
-            clearNativeSubtitleOverlay();
+            if (!sameTrack) clearNativeSubtitleOverlay();
             if (!silent) Toast.makeText(this, "Subtitles could not load", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -6497,6 +6524,12 @@ public class MainActivity extends Activity {
                     if (token != nativeSubtitleLoadToken) return;
                     nativeSubtitleCues.clear();
                     nativeSubtitleCues.addAll(cues);
+                    // A file that arrives mid-episode must follow the picture now.
+                    // Leaving the clock at 0 makes the opening line show half an hour later.
+                    nativeSubtitleSlipMs = 0L;
+                    nativeSubtitleShownMs = -1L;
+                    nativeSubtitleShownWallMs = 0L;
+                    nativeSubtitleLoadedKey = subtitleOverlayKey(cleanUrl);
                     nativeSubtitleHandler.removeCallbacks(nativeSubtitleTick);
                     updateNativeSubtitleOverlay();
                     if (!nativeSubtitleCues.isEmpty()) nativeSubtitleHandler.postDelayed(nativeSubtitleTick, 250);
@@ -6518,7 +6551,7 @@ public class MainActivity extends Activity {
                         }, attempt == 0 ? 4000 : 9000);
                         return;
                     }
-                    clearNativeSubtitleOverlay();
+                    if (nativeSubtitleCues.isEmpty()) clearNativeSubtitleOverlay();
                     if (!silent) Toast.makeText(this, reason, Toast.LENGTH_LONG).show();
                 });
             } finally {
@@ -6598,9 +6631,14 @@ public class MainActivity extends Activity {
     }
 
     private void clearNativeSubtitleOverlay() {
+        boolean hadLine = nativeSubtitleCues != null && !nativeSubtitleCues.isEmpty();
         bumpNativeSubtitleLoadToken();
         nativeSubtitleHandler.removeCallbacks(nativeSubtitleTick);
         nativeSubtitleCues.clear();
+        if (hadLine) {
+            reportNativePlaybackIssue("subs", "subtitle line wiped before a new file arrived", 0);
+        }
+        nativeSubtitleLoadedKey = "";
         if (nativeSubtitleOverlay != null) {
             nativeSubtitleOverlay.setText("");
             nativeSubtitleOverlay.setVisibility(View.GONE);
@@ -6618,9 +6656,18 @@ public class MainActivity extends Activity {
         SubtitleSync.Sample sample = SubtitleSync.step(
                 live, moving, nativeSubtitleShownMs, nativeSubtitleShownWallMs, now,
                 nativeSubtitleSlipMs, seekTarget, seekTarget >= 0L ? nativeUserSeekUntilMs : 0L);
+        long grew = sample.slipMs - nativeSubtitleSlipMs;
         nativeSubtitleShownMs = sample.shownMs;
         nativeSubtitleSlipMs = sample.slipMs;
         if (moving || seekTarget >= 0L) nativeSubtitleShownWallMs = now;
+        if (grew >= 400L && now - nativeSubtitleSlipLogAt > 8000L) {
+            nativeSubtitleSlipLogAt = now;
+            reportNativePlaybackIssue("subs",
+                    "subtitle held the old line because the clock jumped "
+                            + String.format(Locale.US, "%.1f", grew / 1000.0)
+                            + "s during a buffer",
+                    grew / 1000L);
+        }
         return sample.mediaMs;
     }
 
@@ -7288,7 +7335,7 @@ public class MainActivity extends Activity {
             return;
         }
         web.evaluateJavascript("window.__tvNativeEpisodeSelect && window.__tvNativeEpisodeSelect("
-                + ep.index + "," + nativePosSeconds() + "," + nativeDurSeconds()
+                + ep.index + "," + nativePosSecondsPrecise() + "," + nativeDurSeconds()
                 + "," + nativePlaybackToken + ")", null);
     }
 
@@ -7485,7 +7532,7 @@ public class MainActivity extends Activity {
         if (trackType == C.TRACK_TYPE_AUDIO && choice.group == null) {
             if (web != null && choice.index >= 0) {
                 web.evaluateJavascript("window.__tvNativeVideoAudio && window.__tvNativeVideoAudio("
-                        + choice.index + "," + nativePosSeconds() + "," + nativeDurSeconds()
+                        + choice.index + "," + nativePosSecondsPrecise() + "," + nativeDurSeconds()
                         + "," + nativePlaybackToken + ")", null);
             }
             showNativeChrome(false);
@@ -7643,7 +7690,7 @@ public class MainActivity extends Activity {
         if (web == null) return;
         web.evaluateJavascript("window.__tvNativeSubtitleSelect && window.__tvNativeSubtitleSelect("
                 + (rel == null ? "null" : org.json.JSONObject.quote(rel))
-                + "," + nativePosSeconds() + "," + nativeDurSeconds()
+                + "," + nativePosSecondsPrecise() + "," + nativeDurSeconds()
                 + "," + nativePlaybackToken + ")", null);
     }
 
@@ -7653,7 +7700,7 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "Loading subtitle versions...", Toast.LENGTH_SHORT).show();
         web.evaluateJavascript("window.__tvNativeSubtitleVersions && window.__tvNativeSubtitleVersions("
                 + org.json.JSONObject.quote(lang == null || lang.isEmpty() ? "en" : lang)
-                + "," + nativePosSeconds() + "," + nativeDurSeconds()
+                + "," + nativePosSecondsPrecise() + "," + nativeDurSeconds()
                 + "," + nativePlaybackToken + ")", null);
     }
 
@@ -7662,7 +7709,7 @@ public class MainActivity extends Activity {
         nativeOpenSubtitleMenuAfterRefresh = true;
         Toast.makeText(this, "Showing all subtitle languages", Toast.LENGTH_SHORT).show();
         web.evaluateJavascript("window.__tvNativeSubtitleShowAll && window.__tvNativeSubtitleShowAll("
-                + nativePosSeconds() + "," + nativeDurSeconds()
+                + nativePosSecondsPrecise() + "," + nativeDurSeconds()
                 + "," + nativePlaybackToken + ")", null);
     }
 
@@ -7711,7 +7758,7 @@ public class MainActivity extends Activity {
         if (web == null) return;
         String quality = which <= 0 ? "orig" : (which == 1 ? "1080" : (which == 2 ? "720" : "480"));
         web.evaluateJavascript("window.__tvNativeVideoQuality && window.__tvNativeVideoQuality("
-                + org.json.JSONObject.quote(quality) + "," + nativePosSeconds() + "," + nativeDurSeconds()
+                + org.json.JSONObject.quote(quality) + "," + nativePosSecondsPrecise() + "," + nativeDurSeconds()
                 + "," + nativePlaybackToken + ")", null);
         showNativeChrome(false);
     }
@@ -8044,7 +8091,6 @@ public class MainActivity extends Activity {
 
     private void playNativeNextEpisode() {
         String mode = nativeMode;
-        long pos = nativePosSeconds();
         long dur = nativeDurSeconds();
         long playbackToken = nativePlaybackToken;
         if (!"video".equals(mode)) return;
@@ -8057,7 +8103,7 @@ public class MainActivity extends Activity {
         // JS owns the atomic player-to-player handoff. Cover first so the next title
         // cannot flash at 00:00 while /api/play is still mounting.
         web.evaluateJavascript("window.__tvNativeVideoNext && __tvNativeVideoNext("
-                + pos + "," + dur + "," + playbackToken + ")", null);
+                + nativePosSecondsPrecise() + "," + dur + "," + playbackToken + ")", null);
     }
 
     private void startNativeProgress() {
@@ -8209,7 +8255,7 @@ public class MainActivity extends Activity {
         if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
         nativeSheetReturnFocus = null;
         String mode = nativeMode;
-        long pos = nativePosSeconds();
+        String posText = nativeSafePosPrecise();
         long dur = nativeDurSeconds();
         long playbackToken = nativePlaybackToken;
         boolean guideMode = nativeGuideMode;
@@ -8291,7 +8337,7 @@ public class MainActivity extends Activity {
         nativeHasWyzieSubtitle = false;
         if (notifyClosed && "video".equals(mode)) {
             web.evaluateJavascript("window.__tvNativeVideoClosed && __tvNativeVideoClosed("
-                    + pos + "," + dur + ",false," + playbackToken + ")", null);
+                    + posText + "," + dur + ",false," + playbackToken + ")", null);
         } else if (notifyClosed) {
             web.evaluateJavascript("window.__tvNativeLiveClosed && __tvNativeLiveClosed()", null);
         }

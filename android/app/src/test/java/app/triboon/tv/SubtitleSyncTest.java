@@ -59,6 +59,16 @@ public class SubtitleSyncTest {
     }
 
     @Test
+    public void turningSubtitlesOnLateFollowsThePicture() {
+        // The movie is at 26:00. The subtitle clock is still at the start because
+        // the line was just turned on. That is not a buffer stall.
+        SubtitleSync.Sample sample = SubtitleSync.step(
+                26 * 60 * 1000L, true, 0L, 1000L, 1500L, 0L, -1L, 0L);
+        assertEquals(26 * 60 * 1000L, sample.mediaMs);
+        assertEquals(0L, sample.slipMs);
+    }
+
+    @Test
     public void steadyPlayFollowsThePicture() {
         SubtitleSync.Sample sample = SubtitleSync.step(
                 20 * 60 * 1000L + 250L, true, 20 * 60 * 1000L, 1000L, 1250L, 0L, -1L, 0L);

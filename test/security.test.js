@@ -207,7 +207,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
   const probes = [
     ['GET', '/api/me'], ['GET', '/api/me/security'], ['GET', '/api/app/latest'], ['POST', '/api/me/totp/setup'], ['POST', '/api/me/totp/enable'],
     ['POST', '/api/me/totp/disable'], ['POST', '/api/me/totp/recovery'], ['GET', '/api/status'], ['GET', '/api/search?q=x'],
-    ['POST', '/api/play'], ['POST', '/api/play/stop'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
+    ['POST', '/api/play'], ['POST', '/api/play/stop'], ['GET', '/api/playback-story'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
     ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['GET', '/api/watch-stats'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
     ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
@@ -617,6 +617,9 @@ test('playback issue lines include the reason', () => {
   const html = fs.readFileSync(require('path').join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(html, /function notePictureHop\(p, prev, incoming\)[\s\S]+the picture jumped back/,
     'a backward clock writes how far the picture jumped');
+  assert.match(html, /function wholeSecondChopped\(prev, incoming\)[\s\S]+ignored a whole-second report/,
+    'a whole-second report does not move the bar backward');
+  assert.match(html, /id="copyPlaybackStory"/, 'settings can copy the last playback story');
   const lines = [];
   const orig = console.log;
   const prev = process.env.TRIBOON_DEBUG;
@@ -627,7 +630,7 @@ test('playback issue lines include the reason', () => {
     assert.match(lines[0], /^\[debug:issue\] \d{2}:\d{2}:\d{2} buffered 8s at 56:42/);
     assert.match(server, /disk \$\{m\.name \|\| 'file'\}/,
       'a second open file is named, and a disk movie is marked disk so it is not a usenet login');
-    assert.match(server, /why=\$\{String\(body\.why/,
+    assert.match(server, /const playWhy = String\(body\.why/,
       'a play line says whether the viewer pressed play or a remount asked again');
     assert.match(server, /also="\$\{others\.join/,
       'a play line names the other open files');
