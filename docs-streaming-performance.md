@@ -221,6 +221,23 @@ release and the pipeline records the playback-failed verdict. Timeouts,
 resets, refused logins, and unreachable providers are never definitive — a
 piece with one of those mixed in is retried, not killed.
 
+**Backup only accounts (2026-09-28).** Settings → Usenet providers has a
+per-account **Backup only** checkbox (`providers[].backup`, boolean, default
+false; part of the pool rebuild key). `_ordered()` sorts as before, then
+places backups behind every primary that can still take a piece:
+`[primaries not dark/no-room] → [backups] → [dark or no-room primaries]`.
+Load balancing therefore happens among primaries only; a backup is reached
+when the failover walk (430, corrupt copy, line fault, command timeout) runs
+out of primaries, or when every primary is dark or has no room to open a
+line. The hedge never speculates onto a backup (a slow primary is not a
+failed primary), `warm()` puts the one boot login on the first primary, and
+`stats()`/Activity show a `backup` badge. Motivation: the idle-tie headroom
+rule used to dial the biggest untouched plan first, which is how a block or
+over-limit account (Eweka, Easynews `secure-us`) got a fresh login and a
+`480 Authentication Required` on every episode. Note that an account with no
+saved login always answers 480 — Backup only hides the symptom, it does not
+add credentials.
+
 ## Priority Lanes
 
 Provider work is scheduled by priority:

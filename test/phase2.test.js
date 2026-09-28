@@ -4754,8 +4754,8 @@ test('server: NNTP pipelining is an owner setting that rides provider opts, env 
     'the setting wins; the env var stays as a fallback for pre-setting deployments');
   assert.match(src, /for \(const p of list\) p\.pipelineDepth = depth;/,
     'the depth rides every provider\'s pool opts');
-  assert.match(src, /\[p\.host, p\.port, p\.user, p\.connections, p\.pipelineDepth \|\| 0\]/,
-    'saving the setting changes the pool key, so pools rebuild without a restart');
+  assert.match(src, /\[p\.host, p\.port, p\.user, p\.connections, p\.pipelineDepth \|\| 0, p\.backup === true\]/,
+    'saving the setting (or flipping Backup only) changes the pool key, so pools rebuild without a restart');
 });
 
 test('pipeline: auto-advance mounts the next candidate when the current source dies', async () => {
@@ -5801,6 +5801,64 @@ test('nntp: hedged failover — a copy that fails opts.verify (bad CRC) advances
         (e) => e.code === 'CORRUPT_ARTICLE' && e.everyProviderDefinitive === true, 'sequential lanes report the same');
     } finally { both.close(); }
   } finally { pool.close(); await p0.close(); await p1.close(); }
+});
+
+test('nntp: "Backup only" account is never dialed while a primary can serve, and takes over when the primaries fail', async () => {
+  const payload = seededPayload(24 * 1024, 0x55);
+  const r = nzbFor(writeRar4Store([{ name: 'backup.mkv', data: payload }], { base: 'bk' }), 30000, 'bk');
+  const id = [...r.articles.keys()][0];
+  const primary = createMockNntp({ articles: r.articles, latencyMs: 400 }); // slow but healthy
+  const backup = createMockNntp({ articles: r.articles });
+  const primaryPort = await primary.listen();
+  const backupPort = await backup.listen();
+  // The backup is listed FIRST and has the bigger plan: the idle-tie headroom rule alone would dial it.
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: backupPort, tls: false, connections: 40, backup: true },
+    { host: '127.0.0.1', port: primaryPort, tls: false, connections: 8 },
+  ], 8);
+  try {
+    const ordered = pool._ordered(0);
+    assert.strictEqual(ordered[0].opts.port, primaryPort, 'the primary is ordered first no matter the list order or headroom');
+    assert.strictEqual(ordered[1].opts.port, backupPort, 'the backup sits behind it as the failover');
+    pool.warm(1);
+    await new Promise((ok) => setTimeout(ok, 150));
+    assert.strictEqual(backup.connCount(), 0, 'the boot login goes to the primary, not the backup');
+    // Player lane, tiny hedge: a SLOW primary must not make the pool speculate onto the backup.
+    const body = await pool.body(id, 'playback', { hedgeMs: 50 });
+    assert.ok(Buffer.isBuffer(body) && body.length > 0, 'served');
+    assert.strictEqual(backup.connCount(), 0, 'a slow primary is not a failed primary — the backup stayed cold');
+    assert.strictEqual(primary.bodyCount(id), 1, 'the primary served it');
+    // A real failure on the primary (430) advances to the backup at once.
+    primary.markMissing(id);
+    const healed = await pool.body(id, 'playback', { hedgeMs: 5000 });
+    assert.ok(healed.equals(body), 'the backup served the piece the primary no longer has');
+    assert.strictEqual(backup.bodyCount(id), 1, 'the backup was asked exactly once, after the primary failed');
+    // Sequential lanes (read-ahead) walk the same order.
+    assert.ok((await pool.body(id, 'readAhead')).equals(body), 'read-ahead fails over to the backup too');
+    // Health STAT: primary answers 430, backup 223 → the article is still "present" via the backup.
+    assert.strictEqual(await pool.stat(id, 'health'), true, 'a backup copy still counts for health');
+  } finally { pool.close(); await primary.close(); await backup.close(); }
+});
+
+test('nntp: a backup is preferred over a primary that is dark (connect failure, no line up)', async () => {
+  const payload = seededPayload(8 * 1024, 0x56);
+  const r = nzbFor(writeRar4Store([{ name: 'dark.mkv', data: payload }], { base: 'dk' }), 30000, 'dk');
+  const id = [...r.articles.keys()][0];
+  const backup = createMockNntp({ articles: r.articles });
+  const backupPort = await backup.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false, connections: 8 },                       // primary: refuses instantly
+    { host: '127.0.0.1', port: backupPort, tls: false, connections: 8, backup: true },
+  ], 4);
+  try {
+    const first = await pool.body(id, 'playback');
+    assert.ok(first.length > 0, 'the backup took over when the only primary could not open a line');
+    // Now the primary is "down" (connect failure < 60s, no socket): the backup is ordered ahead of it,
+    // so the next piece does not wait out the primary's half-open probe.
+    const ordered = pool._ordered(0);
+    assert.strictEqual(ordered[0].opts.port, backupPort, 'dark primary sinks behind the backup');
+    assert.ok(ordered[0].isBackup() && !ordered[1].isBackup(), 'both accounts stay in the walk (a wrong breaker cannot lose an article)');
+  } finally { pool.close(); await backup.close(); }
 });
 
 test('nntp: circuit-breaker half-open probe recovers a provider before the full backoff', async () => {

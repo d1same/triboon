@@ -2043,6 +2043,23 @@ test('settings: edit provider/indexer in place — blank secret keeps the saved 
   assert.strictEqual(p.host, 'h2.example');
   assert.strictEqual(p.pass, 'pw', 'blank password keeps the saved secret');
   assert.strictEqual(p.connections, 12);
+  assert.strictEqual(p.backup, false, 'a provider is a primary unless the owner ticks Backup only');
+  // "Backup only": saved on add, kept across an edit that does not mention it, cleared on demand,
+  // and visible (as a boolean, never the secret) in the redacted GET the Settings page renders.
+  await httpJson(srv.port, 'POST', '/api/settings', { editProvider: { index: idx, backup: true } }, admin);
+  assert.strictEqual(srv.settings.get().providers[idx].backup, true, 'edit turns Backup only on');
+  await httpJson(srv.port, 'POST', '/api/settings', { editProvider: { index: idx, connections: 6 } }, admin);
+  assert.strictEqual(srv.settings.get().providers[idx].backup, true, 'an edit that does not mention backup keeps it');
+  const view = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(view.json.providers[idx].backup, true, 'the Settings page can show the backup badge');
+  assert.strictEqual(view.json.providers[idx].user, '•••', 'the redacted view still hides the login');
+  await httpJson(srv.port, 'POST', '/api/settings', { editProvider: { index: idx, backup: false } }, admin);
+  assert.strictEqual(srv.settings.get().providers[idx].backup, false, 'edit turns Backup only off');
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    addProvider: { host: 'h3.example', port: 563, user: 'u', pass: 'pw', connections: 4, backup: 'yes' },
+  }, admin);
+  assert.strictEqual(srv.settings.get().providers[idx + 1].backup, false, 'only a real true means backup (no truthy strings)');
+  await httpJson(srv.port, 'POST', '/api/settings', { removeProvider: idx + 1 }, admin);
   await httpJson(srv.port, 'POST', '/api/settings', { removeProvider: idx }, admin); // leave others untouched
 });
 

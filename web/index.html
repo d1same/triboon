@@ -5106,8 +5106,10 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
   <div class="setGrid" data-stab="sources" hidden>
   <div class="panel"><h2>Usenet providers</h2>
-    <p>Add one or more NNTP providers — extras act as failover when articles are missing.
-       Each has its own connection limit. Credentials are encrypted at rest and never sent to clients.</p>
+    <p>Add one or more NNTP providers — pieces are spread across the accounts with room, and a missing
+       or damaged piece fails over to the next one. Mark an account <b>Backup only</b> to keep it out of
+       the rotation until every other account fails. Each has its own connection limit. Credentials
+       are encrypted at rest and never sent to clients.</p>
     <div id="npList" style="margin-bottom:14px"></div>
     <div class="field">
       <select id="npPreset" style="max-width:170px">
@@ -5129,6 +5131,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <input id="npPass" placeholder="password" type="password" style="flex:1">
       <input id="npConn" placeholder="connections (16, max 150)" title="max connections for this provider" style="max-width:190px">
     </div>
+    <label class="catRow" style="margin-bottom:10px" title="A backup account is only dialed when every primary account is down, refuses logins, or has no clean copy of a piece. Use it for a block account or a plan that answers 480 when it is over its limit."><input type="checkbox" id="npBackup"><span class="cgN">Backup only — use this account only when the others fail</span></label>
     <div class="settingsActions"><button class="btn primary" id="npSave">Add provider</button></div>
   </div>
 
@@ -27326,7 +27329,7 @@ function connRowHtml(p = {}) {
     : p.authBroken ? '<span class="connQ" style="color:var(--danger)" title="The provider accepts the login, then answers 480 to every article. Usually an exhausted block account, too many sessions, or a suspended plan. Other providers take over.">login rejected</span>'
     : q;
   return `<div class="connRow${p.down || p.authBroken ? ' down' : ''}">
-    <b>${esc(p.label || 'Provider')}</b>
+    <b>${esc(p.label || 'Provider')}${p.backup ? ' <small title="Dialed only when every primary account fails">backup</small>' : ''}</b>
     <div class="connNums">${esc(inUse)} / ${esc(size)} <small>in use · ${esc(open)} open</small> ${status}</div>
     <div class="connBar"><i class="inUse" style="width:${inUsePct}%"></i><i class="open" style="width:${openPct}%"></i></div>
   </div>`;
@@ -27562,7 +27565,7 @@ async function refreshSettings(opts = {}) {
     S.settingsCache = s; // for the ✎ edit flow (secrets stay redacted)
     if ($('jellyfinAppsEnabled')) $('jellyfinAppsEnabled').checked = s.jellyfinApps === true;
     $('npList').innerHTML = s.providers.length ? s.providers.map((p, i) =>
-      `<div class="kv"><span>${esc(p.host)}:${esc(p.port)} ${p.tls ? '🔒' : ''} ${p.user ? '· <span style="color:var(--amber)">login saved ✓</span>' : ''}</span>
+      `<div class="kv"><span>${esc(p.host)}:${esc(p.port)} ${p.tls ? '🔒' : ''} ${p.user ? '· <span style="color:var(--amber)">login saved ✓</span>' : ''}${p.backup ? ' · <span class="chip" title="Dialed only when every primary account fails">backup only</span>' : ''}</span>
        <span>×${esc(p.connections)} <button class="testBtn" data-tp="${i}" title="Test connection">test</button>
        <button class="rm" data-edp="${i}" title="Edit" style="color:var(--amber);margin-left:8px">✎</button>
        <button class="rm" data-rmp="${i}" title="Remove" style="color:#ff8d8d;margin-left:8px">✕</button></span></div>`).join('')
@@ -27593,6 +27596,7 @@ async function refreshSettings(opts = {}) {
       $('npHost').value = p.host; $('npPort').value = p.port;
       $('npUser').value = p.user === '•••' ? '' : p.user; $('npPass').value = '';
       $('npConn').value = p.connections;
+      if ($('npBackup')) $('npBackup').checked = p.backup === true;
       S.editingProvider = +b.dataset.edp;
       $('npSave').textContent = `Save changes (${p.host})`;
       $('npPass').placeholder = 'password (blank = keep saved)';
@@ -27867,12 +27871,14 @@ $('npSave').addEventListener('click', async () => {
     host: $('npHost').value.trim(), port, tls: port !== 119,
     user: $('npUser').value.trim(), pass: $('npPass').value,
     connections: parseInt($('npConn').value || '16', 10),
+    backup: !!($('npBackup') && $('npBackup').checked),
   };
   const editing = Number.isInteger(S.editingProvider);
   await api('/api/settings', { method: 'POST', body: editing
     ? { editProvider: { index: S.editingProvider, ...fields } } : { addProvider: fields } });
   S.editingProvider = null; $('npSave').textContent = 'Add provider'; $('npPass').placeholder = 'password';
   ['npHost', 'npPort', 'npUser', 'npPass', 'npConn'].forEach((id) => { $(id).value = ''; }); $('npPreset').value = '';
+  if ($('npBackup')) $('npBackup').checked = false;
   toast(editing ? 'Provider updated' : 'Provider added (encrypted)'); refreshSettings({ force: true });
 });
 $('ixPreset').addEventListener('change', () => {

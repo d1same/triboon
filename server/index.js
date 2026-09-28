@@ -490,6 +490,7 @@ function normalizeProviders(list) {
     user: String(p.user || ''),
     pass: String(p.pass || ''),
     connections: providerConnections(p.connections),
+    backup: p.backup === true, // "Backup only": dialed only when every primary fails
   })).filter((p) => p.host);
 }
 
@@ -838,7 +839,7 @@ let pool = null, poolKey = '';
 function getPool() {
   const list = providerList();
   if (!list.length) { const e = new Error('no usenet provider configured'); e.status = 409; throw e; }
-  const key = JSON.stringify(list.map((p) => [p.host, p.port, p.user, p.connections, p.pipelineDepth || 0]));
+  const key = JSON.stringify(list.map((p) => [p.host, p.port, p.user, p.connections, p.pipelineDepth || 0, p.backup === true]));
   if (pool && poolKey === key) return pool;
   if (pool) pool.close();
   poolKey = key;
@@ -5006,6 +5007,7 @@ function activityConnectionStats() {
     return {
       label: n > 1 ? `${host} (${n})` : host,
       inUse: p.inUse, open: p.open, connecting: p.connecting, size: p.size, queued: p.queued, down: !!p.down,
+      authBroken: !!p.authBroken, backup: !!p.backup,
     };
   });
   return { providers, inUse: stats.inUse, open: stats.open, size: stats.size, queued: stats.queued };
@@ -8631,7 +8633,7 @@ Object.assign(H, {
     const iptvSources = iptvSourcesFromSettings(s);
     const primaryIptv = iptvSources[0] || legacyIptvSource(s) || {};
     send(ctx.res, 200, { // secrets redacted — the UI shows presence, not values
-      providers: (s.providers || []).map((p) => ({ host: p.host, port: p.port, tls: !!p.tls, user: p.user ? '•••' : '', connections: p.connections || 16 })),
+      providers: (s.providers || []).map((p) => ({ host: p.host, port: p.port, tls: !!p.tls, user: p.user ? '•••' : '', connections: p.connections || 16, backup: p.backup === true })),
       indexers: (s.indexers || []).map((i) => ({
         name: i.name, url: i.url, apikey: i.apikey ? '•••' : '',
         apiDayLimit: i.apiDayLimit || null, grabDayLimit: i.grabDayLimit || null,
@@ -8932,6 +8934,7 @@ Object.assign(H, {
           tls: b.addProvider.tls !== false, user: String(b.addProvider.user || ''),
           pass: String(b.addProvider.pass || ''),
           connections: providerConnections(b.addProvider.connections),
+          backup: b.addProvider.backup === true,
         });
       }
       if (Number.isInteger(b.removeProvider)) next.providers.splice(b.removeProvider, 1);
@@ -8945,6 +8948,7 @@ Object.assign(H, {
           user: e.user !== undefined ? String(e.user) : cur.user,
           pass: e.pass ? String(e.pass) : cur.pass,
           connections: providerConnections(e.connections, cur.connections || 16),
+          backup: e.backup !== undefined ? e.backup === true : cur.backup === true,
         };
       }
       if (b.addIndexer && b.addIndexer.url) {
@@ -9543,6 +9547,9 @@ Object.assign(H, {
     }
     // Resume: the picture already starts at the saved minute. Fill the clock
     // up to that minute so the phone's jump lands on the picture instead of waiting.
+    // The Jellyfin list re-encodes its picture, so the pieces really begin at the saved
+    // second (measured 12.42s for a 12.5s ask) and the pad clock ends there. Do not move
+    // the pads to the keyframe before it — that is a copy-path fact, not this path's.
     if (jellyfinPlaylist && sessionStart >= 1 && await ensureResumePad()) raw = resumeClockPlaylist(raw, sessionStart);
     // Name every piece through the real runtime. The bar is then the whole
     // movie, and a drag asks for that minute instead of stopping early.

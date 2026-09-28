@@ -8883,3 +8883,49 @@ test('v3.3.1: remux clock � the keyframe-before probe names where a copy-remux
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('Jellyfin apps: the re-encoded HLS list really starts at the asked second, so its clock and captions need no keyframe shift', { skip: !HAS_FFMPEG || !HAS_FFPROBE }, async () => {
+  // Jellyfin apps play /api/hls/<mount>/<movie>/master.m3u8?start=N. The playlist clock is movie-
+  // absolute (pad pieces 0..N, then real pieces) and the app lays ABSOLUTE-timed captions over it.
+  // Unlike the copy remux above, the Jellyfin list RE-ENCODES its picture (spawnHls holdSegments),
+  // and an encoder drops the frames before the ask — so 0:00 of the first real piece IS the asked
+  // second and the pads must keep ending at N. Measured, so a later "fix" cannot move the pads to
+  // the keyframe before N and put every caption 2.5s late.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-hlskf-'));
+  const clip = path.join(dir, 'gop5.mp4');
+  const gen = spawnSync(detectFfmpeg().path, ['-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+    '-t', '30', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '120', '-keyint_min', '120', '-sc_threshold', '0',
+    '-c:a', 'aac', '-shortest', clip], { timeout: 60000 });
+  assert.strictEqual(gen.status, 0, `fixture encode failed: ${gen.stderr}`);
+  const { spawnHls } = require('../server/transcode');
+  const run = async (opts) => {
+    const out = fs.mkdtempSync(path.join(dir, 'hls-'));
+    const ff = spawnHls(clip, { startSeconds: 12.5, outDir: out, segmentTime: 2, ...opts });
+    await new Promise((ok) => { ff.on('close', ok); ff.on('error', ok); });
+    let frames = 0;
+    for (const seg of fs.readdirSync(out).filter((f) => /^seg\d+\.m4s$/.test(f)).sort()) {
+      const joined = path.join(out, `${seg}.mp4`);
+      fs.writeFileSync(joined, Buffer.concat([fs.readFileSync(path.join(out, 'init.mp4')), fs.readFileSync(path.join(out, seg))]));
+      const rows = spawnSync(detectFfprobe().path, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'packet=pts_time', '-of', 'csv=p=0', joined], { timeout: 20000 })
+        .stdout.toString().split(/\r?\n/).filter(Boolean);
+      frames += rows.length;
+    }
+    return 30 - frames / 24; // where the output really began, from what it contains
+  };
+  try {
+    const jellyfin = await run({ holdSegments: true });
+    assert.ok(Math.abs(jellyfin - 12.5) < 0.25, `Jellyfin (re-encode) asked 12.5s and really began at ${jellyfin.toFixed(2)}s — the pads to 12.5s are right`);
+    const copy = await run({ holdSegments: false });
+    assert.ok(Math.abs(copy - 10) < 0.3, `the copy variant asked 12.5s really began at ${copy.toFixed(2)}s (keyframe 10s) — that is the remux fact, not Jellyfin's`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /if \(jellyfinPlaylist && sessionStart >= 1 && await ensureResumePad\(\)\) raw = resumeClockPlaylist\(raw, sessionStart\);/,
+    'the Jellyfin pad clock ends at the asked second');
+  assert.match(server, /const startAt = sessionStart >= 1 \? String\(Math\.round\(sessionStart \* 1000\) \/ 1000\) : '0';/,
+    'EXT-X-START opens at the asked second');
+  assert.doesNotMatch(server, /jellyfinPlaylist[^\n]*ffprobeKeyframeAtOrBefore|keyframeBefore[^\n]*jellyfinPlaylist/,
+    'the Jellyfin list is never moved to the keyframe before the ask — that shift is a copy-path fact');
+});

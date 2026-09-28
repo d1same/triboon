@@ -982,7 +982,13 @@ class ProviderPool {
       down: this.down(),
       authBroken: this.authBroken(),
       quiet: this.refusingNewLogins(),
+      backup: this.isBackup(),
     };
+  }
+  // "Backup only" account (Settings → Usenet providers). Never dialed while a primary can take the
+  // piece; it takes over when every primary is down, refusing logins, or has no clean copy.
+  isBackup() {
+    return this.opts.backup === true;
   }
   close() {
     this.closed = true;
@@ -1026,8 +1032,10 @@ class NntpPool {
   // before anyone pressed play. A single-provider pool can still warm `n`.
   warm(n = 1) {
     if (!this.providers.length) return;
-    if (this.providers.length === 1) this.providers[0].warm(n);
-    else this.providers[0].warm(1);
+    if (this.providers.length === 1) return this.providers[0].warm(n);
+    // The one boot login goes to a primary. A backup-only account is not dialed until needed.
+    const first = this.providers.find((p) => !p.isBackup()) || this.providers[0];
+    first.warm(1);
   }
 
   // While a movie or show is playing, this is how many usenet lines the whole
@@ -1088,7 +1096,7 @@ class NntpPool {
     // the 60-plan account won the idle tie on headroom while the one warm login sat on the
     // 40-plan account, and every health check parked there. Reuse the login that is up.
     const noRoom = (p) => !live(p) && typeof p._roomForNewLine === 'function' && p._roomForNewLine() === 0;
-    return [...list].sort((a, b) => {
+    const sorted = [...list].sort((a, b) => {
       const da = dark(a) || noRoom(a);
       const db = dark(b) || noRoom(b);
       if (da !== db) return da ? 1 : -1;
@@ -1103,6 +1111,19 @@ class NntpPool {
       if (sa !== sb) return sa - sb;
       return hb - ha;
     });
+    // "Backup only" accounts sit behind every primary that can still take a piece. Load balancing
+    // happens among the primaries; a backup is reached only when the failover walk (430 / corrupt
+    // copy / line fault / hedge past the last primary) runs out of primaries, or when every
+    // primary is dark or has no room to open a line. Idle-tie headroom used to put the biggest
+    // untouched plan first — that is how Eweka got a fresh login (and a 480) on every episode.
+    const backup = (p) => typeof p.isBackup === 'function' && p.isBackup();
+    if (!sorted.some(backup)) return sorted;
+    const stuck = (p) => dark(p) || noRoom(p);
+    return [
+      ...sorted.filter((p) => !backup(p) && !stuck(p)),
+      ...sorted.filter(backup),
+      ...sorted.filter((p) => !backup(p) && stuck(p)),
+    ];
   }
 
   // True if ANY provider has the article.
@@ -1257,6 +1278,9 @@ class NntpPool {
       const armHedge = () => {
         clearHedge();
         if (idx >= ordered.length) return; // no more providers to speculate onto
+        // A slow primary is not a failed primary: never speculate onto a backup-only account.
+        // A real failure (430 / corrupt / line fault / command timeout) still advances to it.
+        if (typeof ordered[idx].isBackup === 'function' && ordered[idx].isBackup()) return;
         // Only player lanes reach this function. Health and read-ahead stay on
         // one provider until it actually fails, so a slow check does not log in next.
         hedgeTimer = setTimeout(() => { hedgeTimer = null; startNext(); }, hedgeMs);

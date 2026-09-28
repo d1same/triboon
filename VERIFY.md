@@ -126,6 +126,51 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-28, main (post-v3.3.1) — "Backup only" usenet accounts + subtitle
+clock double-check on Windows, Android, Jellyfin, and Cast:
+
+- Example: Eweka is the biggest plan in the list, so the idle tie dialed it
+  first for every episode and it answered `480 Authentication Required`
+  (2-minute quiet, log spam). Tick **Backup only** on it: the primaries share
+  the pieces; Eweka is dialed only when they all fail. (Also found: the house
+  Eweka entry has no saved login — it will 480 until a username/password is
+  saved. Backup only hides the symptom, not the cause.)
+- Code: `server/nntp.js` `ProviderPool.isBackup()`, `_ordered()` partition
+  `[usable primaries] → [backups] → [dark/no-room primaries]`, hedge never
+  speculates onto a backup, `warm()` picks the first primary, `stats().backup`;
+  `server/index.js` `normalizeProviders`/add/edit/GET carry `backup` (strict
+  `=== true`), pool rebuild key includes it, Activity rows carry
+  `backup`/`authBroken`; `web/index.html` Providers panel checkbox + "backup
+  only" chip, edit prefill, Activity `backup` tag. Verified visually on the
+  house server (Providers panel, checkbox under the connections field).
+- Tests: `test/phase2.test.js` (backup listed first with the bigger plan is
+  still ordered last; boot warm skips it; slow primary with a 50ms hedge
+  never dials it; 430 on the primary → backup serves once; read-ahead lane
+  and health STAT fail over; dark primary sinks behind the backup but stays
+  in the walk); `test/security.test.js` (default false, edit on/keep/off,
+  redacted GET shows the flag, truthy string is not true).
+- Subtitle clock double-check (no code change needed):
+  Windows native: `bridge.js` passes `startOffset` through; `player.rs`
+  `display_position`/`subtitle_stream_offset` = `start_offset` for remux and
+  transcode, `sub-delay` uses it — so the v3.3.1 keyframe-corrected
+  `startOffset` reaches mpv's clock and captions. Android:
+  `MainActivity` `nativeStartOffsetMs` from the same payload feeds the
+  caption clock. Jellyfin apps: MEASURED — the Jellyfin HLS list re-encodes
+  its picture, so a 12.5s ask really began at 12.42s (copy variant: 10.0s);
+  the pad clock correctly ends at the asked second and needs no keyframe
+  shift (new real-ffmpeg test in `test/phase4.test.js` locks both facts; a
+  first attempt to "fix" Jellyfin like the remux was reverted because the
+  measurement disproved it). Chromecast (browser sender): no caption track
+  is sent at all today (pre-existing; not a regression). Windows Rust unit
+  test for `subtitle_delay(shift, start_offset=120.5)` runs in CI.
+- Gate: `npm.cmd test` 785/785 (782 + 3 new). `npm.cmd run verify:full` PASS
+  on the house server (emulator `emulator-5554`, Shield untouched): Mario 4K
+  ready 2841ms OK, 1stByte 104ms, seek 660ms, resume 20ms, cc=200; FROM
+  S01E01 ready 2655ms, 1stByte 51ms, seek 132ms, resume 10ms, cc=200;
+  overlapping Play both returned in 16ms; IPTV ABC web 1366ms / native
+  1091ms, ESPN 392ms / 18ms; Android lint + unit + debug build PASS; Android
+  ExoPlayer stress smoke PASS (10 VOD seeks, resume 2729s = 0.45).
+
 2026-09-28, main (post-v3.3.1) — a corrupt piece on one provider no longer
 kills the show, and a piece corrupt everywhere no longer loops:
 
