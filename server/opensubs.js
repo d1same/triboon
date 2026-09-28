@@ -313,14 +313,107 @@ function subSyncResultOk(inputText, outputText) {
   if (!inN) return true;
   return Math.abs(outN - inN) <= Math.max(1, Math.floor(inN * 0.02));
 }
+function srtStampMs(stamp) {
+  const m = /^(\d{2}):(\d{2}):(\d{2})[,.](\d{3})$/.exec(String(stamp || '').trim());
+  if (!m) return null;
+  return (((+m[1] * 60) + +m[2]) * 60 + +m[3]) * 1000 + +m[4];
+}
+function formatSrtStamp(ms) {
+  let n = Math.max(0, Math.round(+ms || 0));
+  const h = Math.floor(n / 3600000); n -= h * 3600000;
+  const m = Math.floor(n / 60000); n -= m * 60000;
+  const s = Math.floor(n / 1000); n -= s * 1000;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(n).padStart(3, '0')}`;
+}
+function srtCueStarts(text) {
+  const out = [];
+  const re = /(\d{2}:\d{2}:\d{2})[,.](\d{3})\s*-->/g;
+  const src = String(text || '');
+  let m;
+  while ((m = re.exec(src))) out.push(srtStampMs(`${m[1]},${m[2]}`));
+  return out;
+}
+// One gap, in milliseconds, between an SRT and the same cues after alass. Null when the
+// result is not one shift: too few cues, a scrambled file, or a jump past 90 seconds.
+// A 90-second cap is the "words are a bit behind" case. A multi-minute jump means alass
+// matched the wrong scene.
+function syncShiftMs(inputText, outputText) {
+  const inn = srtCueStarts(inputText);
+  const out = srtCueStarts(outputText);
+  if (inn.length < 4 || Math.abs(inn.length - out.length) > Math.max(1, Math.floor(inn.length * 0.02))) return null;
+  const n = Math.min(inn.length, out.length);
+  const deltas = [];
+  for (let i = 0; i < n; i++) deltas.push(out[i] - inn[i]);
+  const sorted = [...deltas].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const med = sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  if (!Number.isFinite(med) || Math.abs(med) > 90000) return null;
+  let agree = 0;
+  for (const d of deltas) if (Math.abs(d - med) <= 1500) agree++;
+  if (agree < Math.ceil(deltas.length * 0.7)) return null;
+  return med;
+}
+// Cues that belong to one short audio sample, with times moved so 0 is the sample start.
+// alass then hears that slice only. Giving it the whole movie plus a two-minute clip makes
+// it jump the words to the wrong scene.
+function windowSrt(srt, originMs, spanMs = 120000) {
+  const blocks = String(srt || '').replace(/\r/g, '').split(/\n{2,}/);
+  const hi = originMs + spanMs;
+  const lines = [];
+  for (const block of blocks) {
+    const m = /(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})/.exec(block);
+    if (!m) continue;
+    const start = srtStampMs(m[1]);
+    const end = srtStampMs(m[2]);
+    if (start == null || end == null || start < originMs || start > hi) continue;
+    const body = block.slice(m.index + m[0].length).replace(/^\n/, '').trim();
+    if (!body) continue;
+    const relStart = start - originMs;
+    const relEnd = Math.max(relStart + 200, end - originMs);
+    lines.push(`${lines.length + 1}\n${formatSrtStamp(relStart)} --> ${formatSrtStamp(relEnd)}\n${body}`);
+  }
+  if (lines.length < 4) return null;
+  return { srt: `${lines.join('\n\n')}\n`, count: lines.length };
+}
+// Logos and quiet stretches have fewer than four lines, so a sample taken right
+// at the playhead comes back empty and the raw caption stays on screen. The
+// nearest spoken stretch, within three minutes, has the same gap. Keep the
+// slice short: a two-minute slice that crosses a long silence makes alass
+// delay every line by most of a minute.
+function speechWindow(srt, aroundMs, spanMs = 30000, searchMs = 180000) {
+  const origin = Math.max(0, Math.round(Number(aroundMs) || 0));
+  const first = windowSrt(srt, origin, spanMs);
+  if (first) return { ...first, originMs: origin };
+  for (let step = 20000; step <= searchMs; step += 20000) {
+    for (const dir of [1, -1]) {
+      const next = origin + dir * step;
+      if (next < 0) continue;
+      const hit = windowSrt(srt, next, spanMs);
+      if (hit) return { ...hit, originMs: next };
+    }
+  }
+  return null;
+}
 // Trailing release-group tag ("-GROUP") and the source class (WEB vs BluRay vs HDTV/DVD). Together
 // these are the cheap signals that actually correlate with frame-exact timing for same-lineage
 // releases — a bare key-substring overlap does NOT (a different cut, recap, or PAL/NTSC framerate of
 // the "same" release still drifts a second or two), which is why a loose match must not be trusted.
 function releaseGroupTag(s) {
-  const base = String(s || '').split(/[\\/]/).pop().replace(/\.(srt|vtt|sub|idx|ass|ssa|mkv|mp4|m4v|avi|mov|ts)$/i, '');
-  const m = base.match(/-([a-z0-9]+)$/i);
+  const base = String(s || '').split(/[\\/]/).pop().replace(/\.(srt|vtt|sub|idx|ass|ssa|mkv|mp4|m4v|avi|mov|ts)$/i, '').trim();
+  // Scene names use -GROUP. The CC menu uses "WEB-DL - PlayWEB". Both are the same tag.
+  const m = base.match(/-([a-z0-9]+)$/i) || base.match(/\s[-–]\s([a-z0-9]+)$/i);
   return m ? m[1].toLowerCase() : '';
+}
+function groupFitBonus(releaseName, relText) {
+  const mine = releaseGroupTag(releaseName);
+  const theirs = releaseGroupTag(relText);
+  if (!mine) return 0;
+  if (theirs && theirs === mine) return 200;
+  if (!theirs && String(relText || '').toLowerCase().includes(mine)) return 200;
+  // PlayWEB on a PiRaTeS Amazon file is a different clock. Keep it in the menu, but
+  // do not let a popular generic row beat an Amazon or same-group row.
+  if (theirs && theirs !== mine) return -240;
+  return 0;
 }
 function releaseSourceTag(s) {
   const t = String(s || '').toLowerCase();
@@ -425,7 +518,8 @@ function pickSub(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid
     if (myEpisode && relEpisode === myEpisode) s += 260;
     else if (myEpisode && relEpisode) s -= 1000;
     else if (myEpisode) s -= 80;
-    if (myGroup && rel.includes(myGroup)) s += 200;              // same release group ≈ frame-exact
+    else if (relEpisode) s -= 1000; // a TV episode is not this movie
+    s += groupFitBonus(releaseName, rel);
     const matchedEdition = [...myEdition].some((tag) => relEdition.has(tag));
     for (const tag of myEdition) {
       if (relEdition.has(tag)) s += 180;
@@ -465,9 +559,11 @@ function subtitleSourceLabel(rel) {
   return '';
 }
 function subtitleGroupLabel(d) {
-  const raw = String(d && (d.display || d.media) || '');
-  const m = /-([a-z0-9]+)(?:\.(?:srt|vtt))?$/i.exec(raw);
-  return m && m[1] ? m[1] : '';
+  const raw = String(subtitleMatchText(d) || (d && (d.display || d.media)) || '');
+  const tag = releaseGroupTag(raw);
+  if (!tag) return '';
+  const shown = raw.match(new RegExp(tag, 'i'));
+  return shown ? shown[0] : tag;
 }
 function subtitleVariantLabel(d) {
   const rel = subtitleMatchText(d).toLowerCase();
@@ -654,7 +750,8 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoi
     if (myEpisode && relEpisode === myEpisode) s += 260;
     else if (myEpisode && relEpisode) s -= 1000;
     else if (myEpisode) s -= 80;
-    if (myGroup && rel.includes(myGroup)) s += 200;
+    else if (relEpisode) s -= 1000; // a TV episode is not this movie
+    s += groupFitBonus(releaseName, rel);
     const matchedEdition = [...myEdition].some((tag) => relEdition.has(tag));
     for (const tag of myEdition) {
       if (relEdition.has(tag)) s += 180;
@@ -728,9 +825,14 @@ function usableVariants(ranked, { releaseName = '', season = null, episode = nul
     if (myEpisode) {
       const relEp = episodeKey(subtitleMatchText(v.raw || v));
       if (relEp && relEp !== myEpisode) return false;               // confirmed wrong episode
+    } else if (episodeKey(subtitleMatchText(v.raw || v))) {
+      return false; // Forensic Files S13E10 is not a movie
     }
     return true;
   });
+  // A movie must not fall back to the only TV-episode hit. A show still keeps best-effort
+  // rows when every result is the wrong episode, so the menu is not blank.
+  if (!playable.length && !myEpisode) return [];
   const out = playable.length ? playable : list;
   if (out.length && !out.some((v) => v.selected)) out[0].selected = true;
   return out;
@@ -771,7 +873,7 @@ function hasConfidentAutoPick(variants, { releaseName = '', season = null, episo
   if (!list.length) return false;
   const isText = (v) => /^(srt|vtt|)$/i.test(String(v.format || ''));
   const myEpisode = requestedEpisodeKey(releaseName, { season, episode });
-  if (!myEpisode) return list.some(isText);
+  if (!myEpisode) return list.some((v) => isText(v) && !episodeKey(subtitleMatchText(v.raw || v)));
   return list.some((v) => {
     if (!isText(v)) return false;
     const relEp = episodeKey(subtitleMatchText(v.raw || v));
@@ -1052,5 +1154,5 @@ module.exports = {
   _subtitleDownloadCanFallback: subtitleDownloadCanFallback,
   _redactSubUrl: redactSubUrl,
   _toIso6391: toIso6391,
-  subtitleLooksSynced, subSyncResultOk,
+  subtitleLooksSynced, subSyncResultOk, syncShiftMs, windowSrt, speechWindow,
 };

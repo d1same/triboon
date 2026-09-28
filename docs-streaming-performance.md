@@ -211,7 +211,18 @@ sharing 4 lines for the rest of the night. After two minutes each movie can
 take its normal share again (about 4 lines to start, more if the house still
 has room). A 480 on one line moves that piece to another line that is already
 signed in, so the picture does not wait on a new login. The same piece is not
-handed to the other account when that one just said no too. In-flight extras that complete after the 502 are
+handed to the other account when that one just said no too. When a 480 burst
+closes the LAST line on an account, the articles still waiting in that
+account's queue are handed to a peer at once (error code `NNTP_AUTH_LOST`, so
+the combined pool fails over); a solo account keeps them parked and a wake
+timer pumps the queue when the two minutes end. Parked read-ahead used to sit
+there for the whole window with its segments marked in flight, so the buffer
+stopped growing past them and the player paid a fresh fetch for each one. A
+480 burst after the window is written to the log again and starts a new quiet
+window (the old one-shot "announced" flag hid every later burst and let a
+login-480 be dialed again without any pause). Buffer/seek/drop/source lines in
+the playback log carry a per-account snapshot (`eweka 0/0 busy (12 waiting,
+quiet after 480); newshosting 6/8 busy`). In-flight extras that complete after the 502 are
 closed. Parallel connects stay at 4. Indexers that return HTTP 429/503 or
 Newznab limit codes 500/501 are skipped for 60s — the other indexers still
 answer so search does not stall.

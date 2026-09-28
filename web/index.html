@@ -12761,6 +12761,63 @@ function armPauseIdleExit(p = S.playing) {
     closePlayer();
   }, PAUSE_IDLE_EXIT_MS);
 }
+// A JavaScript error in the app used to die in the browser console — on a TV nobody ever
+// sees that console. Send it to the server log with the message and the code line, at most
+// a handful a minute, the same message once a minute. Works with or without a movie playing.
+const _uiIssueSeen = new Map();
+let _uiIssueWindowAt = 0, _uiIssueCount = 0;
+function uiErrorDetail(err, fallback) {
+  const reason = err && err.reason !== undefined ? err.reason : err;
+  const msg = (reason && (reason.message || (typeof reason === 'string' ? reason : '')))
+    || (typeof err === 'string' ? err : '') || fallback || 'unknown error';
+  const stack = String((reason && reason.stack) || '');
+  const spots = [];
+  for (const m of stack.matchAll(/([\w.-]+\.(?:html|js)):(\d+)(?::\d+)?/g)) {
+    const spot = m[1] + ':' + m[2];
+    if (spots.indexOf(spot) === -1) spots.push(spot);
+    if (spots.length >= 2) break;
+  }
+  return String(msg).slice(0, 160) + (spots.length ? ' @ ' + spots.join(' <- ') : '');
+}
+function noteUiIssue(detail) {
+  try {
+    if (typeof tokenStore === 'undefined' || !tokenStore.get()) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    const text = String(detail || '').replace(/\s+/g, ' ').trim().slice(0, 260);
+    if (!text) return;
+    const now = Date.now();
+    if (now - _uiIssueWindowAt > 60000) { _uiIssueWindowAt = now; _uiIssueCount = 0; }
+    if (++_uiIssueCount > 6) return;
+    const last = _uiIssueSeen.get(text);
+    if (last && now - last < 60000) return;
+    _uiIssueSeen.set(text, now);
+    if (_uiIssueSeen.size > 40) _uiIssueSeen.delete(_uiIssueSeen.keys().next().value);
+    const p = S.playing;
+    api('/api/playback-issue', {
+      method: 'POST',
+      body: {
+        kind: 'ui', detail: text,
+        screen: String(S.view || ''),
+        device: window.TriboonTV ? 'android' : 'web',
+        title: p && p.item ? String(p.item.title || p.item.name || '').slice(0, 80) : '',
+        file: p && p.candidate ? String(p.candidate.name || '').slice(0, 140) : '',
+        sessionId: p ? String(p.sessionId || '').slice(0, 40) : '',
+      },
+    }).catch(() => {});
+  } catch {}
+}
+window.addEventListener('error', (ev) => {
+  // A poster that failed to load fires 'error' on its <img>, not here. Here it is script errors.
+  if (!ev || (ev.target && ev.target !== window && !ev.error && !ev.message)) return;
+  const where = ev.filename ? ' (' + String(ev.filename).split('/').pop().split('?')[0] + ':' + (ev.lineno || 0) + ')' : '';
+  noteUiIssue(uiErrorDetail(ev.error || null, ev.message) + where);
+});
+window.addEventListener('unhandledrejection', (ev) => {
+  const r = ev && ev.reason;
+  if (r && r.status === 401) return; // signed out is a gate, not a crash
+  if (r && (r.name === 'AbortError' || r.code === 'ABORT_ERR')) return;
+  noteUiIssue('unhandled promise: ' + uiErrorDetail(ev, r == null ? 'rejected with nothing' : String(r)));
+});
 function clearWebRebufferRecovery() {
   if (S._webRebufferT) clearTimeout(S._webRebufferT);
   S._webRebufferT = null;
@@ -13114,6 +13171,7 @@ async function openPlayer(it, mount, opts = {}) {
     bumpPlayClock(playingRef);
     clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame();
     if (!(playingRef.item && playingRef.item.type === 'live')) renderSubCues();
+    runPendingWebSync();
   };
   v.onpause = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
@@ -13159,6 +13217,7 @@ async function openPlayer(it, mount, opts = {}) {
     if ($('playerLoader').classList.contains('show')) { clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); }
     hideSeekHoldFrame();
     if (!(playingRef.item && playingRef.item.type === 'live')) renderSubCues();
+    runPendingWebSync();
   };
   // A finished movie closes the player itself. Episodes keep the Up Next card on screen even
   // if the final timeupdate did not fire before the ended event.
@@ -13319,7 +13378,11 @@ function startSource(kind, atSeconds, opts = {}) {
   const serverSeek = p.usingRemux || p.usingTranscode;
   const seekStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
   p.startOffset = seekStart;
-  resetSubtitleClock(p, 0);
+  // Remux/transcode restart the video clock at 0, which is the minute we asked for.
+  // Direct play keeps movie time, so the words wait on that minute until the picture arrives.
+  p._subSeekAt = serverSeek ? 0 : Math.max(0, Number(atSeconds) || 0);
+  p._subSeekUntil = Date.now() + 20000;
+  resetSubtitleClock(p, p._subSeekAt);
   cleanupLiveMse();
   if (p.item && p.item.type === 'live') {
     // iPhone/iPad only: play the tokened provider HLS in <video>. MSE remux stays on every
@@ -13721,6 +13784,15 @@ function refreshNativeAudioChoices() {
     window.TriboonTV.updateAudioChoices(JSON.stringify({ choices: nativeAudioChoices() }));
   } catch {}
 }
+// The browser <video> track applies the saved sync offset on its own cues; the server must
+// not ALSO bake it into the file, or the offset is applied twice. Native payloads keep it.
+function webSubtitleFetchUrl(url) {
+  try {
+    const u = new URL(String(url || ''), location.origin);
+    u.searchParams.delete('shift');
+    return u.pathname + (u.search || '');
+  } catch { return url; }
+}
 function subtitleUrlForRel(p, rel, opts = {}) {
   if (typeof rel === 'string' && rel.startsWith('rs:')) return releaseSubUrl(p, rel);
   if (typeof rel === 'string' && rel.startsWith('em:')) return embeddedSubUrl(p, rel, opts);
@@ -13870,6 +13942,7 @@ async function prepareNativeStartKindForAudio(startKind) {
     if (nativeDirectAudioNeedsSafeRemux(selectedPlayerAudioTrack(p))) {
       p.forceAacRemux = true;
       p.nativeStartKind = 'remux';
+      notePlaybackIssue('audio', 'this device cannot play ' + (audioDescriptorForClient(selectedPlayerAudioTrack(p)) || 'this audio') + ' natively — server remux to AAC instead of direct play', 0);
       return 'remux';
     }
     return startKind;
@@ -13877,6 +13950,7 @@ async function prepareNativeStartKindForAudio(startKind) {
   if (nativeDirectAudioNameRisk(p)) {
     p.forceAacRemux = true;
     p.nativeStartKind = 'remux';
+    notePlaybackIssue('audio', 'tracks unknown and the release name says surround audio — server remux to AAC instead of direct play', 0);
     return 'remux';
   }
   return startKind;
@@ -14158,11 +14232,11 @@ window.__tvNativeVideoReady = (pos, dur, token) => {
   applyNativeVideoProgress(pos, dur);
   p.nativeReady = true;
 };
-window.__tvNativeVideoPlaying = (pos, dur, token) => {
+window.__tvNativeVideoPlaying = (pos, dur, token, why) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   const wasPaused = !!p.nativePaused;
   applyNativeVideoProgress(pos, dur);
-  if (wasPaused && p._pausedAt) notePlaybackTrace('started again after pause at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's — the player pressed play');
+  if (wasPaused && p._pausedAt) notePlaybackTrace('started again after pause at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's — ' + (why || 'the picture started'));
   p.nativePaused = false;
   p._nativeResuming = false;
   clearPauseIdleExit();
@@ -14172,19 +14246,19 @@ window.__tvNativeVideoPlaying = (pos, dur, token) => {
   markVodPlaybackStarted(p);
   cancelPauseWarmAhead();
 };
-window.__tvNativeVideoResuming = (pos, dur, token) => {
+window.__tvNativeVideoResuming = (pos, dur, token, why) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
-  if (p.nativePaused && p._pausedAt) notePlaybackTrace('resumed at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's — the viewer pressed play');
+  if (p.nativePaused && p._pausedAt) notePlaybackTrace('resumed at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's — ' + (why || 'play was sent'));
   p.nativePaused = false;
   p._nativeResuming = true;
   p._pausedAt = 0;
   clearPauseIdleExit();
 };
-window.__tvNativeVideoPaused = (pos, dur, token) => {
+window.__tvNativeVideoPaused = (pos, dur, token, why) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
-  notePlaybackTrace('paused at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's');
+  notePlaybackTrace('paused at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's — ' + (why || 'the player stopped'));
   p.nativePaused = true;
   p._pausedAt = Date.now();
   bumpPlayClock(p);
@@ -14398,6 +14472,7 @@ window.__tvNativeVideoAudio = (index, pos, dur, token) => {
     return;
   }
   refreshNativeAudioChoices();
+  if (typeof p.subTrack === 'string' && p.subTrack.startsWith('os:')) autoSyncNative(p, p.subTrack);
 };
 window.__tvNativeEpisodeSelect = (index, pos, dur, token) => {
   const p = S.playing;
@@ -14818,13 +14893,17 @@ function failover() {
   if (!p.usingRemux && !p.usingTranscode && p.remuxUrl && !p.triedRemux) {
     p.triedRemux = true;
     if (!vodPlaybackStarted(p)) toast('Direct play not supported here — remuxing on the server…');
+    notePlaybackIssue('source', 'direct play did not start here — switching to server remux', 0);
     startSource('remux', currentTime(), vodPlaybackStarted(p) ? { quietSeek: true } : {});
   } else if (!p.usingTranscode && p.transcodeUrl && !p.triedTranscode) {
     p.triedTranscode = true;
+    notePlaybackIssue('source', (p.usingRemux ? 'remux' : 'direct play') + ' did not start here — switching to full transcode', 0);
     startSource('transcode', currentTime(), vodPlaybackStarted(p) ? { quietSeek: true } : {});
   } else if (p.sessionId) {
+    notePlaybackIssue('source', 'every player path failed on this file (direct, remux, transcode) — asking the server for another copy', 0);
     autoAdvance();
   } else {
+    notePlaybackIssue('source', 'nothing left to try on this file and no play session to advance — showing the external-player panel', 0);
     showVlcPanel();
   }
 }
@@ -16670,6 +16749,10 @@ function seekTo(seconds) {
   if (Math.abs(delta) >= 1) {
     notePlaybackIssue('skip', `skip ${delta >= 0 ? 'forward' : 'back'} from ${from.toFixed(1)}s to ${seconds.toFixed(1)}s`, Math.abs(Math.round(delta)));
   }
+  if (!(p.usingRemux || p.usingTranscode) && !(p.usingNative && canUseNativeVideoPlayer())) {
+    p._subSeekAt = seconds;
+    p._subSeekUntil = Date.now() + 20000;
+  }
   resetSubtitleClock(p, (p.usingRemux || p.usingTranscode) ? Math.max(0, seconds - (p.startOffset || 0)) : seconds);
   if (p.castingActive) { // seek the TV, not the idle local element
     if (_castRp && _castRpc) { try { _castRp.currentTime = seconds; _castRpc.seek(); p.castPos = seconds; } catch {} }
@@ -17588,38 +17671,123 @@ function setQuality(q) {
     startSource('transcode', at, { quietSeek: true });
   }
 }
+// The minute alass should hear. Null while Continue Watching is still on the opening,
+// a skip has not landed, or the picture has not buffered yet. Sampling those moments
+// shifts every line to the wrong scene, then the server remembers that shift.
+function subtitleSyncPlayhead(p) {
+  if (!p || (p.item && p.item.type === 'live')) return null;
+  const resume = Math.max(0, Number(p.item && p.item.resume) || 0);
+  const offset = Math.max(0, Number(p.startOffset) || 0);
+  const pct = traktResumeFractionForItem(p.item);
+  const dur = Math.max(0, Number(p.duration) || Number(p.nativeDuration) || 0);
+  const percentAt = pct > 0 && dur > 0 ? pct * dur : 0;
+  let at = 0;
+  if (p.usingNative) at = Math.max(0, Number(p.nativePos) || 0);
+  else if (p.usingJellyfinDesktop) at = Math.max(0, Number(p.jfPos) || offset);
+  else at = Math.max(0, Number(currentTime()) || 0);
+  const want = Math.max(resume, offset, percentAt);
+  if (want > 20 && at + 8 < want * 0.5) return null;
+  if (pct > 0.02 && at < 15 && percentAt <= 0) return null;
+  if (p._subSeekUntil && Date.now() < p._subSeekUntil) {
+    const v = $('video');
+    const raw = v && Number.isFinite(v.currentTime) ? v.currentTime : 0;
+    const land = Number(p._subSeekAt);
+    if (Number.isFinite(land) && Math.abs(raw - land) > 3) return null;
+  }
+  if (p._seekLandUntil && appMs() < p._seekLandUntil) {
+    const land = Number(p._seekLandAt);
+    if (Number.isFinite(land) && Math.abs(at - land) > 4) return null;
+  }
+  if (p.usingNative) {
+    if (!p.started) return null;
+    const ahead = p.nativeStats && Number(p.nativeStats.bufferedSec);
+    if (Number.isFinite(ahead) && ahead < 1) return null;
+    if (p.nativePaused && !(Number.isFinite(ahead) && ahead >= 1)) return null;
+    if (!Number.isFinite(ahead) && p.startedAt && appMs() - p.startedAt < 2000) return null;
+  } else if (!p.usingJellyfinDesktop) {
+    const v = $('video');
+    if (!v || v.seeking || v.readyState < 3) return null;
+    let ahead = 0;
+    try {
+      if (v.buffered && v.buffered.length) ahead = v.buffered.end(v.buffered.length - 1) - (v.currentTime || 0);
+    } catch {}
+    if (ahead < 1) return null;
+  }
+  return Math.max(0, Math.round(at));
+}
+// "Subtitles moved 1.2s earlier" tells the viewer what changed. A bare "synced" hid whether
+// anything happened at all.
+function subtitleSyncToast(shiftHeader) {
+  const ms = parseInt(shiftHeader, 10);
+  if (!Number.isFinite(ms) || Math.abs(ms) < 50) return 'Subtitles synced to this video';
+  return `Subtitles moved ${(Math.abs(ms) / 1000).toFixed(1)}s ${ms > 0 ? 'later' : 'earlier'}`;
+}
 // Background subtitle sync: re-request the same online sub with &sync=1 (the server runs alass
 // against the audio), then hot-swap the corrected cues if the user is still on that track. The
 // unsynced track plays meanwhile, so this never blocks the subtitle from appearing.
 function autoSyncSubtitle(p, rel, baseUrl) {
-  if (!(S.serverInfo && S.serverInfo.subSync) || !p || !baseUrl) return;
-  clearTimeout(p._autoSyncT);
-  p._autoSyncT = setTimeout(async () => {
-    if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
-    try {
-      // Strip any manual &shift before asking for the alass-corrected sub: alass aligns the RAW sub
-      // to the audio, so re-applying the user's hand-offset on top would double-shift it. Mirrors
-      // autoSyncNative. After the corrected cues swap in, the manual offset is obsolete → reset it.
-      const u = new URL(baseUrl, location.origin);
-      u.searchParams.delete('shift');
-      u.searchParams.set('sync', '1');
-      const r = await fetch(u.href);
-      if (!r.ok || r.headers.get('x-triboon-subsync') !== 'corrected') return;
-      const synced = await r.text();
-      if (!S.playing || S.playing !== p || p.subTrack !== rel || !synced || synced === p._subVttText) return;
-      p._subVttText = synced; p._subVttRel = rel;
-      p._subShift = 0; saveSubShift(rel, 0);
-      applySubtitleTrack();
-      toast('Subtitles synced to this video');
-    } catch {}
-  }, 400);
+  // The subtitle response already said "pending". That is the live answer. A page opened
+  // before the sync tool was on must not keep the words on the wrong timing.
+  if (!p || !baseUrl) return;
+  if (S.serverInfo) S.serverInfo.subSync = true;
+  p._pendingWebSync = { rel, baseUrl };
+  p._webSyncTries = 0;
+  p._webSyncNextAt = 0;
+  runPendingWebSync();
+}
+async function runPendingWebSync() {
+  const p = S.playing;
+  if (!p || p.usingNative || p._webSyncRunning) return;
+  const job = p._pendingWebSync;
+  if (!job || !job.baseUrl) return;
+  const rel = job.rel;
+  if (p.subTrack !== rel) { p._pendingWebSync = null; return; }
+  // A rejected measurement waits a minute, so the retry hears a different stretch of
+  // the film instead of spending its strikes on the same thirty seconds.
+  if (p._webSyncNextAt && Date.now() < p._webSyncNextAt) return;
+  const at = subtitleSyncPlayhead(p);
+  if (at == null) return;
+  if ((p._webSyncTries = (p._webSyncTries || 0) + 1) > 8) { p._pendingWebSync = null; return; }
+  const audio = Math.max(0, parseInt(p.audioTrack, 10) || 0);
+  p._webSyncRunning = true;
+  try {
+    // Strip any manual &shift before asking for the alass-corrected sub: alass aligns the RAW sub
+    // to the audio, so re-applying the user's hand-offset on top would double-shift it. Mirrors
+    // autoSyncNative. After the corrected cues swap in, the manual offset is obsolete → reset it.
+    const u = new URL(job.baseUrl, location.origin);
+    u.searchParams.delete('shift');
+    u.searchParams.set('sync', '1');
+    u.searchParams.set('at', String(at));
+    u.searchParams.set('audio', String(audio));
+    if (p._webSyncTries === 1) notePlaybackIssue('subs', `subtitle sync asked at ${at}s on audio ${audio}`, 0);
+    const r = await fetch(u.href);
+    if (!S.playing || S.playing !== p || p.subTrack !== rel) { p._pendingWebSync = null; return; }
+    if ((parseInt(p.audioTrack, 10) || 0) !== audio) return;
+    if (!r.ok) return;
+    const verdict = r.headers.get('x-triboon-subsync');
+    if (verdict === 'failed') { p._pendingWebSync = null; notePlaybackIssue('subs', 'subtitle sync gave up', 0); return; }
+    if (verdict === 'synced' || verdict === 'unavailable') { p._pendingWebSync = null; return; }
+    if (verdict !== 'corrected') { p._webSyncNextAt = Date.now() + 60000; return; }
+    const synced = await r.text();
+    if (!S.playing || S.playing !== p || p.subTrack !== rel || !synced || synced === p._subVttText) return;
+    if ((parseInt(p.audioTrack, 10) || 0) !== audio) return;
+    p._pendingWebSync = null;
+    p._subVttText = synced; p._subVttRel = rel;
+    p._subShift = 0; saveSubShift(rel, 0);
+    applySubtitleTrack();
+    toast(subtitleSyncToast(r.headers.get('x-triboon-subsync-shift')));
+    notePlaybackIssue('subs', `subtitle synced at ${at}s: ${subtitleSyncToast(r.headers.get('x-triboon-subsync-shift'))}`, 0);
+  } catch {
+  } finally {
+    p._webSyncRunning = false;
+  }
 }
 // Native (ExoPlayer) equivalent of autoSyncSubtitle: the native side loaded the subtitle URL we
 // gave it; if the server flags it 'pending', warm the alass-corrected version and re-hand the
 // ?sync=1 URL to ExoPlayer so it reloads the in-sync cues. Safe: any failure leaves the unsynced
 // track in place. Only for online (os:) subs; release/embedded subs are already in sync.
 function autoSyncNative(p, rel) {
-  if (!(S.serverInfo && S.serverInfo.subSync) || !p || !p.usingNative) return;
+  if (!p || !p.usingNative) return;
   if (!(typeof rel === 'string' && rel.startsWith('os:'))) return;
   if (!(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) return;
   // The native player hides the WebView (View.GONE), so Android throttles — and often outright
@@ -17629,6 +17797,7 @@ function autoSyncNative(p, rel) {
   // throttling — the same mechanism the presence heartbeat rides on. See runPendingNativeSync.
   p._pendingNativeSyncRel = rel;
   p._nativeSyncTries = 0;
+  p._nativeSyncNextAt = 0;
   runPendingNativeSync();
 }
 // Run the queued native alass sync, at most once per native tick. Definitive outcomes — no sync
@@ -17640,8 +17809,13 @@ async function runPendingNativeSync() {
   if (!p || !p.usingNative || p._nativeSyncRunning) return;
   const rel = p._pendingNativeSyncRel;
   if (!rel) return;
-  if (p.subTrack !== rel || !(S.serverInfo && S.serverInfo.subSync)
+  if (p.subTrack !== rel
       || !(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) { p._pendingNativeSyncRel = null; return; }
+  // Do not spend a try while the picture is still buffering or Continue Watching
+  // is still sitting on 0:00. Those tries used to line the words up on the opening.
+  if (p._nativeSyncNextAt && Date.now() < p._nativeSyncNextAt) return;
+  const at = subtitleSyncPlayhead(p);
+  if (at == null) return;
   // alass reads the mount's AUDIO, which is still cold at startup — its first attempts can fail
   // transiently until the audio warms. Give it a generous budget of native ticks (~1-2s each) so a
   // later attempt on warm audio succeeds, instead of giving up after a few and leaving the raw sub.
@@ -17660,7 +17834,10 @@ async function runPendingNativeSync() {
     if (!S.playing || S.playing !== p || p.subTrack !== rel) { p._pendingNativeSyncRel = null; return; }
     if (!head.ok) return; // transient — leave queued for the next native tick
     if (head.headers.get('x-triboon-subsync') !== 'pending') { p._pendingNativeSyncRel = null; return; }
-    const syncUrl = base + (base.includes('?') ? '&' : '?') + 'sync=1';
+    if (S.serverInfo) S.serverInfo.subSync = true;
+    const audio = Math.max(0, parseInt(p.audioTrack, 10) || 0);
+    const syncUrl = base + (base.includes('?') ? '&' : '?') + 'sync=1&at=' + at + '&audio=' + audio;
+    if (p._nativeSyncTries === 1) notePlaybackIssue('subs', `subtitle sync asked at ${at}s on audio ${audio}`, 0);
     const r = await fetch(syncUrl); // triggers/awaits the alass correction, then caches it
     if (!r.ok) return; // transient — leave queued
     const syncVerdict = r.headers.get('x-triboon-subsync');
@@ -17669,14 +17846,16 @@ async function runPendingNativeSync() {
     if (syncVerdict === 'failed') { p._pendingNativeSyncRel = null; return; }
     // alass didn't correct it yet (cold audio / transient failure): leave queued so a later native
     // tick retries once the audio has warmed, instead of permanently abandoning the sync.
-    if (syncVerdict !== 'corrected') return;
+    if (syncVerdict !== 'corrected') { p._nativeSyncNextAt = Date.now() + 60000; return; }
     p._pendingNativeSyncRel = null; // corrected — apply once and stop retrying
     if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
+    if ((parseInt(p.audioTrack, 10) || 0) !== audio) { p._pendingNativeSyncRel = rel; return; }
     window.TriboonTV.updateActiveSubtitle(JSON.stringify({
       subtitleRel: rel, subtitleUrl: syncUrl,
       subtitleLang: payload.lang, subtitleLabel: payload.label, subtitleShift: 0,
     }));
-    toast('Subtitles synced to this video');
+    toast(subtitleSyncToast(r.headers.get('x-triboon-subsync-shift')));
+    notePlaybackIssue('subs', `subtitle synced at ${at}s: ${subtitleSyncToast(r.headers.get('x-triboon-subsync-shift'))}`, 0);
   } catch {
     // transient — leave queued so the next native tick retries (capped above)
   } finally {
@@ -17719,6 +17898,9 @@ async function setSubtitle(rel, opts = {}) {
     const info = typeof rel === 'string' && rel.startsWith('os:') ? osTrackInfo(rel) : null;
     const definitiveMiss = !!(e && (e.noSubtitles || e.status === 404));
     if (info && e && e.noSubtitles) rememberSubtitleMiss(info.lang, e.message);
+    notePlaybackIssue('subs', 'subtitle search failed' + (info ? ' (' + info.lang + ')' : '') + ' — '
+      + ((e && e.message) || 'error') + (e && e.status ? ' [HTTP ' + e.status + ']' : '')
+      + (opts.startup ? (definitiveMiss ? ' — stopping quietly' : ' — will retry quietly') : ''), 0);
     if (opts.startup) {
       // Silent on startup: a warming search/mount is normal seconds into playback — retry
       // quietly instead of toasting; a definitive miss just stops (rememberSubtitleMiss noted it).
@@ -17739,12 +17921,21 @@ async function setSubtitle(rel, opts = {}) {
     try {
       const extractionMode = opts.startup ? 'startup' : 'manual';
       let url = subtitleUrlForRel(p, rel, { mode: extractionMode });
+      // The web <video> path applies the remembered sync offset ITSELF (applySubShiftToCues
+      // in applySubtitleTrack, so ±0.5s taps work on live cues). Asking the server to bake
+      // the same &shift into the VTT too moved every saved offset twice: a +1.0s nudge from
+      // last night came back as +2.0s tonight, and "Reset sync" still left +1.0s. Native
+      // players keep &shift in their payload URL (Android strips it; the shell applies once).
+      url = webSubtitleFetchUrl(url);
       let r = await fetch(url, subSignal ? { signal: subSignal } : {});
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         const info = rel.startsWith('os:') ? osTrackInfo(rel) : null;
         const noResults = info ? subtitleResponseNoResults(info.lang, r.status, j) : '';
         if (noResults && rel.startsWith('os:')) rememberSubtitleMiss(info.lang, noResults);
+        notePlaybackIssue('subs', 'subtitle ' + rel.slice(0, 48) + ' failed to download — HTTP ' + r.status
+          + (j.detail || j.error ? ': ' + String(j.detail || j.error).slice(0, 90) : '')
+          + (opts.startup ? ' (startup, quiet)' : ''), 0);
         if (rel.startsWith('em:') && canAutoSubtitle(p)) {
           const detail = String(j.detail || j.error || '');
           toast(r.status === 504 || /preparing|timed out|too long/i.test(detail) ? 'Built-in subtitles are still preparing - using online subtitles' : 'Built-in subtitles failed - using online subtitles');
@@ -17879,24 +18070,46 @@ function subtitleMediaNow(p) {
   const v = $('video');
   const raw = Math.max(0, (v && Number.isFinite(v.currentTime) ? v.currentTime : 0) || 0);
   if (!p || (p.item && p.item.type === 'live')) return raw;
+  const now = Date.now();
   const moving = !!(v && !v.paused && !v.seeking && v.readyState >= 3);
+  // Same rules as the Android SubtitleSync clock. A skip holds the words on the
+  // new minute while the old clock is still talking. A buffer keeps the frozen
+  // line. A jump of many minutes is resume or turning captions on late.
+  const landUntil = Number(p._subSeekUntil) || 0;
+  const landAt = Number(p._subSeekAt);
+  if (landUntil && now <= landUntil && Number.isFinite(landAt) && landAt >= 0) {
+    if (Math.abs(raw - landAt) > 3) {
+      p._subShown = landAt;
+      p._subSlip = 0;
+      p._subFrozen = true;
+      return landAt;
+    }
+    p._subSeekUntil = 0;
+    const landed = Math.max(0, raw);
+    p._subShown = landed;
+    p._subShownWall = now;
+    p._subSlip = 0;
+    p._subFrozen = false;
+    return landed;
+  }
+  if (p._subShown == null) p._subShown = raw;
   if (!moving) {
-    if (p._subShown == null) p._subShown = raw;
     p._subFrozen = true;
     return Math.max(0, p._subShown - (p._subSlip || 0));
   }
-  if (p._subFrozen && p._subShown != null && p._subShownWall) {
-    const wallSec = Math.max(0, (Date.now() - p._subShownWall) / 1000);
-    const jump = raw - p._subShown;
+  const jump = raw - p._subShown;
+  if (p._subShownWall && jump > 2) {
+    const wallSec = Math.max(0, (now - p._subShownWall) / 1000);
     // A late tick while the movie kept playing has jump ≈ wall. Follow it.
     // Only a clock that leaps past the wait is a stall, not a new minute.
-    if (jump > 2 && jump > wallSec + 1.5) {
-      p._subSlip = (p._subSlip || 0) + jump;
-    }
+    // A jump of many minutes is subtitles turning on late, or a missed seek.
+    // Holding that as slip paints the opening line half an hour later.
+    if (jump > wallSec + 1.5 && jump <= 30) p._subSlip = (p._subSlip || 0) + jump;
+    else if (jump > 30) p._subSlip = 0;
   }
   p._subFrozen = false;
   p._subShown = raw;
-  p._subShownWall = Date.now();
+  p._subShownWall = now;
   return Math.max(0, raw - (p._subSlip || 0));
 }
 function activeSubtitleCues(tt) {
@@ -17927,6 +18140,7 @@ function renderSubCues() {
 function applySubtitleTrack() {
   const v = $('video'); const p = S.playing; if (!p) return;
   const seq = (p._subSeq || 0) + 1; p._subSeq = seq;
+  p._subRebaseTries = 0;
   if (p._subBlobUrl) {
     try { URL.revokeObjectURL(p._subBlobUrl); } catch {}
     p._subBlobUrl = '';
@@ -17948,7 +18162,7 @@ function applySubtitleTrack() {
     p._subBlobUrl = URL.createObjectURL(new Blob([p._subVttText], { type: 'text/vtt;charset=utf-8' }));
     tr.src = p._subBlobUrl;
   } else {
-    tr.src = subtitleUrlForRel(p, p.subTrack, { mode: 'manual' });
+    tr.src = webSubtitleFetchUrl(subtitleUrlForRel(p, p.subTrack, { mode: 'manual' }));
   }
   const arm = () => {
     if (!S.playing || S.playing !== p || p._subSeq !== seq || !tr.isConnected) return;
@@ -17957,13 +18171,18 @@ function applySubtitleTrack() {
       const tt = tr.track || (v.textTracks && v.textTracks[v.textTracks.length - 1]);
       if (!tt) return;
       try { for (const other of [...(v.textTracks || [])]) if (other !== tt) other.mode = 'disabled'; } catch {}
+      // Hidden first. Chrome leaves cues empty until the track is showing or hidden,
+      // so a resume used to paint the movie's opening lines over minute 5.
+      p._textTrack = tt;
+      tt.mode = 'hidden';
       // SEEK SYNC: server-seek restarts make the <video> timeline 0-based at the seek
       // point, but the VTT cues are movie-absolute — unshifted, the subtitles "start from
       // scratch". Rebase every cue by the stream's start offset. Cues that ENDED before the
       // seek point are REMOVED — clamping them to [0,0] made every line since the episode
       // start paint at once after a skip (the wall-of-text screenshot).
       const off = p.startOffset || 0;
-      if (off > 0 && tt && tt.cues) {
+      const cuesReady = !!(tt.cues && tt.cues.length);
+      if (off > 0 && cuesReady) {
         for (const c of [...tt.cues]) {
           if (c._shifted) continue;
           if (c.endTime - off <= 0.2) { try { tt.removeCue(c); } catch {} continue; }
@@ -17971,11 +18190,12 @@ function applySubtitleTrack() {
           c.endTime = Math.max(0.05, c.endTime - off);
           c._shifted = true;
         }
+      } else if (off > 0 && (p._subRebaseTries = (p._subRebaseTries || 0) + 1) < 40) {
+        setTimeout(arm, 200);
+        return;
       }
       applySubShiftToCues(tt, p._subShift || 0);
-      p._textTrack = tt;
-      tt.mode = 'hidden';            // parse + fire cuechange, but WE paint
-      tt.oncuechange = renderSubCues;
+      tt.oncuechange = () => { if ((p.startOffset || 0) > 0 && tt.cues && [...tt.cues].some((c) => !c._shifted)) arm(); else renderSubCues(); };
       renderSubCues();
     } catch {}
   };
@@ -17983,6 +18203,12 @@ function applySubtitleTrack() {
   tr.addEventListener('error', () => {
     if (!S.playing || S.playing !== p || p._subSeq !== seq || !tr.isConnected) return;
     toast('Subtitles failed to load - try another version');
+    // The <track> element hides the HTTP status. Ask once so the log says 404/500/timeout
+    // instead of "failed".
+    const src = String(tr.src || '');
+    fetch(src, { method: 'GET', headers: { range: 'bytes=0-0' } })
+      .then((r) => notePlaybackIssue('subs', 'subtitle track failed to load — server answered HTTP ' + r.status + ' (' + (r.headers.get('content-type') || 'no type') + ')', 0))
+      .catch((e) => notePlaybackIssue('subs', 'subtitle track failed to load — ' + ((e && e.message) || 'fetch failed'), 0));
   });
   v.appendChild(tr);
   setTimeout(arm, 400); // some WebViews skip the load event for tracks — arm anyway
@@ -17995,6 +18221,10 @@ function setAudio(rel) {
   p.audioTrack = rel;
   if (!p.remuxUrl && !p.transcodeUrl) return toast('Audio selection needs ffmpeg on the server');
   startSource(p.usingTranscode ? 'transcode' : 'remux', currentTime(), { quietSeek: true });
+  // The gap was measured on the track they just left. Measure the one they hear now.
+  if (typeof p.subTrack === 'string' && p.subTrack.startsWith('os:')) {
+    autoSyncSubtitle(p, p.subTrack, subtitleUrlForRel(p, p.subTrack));
+  }
 }
 // Clicking the SAME button again closes; clicking a different one switches menus.
 const tmToggle = (kind) => {
@@ -19732,10 +19962,13 @@ function prefetchTrailerStream(clip) {
   const id = trailerClipId(ref);
   const memo = S._trailerPrefetch || (S._trailerPrefetch = new Map());
   if (memo.has(id)) return;
-  memo.set(id, trailerTokenUrl(ref).catch((e) => {
-    memo.delete(id);
-    throw e;
-  }));
+  // Keep the ORIGINAL promise for the player (it must still see the failure), and mark
+  // it handled on the side. Storing a re-throwing .catch() left an unhandled rejection
+  // every time a prefetch failed with nobody awaiting it yet — on a server without
+  // yt-dlp that was one "app error" per focused title.
+  const pending = trailerTokenUrl(ref);
+  pending.catch(() => { memo.delete(id); });
+  memo.set(id, pending);
 }
 function stopTrailerVideo() {
   const video = $('trailerBox') && $('trailerBox').querySelector('video');
@@ -22262,6 +22495,9 @@ function liveItemForPlayerGuide(ch) {
 function returnToSavedVod(backTo) {
   if (!backTo || !backTo.item) return closePlayerGuide();
   const target = { ...backTo.item, resume: Math.max(0, Math.floor(backTo.resume || backTo.item.resume || 0)) };
+  // "Start over" belonged to THAT press. Coming back from the guide must land on the minute
+  // you left, not at 0:00 — resolvePlaybackResume() zeroes anything still carrying the flag.
+  delete target._startOver;
   S.returnVod = null;
   S._resumingVod = true;
   S.nativeGuideMode = false;
@@ -26025,12 +26261,21 @@ $('searchClearBtn').addEventListener('keydown', (e) => {
     clearSearchQuery();
   }
 });
-function searchAndFocusResults() {
+// Enter, the mic, and a suggestion chip all submit the same way: cancel the keystroke
+// debounce (its late fire used to run a SECOND search that wiped the grid under the focus),
+// then move focus into the results ONLY if the box still holds that query. Typing "bat",
+// pressing OK, and continuing "man" used to yank the highlight out of the keyboard the moment
+// the "bat" posters landed.
+function submitSearchAndFocus() {
   clearTimeout(searchTimer);
-  syncSearchClear();
+  searchTimer = null;
   const q = $('searchInput').value.trim();
   if (!q) { clearSearchResults({ invalidate: true }); $('searchInput').focus(); return; }
-  doSearch().then(() => focusSearchResultsSoon()).catch(() => focusSearchResultsSoon());
+  doSearch().then(() => focusSearchResultsSoon(18, q)).catch(() => focusSearchResultsSoon(18, q));
+}
+function searchAndFocusResults() {
+  syncSearchClear();
+  submitSearchAndFocus();
 }
 $('searchInput').addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); moveSearchDownFromField(); }
@@ -26058,7 +26303,10 @@ function focusSearchResultsNow() {
   focusGrid(0);
   return true;
 }
-function focusSearchResultsSoon(tries = 18) {
+function focusSearchResultsSoon(tries = 18, forQuery = null) {
+  // The viewer kept typing after submitting: the results on screen are for an older word.
+  // Leave the focus in the box; the new search will place it when it lands.
+  if (forQuery !== null && $('searchInput').value.trim() !== forQuery) return;
   if (focusSearchResultsNow()) return;
   if ($('grid') && $('grid').querySelector('.gridMore')) {
     const chips = searchSuggestEls();
@@ -26068,8 +26316,9 @@ function focusSearchResultsSoon(tries = 18) {
   }
   setTimeout(() => {
     if (S.view !== 'search') return;
+    if (forQuery !== null && $('searchInput').value.trim() !== forQuery) return;
     if (focusSearchResultsNow()) return;
-    if (tries > 0) return focusSearchResultsSoon(tries - 1);
+    if (tries > 0) return focusSearchResultsSoon(tries - 1, forQuery);
     const chips = searchSuggestEls();
     if (searchSuggestVisible() && chips.length) return focusSearchSuggest(chips.length - 1);
     $('micBtn').blur();
@@ -26086,7 +26335,7 @@ function submitVoiceSearch(text) {
   const q = String(text || '').trim();
   if (!q) return;
   $('searchInput').value = q;
-  doSearch().then(() => focusSearchResultsSoon()).catch(() => focusSearchResultsSoon());
+  submitSearchAndFocus();
 }
 window.__tvVoice = (text) => {
   if (tvVoiceTarget === 'music' && S.view === 'music') return submitMusicVoiceSearch(text);
@@ -26506,7 +26755,7 @@ function applySearchSuggest(hint) {
   syncSearchClear();
   searchSuggestPicked = true;
   showSearchSuggest(null);
-  doSearch().then(() => focusSearchResultsSoon()).catch(() => focusSearchResultsSoon());
+  submitSearchAndFocus();
 }
 window.addEventListener('resize', () => { if (S.view === 'search') syncSearchSuggestPad(); });
 const SEARCH_CLOSE_SEEDS = [
@@ -26645,6 +26894,7 @@ async function doSearch() {
   // Raw usenet search has no ratings at all — restricted profiles never get the fallback.
   if (!current()) return;
   const lib = (await libJob.catch(() => [])).filter((it) => searchLibraryTitleMatch(q, it.title || it.name || ''));
+  if (!current()) return; // the library wait can lose to a newer keystroke too
   if ((S.maxLevel ?? 4) < 4) {
     if (lib.length) return renderSearchSections([{ name: 'Library', items: lib }]);
     renderGrid([]); $('grid').innerHTML = '<div class="gridMore">No results for this profile.</div>'; return;

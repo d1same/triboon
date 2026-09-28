@@ -92,6 +92,7 @@ import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
@@ -360,6 +361,11 @@ public class MainActivity extends Activity {
     private boolean nativeIssuePauseNoted;
     private long nativeResumeGraceUntilMs;
     private long nativeUserPausedAtMs;
+    // Set only by our own pause/play calls. ExoPlayer's reason covers the rest
+    // (another app took the sound, headphones, a remote command).
+    private String nativePauseCause;
+    private String nativeResumeCause;
+    private int nativeLastPlayWhenReadyReason = Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST;
     private boolean nativeStayedPausedNoted;
     private boolean nativeVideoStarted;
     private boolean nativeVideoMemoryTrimmedDuringBuffer;
@@ -3700,6 +3706,7 @@ public class MainActivity extends Activity {
             Log.w(TAG, "Native handoff mute ignored: " + nativeThrowableMessage(e));
         }
         try {
+            nativePauseCause = "the next title is starting";
             nativePlayer.pause();
         } catch (Throwable e) {
             Log.w(TAG, "Native handoff pause ignored: " + nativeThrowableMessage(e));
@@ -4552,6 +4559,43 @@ public class MainActivity extends Activity {
                 // release the replacement episode as if it belonged to the old one.
                 final ExoPlayer listenerPlayer = nativePlayer;
                 final long listenerPlaybackToken = nativePlaybackToken;
+                // Audio problems never reached the server log: a dead audio sink, an underrun,
+                // or a codec the box could not open all showed up as "silent movie" with
+                // nothing written anywhere. Report each with the codec and channel count.
+                nativePlayer.addAnalyticsListener(new AnalyticsListener() {
+                    @Override public void onAudioSinkError(EventTime eventTime, Exception audioSinkError) {
+                        if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
+                        reportNativePlaybackIssue("audio", "audio output failed — "
+                                + (audioSinkError == null ? "audio sink error" : String.valueOf(audioSinkError.getMessage())), 0L);
+                    }
+                    @Override public void onAudioUnderrun(EventTime eventTime, int bufferSize, long bufferSizeMs, long elapsedSinceLastFeedMs) {
+                        if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
+                        if (elapsedSinceLastFeedMs < 250L) return;
+                        reportNativePlaybackIssue("audio", "audio ran dry for " + elapsedSinceLastFeedMs + "ms (sink buffer " + bufferSizeMs + "ms)", 0L);
+                    }
+                    @Override public void onAudioCodecError(EventTime eventTime, Exception audioCodecError) {
+                        if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
+                        reportNativePlaybackIssue("audio", "audio decoder error — "
+                                + (audioCodecError == null ? "codec error" : String.valueOf(audioCodecError.getMessage())), 0L);
+                    }
+                    @Override public void onAudioInputFormatChanged(EventTime eventTime, Format format, androidx.media3.exoplayer.DecoderReuseEvaluation reuse) {
+                        if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken || format == null) return;
+                        reportNativePlaybackIssue("trace", "audio track " + String.valueOf(format.sampleMimeType)
+                                + " " + format.channelCount + "ch " + format.sampleRate + "Hz"
+                                + (format.language == null ? "" : " " + format.language), 0L);
+                    }
+                    @Override public void onVideoCodecError(EventTime eventTime, Exception videoCodecError) {
+                        if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
+                        reportNativePlaybackIssue("crash", "video decoder error — "
+                                + (videoCodecError == null ? "codec error" : String.valueOf(videoCodecError.getMessage())), 0L);
+                    }
+                    @Override public void onDroppedVideoFrames(EventTime eventTime, int droppedFrames, long elapsedMs) {
+                        if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
+                        // A few dropped frames a minute is normal. A burst is a decoder that cannot keep up.
+                        if (droppedFrames < 30) return;
+                        reportNativePlaybackIssue("trace", "dropped " + droppedFrames + " video frames in " + elapsedMs + "ms — the decoder is behind", 0L);
+                    }
+                });
                 nativePlayer.addListener(new Player.Listener() {
                 @Override public void onPlayerError(PlaybackException error) {
                     if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
@@ -4564,6 +4608,8 @@ public class MainActivity extends Activity {
                         if (userPaused && isNativeRecoverableIoError(error)) {
                             Log.w(TAG, "Native VOD IO while paused (code " + error.errorCode
                                     + "); keeping player, no remount");
+                            reportNativePlaybackIssue("drop", "stream dropped while paused (code " + error.errorCode + ", " + msg
+                                    + ") — keeping the player, it reconnects on resume", 0L);
                             return;
                         }
                         // Remux/transcode reconnect: the load-error policy suppressed the replay-retry, so
@@ -4589,6 +4635,11 @@ public class MainActivity extends Activity {
                             long resumeAt = nativeResumePositionMs();
                             nativeLastAutoResumeSeekMs = SystemClock.elapsedRealtime();
                             nativeBackwardTicks = 0;
+                            // The server sees a closed socket and nothing else. Say what the
+                            // player saw and where it is picking the film back up.
+                            reportNativePlaybackIssue("drop", "stream dropped (code " + error.errorCode + ", " + msg
+                                    + ") — resuming at " + (resumeAt / 1000L) + "s via "
+                                    + (nativeServerSeekMode() ? "a fresh server seek" : "the same direct stream"), 0L);
                             if (nativeServerSeekMode()) {
                                 Log.w(TAG, "Native VOD remux stream dropped (code " + error.errorCode + ", " + msg
                                         + "); resuming at " + resumeAt + "ms (no replay)");
@@ -4703,6 +4754,7 @@ public class MainActivity extends Activity {
 
                 @Override public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
                     if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
+                    nativeLastPlayWhenReadyReason = reason;
                     if ("video".equals(nativeMode) && playWhenReady && nativeVideoStarted) {
                         nativeVideoUnhealthySinceMs = 0L;
                         nativeResumeGraceUntilMs = SystemClock.elapsedRealtime() + NATIVE_VIDEO_RESUME_GRACE_MS;
@@ -4734,7 +4786,8 @@ public class MainActivity extends Activity {
                         if (!nativePercentResumePending) {
                             rememberNativeVideoPosition();
                             web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
-                                    + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
+                                    + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + listenerPlaybackToken
+                                    + "," + jsQuote(playStartWhy(nativeLastPlayWhenReadyReason)) + ")", null);
                         }
                     } else if ("video".equals(nativeMode) && nativeVideoStarted
                             && nativePlayer != null
@@ -4744,7 +4797,8 @@ public class MainActivity extends Activity {
                         markNativeUserPaused();
                         rememberNativeVideoPosition();
                         web.evaluateJavascript("window.__tvNativeVideoPaused && __tvNativeVideoPaused("
-                                + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
+                                + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + listenerPlaybackToken
+                                + "," + jsQuote(takePauseCause()) + ")", null);
                     }
                     scheduleNativeChromeHide();
                 }
@@ -4792,12 +4846,16 @@ public class MainActivity extends Activity {
             nativeQuietSeekHoldPlay = reuseQuietVideo && "video".equals(mode)
                     && nativeServerSeekMode() && !nativePercentResumePending;
             if (nativePercentResumePending || nativeQuietSeekHoldPlay
-                    || AutoResume.keepPauseOnQuietRemount(nativeUserPausedAtMs, true)) nativePlayer.setPlayWhenReady(false);
+                    || AutoResume.keepPauseOnQuietRemount(nativeUserPausedAtMs, true)) {
+                if (nativePauseCause == null) nativePauseCause = "playback is held until the picture is ready";
+                nativePlayer.setPlayWhenReady(false);
+            }
             else nativePlayer.play();
             if (reuseQuietVideo && "video".equals(mode) && web != null
                     && AutoResume.mayReconnectWhilePaused(nativeUserPausedAtMs)) {
                 web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
-                        + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                        + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken
+                        + "," + jsQuote("a quiet remount sent play") + ")", null);
             }
             if ("video".equals(mode) && nativeHasWyzieSubtitle && !nativeSubtitleUrl.isEmpty()) {
                 disableNativeTextTracks();
@@ -5163,10 +5221,55 @@ public class MainActivity extends Activity {
                 && (nativeQuietSeekHoldPlay || nativePercentResumePending);
     }
 
-    private void nativeUserPause() {
+    private void nativeUserPause() { nativeUserPause("the pause button"); }
+
+    private void nativeUserPause(String cause) {
+        nativePauseCause = cause;
         markNativeUserPaused();
         nativeQuietSeekHoldPlay = false;
         if (nativePlayer != null) nativePlayer.pause();
+    }
+
+    private static String jsQuote(String s) {
+        if (s == null || s.isEmpty()) return "''";
+        return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'";
+    }
+
+    // Our own pause calls set nativePauseCause. Anything else uses ExoPlayer's reason,
+    // so a notification is not written down as the pause button.
+    private String takePauseCause() {
+        String cause = nativePauseCause;
+        nativePauseCause = null;
+        if (cause != null && !cause.isEmpty()) return cause;
+        switch (nativeLastPlayWhenReadyReason) {
+            case Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS:
+                return "another sound took the audio";
+            case Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY:
+                return "the headphones came unplugged";
+            case Player.PLAY_WHEN_READY_CHANGE_REASON_REMOTE:
+                return "a remote command stopped the picture";
+            case Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM:
+                return "the file ended";
+            case Player.PLAY_WHEN_READY_CHANGE_REASON_SUPPRESSED_TOO_LONG:
+                return "playback was held too long";
+            case Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST:
+                return "the player was told to stop";
+            default:
+                return "the player stopped";
+        }
+    }
+
+    private static String playStartWhy(int reason) {
+        switch (reason) {
+            case Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS:
+                return "the sound came back";
+            case Player.PLAY_WHEN_READY_CHANGE_REASON_REMOTE:
+                return "a remote command started the picture";
+            case Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST:
+                return "play was requested";
+            default:
+                return "the picture started";
+        }
     }
 
     // playWhenReady, not isPlaying(): a remux remount has playWhenReady=false and isPlaying=false.
@@ -5186,6 +5289,9 @@ public class MainActivity extends Activity {
 
     private void resumeNativeVideoInPlace() {
         if (nativePlayer == null) return;
+        String resumeWhy = nativeResumeCause != null && !nativeResumeCause.isEmpty()
+                ? nativeResumeCause : "the play button";
+        nativeResumeCause = null;
         boolean remux = nativeServerSeekMode();
         // Dedicated Play / lock-screen Play (not toggle) used to remount again while the first
         // remux pipe was still coming up — two 4K buffers, spinner or a dead app.
@@ -5212,7 +5318,8 @@ public class MainActivity extends Activity {
         // User hit Play — recovery must be allowed even if PLAYING never fires on a dead pipe.
         if (web != null) {
             web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
-                    + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                    + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken
+                    + "," + jsQuote(resumeWhy) + ")", null);
         }
         if ("video".equals(nativeMode) && (state == Player.STATE_IDLE || state == Player.STATE_ENDED)) {
             long at = nativeResumePositionMs();
@@ -5256,6 +5363,7 @@ public class MainActivity extends Activity {
         if (nativePlayer == null) return;
         nativeSeekHandler.removeCallbacks(nativeRemuxInPlaceResumeCheck);
         nativeUserPausedAtMs = 0L;
+        nativePauseCause = "a reconnect is rebuilding the picture";
         nativePlayer.setPlayWhenReady(false);
         requestNativeVideoSeek(nativeResumePositionMs(), true);
     }
@@ -5293,8 +5401,10 @@ public class MainActivity extends Activity {
         nativeSubtitleShownWallMs = SystemClock.elapsedRealtime();
         nativeResumeGraceUntilMs = SystemClock.elapsedRealtime()
                 + (nativeServerSeekMode() ? NATIVE_VIDEO_REMUX_RESUME_GRACE_MS : NATIVE_VIDEO_RESUME_GRACE_MS);
+        String resumeWhy = resume ? "a reconnect moved the picture" : "a skip moved the picture";
         web.evaluateJavascript("window.__tvNativeVideoResuming && __tvNativeVideoResuming("
-                + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                + nativePosSecondsPrecise() + "," + nativeDurSeconds() + "," + nativePlaybackToken
+                + "," + jsQuote(resumeWhy) + ")", null);
         // Pass FRACTIONAL seconds (ms precision): the server -ss and the &start= URL both accept a
         // fractional start, so a resume no longer floors to the whole second (was up to ~1s backward).
         // Transcode (accurate -ss) becomes frame-exact; `resume` (a reconnect, not a user seek) tells the
@@ -8784,9 +8894,10 @@ public class MainActivity extends Activity {
                             if (!repeat) nativeTogglePlayPause();
                             return true;
                         case KeyEvent.KEYCODE_MEDIA_PLAY:
-                            if (!repeat) resumeNativeVideoInPlace(); return true;
+                            if (!repeat) { nativeResumeCause = "the remote sent play"; resumeNativeVideoInPlace(); }
+                            return true;
                         case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                            if (!repeat) nativeUserPause();
+                            if (!repeat) nativeUserPause("the remote sent pause");
                             return true;
                         case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
                             nativeSeekBy(30000);
@@ -8820,9 +8931,10 @@ public class MainActivity extends Activity {
                         if (!repeat) nativeTogglePlayPause();
                         return true;
                     case KeyEvent.KEYCODE_MEDIA_PLAY:
-                        if (!repeat) resumeNativeVideoInPlace(); return true;
+                        if (!repeat) { nativeResumeCause = "the remote sent play"; resumeNativeVideoInPlace(); }
+                        return true;
                     case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                        if (!repeat) nativeUserPause();
+                        if (!repeat) nativeUserPause("the remote sent pause");
                         return true;
                     case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
                         nativeSeekBy(30000);
@@ -8966,10 +9078,11 @@ public class MainActivity extends Activity {
                 nativeTogglePlayPause();
                 return true;
             case "play":
+                nativeResumeCause = "a media key sent play";
                 resumeNativeVideoInPlace();
                 return true;
             case "pause":
-                nativeUserPause();
+                nativeUserPause("a media key sent pause");
                 return true;
             case "fast_forward":
                 nativeSeekBy(30000L);
@@ -9209,8 +9322,11 @@ public class MainActivity extends Activity {
         if (nativePlayer != null && !inPip) {
             // Remember the moment a call or home-press stopped the show, so Play
             // after a long gap starts a fresh stream instead of the dead one.
-            if (nativeWantsPause() || nativeHoldWillAutoPlay()) nativeUserPause();
-            else nativePlayer.pause();
+            if (nativeWantsPause() || nativeHoldWillAutoPlay()) nativeUserPause("the app left the screen");
+            else {
+                nativePauseCause = "the app left the screen";
+                nativePlayer.pause();
+            }
         }
         if (web != null) {
             // Update the hidden WebView with ExoPlayer's exact position, then issue keepalive watch

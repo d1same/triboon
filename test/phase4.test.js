@@ -368,7 +368,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.ok(serverForPolicy.includes('function parseCapsQuery(raw) {')
     && serverForPolicy.includes("caps: parseCapsQuery(ctx.url.searchParams.get('caps'))"),
     'Sources search should parse native device caps into the server scoring policy');
-  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, runtimeMin, tmdbId, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.akaTitles = [\s\S]+policy\.otherYears = [\s\S]+policy\.mediaType = mediaType[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.wantedYear[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
+  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, articleSiblings, runtimeMin, tmdbId, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.akaTitles = [\s\S]+policy\.otherYears = [\s\S]+policy\.articleSiblings = [\s\S]+policy\.mediaType = mediaType[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.wantedYear[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
     'Server playback policy should preserve media-type/language/year/aka/device hints for the scorer and verifier');
   // The restored-page year gap + same-title films: search/play/prepare pull catalog facts (year,
   // alternative titles, other same-title years) from TMDB before building the policy, so a
@@ -2546,6 +2546,108 @@ test('music search supports voice and TV result focus without side-note clutter'
     'TV Music search results should render as larger two-column song cards with clear focus');
 });
 
+test('logging contract: every failure names its cause — ffmpeg tail, HTTP 5xx, app errors, audio, sources, subtitles', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const bridge = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'ui', 'bridge.js'), 'utf8');
+
+  // ffmpeg: the reason is the LAST line of stderr. Keep the tail, log the tail, once per death,
+  // into the failure log AND the play story. The old head-slice logged the banner every time.
+  assert.match(serverSrc, /function ffmpegErrorTail\(stderrTail, max = 320\)/);
+  assert.match(serverSrc, /function noteFfmpegDeath\(kind, vf, code, stderrTail, ctx = \{\}\)[\s\S]+debug\.fail\(kind,[\s\S]+debug\.issue\(line\);[\s\S]+story\.noteMount\(vf\.id, line\)/);
+  assert.match(serverSrc, /noteFfmpegDeath\('remux', vf, codeNum, err, \{ startSeconds, audio: audioMode \}\)/);
+  assert.match(serverSrc, /noteFfmpegDeath\('transcode', vf, codeNum, err, \{ startSeconds, audio: audioMode \}\)/);
+  assert.match(serverSrc, /noteFfmpegDeath\('hls', vf, codeNum, err/);
+  assert.match(serverSrc, /noteFfmpegDeath\('hls seek', sess\.vf \|\| null, codeNum, err/);
+  assert.ok(!/err\.slice\(0, 400\)/.test(serverSrc), 'no ffmpeg death logs the stderr HEAD any more');
+  assert.ok(!/if \(err\.length < 8000\) err \+= d;/.test(serverSrc), 'no ffmpeg stderr buffer stops recording before the death line');
+  // Live TV keeps head (HTTP status for the retry decision) AND tail (death line), and a
+  // remux that dies after it had video is written as a failure, not a clean "ended".
+  assert.match(serverSrc, /function keepFfmpegStderr\(buf, chunk\)[\s\S]+return `\$\{next\.slice\(0, 2000\)\}\\n\.\.\.\\n\$\{next\.slice\(-5000\)\}`;/);
+  assert.strictEqual((serverSrc.match(/= keepFfmpegStderr\((err|errBuf), d\)/g) || []).length, 2, 'both live remux paths keep head+tail');
+  assert.match(serverSrc, /live remux died mid-stream \(exit \$\{codeNum\}\) — reason: \$\{ffmpegErrorTail\(err\)/);
+  assert.match(serverSrc, /live remux \(shared\) died mid-stream \(exit \$\{code\}\) — reason: \$\{ffmpegErrorTail\(errBuf\)/);
+  assert.match(serverSrc, /debug\.fail\('iptv', `"\$\{ch\.name\}" could not start \(exit \$\{codeNum\}, \$\{reason\}\) — every source tried — reason: \$\{ffmpegErrorTail\(err, 400\)/);
+  assert.match(serverSrc, /debug\.log\('play', `remux mount=\$\{vf\.id\} start=[\s\S]+codec=[\s\S]+audio=\$\{audioMode\}`\)/, 'the audio path decision is written (copy / aac / stereo-aac)');
+
+  // HTTP: a route crash carries its stack top; an intentional 5xx is still written; a
+  // failure after headers went out is written instead of a bare res.end().
+  assert.match(serverSrc, /debug\.fail\('http', `\$\{route\} crashed: \$\{\(e && e\.message\) \|\| e\}\$\{top \? ` @ \$\{top\}` : ''\}`\)/);
+  assert.match(serverSrc, /else if \(status >= 500\) \{\s*debug\.fail\('http', `\$\{route\} \$\{status\}: \$\{e\.message\}`\)/);
+  assert.match(serverSrc, /failed after the reply started/);
+  assert.ok(!/console\.error\('\[500\]', p, e\.message\)/.test(serverSrc));
+
+  // Play failure: each tried source or failed indexer is named WITH its reason.
+  assert.match(serverSrc, /function playFailDetail\(e\)[\s\S]+return name && why \? `\$\{name\}: \$\{why\}` : \(name \|\| why\);[\s\S]+` — tried: \$\{rows\.join\(' \| '\)\}`/);
+
+  // Pieces: the file stream writes slow and dead pieces into the story of the mount that owns it.
+  assert.match(serverSrc, /function bindMountTrouble\(vf\)[\s\S]+v\.onTrouble = \(text\) => story\.noteMount\(vf\.id, text\)/);
+  assert.strictEqual((serverSrc.match(/bindMountTrouble\(vf\);\s*story\.bindMount\(vf\.id/g) || []).length, 2, 'both play routes bind the trouble hook before the story');
+
+  // Client issue kinds: audio and app errors are accepted, and a crash / app error is written
+  // even with debug logging off.
+  assert.match(serverSrc, /audio: 'audio',\s*ui: 'app error',/);
+  assert.match(serverSrc, /if \(kind === 'ui' \|\| kind === 'crash'\) debug\.fail\(kind === 'ui' \? 'ui' : 'player'/);
+
+  // Web: a JavaScript error or an unhandled promise in the app reaches the server log with
+  // the message and the code spot, rate-limited, with or without a movie playing.
+  assert.match(ui, /function noteUiIssue\(detail\)[\s\S]+if \(\+\+_uiIssueCount > 6\) return;[\s\S]+kind: 'ui', detail: text,/);
+  assert.match(ui, /window\.addEventListener\('error', \(ev\) => \{[\s\S]+noteUiIssue\(uiErrorDetail\(ev\.error \|\| null, ev\.message\) \+ where\);/);
+  assert.match(ui, /window\.addEventListener\('unhandledrejection', \(ev\) => \{[\s\S]+if \(r && r\.status === 401\) return;[\s\S]+noteUiIssue\('unhandled promise: '/);
+  // Web: audio path decisions, player-path switches, and subtitle failures say why.
+  assert.match(ui, /notePlaybackIssue\('audio', 'this device cannot play ' \+ \(audioDescriptorForClient\(selectedPlayerAudioTrack\(p\)\) \|\| 'this audio'\) \+ ' natively/);
+  assert.match(ui, /notePlaybackIssue\('source', 'direct play did not start here — switching to server remux', 0\);/);
+  assert.match(ui, /notePlaybackIssue\('source', \(p\.usingRemux \? 'remux' : 'direct play'\) \+ ' did not start here — switching to full transcode', 0\);/);
+  assert.match(ui, /notePlaybackIssue\('source', 'every player path failed on this file/);
+  assert.match(ui, /notePlaybackIssue\('subs', 'subtitle search failed'/);
+  assert.match(ui, /notePlaybackIssue\('subs', 'subtitle ' \+ rel\.slice\(0, 48\) \+ ' failed to download — HTTP ' \+ r\.status/);
+  assert.match(ui, /subtitle track failed to load — server answered HTTP ' \+ r\.status/);
+
+  // Android: audio sink / underrun / codec errors and stream drops reach the server log.
+  assert.match(java, /nativePlayer\.addAnalyticsListener\(new AnalyticsListener\(\) \{[\s\S]+onAudioSinkError[\s\S]+reportNativePlaybackIssue\("audio"[\s\S]+onAudioUnderrun[\s\S]+onAudioCodecError[\s\S]+onVideoCodecError/);
+  assert.match(java, /reportNativePlaybackIssue\("drop", "stream dropped \(code " \+ error\.errorCode \+ ", " \+ msg\s*\+ "\) — resuming at "/);
+
+  // Windows: mpv's own error text reaches the page, never a fixed "Windows player error" alone.
+  assert.match(bridge, /function playerErrorText\(event\)[\s\S]+replace\(\/https\?:\\\/\\\/\\S\+\/gi, '\[url\]'\)/);
+  assert.match(bridge, /case 'error': callPage\('__tvNativeVideoError', \[playerErrorText\(event\), pos, duration, token\]\); break;/);
+});
+
+test('resume/subtitle/search contract: nudge applied once, guide return keeps the minute, search focus follows the last word', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const rust = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'src-tauri', 'src', 'player.rs'), 'utf8');
+
+  // Subtitle nudge: the server bakes &shift into the VTT AND the web player moves the cues
+  // again in applySubShiftToCues. The web <track> / fetch URL must therefore never carry
+  // &shift — otherwise a 1s nudge lands as 2s.
+  assert.match(ui, /function webSubtitleFetchUrl\(url\) \{[\s\S]+u\.searchParams\.delete\('shift'\);/);
+  assert.match(ui, /let url = subtitleUrlForRel\(p, rel, \{ mode: extractionMode \}\);[\s\S]{0,700}?url = webSubtitleFetchUrl\(url\);\s*let r = await fetch\(url/);
+  assert.match(ui, /tr\.src = webSubtitleFetchUrl\(subtitleUrlForRel\(p, p\.subTrack, \{ mode: 'manual' \}\)\);/);
+  // Windows libmpv: after a server-side seek the stream clock starts at 0, so sub-delay
+  // must subtract the stream offset, and the baked &shift must be stripped from sub-add.
+  assert.match(rust, /fn subtitle_delay\(shift: f64, stream_offset: f64\) -> f64/);
+  assert.match(rust, /fn strip_shift_param\(url: &str\) -> String/);
+  assert.match(rust, /let url = strip_shift_param\(&subtitle\.url\);\s*mpv\.command\(\s*"sub-add",\s*&\[url\.as_str\(\), "select"/);
+  assert.match(rust, /mpv\.set_property\("sub-delay", subtitle_delay\(subtitle\.shift, stream_offset\)\)/);
+  // Framerate drift between the two witness slices is named in the log; the nearest slice still wins.
+  assert.match(serverSrc, /if \(gap > 600\) driftMsPer30s = /);
+  assert.match(serverSrc, /subtitle drifts \$\{Math\.abs\(res\.driftMsPer30s\)\}ms every 30s \(framerate mismatch\)/);
+
+  // Start over is one press. Coming back from the Live TV guide lands on the minute you left.
+  assert.match(ui, /function resolvePlaybackResume\(it\) \{[\s\S]{0,120}if \(it\._startOver\) return \{ \.\.\.it, resume: 0 \};/);
+  assert.match(ui, /function returnToSavedVod\(backTo\) \{[\s\S]+?delete target\._startOver;[\s\S]+?play\(target\)/);
+
+  // Search: one submit path. The debounce is cleared, the word is captured, and the focus
+  // hop is skipped when the viewer has already typed a newer word.
+  assert.match(ui, /function submitSearchAndFocus\(\) \{\s*clearTimeout\(searchTimer\);\s*searchTimer = null;[\s\S]+?focusSearchResultsSoon\(18, q\)/);
+  assert.match(ui, /function focusSearchResultsSoon\(tries = 18, forQuery = null\) \{[\s\S]{0,400}if \(forQuery !== null && \$\('searchInput'\)\.value\.trim\(\) !== forQuery\) return;/);
+  assert.strictEqual((ui.match(/doSearch\(\)\.then\(\(\) => focusSearchResultsSoon\(\)\)/g) || []).length, 0, 'voice and suggestion picks go through submitSearchAndFocus');
+  assert.match(ui, /await libJob\.catch\(\(\) => \[\]\)\)\.filter\([\s\S]{0,120}\n\s*if \(!current\(\)\) return;/);
+  // Trailer prefetch: a failed token fetch is not an unhandled rejection and is not memoised.
+  assert.match(ui, /const pending = trailerTokenUrl\(ref\);\s*pending\.catch\(\(\) => \{ memo\.delete\(id\); \}\);\s*memo\.set\(id, pending\);/);
+});
+
 test('subtitle startup preference contract: admin can toggle built-in captions', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
@@ -2724,7 +2826,7 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'subtitle selection should keep the verified VTT body for the player attach path');
   assert.match(ui, /p\.subTrack\.startsWith\('os:'\) \|\| p\.subTrack\.startsWith\('rs:'\) \|\| p\.subTrack\.startsWith\('em:'\)/,
     'built-in subtitle rels should be allowed through the web subtitle attach path');
-  assert.match(ui, /tr\.src = subtitleUrlForRel\(p, p\.subTrack, \{ mode: 'manual' \}\)/,
+  assert.match(ui, /tr\.src = webSubtitleFetchUrl\(subtitleUrlForRel\(p, p\.subTrack, \{ mode: 'manual' \}\)\)/,
     'fallback web subtitle attachment should use the manual extraction window for built-in subtitles');
   assert.match(ui, /URL\.createObjectURL\(new Blob\(\[p\._subVttText\], \{ type: 'text\/vtt;charset=utf-8' \}\)\)/,
     'web subtitles should attach the already-fetched VTT text through a blob URL');
@@ -2773,8 +2875,14 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'embedded subtitle extraction should read through the background stream lane');
   // The on-demand alass sub-sync pulls the mount's AUDIO; it MUST read through the background lane
   // too, or enabling CC mid-playback steals the player's connections (startup/seek lane) and buffers.
-  assert.match(server, /async function onDemandSubSync\(vf, vtt, uid\) \{[\s\S]+const selfUrl = localMediaInput\(vf\) \|\| `http:\/\/127\.0\.0\.1:\$\{server\.address\(\)\.port\}\/api\/stream\/\$\{vf\.id\}\?t=\$\{auth\.streamToken\(uid, vf\.id\)\}&priority=background`;/,
-    'on-demand subtitle sync must pull audio through the background NNTP lane so CC never starves the active player');
+  assert.match(server, /async function measureSubSyncWindow\(dir, tag, streamUrl, windowed, audioIndex\) \{[\s\S]+extractSyncSample\(streamUrl, wav, windowed\.originMs \/ 1000, audioIndex\);[\s\S]+spawnSubSync\(wav, inSrt, outSrt, \['--no-split', '--disable-fps-guessing'\]\)[\s\S]+syncShiftMs\(windowed\.srt, out\)/,
+    'one sync slice pulls its own 30s of audio and hands alass only the lines from that slice');
+  assert.match(server, /async function onDemandSubSync\(vf, vtt, uid, atSec = 0, audioIndex = 0\) \{[\s\S]+speechWindow\(srt, Math\.round\(Math\.max\(0, at - 30\) \* 1000\)\)[\s\S]+const selfUrl = localMediaInput\(vf\) \|\| `http:\/\/127\.0\.0\.1:\$\{server\.address\(\)\.port\}\/api\/stream\/\$\{vf\.id\}\?t=\$\{auth\.streamToken\(uid, vf\.id\)\}&priority=background`;[\s\S]+measureSubSyncWindow\(dir, 'a', selfUrl, spoken, audioIndex\)[\s\S]+measureSubSyncWindow\(dir, 'b', selfUrl, witness, audioIndex\)[\s\S]+Math\.abs\(second - shiftMs\) > 1500[\s\S]+witnesses disagree/,
+    'on-demand subtitle sync samples the spoken stretch near the playhead and a second slice must agree before the gap is applied');
+  assert.match(server, /'x-triboon-subsync-shift': String\(vf\._subSyncShift\.get\(syncKey\) \?\? 0\)/,
+    'the corrected subtitle reports how far the words moved');
+  assert.match(ui, /function subtitleSyncToast\(shiftHeader\)[\s\S]+Subtitles moved \$\{\(Math\.abs\(ms\) \/ 1000\)\.toFixed\(1\)\}s/,
+    'the player tells the viewer how far the subtitles moved');
   assert.match(server, /function subtitleVttHasCues\(vtt\) \{[\s\S]+-->/,
     'embedded subtitle extraction should require real cue timings before treating WebVTT as valid');
   assert.match(server, /if \(!subtitleVttHasCues\(vtt\)\) return fail\(new Error\('embedded subtitle extraction returned no text cues'\)\);[\s\S]+vf\._subFailures\.delete\(track\);[\s\S]+vf\._subCache\.set\(track, vtt\)/,
@@ -2871,7 +2979,7 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'user-initiated resume should cancel pause warm-ahead before and after play starts');
   assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+if \(!p\) return;/,
     'manual seeks should cancel old pause warm-ahead ranges before changing position');
-  assert.match(ui, /window\.__tvNativeVideoPlaying = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+clearPauseIdleExit\(\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+\};[\s\S]+window\.__tvNativeVideoPaused = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+armPauseIdleExit\(p\);[\s\S]+saveWatch\(true\);/,
+  assert.match(ui, /window\.__tvNativeVideoPlaying = \(pos, dur, token, why\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+clearPauseIdleExit\(\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+\};[\s\S]+window\.__tvNativeVideoPaused = \(pos, dur, token, why\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+paused at[\s\S]+why[\s\S]+armPauseIdleExit\(p\);[\s\S]+saveWatch\(true\);/,
     'native ExoPlayer should persist pause progress, arm the 1-hour idle exit, and skip competing read-ahead');
   assert.match(ui, /const PAUSE_IDLE_EXIT_MS = 60 \* 60 \* 1000;[\s\S]+function armPauseIdleExit\([\s\S]+p\.item\.type === 'live'[\s\S]+closePlayer\(\);/,
     'a VOD pause that sits 1 hour must stop and return to details; Play before that remounts the same file');
@@ -2891,12 +2999,16 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'Play after a crash must hide the circles; remux Play uses leftover when live and remounts only a dead pipe; a second Play while remounting is ignored');
   assert.match(android, /NATIVE_LONG_PAUSE_REMOUNT_MS = 45000L[\s\S]+pausedForMs >= NATIVE_LONG_PAUSE_REMOUNT_MS[\s\S]+nativeRemuxBufferLooksLive\(\)/,
     'a phone-call length pause remounts the same file instead of playing a dead leftover');
-  assert.match(android, /protected void onPause\(\) \{[\s\S]+nativeWantsPause\(\) \|\| nativeHoldWillAutoPlay\(\)\) nativeUserPause\(\)/,
-    'leaving the app, including a phone call, remembers when playback stopped');
+  assert.match(android, /protected void onPause\(\) \{[\s\S]+nativeWantsPause\(\) \|\| nativeHoldWillAutoPlay\(\)\) nativeUserPause\("the app left the screen"\)/,
+    'leaving the app, including a phone call, remembers when playback stopped and the log says the app left');
   assert.match(android, /private void nativeUserPause\(\) \{[\s\S]+markNativeUserPaused\(\);[\s\S]+nativeQuietSeekHoldPlay = false;[\s\S]+nativePlayer != null\) nativePlayer\.pause\(\)/,
     'pause during the opening wait must stay paused when the picture becomes ready');
-  assert.match(ui, /window\.__tvNativeVideoResuming = \(pos, dur, token\) => \{[\s\S]+p\.nativePaused = false;/,
-    'user Play must clear nativePaused so a dead remux pipe can recover');
+  assert.match(ui, /window\.__tvNativeVideoResuming = \(pos, dur, token, why\) => \{[\s\S]+why[\s\S]+p\.nativePaused = false;/,
+    'user Play must clear nativePaused so a dead remux pipe can recover, and the log names who sent play');
+  assert.match(android, /another sound took the audio[\s\S]+the play button[\s\S]+a reconnect moved the picture/,
+    'a pause log names audio focus, the play button, or a reconnect instead of guessing the viewer');
+  assert.doesNotMatch(ui, /the viewer pressed play/,
+    'a restart must not be written as the viewer pressing play');
   assert.match(ui, /function remuxResumeLooksLive\(v\) \{[\s\S]+ranges\.end\(i\) > t \+ 0\.4[\s\S]+function togglePlay\(\) \{[\s\S]+p\.usingRemux \|\| p\.usingTranscode[\s\S]+if \(p\._webResuming\) \{ updPP\(\); return; \}[\s\S]+if \(remuxResumeLooksLive\(v\)\) \{[\s\S]+requestVideoPlay\(v\)[\s\S]+remountWebRemuxResume\(p\)/,
     'web remux Play after pause uses leftover when live and remounts only a dead pipe; a second Play while remounting does not spawn another ffmpeg');
   assert.match(ui, /function setQuality\(q\) \{[\s\S]+startSource\(p\.remuxUrl \? 'remux' : 'direct', at, \{ quietSeek: true \}\)[\s\S]+startSource\('transcode', at, \{ quietSeek: true \}\)/,
@@ -4130,8 +4242,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native playback should not allow provider redirects to switch protocols after URL validation');
   assert.match(android, /setAudioAttributes\(new AudioAttributes\.Builder\(\)[\s\S]+setUsage\(C\.USAGE_MEDIA\)[\s\S]+setHandleAudioBecomingNoisy\(true\)/,
     'Android ExoPlayer should request media audio focus and pause on noisy-device changes');
-  assert.match(android, /protected void onPause\(\) \{[\s\S]+boolean inPip = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.N && isInPictureInPictureMode\(\);[\s\S]+if \(nativePlayer != null && !inPip\) \{[\s\S]+nativeWantsPause\(\) \|\| nativeHoldWillAutoPlay\(\)\) nativeUserPause\(\);[\s\S]+else nativePlayer\.pause\(\);[\s\S]+__tvNativeVideoProgress[\s\S]+__tvPlaybackBackgrounded[\s\S]+document\.querySelectorAll\('video'\)\.forEach\(v=>v\.pause\(\)\)[\s\S]+if \(!inPip && !musicPlaying\) \{[\s\S]+web\.evaluateJavascript\(checkpoint, ignored -> suspendWeb\.run\(\)\);[\s\S]+web\.postDelayed\(suspendWeb, 250L\);/,
-    'Android backgrounding should remember a phone-call pause, then checkpoint exact native progress before pausing playback/WebView timers, while keeping system PiP playback and background music alive');
+  assert.match(android, /protected void onPause\(\) \{[\s\S]+boolean inPip = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.N && isInPictureInPictureMode\(\);[\s\S]+if \(nativePlayer != null && !inPip\) \{[\s\S]+nativeWantsPause\(\) \|\| nativeHoldWillAutoPlay\(\)\) nativeUserPause\("the app left the screen"\);[\s\S]+nativePauseCause = "the app left the screen";[\s\S]+nativePlayer\.pause\(\);[\s\S]+__tvNativeVideoProgress[\s\S]+__tvPlaybackBackgrounded[\s\S]+document\.querySelectorAll\('video'\)\.forEach\(v=>v\.pause\(\)\)[\s\S]+if \(!inPip && !musicPlaying\) \{[\s\S]+web\.evaluateJavascript\(checkpoint, ignored -> suspendWeb\.run\(\)\);[\s\S]+web\.postDelayed\(suspendWeb, 250L\);/,
+    'Android backgrounding should remember a phone-call pause, name it as leaving the screen, then checkpoint exact native progress before pausing playback/WebView timers, while keeping system PiP playback and background music alive');
   assert.doesNotMatch(android, /protected void onPause\(\) \{[\s\S]{0,240}closeNativePlayback\(true\);/,
     'Android onPause must not close native playback; that caused resume/PiP churn');
   assert.match(android, /protected void onUserLeaveHint\(\) \{[\s\S]+super\.onUserLeaveHint\(\);[\s\S]+enterNativePictureInPictureIfUseful\(\);[\s\S]+onPictureInPictureModeChanged\(boolean isInPictureInPictureMode, Configuration newConfig\)[\s\S]+PictureInPictureParams\.Builder\(\)[\s\S]+new Rational\(16, 9\)/,
@@ -4214,7 +4326,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'mid-play source swap must stay quiet so the user never sees Preparing or a loader');
   assert.match(ui, /catch \(e\) \{[\s\S]+opts\.allowMidstreamAdvance && e && e\.status === 404[\s\S]+reMountAndResume\(opts\.reason/,
     'a server restart that lost the play session should re-mount the title instead of being mistaken for source exhaustion');
-  assert.match(ui, /window\.__tvNativeVideoReady = \(pos, dur, token\) => \{[\s\S]+p\.nativeReady = true;[\s\S]+window\.__tvNativeVideoPlaying = \(pos, dur, token\) => \{[\s\S]+markVodPlaybackStarted\(p\);[\s\S]+window\.__tvNativeVideoError = \(msg, pos, dur, token\) => \{[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\(msg \|\| 'native playback interrupted'\);/,
+  assert.match(ui, /window\.__tvNativeVideoReady = \(pos, dur, token\) => \{[\s\S]+p\.nativeReady = true;[\s\S]+window\.__tvNativeVideoPlaying = \(pos, dur, token, why\) => \{[\s\S]+markVodPlaybackStarted\(p\);[\s\S]+window\.__tvNativeVideoError = \(msg, pos, dur, token\) => \{[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\(msg \|\| 'native playback interrupted'\);/,
     'native playback should become established on PLAYING, not READY, while real mid-stream errors swap to the next warmed source');
   assert.match(android, /if \(state == Player\.STATE_READY\) \{[\s\S]+if \("video"\.equals\(nativeMode\)\) \{[\s\S]+applyNativeStartSeekIfReady\(\);[\s\S]+window\.__tvNativeVideoReady && __tvNativeVideoReady/,
     'Android ExoPlayer STATE_READY should apply the resume seek and report readiness without claiming that frames advanced');
@@ -4689,7 +4801,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'manual mode should background-prewarm the subtitle menu (list only) so opening CC is instant');
   assert.match(ui, /function autoSyncSubtitle\(p, rel, baseUrl\)[\s\S]+u\.searchParams\.delete\('shift'\);[\s\S]+u\.searchParams\.set\('sync', '1'\);[\s\S]+p\._subShift = 0; saveSubShift\(rel, 0\);/,
     'web auto-sync must strip the manual shift (no double-offset) and reset it once alass-corrected cues swap in, like the native path');
-  assert.match(server, /if \(!subSyncResultOk\(vtt, out\)\) throw new Error\('alass output failed the cue-count sanity check'\);/,
+  assert.match(server, /if \(!subSyncResultOk\(windowed\.srt, out\)\) throw new Error\('alass output failed the cue-count sanity check'\);/,
     'alass output must pass the cue-count sanity guard before it is trusted/cached');
   assert.match(server, /function localMountFor\(ctx, libId, idx, caps = \{\}, playCtx = \{\}\)[\s\S]+const q = String\(playCtx\.q \|\| found\.item\.q \|\| found\.item\.title \|\| name\)[\s\S]+const season = playCtx\.season \?\? found\.item\.s[\s\S]+const ep = playCtx\.ep \?\? playCtx\.episode \?\? found\.item\.e[\s\S]+vf\._subQuery = episodeSubtitleQuery\(vf\._q, season, ep\)/,
     'local library mounts should preserve episode-aware subtitle queries for Wyzie');
@@ -4789,8 +4901,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'player subtitle labels should not show provider branding');
   assert.match(ui, /if \(prefSubtitleMode\(\) !== 'always'\) return '';/,
     'native subtitles should respect manual mode before considering saved online subtitle choices');
-  assert.match(ui, /function subtitleMediaNow\(p\) \{[\s\S]+p\._subFrozen[\s\S]+p\._subSlip[\s\S]+function activeSubtitleCues\(tt\) \{[\s\S]+subtitleMediaNow\(S\.playing\)[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
-    'captions follow the picture clock and drop a stall jump instead of the browser cue scheduler');
+  assert.match(ui, /function subtitleMediaNow\(p\) \{[\s\S]+p\._subFrozen[\s\S]+p\._subSlip[\s\S]+jump > 30[\s\S]+function activeSubtitleCues\(tt\) \{[\s\S]+subtitleMediaNow\(S\.playing\)[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
+    'captions follow the picture clock, hold a skip, and drop a stall jump instead of the browser cue scheduler');
+  assert.match(ui, /function subtitleSyncPlayhead\(p\) \{[\s\S]+bufferedSec[\s\S]+readyState < 3[\s\S]+function autoSyncSubtitle\(p, rel, baseUrl\)[\s\S]+subtitleSyncPlayhead\(p\)/,
+    'auto-sync waits until the picture has buffered at the real minute, including Continue Watching');
   assert.match(android, /nativeSubtitleMediaMs\(\)[\s\S]+nativePlayer\.isPlaying\(\)[\s\S]+nativeSubtitleSlipMs/,
     'native captions stay on the frozen frame and ignore a clock jump from the buffer');
   assert.match(ui, /function renderSubCues\(\) \{[\s\S]+const active = activeSubtitleCues\(tt\);[\s\S]+for \(const c of active\.slice\(-5\)\)/,
@@ -7308,7 +7422,7 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'Search should not auto-populate movies or TV shows before the user types');
   assert.match(ui, /if \(!q\) \{ clearSearchResults\(\{ invalidate: true \}\); return; \}[\s\S]+const seq = \+\+searchSeq;[\s\S]+const current = \(\) => seq === searchSeq[\s\S]+if \(!current\(\)\) return;/,
     'Search should ignore late async responses after the query or page changes');
-  assert.match(ui, /function searchAndFocusResults\(\) \{[\s\S]+doSearch\(\)\.then\(\(\) => focusSearchResultsSoon\(\)\)[\s\S]+\$\('searchInput'\)\.addEventListener\('keydown'[\s\S]+e\.key === 'ArrowDown'[\s\S]+moveSearchDownFromField\(\)[\s\S]+e\.key === 'Enter'[\s\S]+searchAndFocusResults\(\)/,
+  assert.match(ui, /function submitSearchAndFocus\(\) \{[\s\S]+doSearch\(\)\.then\(\(\) => focusSearchResultsSoon\(18, q\)\)[\s\S]+function searchAndFocusResults\(\) \{\s*syncSearchClear\(\);\s*submitSearchAndFocus\(\);\s*\}[\s\S]+\$\('searchInput'\)\.addEventListener\('keydown'[\s\S]+e\.key === 'ArrowDown'[\s\S]+moveSearchDownFromField\(\)[\s\S]+e\.key === 'Enter'[\s\S]+searchAndFocusResults\(\)/,
     'Android TV Search typing should submit and then wait for result focus');
   assert.match(ui, /if \(inInput && S\.view === 'search' && ae === \$\('searchInput'\)\) \{[\s\S]+k === 'ArrowDown'[\s\S]+moveSearchDownFromField\(\)[\s\S]+k === 'Enter'[\s\S]+searchAndFocusResults\(\);[\s\S]+return;/,
     'document-level D-pad handling should not strand focus in the Search text input');
@@ -7509,6 +7623,12 @@ test('web shell avoids known TV paint/focus regressions', () => {
   // fired, leaving the raw unsynced sub. It must be QUEUED and driven off the native ticks instead.
   assert.match(ui, /function autoSyncNative\(p, rel\) \{[\s\S]+p\._pendingNativeSyncRel = rel;[\s\S]+runPendingNativeSync\(\);[\s\S]+\}/,
     'native auto-sync should queue a request + run it, not schedule a throttle-prone timer');
+  assert.doesNotMatch(ui, /function autoSyncNative\(p, rel\) \{\s*if \(!\(S\.serverInfo && S\.serverInfo\.subSync\)/,
+    'native auto-sync must not skip because the page still remembers sync as off; the subtitle header is the live answer');
+  assert.doesNotMatch(ui, /function autoSyncSubtitle\(p, rel, baseUrl\) \{\s*if \(!\(S\.serverInfo && S\.serverInfo\.subSync\)/,
+    'web auto-sync must not skip because the page still remembers sync as off');
+  assert.doesNotMatch(ui, /p\.subTrack !== rel \|\| !\(S\.serverInfo && S\.serverInfo\.subSync\)/,
+    'a queued native sync follows the server header, not a stale page flag');
   assert.doesNotMatch(ui, /_autoSyncNT/,
     'native auto-sync must not rely on the old throttle-prone setTimeout (the _autoSyncNT timer is gone)');
   assert.match(ui, /async function runPendingNativeSync\(\) \{[\s\S]+x-triboon-subsync'\) !== 'pending'[\s\S]+sync=1[\s\S]+if \(syncVerdict === 'failed'\) \{ p\._pendingNativeSyncRel = null; return; \}[\s\S]+syncVerdict !== 'corrected'[\s\S]+updateActiveSubtitle\(/,
@@ -8140,8 +8260,10 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
     'per-mount sync-failure map exists');
   assert.match(server, /const syncTerminal = \(\) => \{ const f = vf\._subSyncFail\.get\(syncKey\); return !!\(f && \(f\.timedOut \|\| f\.tries >= 3\)\); \};[\s\S]{0,400}'x-triboon-subsync': 'failed'/,
     'a terminal sync failure short-circuits BEFORE spawning alass and reports failed');
-  assert.match(server, /vf\._subSyncFail\.set\(syncKey, \{ tries: prev\.tries \+ 1, timedOut: prev\.timedOut \|\| \/timed out\/i\.test\(msg\), at: Date\.now\(\) \}\);/,
+  assert.match(server, /vf\._subSyncFail\.set\(syncKey, \{ tries: prev\.tries \+ 1, timedOut: prev\.timedOut \|\| \/timed out\/i\.test\(msg\), at: Date\.now\(\), atSec \}\);/,
     'sync failures are recorded with try count + timeout flag (timeouts are immediately terminal)');
+  assert.match(server, /const syncKey = `\$\{cacheKey\}:synced:a\$\{audioIndex\}`;[\s\S]+sampledAt < 20 && atSec > sampledAt \+ 45/,
+    'a subtitle correction is per audio track, and an opening-logo sample must not answer a later minute');
   assert.match(server, /const syncHdr = looksSynced \? 'synced'\s*: \(_sf && \(_sf\.timedOut \|\| _sf\.tries >= 3\)\) \? 'failed'/,
     'the advertised sync status reports failed so clients stop queueing background syncs');
 
@@ -8150,6 +8272,14 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
   // primary provider passed into the combined ranking as a tie-breaking preference.
   assert.match(server, /const \[wySettled, osData\] = await Promise\.all\(\[\s*wyzieActive \? searchOnlineSubs\(subOpts\)\.then\(\(d\) => \(\{ d \}\), \(e\) => \(\{ e \}\)\) : Promise\.resolve\(\{ d: \[\] \}\),\s*osActive \? openSubtitlesVariantsForMount\(/,
     'both ACTIVE subtitle providers are queried in parallel (policy-gated)');
+  assert.match(server, /if \(vf\._moviehashJob\) return vf\._moviehashJob;/,
+    'one in-flight moviehash is shared so a second caller waits for the real fingerprint');
+  assert.match(server, /const searchKey = `\$\{searchBase\}:\$\{vf\._moviehash \|\| 'nohash'\}`;/,
+    'a subtitle list built without the file hash is not reused once the hash is known');
+  assert.match(server, /setTimeout\(\(\) => r\(null\), 8000\)/,
+    'the playing subtitle waits for the file hash so the first pick can be the exact match');
+  assert.match(server, /endsWith\(':auto:nohash'\)/,
+    'a no-hash auto-pick is dropped once the real file hash arrives');
   assert.match(server, /const ranked = rankSubs\(combined, releaseName, \{[\s\S]+durationSeconds: vf\._tracks && vf\._tracks\.duration, sdhPref, preferProvider,[\s\S]+season: rankSeason, episode: rankEpisode,/,
     'the combined ranking receives the primary-provider preference and the episode being watched');
   // FOUND-BUT-WON'T-LOAD: an OpenSubtitles download failure (login/quota/dead file) must fall

@@ -234,7 +234,10 @@ class NntpConnection {
     const msg = String(err && err.message || '');
     // The "refused a new login" line already explained a 480 burst.
     // Later refusals on that same quiet window must not fill the log again.
-    const alreadyTold = err && err.code === 'NNTP_AUTH_LOST' && this.pool && this.pool._authCapAnnounced;
+    // Once the window has passed, the next 480 is news again — a flag that
+    // never reset hid every later burst on this account for the whole run.
+    const alreadyTold = err && err.code === 'NNTP_AUTH_LOST' && this.pool
+      && typeof this.pool.refusingNewLogins === 'function' && this.pool.refusingNewLogins();
     if (!alreadyTold && err && (err.code === 'NNTP_STALL' || err.code === 'NNTP_AUTH_LOST' || /connect timeout|auth failed|body too large/i.test(msg))) {
       const host = (this.opts && this.opts.host) || 'usenet';
       const waiting = (this.waiters || []).map((w) => w && w.cmdName).filter(Boolean).slice(0, 4).join(', ');
@@ -476,6 +479,15 @@ class ProviderPool {
     this.lastProbeAt = now;
     this.authCapped = true;
     this._authCapAnnounced = true;
+    // Nothing dials this account during the quiet window, so nothing pumps it
+    // either. Work still queued here when the window ends would sit until an
+    // unrelated article happened to land on this provider. Wake it ourselves.
+    if (this._quietWakeTimer) clearTimeout(this._quietWakeTimer);
+    this._quietWakeTimer = setTimeout(() => {
+      this._quietWakeTimer = null;
+      if (!this.closed) { try { this._pump(); } catch {} }
+    }, CAP_HIT_COOLDOWN_MS + 50);
+    if (this._quietWakeTimer.unref) this._quietWakeTimer.unref();
     const open = (this.conns || []).filter((c) => c && c.alive).length;
     const host = (this.opts && this.opts.host) || 'usenet';
     const refused = open > 0
@@ -558,9 +570,12 @@ class ProviderPool {
         if (e && /auth failed/i.test(String(e.message || ''))) {
           const authLost = /48[012]/.test(String(e.message || ''));
           // Login itself got 480. That is the same full account as a STAT 480.
-          // Say it once, then stop opening sockets.
+          // Say it once per quiet window, then stop opening sockets. _markAuthCap
+          // dedups inside the window; a 480 after the window starts a new one.
+          // Gating on the old "announced" flag left every later login-480 with
+          // no quiet window at all, so this account was dialed again and again.
           if (authLost) {
-            if (!this._authCapAnnounced) this._markAuthCap();
+            this._markAuthCap();
           } else {
             const authLine = `${(this.opts && this.opts.host) || 'usenet'}: ${e.message}`;
             debug.fail('buffer', authLine);
@@ -570,6 +585,20 @@ class ProviderPool {
         }
         try { c.close(); } catch {}
         if (isTooManyConnections(e)) this._markCapHit(e);
+        else if (!(e && /auth failed/i.test(String(e.message || '')))) {
+          // A line that never opened (DNS, TCP refused, TLS, 8s connect timeout) used
+          // to fail silently: the account showed "0/0 busy (N waiting)" with no reason.
+          // debug.fail dedups the same text for 60s, so a dead provider is one line.
+          const host = (this.opts && this.opts.host) || 'usenet';
+          const why = String((e && e.message) || e || 'unknown error').replace(/[\r\n]+/g, ' ').slice(0, 160);
+          const open = (this.conns || []).filter((x) => x && x.alive).length;
+          const line = open > 0
+            ? `${host}: could not open another line — ${why} (${open} still open)`
+            : `${host}: could not open a line — ${why} — treating the account as down for ${Math.round((this.opts.reconnectBackoffMs || 60000) / 1000)}s, probing every ${Math.round((this.opts.reconnectProbeMs || 8000) / 1000)}s`;
+          debug.fail('buffer', line);
+          debug.issue(`provider unreachable — reason: ${line}`);
+          story.noteOpen(`provider unreachable — reason: ${line}`);
+        }
         // If every attempt failed and nothing is live, queued work can never run — fail it.
         if (this.connecting === 0 && this.conns.length === 0 && this.queue.length) {
           const q = this.queue; this.queue = [];
@@ -660,6 +689,21 @@ class ProviderPool {
       if (this.connecting > 0) return; // probing — its resolve (recovered) / reject (still down) re-pumps
       const q = this.queue; this.queue = [];
       const err = this.lastErr || new Error('provider temporarily unavailable');
+      for (const t of q) { if (typeof t.cleanupAbort === 'function') t.cleanupAbort(); t.reject(err); }
+      return;
+    }
+    // A 480 burst just closed the last line on this account. down() is false
+    // (no connect failed) and _ensure will not dial during the quiet window, so
+    // the articles waiting here have no line to run on. Read-ahead parked like
+    // this kept its segments "in flight" for two minutes: the buffer stopped
+    // growing past them and the player paid a fresh fetch for each one. Hand
+    // the work to a peer now; a solo account waits for the wake timer instead.
+    if (this.queue.length && this.conns.length === 0 && this.connecting === 0 && this.refusingNewLogins()) {
+      if (!this._peerCanTakeOver()) return;
+      const q = this.queue; this.queue = [];
+      const host = (this.opts && this.opts.host) || 'usenet';
+      const err = new Error(`${host} refused a new login and has no line open`);
+      err.code = 'NNTP_AUTH_LOST';
       for (const t of q) { if (typeof t.cleanupAbort === 'function') t.cleanupAbort(); t.reject(err); }
       return;
     }
@@ -864,9 +908,15 @@ class ProviderPool {
       queued: this.queue.length,
       down: this.down(),
       authBroken: this.authBroken(),
+      quiet: this.refusingNewLogins(),
     };
   }
-  close() { this.closed = true; for (const c of this.conns) c.close(); this.conns = []; }
+  close() {
+    this.closed = true;
+    if (this._quietWakeTimer) { clearTimeout(this._quietWakeTimer); this._quietWakeTimer = null; }
+    for (const c of this.conns) c.close();
+    this.conns = [];
+  }
 }
 
 // Multi-provider pool with per-article failover: a 430 (or dead connection) on one provider
@@ -953,7 +1003,16 @@ class NntpPool {
       const stillUp = this.providers.filter(live);
       list = stillUp.length ? stillUp : [];
     }
+    // An account with no line up and a connect failure in the last minute is dark.
+    // Its plan still shows headroom, so the fit rule below used to put it FIRST
+    // ahead of a busy account that is actually downloading. The piece then sat
+    // in the dark queue for the 8s half-open probe ("easynews 0/0 busy (1
+    // waiting)" while the player waited). Dark goes last; it is still a fallback.
+    const dark = (p) => !live(p) && typeof p.down === 'function' && p.down();
     return [...list].sort((a, b) => {
+      const da = dark(a);
+      const db = dark(b);
+      if (da !== db) return da ? 1 : -1;
       const ha = providerHeadroom(a);
       const hb = providerHeadroom(b);
       const aFit = need <= 0 || ha >= need;

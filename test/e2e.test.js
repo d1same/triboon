@@ -71,6 +71,50 @@ test('nntp: a 4K startup that cannot fit Easynews leftover spills to Newshosting
     'a 1080 that fits in Easynews leftover 10 uses it when Newshosting is tighter');
 });
 
+test('nntp: an account that cannot connect sorts BEHIND a busy account that is downloading', () => {
+  // Live 2026-09-27 23:30: Easynews had 0 lines up after a connect failure but a plan of 50, so
+  // the headroom rule put it first; every piece waited there for the 8s half-open probe while
+  // Newshosting (3/3 busy) was the only account actually serving. Skip waited 4s.
+  const pool = new NntpPool([{ connections: 50, host: 'news.easynews.com' }, { connections: 3, host: 'news.newshosting.com' }]);
+  const easy = pool.providers[0];
+  const news = pool.providers[1];
+  easy.lastConnectFailAt = Date.now();          // down(): no line, connect failed within 60s
+  news.conns.push({ alive: true, lastUsed: Date.now(), close() {} });
+  for (let i = 0; i < 3; i++) news.busy.add({ i });
+  assert.strictEqual(easy.down(), true);
+  assert.strictEqual(pool._ordered()[0], news, 'the account with a live line goes first even when full');
+  assert.strictEqual(pool._ordered(4)[0], news, 'a startup that wants 4 slots still prefers the live account over a dark plan of 50');
+  assert.deepStrictEqual(pool._ordered(), [news, easy], 'dark stays in the list as the last resort');
+  // Once a line is up again the normal headroom order returns.
+  easy.conns.push({ alive: true, lastUsed: Date.now(), close() {} });
+  assert.strictEqual(pool._ordered()[0], easy, 'a recovered account with 49 free lines takes the next piece');
+});
+
+test('nntp: a line that never opened is written with the host and the reason, once', async () => {
+  const pool = new ProviderPool({ host: 'news.easynews.com', port: 1, reconnectBackoffMs: 60000, reconnectProbeMs: 8000 }, 2);
+  const seen = [];
+  const orig = console.error;
+  console.error = (...a) => { seen.push(a.join(' ')); };
+  try {
+    const failing = { connect: () => Promise.reject(new Error('connect ETIMEDOUT 1.2.3.4:563')), close() {} };
+    const NntpConnectionRef = require('../server/nntp').NntpConnection;
+    const realConnect = NntpConnectionRef.prototype.connect;
+    NntpConnectionRef.prototype.connect = failing.connect;
+    try {
+      pool._ensure(1);
+      await new Promise((r) => setTimeout(r, 30));
+    } finally {
+      NntpConnectionRef.prototype.connect = realConnect;
+    }
+  } finally {
+    console.error = orig;
+    pool.close();
+  }
+  const line = seen.find((s) => /could not open a line/.test(s));
+  assert.ok(line, `expected a "could not open a line" failure line, got:\n${seen.join('\n')}`);
+  assert.match(line, /news\.easynews\.com: could not open a line — connect ETIMEDOUT 1\.2\.3\.4:563 — treating the account as down for 60s, probing every 8s/);
+});
+
 test('nntp: generic run falls through to the next provider', async () => {
   const pool = new NntpPool([{}, {}], 1);
   pool.providers = [
@@ -78,6 +122,74 @@ test('nntp: generic run falls through to the next provider', async () => {
     { busy: new Set(), queue: [], size: 1, down: () => false, run: async () => 'ok', close() {} },
   ];
   assert.strictEqual(await pool.run(async () => 'unused', 'startup'), 'ok');
+});
+
+test('vfs: a slow piece on the player lane is written once with the piece number and the usenet picture', async () => {
+  const { articles, nzb } = makeRelease('Slow.Piece.mkv', 160000, 40000);
+  const origFail = debug.fail;
+  const failed = [];
+  debug.fail = (scope, msg) => { failed.push(`${scope}|${msg}`); };
+  try {
+    let slowOnce = true;
+    const pool = {
+      body: async (msgId, priority = 'playback') => {
+        if (priority === 'playback' && slowOnce) { slowOnce = false; await new Promise((r) => setTimeout(r, 40)); }
+        return articles.get(msgId);
+      },
+      stat: async () => true,
+      stats: () => ({ providers: [{ host: 'news.eweka.nl', inUse: 0, open: 0, queued: 3, quiet: true }, { host: 'news.newshosting.com', inUse: 2, open: 4 }] }),
+    };
+    const vf = new VirtualFile(pool, nzb, { readAhead: 0 });
+    await vf.mount();
+    vf.slowPieceMs = 10;
+    const story = [];
+    vf.onTrouble = (text) => story.push(text);
+    vf.cache.clear(); vf.cacheOrder = []; vf.inflight.clear();
+    for await (const chunk of vf.read(40000, 80000, { priority: 'playback' })) assert.ok(chunk.length);
+    const line = failed.find((l) => l.startsWith('buffer|') && /piece 2\/4 took/.test(l));
+    assert.ok(line, `the slow piece is written to the failure log: ${failed.join(' || ')}`);
+    assert.match(line, /on the playback lane/);
+    assert.match(line, /lines: eweka 0\/0 busy \(3 waiting, quiet after 480\); newshosting 2\/4 busy/, 'the usenet picture rides along');
+    assert.strictEqual(story.length, 1, 'the play story gets the same line once');
+    assert.strictEqual(vf.playbackStats.slowPieces, 1);
+    // The next slow piece inside 15s is counted, not written again.
+    slowOnce = true;
+    vf.cache.clear(); vf.cacheOrder = []; vf.inflight.clear();
+    for await (const chunk of vf.read(40000, 80000, { priority: 'playback' })) assert.ok(chunk.length);
+    assert.strictEqual(failed.filter((l) => /took/.test(l)).length, 1, 'one line per 15s per file');
+    assert.strictEqual(vf.playbackStats.slowPieces, 2);
+  } finally {
+    debug.fail = origFail;
+  }
+});
+
+test('vfs: a piece that fails on every account is written with the piece number and the reason', async () => {
+  const { articles, nzb } = makeRelease('Dead.Piece.mkv', 160000, 40000);
+  const origFail = debug.fail;
+  const failed = [];
+  debug.fail = (scope, msg) => { failed.push(`${scope}|${msg}`); };
+  try {
+    const pool = {
+      body: async (msgId) => {
+        if (msgId === 'seg2@triboon.test') { const e = new Error('no usenet provider could serve the article'); e.code = '430'; throw e; }
+        return articles.get(msgId);
+      },
+      stat: async () => true,
+    };
+    const vf = new VirtualFile(pool, nzb, { readAhead: 0 });
+    await vf.mount();
+    const story = [];
+    vf.onTrouble = (text) => story.push(text);
+    vf.cache.clear(); vf.cacheOrder = []; vf.inflight.clear();
+    await assert.rejects((async () => { for await (const chunk of vf.read(40000, 80000, { priority: 'playback' })) assert.ok(chunk.length); })());
+    const line = failed.find((l) => /piece 2\/4 failed on the playback lane/.test(l));
+    assert.ok(line, `the dead piece is written: ${failed.join(' || ')}`);
+    assert.match(line, /no usenet provider could serve the article/);
+    assert.strictEqual(story.length, 1);
+    assert.strictEqual(vf.playbackStats.failedPieces, 1);
+  } finally {
+    debug.fail = origFail;
+  }
 });
 
 test('vfs: caller priority reaches article reads and aborted reads do not fetch', async () => {
@@ -1076,6 +1188,116 @@ test('nntp: a 480 during the login itself stops the next login', async () => {
     assert.strictEqual(attempts, first, 'the quiet window does not open another login');
   } finally {
     NntpConnection.prototype.connect = orig;
+  }
+});
+
+test('nntp: work parked on an account whose last line got 480 moves to a peer instead of waiting two minutes', async () => {
+  const orig = NntpConnection.prototype.connect;
+  let attempts = 0;
+  NntpConnection.prototype.connect = () => new Promise(() => { attempts++; });
+  try {
+    const pool = new ProviderPool({ host: 'eweka.example' }, 8);
+    pool.peerCanTakeOver = () => true;
+    pool.authCapped = true;
+    pool.capHitAt = Date.now();
+    pool._authCapAnnounced = true;
+    let ran = false;
+    const readAhead = pool.run(() => { ran = true; return Promise.resolve('x'); }, 'readAhead');
+    await assert.rejects(readAhead, (e) => e && e.code === 'NNTP_AUTH_LOST' && /no line open/.test(e.message));
+    assert.strictEqual(ran, false, 'nothing ran here — the peer gets the piece');
+    assert.strictEqual(attempts, 0, 'no login is opened during the quiet window');
+    assert.strictEqual(pool.queue.length, 0, 'nothing is left parked in the queue');
+  } finally {
+    NntpConnection.prototype.connect = orig;
+  }
+});
+
+test('nntp: a solo account keeps parked work through the quiet window and wakes it afterwards', async () => {
+  const orig = NntpConnection.prototype.connect;
+  let attempts = 0;
+  NntpConnection.prototype.connect = () => new Promise(() => { attempts++; });
+  try {
+    const pool = new ProviderPool({ host: 'eweka.example' }, 8);
+    pool._markAuthCap();
+    assert.ok(pool._quietWakeTimer, 'a wake-up is scheduled for the end of the quiet window');
+    let settled = false;
+    const p = pool.run(() => Promise.resolve('x'), 'readAhead');
+    p.then(() => { settled = true; }, () => { settled = true; });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(settled, false, 'with no peer the piece waits instead of failing');
+    assert.strictEqual(attempts, 0, 'and no login is opened while the account is quiet');
+    pool.capHitAt = Date.now() - (CAP_HIT_COOLDOWN_MS + 1);
+    pool.lastProbeAt = pool.capHitAt;
+    pool._pump(); // what the wake timer does when the window ends
+    await new Promise((r) => setTimeout(r, 20));
+    assert.ok(attempts > 0, 'once the window passes the parked piece opens a line again');
+    pool.close();
+    assert.strictEqual(pool._quietWakeTimer, null, 'closing the pool drops the wake-up');
+  } finally {
+    NntpConnection.prototype.connect = orig;
+  }
+});
+
+test('nntp: a 480 burst after the quiet window is told again and starts a new quiet window', async () => {
+  const orig = NntpConnection.prototype.connect;
+  const origFail = debug.fail;
+  let attempts = 0;
+  let told = 0;
+  NntpConnection.prototype.connect = async () => {
+    attempts++;
+    throw new Error('NNTP auth failed: 480 Authentication Required');
+  };
+  debug.fail = (scope, msg) => { if (/refused a new login/.test(String(msg))) told++; };
+  try {
+    const pool = new ProviderPool({ host: 'eweka.example' }, 20);
+    pool._ensure(20);
+    await new Promise((r) => setTimeout(r, 40));
+    assert.strictEqual(told, 1, 'the first burst is written once');
+    assert.strictEqual(pool.refusingNewLogins(), true);
+    const first = attempts;
+    // Two minutes later the account still answers 480 on login.
+    pool.capHitAt = Date.now() - (CAP_HIT_COOLDOWN_MS + 1);
+    pool.lastProbeAt = pool.capHitAt;
+    assert.strictEqual(pool.refusingNewLogins(), false);
+    pool._ensure(20);
+    await new Promise((r) => setTimeout(r, 40));
+    assert.ok(attempts > first && attempts - first <= CONNECT_BURST, 'one small wave of logins, not the plan');
+    assert.strictEqual(told, 2, 'the second burst is news again — it is written once more');
+    assert.strictEqual(pool.refusingNewLogins(), true, 'and it starts a new quiet window');
+    const afterSecond = attempts;
+    pool._ensure(20);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(attempts, afterSecond, 'the new window stops the next login');
+    pool.close();
+  } finally {
+    NntpConnection.prototype.connect = orig;
+    debug.fail = origFail;
+  }
+});
+
+test('nntp: a 480 on a line is quiet during the window and written again once the window has passed', () => {
+  const origFail = debug.fail;
+  const origIssue = debug.issue;
+  let told = 0;
+  debug.fail = () => { told++; };
+  debug.issue = () => {};
+  try {
+    const mk = (refusing) => {
+      const c = new NntpConnection({ host: 'eweka.example' });
+      c.pool = { refusingNewLogins: () => refusing, _authCapAnnounced: true };
+      c.sock = { destroy() {} };
+      c.waiters = [];
+      return c;
+    };
+    const err = new Error('STAT: 480 Authentication Required');
+    err.code = 'NNTP_AUTH_LOST';
+    mk(true)._fail(err);
+    assert.strictEqual(told, 0, 'inside the quiet window the refusal was already explained');
+    mk(false)._fail(err);
+    assert.strictEqual(told, 1, 'after the window a fresh 480 is written again');
+  } finally {
+    debug.fail = origFail;
+    debug.issue = origIssue;
   }
 });
 

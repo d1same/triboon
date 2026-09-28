@@ -8,9 +8,15 @@ const { decode } = require('./yenc');
 const { parseNzb, pickPrimaryFile, fileNameFromSubject } = require('./nzb');
 const { streamStartupNeedSlots } = require('./nntp');
 const { getSegmentDisk } = require('./segment-cache');
+const debug = require('./debug');
 const crypto = require('crypto');
 
 const DEFAULT_CACHE_BYTES = 128 * 1024 * 1024;
+// A piece the PLAYER is waiting on that takes this long is a stall in the making. The
+// client later writes "buffered 12s, nothing ahead"; this is the server half that says
+// which piece, how long, and what the usenet lines looked like at that moment.
+const SLOW_PIECE_MS = 4000;
+const SLOW_PIECE_NOTE_GAP_MS = 15000;
 // How long an ABORTED in-flight segment BODY may keep draining before its connection is killed.
 // NNTP can't cancel a command — killing is the only true abort, and it costs the whole connection
 // (TCP+TLS+AUTH to rebuild) plus the partial transfer. A typical article finishes in well under a
@@ -153,7 +159,68 @@ class NzbFileStream {
       readBytes: 0,
       adaptiveBoosts: 0,
       lastBoostAt: null,
+      slowPieces: 0,
+      failedPieces: 0,
     };
+    // Set by the mount owner: sends a trouble line into that play's story. The
+    // always-on failure log gets the same line here either way.
+    this.onTrouble = null;
+    this._slowPieceNotedAt = 0;
+    this._slowPiecesSinceNote = 0;
+    this.slowPieceMs = SLOW_PIECE_MS;
+  }
+
+  _troubleLine(text) {
+    const label = String(this.name || this.id || 'file').slice(0, 80);
+    debug.fail('buffer', `${label}: ${text}`);
+    if (typeof this.onTrouble === 'function') { try { this.onTrouble(text); } catch {} }
+  }
+
+  _poolPicture() {
+    try {
+      const stats = this.pool && typeof this.pool.stats === 'function' ? this.pool.stats() : null;
+      if (!stats) return '';
+      const providers = Array.isArray(stats.providers) && stats.providers.length ? stats.providers : [stats];
+      return providers.map((p) => {
+        const host = String(p.host || 'usenet').toLowerCase().replace(/^news\./, '').split('.')[0];
+        const flags = [];
+        if (p.queued > 0) flags.push(`${p.queued} waiting`);
+        if (p.connecting > 0) flags.push(`${p.connecting} dialing`);
+        if (p.quiet) flags.push('quiet after 480');
+        if (p.down) flags.push('down');
+        if (p.authBroken) flags.push('login broken');
+        return `${host} ${p.inUse || 0}/${p.open || 0} busy${flags.length ? ` (${flags.join(', ')})` : ''}`;
+      }).join('; ');
+    } catch { return ''; }
+  }
+
+  // The player asked for piece N and waited `waitMs` for it. One line per 15s per file,
+  // carrying how many more were slow in between, so a rough patch reads as one story
+  // and not as forty lines.
+  _noteSlowPiece(segIdx, waitMs, priority) {
+    this.playbackStats.slowPieces++;
+    this._slowPiecesSinceNote++;
+    const now = Date.now();
+    if (now - this._slowPieceNotedAt < SLOW_PIECE_NOTE_GAP_MS) return;
+    const more = this._slowPiecesSinceNote - 1;
+    this._slowPieceNotedAt = now;
+    this._slowPiecesSinceNote = 0;
+    const total = Array.isArray(this.segments) ? this.segments.length : 0;
+    const ahead = typeof this.aheadCacheBytes === 'function' ? Math.round(this.aheadCacheBytes() / 1048576) : null;
+    const lines = this._poolPicture();
+    this._troubleLine(`piece ${segIdx + 1}${total ? `/${total}` : ''} took ${(waitMs / 1000).toFixed(1)}s on the ${priority} lane`
+      + `${more > 0 ? ` (${more} more slow piece${more === 1 ? '' : 's'} since the last note)` : ''}`
+      + `${ahead != null ? `, ${ahead} MB already ahead` : ''}${lines ? ` — lines: ${lines}` : ''}`);
+  }
+
+  // Every account said no (or died) for this piece. This is the cause behind the
+  // player's "connection dropped" / remux death that follows a moment later.
+  _noteFailedPiece(segIdx, priority, e) {
+    this.playbackStats.failedPieces++;
+    const total = Array.isArray(this.segments) ? this.segments.length : 0;
+    const why = String((e && e.message) || e || 'unknown error').replace(/\s+/g, ' ').slice(0, 160);
+    const lines = this._poolPicture();
+    this._troubleLine(`piece ${segIdx + 1}${total ? `/${total}` : ''} failed on the ${priority} lane — ${why}${lines ? ` — lines: ${lines}` : ''}`);
   }
 
   applyPlaybackWindow(win = {}) {
@@ -483,6 +550,7 @@ class NzbFileStream {
         });
       } catch (e) {
         if (aborted() || e.code === 'ABORT_ERR') return;
+        this._noteFailedPiece(segIdx, activePriority, e);
         throw e;
       }
       const waitMs = Date.now() - waitStart;
@@ -492,6 +560,9 @@ class NzbFileStream {
         this.playbackStats.segmentWaitMs += waitMs;
         this.playbackStats.maxSegmentWaitMs = Math.max(this.playbackStats.maxSegmentWaitMs, waitMs);
         if (activePriority === 'playback') this._maybeBoostReadAhead(waitMs);
+        if (waitMs >= this.slowPieceMs && (activePriority === 'playback' || activePriority === 'startup' || activePriority === 'seek')) {
+          this._noteSlowPiece(segIdx, waitMs, activePriority);
+        }
       }
       if (activePriority === 'startup' || activePriority === 'seek') activePriority = 'playback';
       if (aborted()) return;

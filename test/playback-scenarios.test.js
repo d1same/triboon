@@ -76,6 +76,8 @@ test('playback scenarios: captions shift only after a successful write', () => {
   const again = shiftCues(cues, 600);
   assert.strictEqual(again[0].startTime, 0, 'a second remount must not double-shift');
   assert.match(ui, /c\.startTime = Math\.max\(0, c\.startTime - off\);[\s\S]+c\.endTime = Math\.max\(0\.05, c\.endTime - off\);[\s\S]+c\._shifted = true;/);
+  assert.match(ui, /tt\.mode = 'hidden';[\s\S]+c\.startTime = Math\.max\(0, c\.startTime - off\);[\s\S]+_subRebaseTries/,
+    'resume waits until caption cues exist, then moves them to the minute you continued from');
 });
 
 test('playback scenarios: 4K captions keep five visual lines and cancel the old fetch', () => {

@@ -136,7 +136,10 @@ A second subtitle provider for **moviehash** matching — the strongest in-sync 
 which Wyzie cannot do. It is gated by `effectiveOpenSubtitles()` and the selected
 subtitle source mode. When OpenSubtitles is active, the handler computes the moviehash on the
 mounted file (`moviehashForMount` → `moviehashFromChunks`: filesize + uint64-LE sum of
-the first & last 64 KB, ~2 segment reads on the lowest NNTP lane, cached on the mount),
+the first & last 64 KB, ~2 segment reads on the lowest NNTP lane, one shared in-flight job
+cached on the mount). Play waits up to 8s for that hash so the first auto-pick can be the
+exact file; the CC menu keeps a 2.5s cap. A list or auto-pick made before the hash existed
+is not reused once the hash is known. The handler then
 searches the active providers concurrently, and ranks the **combined** set with
 `rankSubs`, where a `moviehash_match` gets a decisive
 `+1000` boost so a hash-exact hit beats any release-name match. Downloads route by
@@ -165,6 +168,14 @@ Flow (`/api/ossubs/:mount`):
 - On `pending`, the player (web `autoSyncSubtitle`, native `autoSyncNative`) re-requests `?sync=1`
   in the background; the server runs alass against the localhost tokened stream URL, caches the
   corrected VTT, and the player hot-swaps it in. The unsynced track plays meanwhile.
+- The measurement uses two 30s slices: the spoken stretch just before the playhead, then a
+  witness slice (the 30s before it, else the 30s after). Both must agree within 1.5s or the
+  correction is rejected and the raw track stays (offline proof: one slice alone read a 3.0s-late
+  caption as +3.0s when the gap matched the line spacing). The server logs
+  `[subsync <mount>] measuring at m:ss on audio track N` and
+  `moved the words X.XXs earlier|later (... two slices agree|one slice)`; the response carries
+  `x-triboon-subsync-shift` (ms) and the player toasts "Subtitles moved X.Xs earlier/later". A
+  rejected measurement makes the player wait 60s before asking again from a different minute.
 - **Skip rule (the "don't pull audio when you don't need to"):** `?sync=1` returns the sub as-is
   without running alass when `subtitleLooksSynced` is true. alass (which reads audio) only runs for
   non-matched subs. Any failure falls back to the unsynced track — auto-sync can never regress.

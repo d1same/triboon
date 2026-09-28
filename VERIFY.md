@@ -126,6 +126,66 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-28, v3.3.0 ship — start/resume/continue-watching, source pick,
+subtitle sync, and search double-check:
+
+- Version contract: `package.json` 3.3.0; Android `versionName` 3.3.0 /
+  `versionCode` 403; Windows client package/Tauri/Cargo(.lock) 3.3.0.
+- Example: one usenet account is unreachable tonight. Play used to dial it
+  for 48 seconds before the movie started; now the account that is already
+  downloading goes first and the first piece lands in milliseconds. You
+  nudge captions +1s; tonight they come back +1s, not +2s. On the Windows
+  app a jump to 40:00 keeps the words on 40:00. You press Start over, open
+  the guide, come back — the movie is where you left it, not 0:00. You type
+  "bat", press OK, keep typing "man" — the highlight stays in the keyboard.
+- Code: `server/nntp.js` `_ordered` dark-account ordering + connect-failure
+  line; `server/vfs.js` `_poolPicture` dialing/login flags; `server/index.js`
+  `onDemandSubSync` drift line, failure-logging review (`ffmpegErrorTail`,
+  `keepFfmpegStderr`, `noteFfmpegDeath`, `bindMountTrouble`, HTTP crash/5xx);
+  `web/index.html` `webSubtitleFetchUrl`, `returnToSavedVod` `_startOver`
+  drop, `submitSearchAndFocus` / `focusSearchResultsSoon(tries, forQuery)`,
+  restricted-profile `current()` guard, `prefetchTrailerStream` rejection
+  handler, `noteUiIssue`; `player.rs` `subtitle_delay`, `strip_shift_param`;
+  `MainActivity.java` Media3 `AnalyticsListener`; Windows `bridge.js`
+  `playerErrorText`.
+- Docs: `docs-architecture.md` "Failure Logging" + Subtitle Model;
+  `docs-player-regression-map.md` P14 dark account, P11 nudge-once, P1 start
+  over. Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 776/776. `npm.cmd run verify:full` on the house
+  process v3.3.0 + `emulator-5554` (never the Shield): PASS whitespace, JS
+  syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite, isolated
+  `/api/server` 3.3.0, Android lint + native unit tests + debug build
+  (installed on the emulator only). Household VOD/IPTV/overlapping Play and
+  Android ExoPlayer stress: PENDING the owner's login (stale token → 401,
+  emulator at `gateLogin`); the tag waits for that PASS. Windows Rust
+  `--features player` compiles under MSVC locally; link needs CI's
+  `mpv.lib`, so the Rust unit tests run in CI.
+
+2026-09-27, failure logging review (folded into v3.3.0):
+
+- Example: a movie freezes at 41:10. The log now says which usenet piece was
+  slow, on which lane, how many MB were ahead, and the per-account line
+  picture — not "stall". A dead ffmpeg logs its LAST stderr line, not the
+  version banner. A web JS error on a TV reaches the server log with
+  `file:line`. Live TV remux that dies after it had video is written as a
+  failure, not "ended".
+- Code: `server/vfs.js` slow/failed piece notes; `server/nntp.js` stranded
+  queue handoff + re-logged 480 bursts; `server/pipeline.js`
+  `noPlayableError`/`summarizeUnplayable`; `server/index.js`
+  `ffmpegErrorTail`, `keepFfmpegStderr`, `noteFfmpegDeath`,
+  `bindMountTrouble`, HTTP crash/5xx lines, `audio`/`ui` issue kinds;
+  `web/index.html` `noteUiIssue`, audio/source/subtitle cause lines;
+  `MainActivity.java` Media3 `AnalyticsListener`; Windows `bridge.js`
+  `playerErrorText`, `player.rs` `current_file_failed`.
+- Docs: `docs-architecture.md` "Failure Logging"; `docs-streaming-performance.md`
+  stranded-queue paragraph. Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 773/773 (new: 4 nntp, 2 vfs, 1 pipeline, 1 phase4
+  logging contract). Android debug build OK and installed on `emulator-5554`
+  only (never the Shield). Windows Rust tests NOT run locally (no MSVC
+  toolchain on this box; the CI `--features player` gate covers
+  `an_end_file_error_is_a_player_error_not_a_timeout`). `verify:full` not
+  run: no release.
+
 2026-09-27, v3.2.25 ship — captions stay on the minute you are watching:
 
 - Version contract: `package.json` 3.2.25; Android `versionName` 3.2.25 /

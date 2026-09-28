@@ -3,7 +3,7 @@
 // Each case is a catalog query (what Play sends) plus scene names that MUST / MUST NOT match.
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseWantedTitle, releaseMatches, catalogIdentityMatches, shortTitleQuery } = require('../server/pipeline');
+const { parseWantedTitle, releaseMatches, catalogIdentityMatches, shortTitleQuery, collectArticleSiblings } = require('../server/pipeline');
 
 const CASES = [
   {
@@ -692,6 +692,45 @@ test('catalog identity: tagged remake is rejected even when the filename has no 
     '2024 remake IMDb must not play for the 2005 show');
   assert.ok(!catalogIdentityMatches({ tvdbid: '999999' }, { tvdbid: '73255' }));
   assert.ok(catalogIdentityMatches({ tvdbid: '73255' }, { tvdbid: '73255' }));
+});
+
+test('runner and the runner are different films when both exist', () => {
+  const file = 'The.Runner.2026.iTA-ENG.WEB-DL.2160p.HEVC.HDR.x265-CYBER';
+  const runner = parseWantedTitle('runner 2026');
+  assert.ok(releaseMatches(file, runner), 'a lone film may still match a scene name that kept The');
+  runner.blockedArticles = new Set(['the']);
+  assert.ok(!releaseMatches(file, runner), 'Runner must not play The Runner');
+  assert.ok(releaseMatches('Runner.2026.2160p.WEB-DL.H265-GRP', runner));
+
+  const theRunner = parseWantedTitle('the runner 2026');
+  theRunner.blockedArticles = new Set(['the']);
+  assert.ok(releaseMatches('The.Runner.2026.2160p.AMZN.WEB-DL-NTb', theRunner));
+  assert.ok(!releaseMatches('Runner.2026.2160p.WEB-DL.H265-GRP', theRunner), 'The Runner must not play Runner');
+});
+
+test('a show and its article twin do not play each other', () => {
+  const named = parseWantedTitle('the runner s01e01');
+  named.blockedArticles = new Set(['the']);
+  assert.ok(releaseMatches('The.Runner.S01E01.1080p.WEB-DL-NTb', named));
+  assert.ok(!releaseMatches('Runner.S01E01.1080p.WEB-DL-NTb', named));
+
+  const bare = parseWantedTitle('runner s01e01');
+  bare.blockedArticles = new Set(['the']);
+  assert.ok(releaseMatches('Runner.S01E01.1080p.WEB-DL-NTb', bare));
+  assert.ok(!releaseMatches('The.Runner.S01E01.1080p.WEB-DL-NTb', bare));
+});
+
+test('article siblings are same-year title twins, not longer titles', () => {
+  const arts = collectArticleSiblings('Runner', 2026, [
+    { id: 1386315, title: 'The Runner', release_date: '2026-09-02' },
+    { id: 99, title: 'Blade Runner', release_date: '2026-01-01' },
+    { id: 50, title: 'The Runner', release_date: '1999-01-01' },
+  ], 1377237, { dateKey: 'release_date', titleKey: 'title' });
+  assert.deepEqual(arts, ['the']);
+  const shows = collectArticleSiblings('The Office', 2005, [
+    { id: 2, name: 'Office', first_air_date: '2005-03-24', original_name: 'Office' },
+  ], 1, { dateKey: 'first_air_date', titleKey: 'name', originalKey: 'original_name' });
+  assert.deepEqual(shows, ['the']);
 });
 
 test('title collisions: short indexer query never becomes a sibling franchise prefix', () => {

@@ -2077,6 +2077,17 @@ impl NativeSession {
         }
     }
 
+    /// How far the subtitle cues (movie-absolute) sit ahead of mpv's clock. A remux or
+    /// transcode that started at 41:10 plays from 0:00 on mpv's clock; direct play keeps
+    /// movie time. Same rule as `display_position`, seen from the caption side.
+    fn subtitle_stream_offset(&self) -> f64 {
+        if self.server_seek() {
+            self.start_offset
+        } else {
+            0.0
+        }
+    }
+
     fn display_duration(&self, raw_duration: f64) -> f64 {
         if self.duration_hint > 0.0 {
             self.duration_hint
@@ -2438,8 +2449,46 @@ fn subtitle_scale(size: &str) -> f64 {
     }
 }
 
+/// mpv `sub-delay` for a Triboon subtitle: the viewer's own nudge, minus the stream offset
+/// when the picture is a server-seeked remux/transcode (0-based clock, movie-absolute cues).
+/// Without the subtraction a resume at 41:10 painted the opening narration for 41 minutes.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn subtitle_delay(shift: f64, stream_offset: f64) -> f64 {
+    let nudge = if shift.is_finite() { shift } else { 0.0 };
+    let offset = if stream_offset.is_finite() && stream_offset > 0.0 {
+        stream_offset
+    } else {
+        0.0
+    };
+    nudge - offset
+}
+
+/// The web page builds subtitle URLs with `&shift=` so the server bakes a saved offset into
+/// the file. The native player applies that same offset through `sub-delay`, so the URL must
+/// not carry it too (Android strips it the same way) or the nudge is applied twice.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn strip_shift_param(url: &str) -> String {
+    let Some(q) = url.find('?') else {
+        return url.to_string();
+    };
+    let (path, query) = url.split_at(q);
+    let kept: Vec<&str> = query[1..]
+        .split('&')
+        .filter(|kv| !kv.is_empty() && !kv.starts_with("shift=") && *kv != "shift")
+        .collect();
+    if kept.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", kept.join("&"))
+    }
+}
+
 #[cfg(all(feature = "player", target_os = "windows"))]
-fn apply_subtitle(mpv: &libmpv2::Mpv, subtitle: &SubtitleRequest) -> Result<(), String> {
+fn apply_subtitle(
+    mpv: &libmpv2::Mpv,
+    subtitle: &SubtitleRequest,
+    stream_offset: f64,
+) -> Result<(), String> {
     if subtitle.url.is_empty() {
         mpv.set_property("sid", "no").map_err(|e| e.to_string())?;
         return Ok(());
@@ -2450,14 +2499,10 @@ fn apply_subtitle(mpv: &libmpv2::Mpv, subtitle: &SubtitleRequest) -> Result<(), 
     } else {
         subtitle.label.as_str()
     };
+    let url = strip_shift_param(&subtitle.url);
     mpv.command(
         "sub-add",
-        &[
-            subtitle.url.as_str(),
-            "select",
-            label,
-            subtitle.lang.as_str(),
-        ],
+        &[url.as_str(), "select", label, subtitle.lang.as_str()],
     )
     .map_err(|e| {
         if subtitle.startup {
@@ -2466,7 +2511,7 @@ fn apply_subtitle(mpv: &libmpv2::Mpv, subtitle: &SubtitleRequest) -> Result<(), 
             format!("could not load subtitle: {e}")
         }
     })?;
-    mpv.set_property("sub-delay", subtitle.shift)
+    mpv.set_property("sub-delay", subtitle_delay(subtitle.shift, stream_offset))
         .map_err(|e| e.to_string())?;
     mpv.set_property("sub-scale", subtitle_scale(&subtitle.size))
         .map_err(|e| e.to_string())
@@ -2480,6 +2525,14 @@ fn property<T: libmpv2::GetData>(mpv: &libmpv2::Mpv, name: &str) -> Option<T> {
 #[cfg(all(feature = "player", target_os = "windows"))]
 fn current_file_eof(start_seen: bool, file_loaded: bool, reason: libmpv2::EndFileReason) -> bool {
     start_seen && file_loaded && reason == libmpv2::mpv_end_file_reason::Eof
+}
+
+// mpv gave up on the file (could not open it, or the decoder died mid-play). Before this
+// was read, that end-file fell through to "startup timed out" or "stalled while
+// buffering" three seconds later — a wrong reason in the server log every time.
+#[cfg(all(feature = "player", target_os = "windows"))]
+fn current_file_failed(start_seen: bool, reason: libmpv2::EndFileReason) -> bool {
+    start_seen && reason == libmpv2::mpv_end_file_reason::Error
 }
 
 #[cfg(all(feature = "player", target_os = "windows"))]
@@ -2507,6 +2560,12 @@ fn drain_session_events(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> (boo
             Ok(libmpv2::events::Event::EndFile(reason)) => {
                 if current_file_eof(session.start_seen, session.file_loaded, reason) {
                     eof = true;
+                } else if current_file_failed(session.start_seen, reason) {
+                    error = Some(if session.file_loaded {
+                        "mpv stopped the file with an error after it had loaded (decoder or stream failure)".to_string()
+                    } else {
+                        "mpv could not open the stream (end-file: error)".to_string()
+                    });
                 }
             }
             Err(event_error) if session.start_seen => {
@@ -2543,7 +2602,7 @@ fn tick_session(
     }
     if session.file_loaded && !session.subtitle_attached {
         session.subtitle_attached = true;
-        if apply_subtitle(mpv, &session.subtitle).is_err() {
+        if apply_subtitle(mpv, &session.subtitle, session.subtitle_stream_offset()).is_err() {
             session.ui.subtitle_rel.clear();
             session.ui.subtitle_label.clear();
         }
@@ -3125,7 +3184,7 @@ fn handle_control(
                     startup: false,
                 };
             } else {
-                let _ = apply_subtitle(mpv, &subtitle);
+                let _ = apply_subtitle(mpv, &subtitle, active.subtitle_stream_offset());
                 active.subtitle = subtitle.clone();
             }
             active.ui.subtitle_rel = rel.clone();
@@ -3165,7 +3224,10 @@ fn handle_control(
             ],
         ),
         ControlAction::SubtitleShift(shift) => {
-            let _ = mpv.set_property("sub-delay", shift);
+            let _ = mpv.set_property(
+                "sub-delay",
+                subtitle_delay(shift, active.subtitle_stream_offset()),
+            );
             active.subtitle.shift = shift;
             eval_callback(
                 app,
@@ -3294,7 +3356,7 @@ fn handle_update(
     match update {
         UpdateAction::SubtitleChoices(choices) => active.ui.subtitle_choices = choices,
         UpdateAction::ActiveSubtitle(subtitle) => {
-            if apply_subtitle(mpv, &subtitle).is_ok() {
+            if apply_subtitle(mpv, &subtitle, active.subtitle_stream_offset()).is_ok() {
                 active.ui.subtitle_rel = subtitle.rel.clone();
                 active.ui.subtitle_label = subtitle.label.clone();
                 active.subtitle = subtitle;
@@ -3462,6 +3524,17 @@ mod tests {
             true,
             libmpv2::mpv_end_file_reason::Stop
         ));
+    }
+
+    #[test]
+    #[cfg(all(feature = "player", target_os = "windows"))]
+    fn an_end_file_error_is_a_player_error_not_a_timeout() {
+        let error = libmpv2::mpv_end_file_reason::Error;
+        assert!(current_file_failed(true, error), "mpv gave up on our file");
+        assert!(!current_file_failed(false, error), "an error before our file started is not ours");
+        assert!(!current_file_failed(true, libmpv2::mpv_end_file_reason::Stop), "a stop is a seek/reload, not a failure");
+        assert!(!current_file_failed(true, libmpv2::mpv_end_file_reason::Eof));
+        assert!(!current_file_failed(true, libmpv2::mpv_end_file_reason::Redirect));
     }
 
     #[test]
@@ -3647,6 +3720,29 @@ mod tests {
     fn cache_budget_has_conservative_first_play_fallbacks() {
         assert_eq!(cache_bytes(30, 0, 0.0, "1080p"), 96 * 1024 * 1024);
         assert_eq!(cache_bytes(30, 0, 0.0, "2160p"), 384 * 1024 * 1024);
+    }
+
+    #[test]
+    fn subtitle_delay_pulls_cues_back_by_the_stream_offset_on_a_server_seek() {
+        // Resume Dune at 41:10 on a remux: mpv's clock is 0-based, the VTT is movie-absolute.
+        assert_eq!(subtitle_delay(0.0, 2470.0), -2470.0);
+        // The viewer's own +1.0s nudge rides on top of that.
+        assert_eq!(subtitle_delay(1.0, 2470.0), -2469.0);
+        // Direct play keeps movie time: only the nudge.
+        assert_eq!(subtitle_delay(-0.5, 0.0), -0.5);
+        // Garbage in is a plain nudge, never NaN into mpv.
+        assert_eq!(subtitle_delay(f64::NAN, f64::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn subtitle_url_drops_the_baked_shift_so_the_nudge_is_applied_once() {
+        assert_eq!(
+            strip_shift_param("/api/ossubs/abc?lang=en&shift=1.0&t=tok"),
+            "/api/ossubs/abc?lang=en&t=tok"
+        );
+        assert_eq!(strip_shift_param("/api/releasesub/abc/r0?shift=-0.5"), "/api/releasesub/abc/r0");
+        assert_eq!(strip_shift_param("/api/subtitle/abc/2?t=tok"), "/api/subtitle/abc/2?t=tok");
+        assert_eq!(strip_shift_param("/plain.vtt"), "/plain.vtt");
     }
 
     #[test]

@@ -257,6 +257,16 @@ When built-in subtitles are off, web playback also skips the optional 1.4-second
 track-probe wait before warming online subtitles. Optional embedded extraction
 must not delay the default online-caption path.
 
+The manual sync nudge is applied exactly once per player. The server can bake
+`&shift=` into a VTT (`shiftVtt`); the web player moves cues itself
+(`applySubShiftToCues`), so its `<track>`/fetch URL never carries `shift`
+(`webSubtitleFetchUrl`). Android strips the parameter and applies the nudge in
+its overlay. The Windows shell strips it from `sub-add` and sets
+`sub-delay = nudge − stream offset`, because a server-side seek restarts the
+stream clock at zero. Alass on-demand sync measures two 30-second witness
+slices; a disagreement over 1.5s rejects the measurement, and one over 600ms
+is logged as framerate drift while the slice nearest the playhead still wins.
+
 ## Streaming Performance / Multi-User Capacity
 
 Triboon treats performance as a capacity model, not a single "more connections"
@@ -584,6 +594,61 @@ When changing persistence, update:
 - Packages the dynamically linked LGPL `libmpv-2.dll`, third-party notices, the
   verbatim LGPL license, and exact source/rebuild/replacement instructions.
   Windows client and Windows server installers are separate release assets.
+
+## Failure Logging
+
+Every failure a viewer can hit is written with its CAUSE, once, not as noise.
+Example: a movie freezes at 41:10. The log does not say "stall". It says
+`piece 812/2410 took 9.4s on the playback lane, 6 MB already ahead — lines:
+eweka 0/40 busy (12 waiting, quiet after 480); newshosting 20/20 busy`.
+
+- `server/debug.js`: `debug.fail(scope, text)` is ALWAYS written
+  (`[fail:scope]`), deduped per text for 60s as
+  `(same failure N more times)`. `debug.log/issue` need debug logging on.
+  Everything passes `redact()` (tokens, keys, provider urls).
+- `server/playback-log.js`: one "story" per play. `bindMountTrouble(vf)` in
+  `server/index.js` routes stream trouble into the story of the mount.
+- Usenet pieces (`server/vfs.js`): a piece on the startup/seek/playback lane
+  that takes `>= 4s` writes one `[fail:buffer]` line per 15s with the piece
+  number, lane, bytes already ahead, and the per-account pool picture
+  (busy/open, waiting, `quiet after 480`, down). A piece that fails on every
+  account writes `piece N/T failed on the <lane> lane — <error code>`.
+  Counters: `playbackStats.slowPieces/failedPieces`.
+- Login refusals (`server/nntp.js`): a 480 burst is written each time it
+  happens (`_authCapAnnounced` resets), stalls include the account snapshot.
+- Source finding (`server/pipeline.js`): `noPlayableError()` carries
+  `summary` (failed indexers by name, or the verdict counts of what WAS found:
+  removed, password, wrong runtime, wrong title, unsupported, incomplete,
+  disqualified, capped) and `attempts`; `playFailDetail()` writes
+  `— tried: name: reason | ...`.
+- ffmpeg (`server/index.js`): remux/transcode/HLS keep the stderr TAIL
+  (`ffmpegErrorTail`, progress and banner lines dropped) and die through
+  `noteFfmpegDeath(kind, vf, code, tail, {startSeconds, audio})` →
+  `[fail:remux|transcode|hls|hlsseek]` + `[debug:issue]` + story line. The
+  audio path decision (`audio=copy|aac|stereo-aac`) is on the mount line.
+  Live TV remux keeps head (HTTP status for the retry decision) AND tail
+  (`keepFfmpegStderr`); a live ffmpeg that dies after it had video writes
+  `live remux died mid-stream (exit N) — reason: ...` instead of "ended".
+- HTTP (`server/index.js`): a route crash writes `[fail:http] <route> crashed:
+  <message> @ <top stack frame>`; an intentional 5xx writes
+  `<route> <status>: <message>`; a failure after headers were sent writes
+  `failed after the reply started`.
+- Client issues (`POST /api/playback-issue`): kinds buffer, seek, skip, subs,
+  source, crash, drop, live, hop, trace, plus `audio` (device cannot play the
+  codec natively, sink error, underrun, codec error) and `ui` (app error).
+  `ui` and `crash` are written with `debug.fail` even with debug logging off.
+- Web (`web/index.html`): `window.onerror` / `unhandledrejection` →
+  `noteUiIssue` (message + `file:line`, max 6/min, same text once/min,
+  401 and AbortError skipped). Player-path switches say why
+  (`direct play did not start here — switching to server remux`). Subtitle
+  failures carry the HTTP status of the search, download, or `<track>` load.
+- Android (`MainActivity.java`): Media3 `AnalyticsListener` reports audio
+  sink errors, underruns `>= 250ms`, audio/video codec errors, dropped frames
+  `>= 30`, and audio format changes (`trace`); `onPlayerError` says whether it
+  resumed via a fresh server seek or the same direct stream.
+- Windows (`bridge.js`, `player.rs`): mpv's own error text reaches the page
+  (urls replaced by `[url]`); `EndFile(Error)` after a load is
+  `mpv stopped the file with an error after it had loaded`, never a timeout.
 
 ## Security Rules
 

@@ -239,6 +239,18 @@
   // Optional single-entry event router for integration tests and older native builds.  Current
   // builds call the exact callbacks directly; keeping this router token-aware makes the bridge
   // backwards compatible without exposing native commands to page scripts.
+  // One line of plain text from a native error event: no newlines, no URLs (a stream
+  // link carries a token), capped so the log line stays a line.
+  function playerErrorText(event) {
+    const raw = event && (event.message || event.error || event.reason);
+    const text = String(raw == null ? '' : raw)
+      .replace(/https?:\/\/\S+/gi, '[url]')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 200);
+    return text ? 'Windows player error: ' + text : 'Windows player error';
+  }
+
   Object.defineProperty(window, '__triboonWindowsPlayerEvent', {
     configurable: true,
     value(raw) {
@@ -258,11 +270,13 @@
         case 'seek': callPage('__tvNativeVideoSeek', [pos, duration, Number(event.resume || pos), token, !!event.percentResume]); break;
         case 'ended': callPage('__tvNativeVideoEnded', [pos, duration, token]); break;
         case 'closed': callPage('__tvNativeVideoClosed', [pos, duration, !!event.ended, token]); break;
-        case 'error': callPage('__tvNativeVideoError', ['Windows player error', pos, duration, token]); break;
+        // Keep mpv's own words. "Windows player error" alone left the server log with a
+        // crash and no cause; the message says decoder, network, or file.
+        case 'error': callPage('__tvNativeVideoError', [playerErrorText(event), pos, duration, token]); break;
         case 'next': callPage('__tvNativeVideoNext', [pos, duration, token]); break;
         case 'live_ready': callPage('__tvNativeLiveReady', []); break;
         case 'live_closed': callPage('__tvNativeLiveClosed', []); break;
-        case 'live_error': callPage('__tvNativeLiveError', ['Windows player error']); break;
+        case 'live_error': callPage('__tvNativeLiveError', [playerErrorText(event)]); break;
         case 'live_guide': callPage('__tvNativeLiveGuide', [Number(event.epoch || 0)]); break;
         case 'live_zap': callPage('__tvNativeLiveZap', [Number(event.direction || 1)]); break;
         default: break;

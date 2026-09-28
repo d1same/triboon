@@ -495,6 +495,36 @@ them when the table is reorganized:
   snap back to the typed plan. Code: `server/nntp.js` `_markAuthCap`,
   `refusingNewLogins`, `_ordered`. Verification: the 480 pause, both-accounts,
   and two-minute restore tests in `test/e2e.test.js`.
+- **P14 - a dark account sorts behind a busy one.** An account with zero open
+  lines whose last dial failed inside the backoff window is `down()`. It must
+  not win `_ordered()` on headroom alone: a busy account that is actually
+  downloading is tried first, the dark one last, and it moves back up as soon
+  as a probe line opens. A dial that fails is written once with the host and
+  the reason (`could not open a line — connect ETIMEDOUT … — treating the
+  account as down for 60s, probing every 8s`) and the pool picture shows
+  `N dialing` / `login broken`. Example: Easynews is unreachable at 9pm;
+  Play used to spend 48s dialing it before moving on. Now the first piece
+  comes from the account that is already streaming. Code: `server/nntp.js`
+  `_ordered` (`dark`), `_ensure` connect-failure log; `server/vfs.js`
+  `_poolPicture`. Verification: the dark-account ordering and never-opened
+  line tests in `test/e2e.test.js`.
+- **P11 - the manual nudge is applied exactly once per player.** The server
+  can bake `&shift=` into the VTT and the web player also moves cues in
+  `applySubShiftToCues`. The web `<track>`/fetch URL therefore never carries
+  `shift` (`webSubtitleFetchUrl`); Android strips it; the Windows shell
+  strips it from `sub-add` and sets `sub-delay = nudge − streamOffset` so a
+  server-side seek (stream clock restarts at 0) does not throw the cues off by
+  the seek position. Alass reports framerate drift (`subtitle drifts Nms
+  every 30s`) when its two witness slices disagree by more than 600ms; the
+  nearest slice still wins for the current minute. Code: `web/index.html`
+  `webSubtitleFetchUrl`; `clients/windows-px8/src-tauri/src/player.rs`
+  `subtitle_delay`, `strip_shift_param`; `server/index.js` `onDemandSubSync`.
+  Verification: the resume/subtitle/search contract in `test/phase4.test.js`
+  and the Rust unit tests in `player.rs`.
+- **P1 - Start over is one press.** `_startOver` zeroes the resume for that
+  Play only. Coming back to the movie from the Live TV guide
+  (`returnToSavedVod`) drops the flag and lands on the minute you left.
+  Verification: the resume/subtitle/search contract in `test/phase4.test.js`.
 - **P14 - the first-article probe asks every account at once.** The 800ms
   press-play STAT used to walk providers one 430 at a time (~4 round trips on a
   four-account box), so most dead copies timed out the probe and fell through to

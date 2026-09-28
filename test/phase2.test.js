@@ -1202,6 +1202,16 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
   ];
   assert.strictEqual(pickSub(exactFile, 'Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb.mkv').id, 'exact',
     'exact subtitle file/release matches beat generic same-title rows');
+  const runnerCuts = [
+    { id: 'playweb', url: 'http://x/pw.srt', format: 'srt', display: 'WEB-DL - PlayWEB', downloads: 9000, fromTrusted: true },
+    { id: 'amzn', url: 'http://x/amzn.srt', format: 'srt', display: 'The.Runner.2026.1080p.AMZN.WEB-DL.DDP.5.1.H.264-NTb' },
+    { id: 'pirates', url: 'http://x/pirates.srt', format: 'srt', display: 'The.Runner.2026.1080p.AMZN.WEB-DL.DDP.5.1.H.264-PiRaTeS' },
+  ];
+  const runnerFile = 'The.Runner.2026.1080p.AMZN.WEB-DL.DDP.5.1.H.264-PiRaTeS.mkv';
+  assert.strictEqual(pickSub(runnerCuts, runnerFile).id, 'pirates',
+    'an Amazon PiRaTeS movie must not auto-pick a popular PlayWEB row');
+  assert.strictEqual(pickSub(runnerCuts.filter((d) => d.id !== 'pirates'), runnerFile).id, 'amzn',
+    'when the same group is missing, the Amazon WEB-DL still beats PlayWEB');
   const forBlu = pickSub(data, 'Show.S01E01.1080p.BluRay.x264-GRP.mkv');
   assert.strictEqual(forBlu.id, 1, 'BluRay source matches the BluRay sub');
   const normalCut = [
@@ -1280,6 +1290,16 @@ test('subs: usableVariants trims the wrong-episode / unplayable rows from the me
   ];
   const mMenu = usableVariants(rankSubs(movie, 'Some.Movie.2024.1080p.WEB-DL-GRP.mkv'), { releaseName: 'Some.Movie.2024.1080p.WEB-DL-GRP.mkv' });
   assert.deepStrictEqual(mMenu.map((v) => v.id), ['srt'], 'movies drop only the unplayable bitmap row');
+  const { pickSub, hasConfidentAutoPick } = require('../server/opensubs');
+  const marioFile = 'The.Super.Mario.Galaxy.Movie.2026.1080p.BluRay.x264.AAC5.1-LAMA.mkv';
+  const mario = [
+    { id: 'ff', url: 'http://x/ff.srt', format: 'srt', display: 'Forensic Files - 13x10 - Sex Crimes - Window Watcher', downloads: 9000, fromTrusted: true },
+    { id: 'bluray', url: 'http://x/br.srt', format: 'srt', display: 'The.Super.Mario.Galaxy.Movie.2026.1080p.BluRay.x264-PSA' },
+  ];
+  assert.strictEqual(pickSub(mario, marioFile).id, 'bluray', 'a movie does not auto-pick a TV episode caption');
+  const onlyEpisode = rankSubs([mario[0]], marioFile);
+  assert.strictEqual(usableVariants(onlyEpisode, { releaseName: marioFile }).length, 0, 'the menu hides a TV episode when that is the only movie hit');
+  assert.strictEqual(hasConfidentAutoPick(onlyEpisode, { releaseName: marioFile }), false, 'auto-pick would rather show no captions than the wrong show');
 
   // Degrade gracefully: if EVERY result is a wrong episode, do not return an empty menu.
   const allWrong = [
@@ -1415,6 +1435,66 @@ test('subs: variant labels are distinct and fall back to the release name, not "
     { id: '2', url: 'http://x/2.srt', format: 'srt', display: 'House' },
   ], '');
   assert.strictEqual(new Set(dupe.map((v) => v.label)).size, 2, 'duplicate display strings are still made unique');
+});
+
+test('subs: sync shift is one gap, and a multi-minute jump is rejected', () => {
+  const { syncShiftMs, windowSrt } = require('../server/opensubs');
+  const line = (n, start, text) => `${n}\n${start} --> ${start.replace(/,000$/, ',400')}\n${text}`;
+  const input = [
+    line(1, '00:00:00,000', 'one'),
+    line(2, '00:00:02,000', 'two'),
+    line(3, '00:00:04,000', 'three'),
+    line(4, '00:00:06,000', 'four'),
+  ].join('\n\n');
+  const later = [
+    line(1, '00:00:03,200', 'one'),
+    line(2, '00:00:05,200', 'two'),
+    line(3, '00:00:07,200', 'three'),
+    line(4, '00:00:09,200', 'four'),
+  ].join('\n\n');
+  const jumped = [
+    line(1, '00:24:00,000', 'one'),
+    line(2, '00:24:02,000', 'two'),
+    line(3, '00:24:04,000', 'three'),
+    line(4, '00:24:06,000', 'four'),
+  ].join('\n\n');
+  assert.equal(syncShiftMs(input, later), 3200);
+  assert.equal(syncShiftMs(input, jumped), null);
+  const movie = [
+    line(1, '00:00:10,000', 'open'),
+    line(2, '01:05:10,000', 'now'),
+    line(3, '01:05:12,000', 'still'),
+    line(4, '01:05:14,000', 'here'),
+    line(5, '01:05:16,000', 'talking'),
+    line(6, '01:40:00,000', 'end'),
+  ].join('\n\n');
+  const slice = windowSrt(movie, 65 * 60 * 1000, 120000);
+  assert.equal(slice.count, 4);
+  assert.match(slice.srt, /00:00:10,000 -->/);
+  assert.doesNotMatch(slice.srt, /open|end/);
+});
+
+test('subs: a quiet opening still finds the next spoken stretch', () => {
+  const { speechWindow } = require('../server/opensubs');
+  const line = (n, start, text) => `${n}\n${start} --> ${start.replace(/,000$/, ',400')}\n${text}`;
+  const logos = [
+    line(1, '00:02:10,000', 'one'),
+    line(2, '00:02:12,000', 'two'),
+    line(3, '00:02:14,000', 'three'),
+    line(4, '00:02:16,000', 'four'),
+  ].join('\n\n');
+  const found = speechWindow(logos, 0);
+  assert.ok(found, 'logos with speech a minute later still sync');
+  assert.ok(found.originMs >= 20000 && found.originMs <= 130000);
+  assert.equal(found.count, 4);
+  const talking = [
+    line(1, '00:10:00,000', 'one'),
+    line(2, '00:10:02,000', 'two'),
+    line(3, '00:10:04,000', 'three'),
+    line(4, '00:10:06,000', 'four'),
+  ].join('\n\n');
+  const stay = speechWindow(talking, (10 * 60 - 20) * 1000);
+  assert.equal(stay.originMs, (10 * 60 - 20) * 1000);
 });
 
 test('subs: subSyncResultOk rejects corrupt alass alignments (cue count must be preserved)', () => {
@@ -5488,6 +5568,42 @@ test('scoring: a short 4K film stays playable so exact-4K does not silently moun
     '80–300MB 4K is a soft penalty, not a sample disqualify');
   const stub68 = scoreRelease({ name: 'Movie.2024.2160p.WEB-DL-Grp', sizeBytes: 68e6 }, policy);
   assert.ok(stub68.score <= -5000, 'a 68MB 4K sample is still disqualified');
+});
+
+test('pipeline: noPlayableError says WHY nothing played — failed indexers by name, or the verdicts on what was found', () => {
+  const { noPlayableError, summarizeUnplayable } = require('../server/pipeline');
+  // Every indexer down: the owner must read "indexers", not "no releases".
+  const allDown = noPlayableError([], [
+    { indexer: 'NZBgeek', error: 'NZBgeek: HTTP 429' },
+    { indexer: 'DrunkenSlug', error: 'deadline after 2000ms: https://api.drunkenslug.com/api' },
+  ], 2);
+  assert.strictEqual(allDown.message, 'no playable releases found', 'the message the client and the prepare cache key on is unchanged');
+  assert.match(allDown.summary, /Every indexer failed \(2 of 2\)/);
+  assert.deepStrictEqual(allDown.attempts.map((a) => a.name), ['NZBgeek', 'DrunkenSlug']);
+  assert.match(allDown.attempts[0].fail, /HTTP 429/);
+  assert.ok(!/\?/.test(allDown.attempts[1].fail), 'indexer errors never carry a query string (api keys)');
+  // One of three indexers down, nothing found.
+  const partial = noPlayableError([], [{ indexer: 'NZBgeek', error: 'NZBgeek: HTTP 503' }], 3);
+  assert.match(partial.summary, /No releases found; 1 of 3 indexers failed/);
+  // Nothing found and nobody failed: usenet simply has nothing.
+  const none = noPlayableError([], [], 3);
+  assert.match(none.summary, /No releases found on 3 indexers/);
+  assert.strictEqual(none.attempts, undefined);
+  // Releases found, all dead: the verdicts explain it.
+  const found = noPlayableError([
+    { name: 'A.2160p.mkv', health: 'missing', score: -100000 },
+    { name: 'B.1080p.mkv', health: 'missing', score: -100000 },
+    { name: 'C.1080p.mkv', health: 'encrypted', score: -100000 },
+    { name: 'D.1080p.mkv', health: 'wrong-runtime', score: -100000 },
+    { name: 'E.1080p-sample.mkv', score: -100000 },
+  ], [{ indexer: 'NZBgeek', error: 'NZBgeek: HTTP 429' }], 2);
+  assert.match(found.summary, /Found 5 releases, none playable \(/);
+  assert.match(found.summary, /2 removed\/missing/);
+  assert.match(found.summary, /1 password-protected/);
+  assert.match(found.summary, /1 wrong runtime/);
+  assert.match(found.summary, /1 incomplete\/sample/);
+  assert.match(found.summary, /1 indexer also failed/);
+  assert.strictEqual(summarizeUnplayable([{ name: 'X.mkv', score: -10 }]), '1 below the quality cap or filtered');
 });
 
 test('pipeline: summarizeAttempts turns raw fail reasons into one actionable sentence', () => {

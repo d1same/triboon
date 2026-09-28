@@ -366,12 +366,18 @@ function mergeQualifiedResults(results, extraResults, qualifies) {
   return results;
 }
 
-function titleWordsMatchFromStart(toks, words, { allowLeadingArticle = true } = {}) {
+function articleIsBlocked(blockedArticles, word) {
+  if (!blockedArticles || !word) return false;
+  return typeof blockedArticles.has === 'function' ? blockedArticles.has(word) : blockedArticles.includes(word);
+}
+function titleWordsMatchFromStart(toks, words, { allowLeadingArticle = true, blockedArticles = null } = {}) {
   let ti = 0;
   // Scene names keep a leading "The" the catalog dropped ("The.Mutiny.2026" for Mutiny 2026).
   // MOVIES only: for an episode request the same tolerance made "The.Dark.S01E01" (a different
   // show) match "Dark", and TMDB's original-title alias already covers a real dropped article.
+  // A blocked article is a DIFFERENT work (Runner vs The Runner, both 2026). Do not skip it.
   while (allowLeadingArticle && ti < toks.length && OPTIONAL_TITLE_ARTICLES.has(toks[ti])
+    && !articleIsBlocked(blockedArticles, toks[ti])
     && words[0] && !titleWordMatches(words[0], toks[ti])) {
     ti++;
   }
@@ -379,15 +385,63 @@ function titleWordsMatchFromStart(toks, words, { allowLeadingArticle = true } = 
     const w = words[wi];
     const t = toks[ti];
     if (t === undefined) {
-      if (OPTIONAL_TITLE_ARTICLES.has(w)) continue;
+      if (OPTIONAL_TITLE_ARTICLES.has(w) && !articleIsBlocked(blockedArticles, w)) continue;
       return -1;
     }
     if (titleWordMatches(w, t)) { ti++; continue; }
     const nextWanted = words[wi + 1];
-    if (OPTIONAL_TITLE_ARTICLES.has(w) && nextWanted && titleWordMatches(nextWanted, t)) continue;
+    if (OPTIONAL_TITLE_ARTICLES.has(w) && !articleIsBlocked(blockedArticles, w)
+      && nextWanted && titleWordMatches(nextWanted, t)) continue;
     return -1;
   }
   return ti;
+}
+// "Runner" and "The Runner" are different films when both exist. Returns the article words
+// that separate the two titles, or [] when one title has extra words (Blade Runner, Batman Begins).
+function titleTokensKeepArticles(s) {
+  return foldDiacritics(String(s || '')).toLowerCase().replace(/['’`]/g, '').replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+}
+function articleSiblingTokens(catalogTitle, otherTitle) {
+  const a = titleTokensKeepArticles(catalogTitle);
+  const b = titleTokensKeepArticles(otherTitle);
+  if (!a.length || !b.length) return [];
+  const aHas = OPTIONAL_TITLE_ARTICLES.has(a[0]) && a[0] !== 'and';
+  const bHas = OPTIONAL_TITLE_ARTICLES.has(b[0]) && b[0] !== 'and';
+  const aCore = (aHas ? a.slice(1) : a).join(' ');
+  const bCore = (bHas ? b.slice(1) : b).join(' ');
+  if (!aCore || aCore !== bCore) return [];
+  if (aHas && bHas && a[0] === b[0]) return [];
+  if (!aHas && !bHas) return [];
+  if (aHas && bHas) return [a[0], b[0]];
+  return [aHas ? a[0] : b[0]];
+}
+function articleFlipQuery(title) {
+  const words = titleTokensKeepArticles(title);
+  if (!words.length) return '';
+  if (OPTIONAL_TITLE_ARTICLES.has(words[0]) && words[0] !== 'and') return words.slice(1).join(' ');
+  return 'the ' + words.join(' ');
+}
+function collectArticleSiblings(catalogTitle, catalogYear, rows, selfId, fields = {}) {
+  const year = Number(catalogYear);
+  if (!catalogTitle || !Number.isInteger(year)) return [];
+  const dateKey = fields.dateKey || 'release_date';
+  const titleKey = fields.titleKey || 'title';
+  const originalKey = fields.originalKey || '';
+  const out = [];
+  for (const r of rows || []) {
+    if (!r || Number(r.id) === Number(selfId)) continue;
+    const y = parseInt(String(r[dateKey] || '').slice(0, 4), 10);
+    if (!Number.isInteger(y) || Math.abs(y - year) > 1) continue;
+    const names = [r[titleKey]];
+    if (originalKey && r[originalKey]) names.push(r[originalKey]);
+    for (const name of names) {
+      for (const art of articleSiblingTokens(catalogTitle, name)) {
+        if (art && !out.includes(art)) out.push(art);
+      }
+    }
+  }
+  return out;
 }
 
 // Does this release NAME actually carry the wanted title, episode, and a compatible year?
@@ -424,7 +478,7 @@ function releaseMatches(name, wanted) {
       }
     }
     let matched = false;
-    const matchOpts = { allowLeadingArticle: wanted.s === null };
+    const matchOpts = { allowLeadingArticle: wanted.s === null, blockedArticles: wanted.blockedArticles };
     for (const words of variants) {
       const ti = titleWordsMatchFromStart(toks, words, matchOpts);
       if (ti < 0) continue;
@@ -649,6 +703,55 @@ function summarizeAttempts(attempts = []) {
     head = `Couldn't start any of the ${n} available sources`;
   }
   return `${head} (${parts.join(', ')}).${tail}`;
+}
+
+// "no playable releases found" used to be the whole story. The owner could not tell
+// "the indexers all timed out" from "usenet has nothing" from "everything found was
+// dead". Say which, and carry the indexer failures so the log and the Sources panel
+// name the indexer and its error (HTTP 429, wrong key, deadline).
+function noPlayableError(candidates = [], errors = [], total = 0) {
+  const e = new Error('no playable releases found');
+  const found = (candidates || []).length;
+  const failed = (errors || []).filter((x) => x && x.error);
+  const indexers = Math.max(Number(total) || 0, failed.length);
+  let head;
+  if (!found && failed.length && indexers && failed.length >= indexers) {
+    head = `Every indexer failed (${failed.length} of ${indexers}), so nothing was searched`;
+  } else if (!found && failed.length) {
+    head = `No releases found; ${failed.length} of ${indexers} indexers failed`;
+  } else if (!found) {
+    head = `No releases found on ${indexers || 'the'} indexers`;
+  } else {
+    const why = summarizeUnplayable(candidates);
+    head = `Found ${found} release${found === 1 ? '' : 's'}, none playable${why ? ` (${why})` : ''}`;
+    if (failed.length) head += `; ${failed.length} indexer${failed.length === 1 ? '' : 's'} also failed`;
+  }
+  e.summary = head;
+  if (failed.length) {
+    e.attempts = failed.slice(0, 6).map((x) => ({ name: String(x.indexer || 'indexer').slice(0, 60), fail: String(x.error || '').slice(0, 160), indexer: x.indexer }));
+  }
+  return e;
+}
+
+// Why did every found release score unplayable? Counts the verdicts already on the
+// candidates so the line reads "3 removed/missing, 2 password-protected, 1 wrong runtime".
+function summarizeUnplayable(candidates = []) {
+  const cats = new Map();
+  const bump = (k) => cats.set(k, (cats.get(k) || 0) + 1);
+  for (const c of candidates || []) {
+    const health = String((c && c.health) || '').toLowerCase();
+    const cls = String((c && c.streamClass) || '').toLowerCase();
+    const name = String((c && c.name) || '');
+    if (/missing|dead|removed/.test(health)) bump('removed/missing');
+    else if (/encrypt|password/.test(health) || /encrypt|password/.test(cls)) bump('password-protected');
+    else if (/wrong-runtime/.test(health)) bump('wrong runtime');
+    else if (/wrong|mismatch/.test(health)) bump('wrong title/episode');
+    else if (/compressed|7z|unsupported|unstreamable/.test(health) || /compressed|7z|unsupported/.test(cls)) bump('unsupported format');
+    else if (/sample|stub/.test(health) || /\bsample\b/i.test(name)) bump('incomplete/sample');
+    else if (Number(c && c.score) <= -50000) bump('disqualified by score');
+    else bump('below the quality cap or filtered');
+  }
+  return [...cats.entries()].map(([k, n]) => `${n} ${k}`).join(', ');
 }
 
 // Is this mounted file too small to be the real feature it claims? Pure + exported so it can be unit-
@@ -2411,6 +2514,11 @@ class Pipeline {
     if (wanted && Array.isArray(policy.otherYears) && policy.otherYears.length) {
       wanted.otherYears = policy.otherYears.map(Number).filter((y) => Number.isInteger(y) && y !== wanted.year);
     }
+    // Runner (2026) and The Runner (2026) share a year and differ by one article. When the
+    // catalog lookup found that other work, the article is no longer optional.
+    if (wanted && Array.isArray(policy.articleSiblings) && policy.articleSiblings.length) {
+      wanted.blockedArticles = new Set(policy.articleSiblings.map((a) => String(a || '').toLowerCase()).filter(Boolean));
+    }
     // TV episode context for scoring: a whole-season PACK must not be size-cap-disqualified — only ONE
     // episode streams from it (it's still size-SHAPED, so it stays a low-ranked fallback below singles).
     // Scoped to episode requests; movies/season-less searches never get wantedEpisode → unaffected.
@@ -3056,7 +3164,7 @@ class Pipeline {
       }).catch(() => {});
       return committed;
     }
-    let { candidates } = await this.search(params, policy);
+    let { candidates, errors: searchErrors } = await this.search(params, policy);
     if (!(candidates && candidates.length)) {
       const stale = await this.search(params, policy, { allowStale: true });
       if (stale.candidates && stale.candidates.length) candidates = stale.candidates;
@@ -3089,7 +3197,7 @@ class Pipeline {
       playable = wide.playable;
       if (wide.candidates && wide.candidates.length) candidates = wide.candidates;
     }
-    if (!playable.length) throw new Error('no playable releases found');
+    if (!playable.length) throw noPlayableError(candidates, searchErrors, this.indexers().length);
     if (!explicitPick) playable = this._orderForPipe(playable, policy);
     if (!explicitPick && !params.pinnedResume) playable = this._orderForPicture(playable, policy);
     const session = new PlaySession(params, playable);
@@ -3351,14 +3459,14 @@ class Pipeline {
   }
 
   async _runPrepare(params, policy = {}, mountOpts = {}) {
-    let { candidates } = await this.search(params, policy);
+    let { candidates, errors: searchErrors } = await this.search(params, policy);
     let playable = this._playableCandidates(candidates, params);
     if (!playable.length) {
       const wide = await this._widenPlayable(params, policy, playable, candidates);
       playable = wide.playable;
       if (wide.candidates && wide.candidates.length) candidates = wide.candidates;
     }
-    if (!playable.length) throw new Error('no playable releases found');
+    if (!playable.length) throw noPlayableError(candidates, searchErrors, this.indexers().length);
     const userChose = (params.pickKey || params.pick) && !params.pinnedResume;
     if (!userChose) playable = this._orderForPipe(playable, policy);
     if (!userChose && !params.pinnedResume) playable = this._orderForPicture(playable, policy);
@@ -3689,10 +3797,11 @@ class Pipeline {
 module.exports = {
   Pipeline, GATE_MS, STARTUP_SLOTS, PLAY_RACE_WIDTH, StartupGate,
   parseWantedTitle, releaseMatches, catalogIdentityMatches, releaseQualifies, shortTitleQuery, foldDiacritics,
+  articleFlipQuery, collectArticleSiblings,
   aliasSearchQueries, yearlessSearchQuery, qualitySearchQuery, seasonPackSearchQuery, widenSearchQueries, widenSearchJobs,
   candidateKey, nzbVerdictKey, runtimeVerdictKeys, runtimeMismatch, lookupVerdict, RUNTIME_VERDICT_TTL_MS,
   releaseFingerprint, applyNzbFingerprintFields,
-  summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
+  summarizeAttempts, noPlayableError, summarizeUnplayable, stubFeatureReason, parseWantedBook, bookMatches,
   isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, mountNeedsUsenetShare, ACTIVE_PLAYBACK_GRACE_MS,
   allocateStreamConnections, classifyStreamNeed, streamNeedMbps, streamIsUhd, mountAheadBytes, fileIsFullyAhead,
   needSocketsFor, pipeIsSaturated, mbpsPerConnection, oneViewerOpenCap,

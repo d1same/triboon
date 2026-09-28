@@ -23,7 +23,7 @@ const {
   attachJellyfinSocket, closeJellyfinSockets,
   streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist, loadingCardPng, loadingHoldPlaylist,
 } = require('./jellyfin-api');
-const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch } = require('./pipeline');
+const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch, articleFlipQuery, collectArticleSiblings } = require('./pipeline');
 const {
   isCamCandidate, camScoringEnabled, sourceDrawerCandidates,
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
@@ -289,37 +289,55 @@ function writeOsSubCache(fileId, lang, vtt) {
     for (const d of doomed) fs.promises.rm(path.join(OS_SUB_CACHE_DIR, d.n), { force: true }).catch(() => {});
   })().catch(() => {});
 }
+// A no-hash auto-pick must not stay cached once we know the file's real fingerprint.
+// The next Play then downloads the hash-exact subtitle instead of the popular stand-in.
+function forgetNoHashSubtitles(vf) {
+  if (!vf._osCache) return;
+  for (const k of [...vf._osCache.keys()]) {
+    if (String(k).endsWith(':auto:nohash')) vf._osCache.delete(k);
+  }
+}
 // Compute the OpenSubtitles moviehash on the mounted file (first+last 64KB + size), cached on
 // the mount. Uses the lowest NNTP lane so it never competes with playback. Null on any failure.
-async function moviehashForMount(vf) {
-  if (vf._moviehash !== undefined) return vf._moviehash;
-  vf._moviehash = null;
-  try {
-    const size = Number(vf.size) || 0;
-    if (size >= 131072 && typeof vf.read === 'function') {
-      const head = await collectStream(vf.read(0, 65536, { priority: 'background' }));
-      const tail = await collectStream(vf.read(size - 65536, size, { priority: 'background' }));
-      vf._moviehash = moviehashFromChunks(head, tail, size) || null;
-    }
-  } catch { vf._moviehash = null; }
-  return vf._moviehash;
+// One shared job: publishing null before the read finished made every later caller give up.
+function moviehashForMount(vf) {
+  if (vf._moviehashJob) return vf._moviehashJob;
+  if (vf._moviehash !== undefined) return Promise.resolve(vf._moviehash);
+  vf._moviehashJob = (async () => {
+    let hash = null;
+    try {
+      const size = Number(vf.size) || 0;
+      if (size >= 131072 && typeof vf.read === 'function') {
+        const head = await collectStream(vf.read(0, 65536, { priority: 'background' }));
+        const tail = await collectStream(vf.read(size - 65536, size, { priority: 'background' }));
+        hash = moviehashFromChunks(head, tail, size) || null;
+      }
+    } catch { hash = null; }
+    vf._moviehash = hash;
+    vf._moviehashJob = null;
+    if (hash) forgetNoHashSubtitles(vf);
+    return hash;
+  })();
+  return vf._moviehashJob;
 }
 // Normalized OpenSubtitles variants for a mount. Never throws — any failure yields [] so the
 // Wyzie results stand alone. Hash search runs first (best signal), id search as the fallback.
-async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang, season = null, episode = null, query = null }) {
+async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang, season = null, episode = null, query = null, hashWaitMs = 2500 }) {
   const cfg = effectiveOpenSubtitles();
   if (!cfg) return [];
   try {
-    // The moviehash needs a head+tail read of the mount — on a cold multi-volume mount that can
-    // take seconds, and it was serializing IN FRONT of the search (slow CC menu). Cap the wait:
-    // a fast hash still rides along for exact-sync ranking; a slow one resolves in the background
-    // (cached on the mount) and enriches the NEXT search instead of stalling this one.
+    // The moviehash needs a head+tail read of the mount. The CC menu caps that wait so the
+    // list stays fast. Play waits longer before it calls in, then passes hashWaitMs 0.
+    // usedHash is the fingerprint this search actually sent, so a no-hash list is never
+    // stored as if it were the exact-file list.
+    const wait = Math.max(0, Number(hashWaitMs) || 0);
     const moviehash = await Promise.race([
       moviehashForMount(vf).catch(() => null),
-      new Promise((r) => { const t = setTimeout(() => r(null), 2500); if (t.unref) t.unref(); }),
+      new Promise((r) => { const t = setTimeout(() => r(null), wait); if (t.unref) t.unref(); }),
     ]);
+    const usedHash = moviehash || '';
     const data = await osSearch({
-      apiKey: cfg.apiKey, base: cfg.base, moviehash: moviehash || '',
+      apiKey: cfg.apiKey, base: cfg.base, moviehash: usedHash,
       // Use the caller's query when provided: for a resolved EPISODE-level imdb the handler strips
       // SxxExx, and passing the RAW vf._subQuery here let osSearch re-derive season/episode and send
       // them ALONGSIDE the episode imdb — which OpenSubtitles treats as over-constrained and returns
@@ -327,7 +345,9 @@ async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang, season 
       // "not found" for no-show-imdb TV like Goosebumps: The Vanishing.
       imdbId, tmdbId, query: query != null ? query : (vf._subQuery || vf._q || ''), lang, season, episode,
     });
-    return (Array.isArray(data) ? data : []).map(osNormalize).filter((v) => v && v._osFileId);
+    const variants = (Array.isArray(data) ? data : []).map(osNormalize).filter((v) => v && v._osFileId);
+    variants.usedHash = usedHash;
+    return variants;
   } catch { return []; }
 }
 
@@ -347,34 +367,105 @@ function vttToSrt(vtt) {
 // tokened stream URL ffmpeg already uses for embedded subs. Heavy (alass reads the audio via
 // ffmpeg), so callers only invoke it for subs that aren't already in sync. Returns the corrected
 // VTT; throws on failure so the caller falls back to the unsynced cue track.
-async function onDemandSubSync(vf, vtt, uid) {
+// Thirty seconds of the first audio track, starting at atSec. alass then measures the gap
+// in that slice. A longer slice that crosses a quiet gap, or the whole caption lined up
+// against the opening, is what shoved the words to the wrong scene.
+function extractSyncSample(streamUrl, wavPath, atSec = 0, audioIndex = 0) {
+  const ff = detectFfmpeg();
+  if (!ff) return Promise.reject(new Error('ffmpeg not available'));
+  const at = Math.max(0, Number(atSec) || 0);
+  const audio = Math.max(0, Math.min(15, parseInt(audioIndex, 10) || 0));
+  const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
+  if (at >= 1) args.push('-ss', at.toFixed(3));
+  args.push('-i', streamUrl, '-t', '30', '-map', `0:a:${audio}`, '-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', wavPath);
+  return new Promise((resolve, reject) => {
+    const p = spawnResumePad(ff.path, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+    let err = '';
+    let settled = false;
+    const finish = (fn) => { if (settled) return; settled = true; clearTimeout(killer); fn(); };
+    const killer = setTimeout(() => {
+      try { p.kill('SIGKILL'); } catch {}
+      finish(() => reject(new Error('subtitle sync audio sample took too long')));
+    }, 90000);
+    p.stderr.on('data', (d) => { if (err.length < 2000) err += d.toString(); });
+    p.on('error', (e) => finish(() => reject(e)));
+    p.on('close', (code) => finish(() => {
+      if (code === 0) resolve();
+      else reject(new Error(`subtitle sync audio sample failed: ${err.slice(-160)}`));
+    }));
+  });
+}
+// Measure the gap for one 30-second slice: pull that audio, hand alass only the lines
+// from the same slice, and demand one clean shift back. Throws when the slice is unusable.
+async function measureSubSyncWindow(dir, tag, streamUrl, windowed, audioIndex) {
+  const fsp = fs.promises;
+  const inSrt = path.join(dir, `in-${tag}.srt`);
+  const outSrt = path.join(dir, `out-${tag}.srt`);
+  const wav = path.join(dir, `ref-${tag}.wav`);
+  await fsp.writeFile(inSrt, windowed.srt, 'utf8');
+  await extractSyncSample(streamUrl, wav, windowed.originMs / 1000, audioIndex);
+  await new Promise((resolve, reject) => {
+    // --no-split keeps one offset for the whole movie. Framerate guessing
+    // stretches that slice so the lines no longer share one gap, and we then
+    // throw the correction away. Runner's Amazon caption was 5.2s behind;
+    // guessing turned that into a scatter and the words stayed late.
+    const p = spawnSubSync(wav, inSrt, outSrt, ['--no-split', '--disable-fps-guessing']);
+    let err = '';
+    const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('subtitle sync took too long')); }, 60000);
+    p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
+    p.on('error', (e) => { clearTimeout(killer); reject(e); });
+    p.on('close', (code) => { clearTimeout(killer); code === 0 ? resolve() : reject(new Error(`alass exited ${code}: ${err.slice(-200)}`)); });
+  });
+  const out = await fsp.readFile(outSrt, 'utf8');
+  // alass only re-times existing cues; a changed cue count (or empty output) means a corrupt
+  // alignment — reject it so the caller falls back to the unsynced track instead of garbage.
+  if (!subSyncResultOk(windowed.srt, out)) throw new Error('alass output failed the cue-count sanity check');
+  const shiftMs = syncShiftMs(windowed.srt, out);
+  if (shiftMs == null) throw new Error('subtitle sync offset was not a single gap');
+  return shiftMs;
+}
+async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
   const os2 = require('os');
   const fsp = fs.promises;
   const dir = await fsp.mkdtemp(path.join(os2.tmpdir(), 'triboon-subsync-'));
-  const inSrt = path.join(dir, 'in.srt');
-  const outSrt = path.join(dir, 'out.srt');
   try {
-    await fsp.writeFile(inSrt, vttToSrt(vtt), 'utf8');
-    // &priority=background is critical: alass pulls the mount's AUDIO through this stream URL, and
-    // without an explicit priority those reads classify as startup/seek — the TOP NNTP lane, which
-    // also bypasses the active-player connection reserve — so enabling CC mid-playback would steal
-    // connections from the live video and cause buffering. The embedded-subtitle extractor already
-    // uses this lane; the on-demand sync path must too. (Sub-sync is background work by contract.)
-    // Local add-ins skip the HTTP hop — alass reads the file on disk.
+    // Sample just before the playhead so a line that is early is still in the clip, then
+    // only hand alass the cues from that same short clip. The gap it finds is applied to
+    // the whole file. A long clip that crosses a quiet gap is what delayed every line.
+    const at = Math.max(0, Number(atSec) || 0);
+    const srt = vttToSrt(vtt);
+    const spoken = speechWindow(srt, Math.round(Math.max(0, at - 30) * 1000));
+    if (!spoken) throw new Error('subtitle sync could not find words near this minute');
+    const origin = spoken.originMs / 1000;
+    // &priority=background is critical: the sample pull uses this stream URL, and without an
+    // explicit priority those reads classify as startup/seek — the TOP NNTP lane, which also
+    // bypasses the active-player connection reserve — so enabling CC mid-playback would steal
+    // connections from the live video and cause buffering. Local add-ins skip the HTTP hop.
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
-    await new Promise((resolve, reject) => {
-      const p = spawnSubSync(selfUrl, inSrt, outSrt);
-      let err = '';
-      const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('subtitle sync timed out')); }, 300000);
-      p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
-      p.on('error', (e) => { clearTimeout(killer); reject(e); });
-      p.on('close', (code) => { clearTimeout(killer); code === 0 ? resolve() : reject(new Error(`alass exited ${code}: ${err.slice(-200)}`)); });
-    });
-    const out = await fsp.readFile(outSrt, 'utf8');
-    // alass only re-times existing cues; a changed cue count (or empty output) means a corrupt
-    // alignment — reject it so the caller falls back to the unsynced track instead of garbage.
-    if (!subSyncResultOk(vtt, out)) throw new Error('alass output failed the cue-count sanity check');
-    return srtToVtt(out);
+    const shiftMs = await measureSubSyncWindow(dir, 'a', selfUrl, spoken, audioIndex);
+    // Second witness. Five lines in thirty seconds can lock onto the neighbouring line
+    // when the gap is close to the spacing between lines (proven offline: a 5.2s-late
+    // caption came back as 0.2s). The slice already played is cheap; the slice after the
+    // playhead is the fallback. Sparse dialogue with no second slice keeps the single answer.
+    const before = spoken.originMs >= 30000 ? windowSrt(srt, spoken.originMs - 30000, 30000) : null;
+    const after = windowSrt(srt, spoken.originMs + 30000, 30000);
+    const witness = before ? { ...before, originMs: spoken.originMs - 30000 }
+      : (after ? { ...after, originMs: spoken.originMs + 30000 } : null);
+    let agreed = 1;
+    let driftMsPer30s = 0;
+    if (witness) {
+      const second = await measureSubSyncWindow(dir, 'b', selfUrl, witness, audioIndex);
+      if (Math.abs(second - shiftMs) > 1500) {
+        throw new Error(`subtitle sync witnesses disagree (${shiftMs}ms vs ${second}ms)`);
+      }
+      agreed = 2;
+      // Two slices thirty seconds apart that agree on direction but not on size is a
+      // framerate mismatch (23.976 vs 25 fps slides ~1.3s every 30s), not noise. The
+      // nearest slice is still right for THIS minute; the log says why later minutes slide.
+      const gap = Math.abs(second - shiftMs);
+      if (gap > 600) driftMsPer30s = Math.round(shiftMs - second) * (spoken.originMs > witness.originMs ? 1 : -1);
+    }
+    return { vtt: shiftVtt(vtt, shiftMs / 1000), shiftMs, originSec: origin, cues: spoken.count, agreed, driftMsPer30s };
   } finally {
     fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -872,7 +963,7 @@ const pipeline = new Pipeline({
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
 const {
   fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, usableVariants, distinctVariants, hasConfidentAutoPick, srtToVtt, shiftVtt, decodeSubtitleBuffer,
-  osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks, subtitleLooksSynced, subSyncResultOk,
+  osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks, subtitleLooksSynced, subSyncResultOk, syncShiftMs, windowSrt, speechWindow,
   _isTransientError: isTransientSubError,
   _isNoSubtitleError: isNoSubtitleError,
 } = require('./opensubs');
@@ -3619,13 +3710,52 @@ async function loadAuthArt() {
 }
 
 // ---------- helpers ----------
+// The line an owner reads when Play fails. Each tried source (or failed indexer) is
+// named WITH its reason — "file.mkv: 430 no such article" — not just listed. A
+// list of names said what we tried; it never said why each one lost.
 function playFailDetail(e) {
   const summary = e && e.summary ? ` — ${e.summary}` : '';
-  const names = Array.isArray(e && e.attempts)
-    ? e.attempts.slice(0, 3).map((row) => String((row && row.name) || '').slice(0, 70)).filter(Boolean)
+  const rows = Array.isArray(e && e.attempts)
+    ? e.attempts.slice(0, 4).map((row) => {
+      const name = String((row && (row.name || row.indexer)) || '').slice(0, 70);
+      const why = String((row && row.fail) || '').replace(/\s+/g, ' ').trim().slice(0, 110);
+      return name && why ? `${name}: ${why}` : (name || why);
+    }).filter(Boolean)
     : [];
-  const which = names.length ? ` sources: ${names.join(' | ')}` : '';
+  const which = rows.length ? ` — tried: ${rows.join(' | ')}` : '';
   return `${(e && e.message) || 'error'}${summary}${which}`;
+}
+
+// ffmpeg writes a banner, then a progress line every second, then — only at the very
+// end — the one line that says what killed it. Keeping the HEAD of stderr and printing
+// its first 400 chars logged the banner on every death and never the reason. Keep the
+// tail, drop the progress heartbeat, and print the last real lines.
+function ffmpegErrorTail(stderrTail, max = 320) {
+  const lines = String(stderrTail || '').split(/\r?\n|\r/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/^(frame|size|fps|bitrate|speed|out_time|progress|total_size|drop_frames|dup_frames|stream_\d|Press \[q\])/i.test(l)
+      && !/^\s*(ffmpeg version|built with|configuration:|lib(av|sw|post)\w*\s+\d)/i.test(l));
+  return lines.slice(-3).join(' | ').slice(-max);
+}
+// Live TV needs both ends of stderr: the HEAD carries the HTTP status ffmpeg got when it
+// opened the provider url (401/403/429 decide the retry), the TAIL carries the death line
+// hours later. Keep 2 KB of head and 5 KB of tail; the middle is heartbeat.
+function keepFfmpegStderr(buf, chunk) {
+  const next = String(buf || '') + chunk;
+  if (next.length <= 8000) return next;
+  return `${next.slice(0, 2000)}\n...\n${next.slice(-5000)}`;
+}
+// One line for a remux/transcode process that died mid-play: which mount, where in the
+// film, what audio path, exit code, and ffmpeg's own last words. Goes to the always-on
+// failure log and to the play story so the owner sees it next to "buffered 12s".
+function noteFfmpegDeath(kind, vf, code, stderrTail, ctx = {}) {
+  const tail = ffmpegErrorTail(stderrTail);
+  const where = Number(ctx.startSeconds) > 0 ? ` from ${Math.round(Number(ctx.startSeconds))}s` : ' from the start';
+  const audio = ctx.audio ? ` audio=${ctx.audio}` : '';
+  const line = `${kind} died${where} (exit ${code}${audio}) — "${String((vf && vf.name) || '').slice(0, 80)}" — reason: ${tail || 'ffmpeg gave no reason'}`;
+  debug.fail(kind, `${(vf && vf.id) || '-'} ${line}`);
+  debug.issue(line);
+  if (vf && vf.id) story.noteMount(vf.id, line);
 }
 
 function send(res, code, body, headers = {}) {
@@ -3904,9 +4034,11 @@ function repositionHls(sess, index) {
     sess.ff = ff;
     sess.encodeAt = index;
     let err = '';
-    ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; });
-    ff.on('error', (e) => console.error('[hls seek]', e.message));
-    ff.on('close', (codeNum) => { if (codeNum) console.error('[hls seek]', err.slice(0, 400)); });
+    ff.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
+    ff.on('error', (e) => debug.fail('hls', `${(sess.vf && sess.vf.id) || '-'} could not start ffmpeg for the seek: ${e.message}`));
+    ff.on('close', (codeNum) => {
+      if (codeNum) noteFfmpegDeath('hls seek', sess.vf || null, codeNum, err, { startSeconds: index * (sess.segmentTime || 2) + (sess.sessionStart || 0) });
+    });
     resolve();
   });
 }
@@ -4209,14 +4341,14 @@ const catalogFactsCache = new Map();
 const normFactTitle = (s) => pipelineFoldDiacritics(String(s || '')).toLowerCase().replace(/['’`]/g, '').replace(/&/g, ' and ')
   .replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter((w) => w && !['the', 'a', 'an'].includes(w)).join(' ');
 async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
-  const out = { year: parseCatalogYear(year) ? year : undefined, akaTitles: [], otherYears: [], runtimeMin: 0 };
+  const out = { year: parseCatalogYear(year) ? year : undefined, akaTitles: [], otherYears: [], articleSiblings: [], runtimeMin: 0 };
   const id = parseInt(tmdbId, 10);
   if (!id || !settings.get().tmdbKey) return out;
   const type = mediaType === 'tv' ? 'tv' : 'movie';
   const key = `${type}:${id}`;
   let facts = catalogFactsCache.get(key);
   if (!facts) {
-    facts = { year: null, akaTitles: [], otherYears: [], runtimeMin: 0 };
+    facts = { year: null, akaTitles: [], otherYears: [], articleSiblings: [], runtimeMin: 0 };
     try {
       const d = await tmdb.get(`/${type}/${id}${type === 'movie' ? '?append_to_response=alternative_titles' : ''}`);
       facts.year = parseCatalogYear(String((d && (d.release_date || d.first_air_date)) || '').slice(0, 4));
@@ -4232,6 +4364,8 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
           `/search/tv?query=${encodeURIComponent(main || d.name)}&first_air_date_year=${facts.year - 1}`,
           `/search/tv?query=${encodeURIComponent(main || d.name)}&first_air_date_year=${facts.year + 1}`,
         ];
+        const flip = articleFlipQuery(d.name);
+        if (flip) queries.push(`/search/tv?query=${encodeURIComponent(flip)}`);
         const pages = await Promise.all(queries.map((q) => tmdb.get(q).catch(() => null)));
         for (const s of pages) {
           for (const r of (s && s.results) || []) {
@@ -4242,6 +4376,12 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
           }
         }
         facts.otherYears = [...new Set(facts.otherYears)];
+        // "The Runner" the show must not play "Runner" the show when both exist in the same year.
+        for (const s of pages) {
+          for (const art of collectArticleSiblings(d.name, facts.year, s && s.results, id, { dateKey: 'first_air_date', titleKey: 'name', originalKey: 'original_name' })) {
+            if (!facts.articleSiblings.includes(art)) facts.articleSiblings.push(art);
+          }
+        }
       }
       if (type === 'movie' && d) {
         const main = normFactTitle(d.title);
@@ -4266,6 +4406,8 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
             `/search/movie?query=${encodeURIComponent(main)}&year=${facts.year - 1}`,
             `/search/movie?query=${encodeURIComponent(main)}&year=${facts.year + 1}`,
           ];
+          const flip = articleFlipQuery(d.title);
+          if (flip) queries.push(`/search/movie?query=${encodeURIComponent(flip)}`);
           const pages = await Promise.all(queries.map((q) => tmdb.get(q).catch(() => null)));
           for (const s of pages) {
             for (const r of (s && s.results) || []) {
@@ -4276,6 +4418,12 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
             }
           }
           facts.otherYears = [...new Set(facts.otherYears)];
+          // Runner (2026) must not play The.Runner.2026 when that other film exists the same year.
+          for (const s of pages) {
+            for (const art of collectArticleSiblings(d.title, facts.year, s && s.results, id, { dateKey: 'release_date', titleKey: 'title', originalKey: 'original_title' })) {
+              if (!facts.articleSiblings.includes(art)) facts.articleSiblings.push(art);
+            }
+          }
         }
       }
     } catch {}
@@ -4285,6 +4433,7 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
   if (!out.year && facts.year) out.year = facts.year;
   out.akaTitles = facts.akaTitles;
   out.otherYears = facts.otherYears;
+  out.articleSiblings = facts.articleSiblings || [];
   out.runtimeMin = facts.runtimeMin || 0;
   // Episodes: only TMDB's PER-EPISODE runtime is trusted for the probe check (a show-level
   // average would flag every 80-minute pilot). Cached per episode; missing → no check.
@@ -4331,10 +4480,13 @@ function armRuntimeCheck(vf, policy, candidate, body) {
   vf._runtimeCheck = { runtimeMin, tmdbId, title: String((body && body.q) || '').replace(/\s+(19|20)\d{2}$/, ''), candidate: { nzbUrl: candidate.nzbUrl, name: candidate.name }, done: false };
   if (vf._tracks) noteRuntimeCheck(vf); // probe already landed (prepared mount reused)
 }
-function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, runtimeMin, tmdbId, caps: rawCaps } = {}) {
+function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, articleSiblings, runtimeMin, tmdbId, caps: rawCaps } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
   if (Array.isArray(akaTitles) && akaTitles.length) policy.akaTitles = akaTitles.slice(0, 6).map(String);
   if (Array.isArray(otherYears) && otherYears.length) policy.otherYears = otherYears.map(Number).filter((y) => Number.isInteger(y));
+  if (Array.isArray(articleSiblings) && articleSiblings.length) {
+    policy.articleSiblings = articleSiblings.map((a) => String(a || '').toLowerCase()).filter((a) => a === 'the' || a === 'a' || a === 'an').slice(0, 3);
+  }
   // Catalog identity for title-scoped verdicts (wrong-runtime) and the film runtime for the probe check.
   if (parseInt(tmdbId, 10) > 0) policy.catalogTmdbId = parseInt(tmdbId, 10);
   if (Number(runtimeMin) > 0) policy.wantedRuntimeMin = Number(runtimeMin);
@@ -4857,6 +5009,32 @@ function activityConnectionStats() {
     };
   });
   return { providers, inUse: stats.inUse, open: stats.open, size: stats.size, queued: stats.queued };
+}
+// A slow or failed piece inside the file stream lands in the play story of the mount that
+// owns it (multi-volume archives have one story, not one per RAR part).
+function bindMountTrouble(vf) {
+  if (!vf || !vf.id) return;
+  for (const v of (vf.vols || [vf])) {
+    if (v && typeof v === 'object') v.onTrouble = (text) => story.noteMount(vf.id, text);
+  }
+}
+// One short clause per account for the playback log: "eweka 0/40 open, 12 waiting, quiet".
+// Host and counts only — the same fields the Activity screen already shows.
+function usenetLinesSnapshot() {
+  if (!pool || typeof pool.stats !== 'function') return '';
+  let stats;
+  try { stats = pool.stats(); } catch { return ''; }
+  if (!stats || !Array.isArray(stats.providers) || !stats.providers.length) return '';
+  return stats.providers.map((p) => {
+    const host = String(p.host || 'usenet').toLowerCase().replace(/^news\./, '').split('.')[0];
+    const flags = [];
+    if (p.queued > 0) flags.push(`${p.queued} waiting`);
+    if (p.connecting > 0) flags.push(`${p.connecting} dialing`);
+    if (p.quiet) flags.push('quiet after 480');
+    if (p.down) flags.push('down');
+    if (p.authBroken) flags.push('login rejected');
+    return `${host} ${p.inUse}/${p.open} busy${flags.length ? ` (${flags.join(', ')})` : ''}`;
+  }).join('; ');
 }
 // Bound a per-mount result cache to its newest N entries (Maps keep insertion order, so the first
 // key is the oldest). Mirrors the _subCache cap so a marathon session that toggles many subtitle
@@ -5793,6 +5971,7 @@ const H = {
       }
       const also = others.length ? ` also="${others.join('; ')}"` : '';
       debug.log('play', `ok "${candidate.name}" mount=${vf.id} session=${session.id} ms=${mountMs} live=${mounts.size}${also}`);
+      bindMountTrouble(vf);
       story.bindMount(vf.id, ctx.user.id, session.id, {
         title: body.q,
         file: candidate.name,
@@ -5835,6 +6014,8 @@ const H = {
       live: 'live tv stalled',
       hop: 'jumped back',
       trace: 'playback note',
+      audio: 'audio',
+      ui: 'app error',
     };
     if (!allowed[kind]) return send(ctx.res, 400, { error: 'kind required' });
     if (throttleUserRoute(ctx, 'playback-issue', { max: 40, windowMs: 60000 })) return;
@@ -5843,13 +6024,19 @@ const H = {
     const title = clip(body.title, 80);
     const file = clip(body.file, 140);
     const at = clip(body.at, 16);
-    const reason = clip(body.detail, 180) || allowed[kind];
+    const reason = clip(body.detail, kind === 'ui' ? 260 : 180) || allowed[kind];
     const sessionId = clip(body.sessionId, 40);
     const where = at ? ` at ${at}` : '';
     const howLong = sec > 0 ? ` ${sec}s` : '';
-    const name = file || title || 'playback';
+    const name = file || title || (kind === 'ui' ? clip(body.screen, 40) || 'app' : 'playback');
     const who = title && file ? ` (${title})` : '';
-    const line = `${allowed[kind]}${howLong}${where} — "${name}"${who} — reason: ${reason}`;
+    // A stall line without the usenet picture cannot be explained later. Add
+    // the per-account line counts (host + numbers only, never credentials).
+    const lines = (kind === 'buffer' || kind === 'seek' || kind === 'drop' || kind === 'source') ? usenetLinesSnapshot() : '';
+    const line = `${allowed[kind]}${howLong}${where} — "${name}"${who} — reason: ${reason}${lines ? ` — lines: ${lines}` : ''}`;
+    // A crashed player or a JavaScript error in the app is a failure, not play-by-play:
+    // it is written even with debug logging off (deduped a minute at a time).
+    if (kind === 'ui' || kind === 'crash') debug.fail(kind === 'ui' ? 'ui' : 'player', `${clip(body.device, 40) || 'client'}: ${line}`);
     debug.issue(line);
     if (sessionId) story.note(ctx.user.id, sessionId, line, { title, at, file });
     else story.noteOpen(line);
@@ -6753,7 +6940,7 @@ const H = {
           });
         }
       });
-      ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; }); // cap: ffmpeg streams stderr for the whole playback
+      ff.stderr.on('data', (d) => { err = keepFfmpegStderr(err, d); }); // head keeps the HTTP status, tail keeps the death line
       ff.on('error', (e) => {
         clearIdle();
         liveSlot.done('spawn error');
@@ -6797,7 +6984,7 @@ const H = {
           // them on a genuine HLS stream just guarantees the next failure ("URL ... is not in
           // allowed_segment_extensions"), which is what was making channels read as unavailable.
           const retryHls = hlsFriendly && !ffmpegRejectedHlsOptions(err);
-          console.error(`[iptv] "${ch.name}" attempt failed (${err.slice(0, 120).trim()}) — retrying ${retryHls ? 'HLS' : 'plain'}`);
+          console.error(`[iptv] "${ch.name}" attempt failed (${ffmpegErrorTail(err, 200) || err.slice(0, 120).trim() || `exit ${codeNum}`}) — retrying ${retryHls ? 'HLS' : 'plain'}`);
           return attempt(target, retryHls, retriesLeft - 1);
         }
         if (codeNum && !wrote && targetIndex + 1 < availableTargets.length && !ctx.res.destroyed) {
@@ -6805,7 +6992,7 @@ const H = {
           targetIndex++;
           const next = availableTargets[targetIndex];
           const nextHls = iptvRemuxTargetLikelyHls(next);
-          console.error(`[iptv] "${ch.name}" ${failedLabel} remux failed (${err.slice(0, 120).trim()}) - trying ${next.label || 'alternate'} source`);
+          console.error(`[iptv] "${ch.name}" ${failedLabel} remux failed (${ffmpegErrorTail(err, 200) || err.slice(0, 120).trim() || `exit ${codeNum}`}) - trying ${next.label || 'alternate'} source`);
           return attempt(next, nextHls, nextHls ? 1 : 0);
         }
         if (codeNum && !wrote) {
@@ -6817,11 +7004,15 @@ const H = {
             until: Date.now() + iptvNativeFailureCacheTtl(status || 502, reason),
           });
           if (iptvNativeErrorCache.size > 2000) iptvNativeErrorCache = new Map([...iptvNativeErrorCache].slice(-1000));
-          console.error(`[iptv] "${ch.name}" exit ${codeNum}: ${err} (${reason})`);
+          debug.fail('iptv', `"${ch.name}" could not start (exit ${codeNum}, ${reason}) — every source tried — reason: ${ffmpegErrorTail(err, 400) || err.slice(0, 200).trim() || 'ffmpeg wrote no error line'}`);
           if (!ctx.res.headersSent && !ctx.res.destroyed) return sendIptvNativeError(ctx.res, status || 502, reason);
         }
         // Log the channel NAME only (the url embeds the provider account).
-        if (codeNum && wrote && err) console.error(`[iptv] "${ch.name}" exit ${codeNum}:`, err.slice(0, 300));
+        if (codeNum && wrote) {
+          const line = `"${ch.name}" live remux died mid-stream (exit ${codeNum}) — reason: ${ffmpegErrorTail(err) || 'ffmpeg wrote no error line'}`;
+          debug.fail('iptv', line);
+          debug.issue(`live: ${line}`);
+        }
         liveSlot.done(codeNum ? 'ended with error' : 'ended');
         try { ctx.res.end(); } catch {}
         try { if (ctx.req.socket && !ctx.req.socket.destroyed) ctx.req.socket.destroy(); } catch {}
@@ -6886,7 +7077,7 @@ const H = {
         try { ff = spawnLiveRemuxStdin({ transcodeVideo }); } catch (e) { giveUp(`spawn failed (${e.message})`); return false; }
         ff.on('error', (e) => giveUp(`ffmpeg error (${e.message})`));
         ff.stdin.on('error', () => {}); // EPIPE when ffmpeg is killed mid-write — expected, swallow
-        ff.stderr.on('data', (d) => { if (errBuf.length < 8000) errBuf += d; });
+        ff.stderr.on('data', (d) => { errBuf = keepFfmpegStderr(errBuf, d); });
         ff.stdout.on('data', (chunk) => {
           if (settled && !wrote) return;
           if (!wrote) {
@@ -6910,9 +7101,16 @@ const H = {
             return giveUp(`ffmpeg exited before output (code ${code}${tail ? `: ${tail}` : ''})`);
           }
           settled = true;
-          leaveHub('ended');
+          if (code) {
+            // A shared-hub viewer whose ffmpeg died after it had video: the viewer's picture
+            // just stopped. Without this line the log shows a clean "ended".
+            const line = `"${ch.name}" live remux (shared) died mid-stream (exit ${code}) — reason: ${ffmpegErrorTail(errBuf) || 'ffmpeg wrote no error line'}`;
+            debug.fail('iptv', line);
+            debug.issue(`live: ${line}`);
+          }
+          leaveHub(code ? 'ended with error' : 'ended');
           try { ctx.res.end(); } catch {}
-          liveSlot.done('ended');
+          liveSlot.done(code ? 'ended with error' : 'ended');
         });
         return true;
       };
@@ -9073,13 +9271,18 @@ Object.assign(H, {
         }
       });
     }
+    const audioMode = forceAudioSafe ? 'stereo-aac' : (transcodeAudio ? 'aac' : 'copy');
+    debug.log('play', `remux mount=${vf.id} start=${Math.round(startSeconds)}s track=${audioTrack} codec=${(aud && aud.codec) || '?'} ch=${(aud && aud.channels) || '?'} audio=${audioMode}`);
     ctx.res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store' });
     // A spawn-level error ('error' event) is FATAL to the process if unhandled — never omit this.
-    ff.on('error', (e) => { console.error('[remux spawn]', e.message); try { ctx.res.destroy(); } catch {} });
+    ff.on('error', (e) => { debug.fail('remux', `${vf.id} could not start ffmpeg: ${e.message}`); try { ctx.res.destroy(); } catch {} });
     ff.stdout.pipe(ctx.res);
     let err = '';
-    ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; }); // cap: ffmpeg streams stderr for the whole playback
-    ff.on('close', (codeNum) => { if (codeNum && !ctx.res.writableEnded) console.error('[remux]', err.slice(0, 400)); ctx.res.end(); });
+    ff.stderr.on('data', (d) => { err = (err + d).slice(-4000); }); // keep the TAIL: the reason is the last line
+    ff.on('close', (codeNum) => {
+      if (codeNum && !ctx.res.writableEnded) noteFfmpegDeath('remux', vf, codeNum, err, { startSeconds, audio: audioMode });
+      ctx.res.end();
+    });
     ctx.req.on('close', () => ff.kill('SIGKILL'));
   },
 
@@ -9114,12 +9317,17 @@ Object.assign(H, {
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
     const ff = spawnTranscode(selfUrl, { startSeconds, audioTrack, height: LADDER[height] ? height : 1080, hdr, safeStereo: forceAudioSafe });
     attachMountFfmpegPipe(vf, ff, ctx.claims && ctx.claims.uid);
+    const audioMode = forceAudioSafe ? 'stereo-aac' : 'aac';
+    debug.log('play', `transcode mount=${vf.id} start=${Math.round(startSeconds)}s track=${audioTrack} height=${LADDER[height] ? height : 1080} hdr=${!!hdr} audio=${audioMode}`);
     ctx.res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store' });
-    ff.on('error', (e) => { console.error('[transcode spawn]', e.message); try { ctx.res.destroy(); } catch {} });
+    ff.on('error', (e) => { debug.fail('transcode', `${vf.id} could not start ffmpeg: ${e.message}`); try { ctx.res.destroy(); } catch {} });
     ff.stdout.pipe(ctx.res);
     let err = '';
-    ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; }); // cap: ffmpeg streams stderr for the whole playback
-    ff.on('close', (codeNum) => { if (codeNum && !ctx.res.writableEnded) console.error('[transcode]', err.slice(0, 400)); ctx.res.end(); });
+    ff.stderr.on('data', (d) => { err = (err + d).slice(-4000); }); // keep the TAIL: the reason is the last line
+    ff.on('close', (codeNum) => {
+      if (codeNum && !ctx.res.writableEnded) noteFfmpegDeath('transcode', vf, codeNum, err, { startSeconds, audio: audioMode });
+      ctx.res.end();
+    });
     ctx.req.on('close', () => ff.kill('SIGKILL'));
   },
 
@@ -9222,14 +9430,16 @@ Object.assign(H, {
       try { ff = spawnHls(selfUrl, { startSeconds: sessionStart, audioTrack, transcodeAudio, safeStereo: true, outDir: dir, segmentTime: 2, holdSegments: jellyfinPlaylist }); }
       catch (e) { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); return send(ctx.res, 503, { error: e.message }); }
       sess = {
-        dir, ff, createdAt: Date.now(), hold: jellyfinPlaylist, input: selfUrl,
+        dir, ff, vf, createdAt: Date.now(), hold: jellyfinPlaylist, input: selfUrl,
         audioTrack, transcodeAudio, segmentTime: 2, sessionStart, encodeAt: 0,
         duration: knownDur,
       };
       let err = '';
-      ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; });
-      ff.on('error', (e) => { console.error('[hls spawn]', e.message); });
-      ff.on('close', (codeNum) => { if (codeNum) console.error('[hls]', err.slice(0, 400)); });
+      ff.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
+      ff.on('error', (e) => { debug.fail('hls', `${vf.id} could not start ffmpeg: ${e.message}`); });
+      ff.on('close', (codeNum) => {
+        if (codeNum) noteFfmpegDeath('hls', vf, codeNum, err, { startSeconds: sessionStart, audio: transcodeAudio ? 'stereo-aac' : 'copy' });
+      });
       vf._hls.set(key, sess);
       // Cap concurrent HLS windows per mount; kill + clean the oldest beyond the cap.
       if (vf._hls.size > 4) {
@@ -9546,12 +9756,14 @@ Object.assign(H, {
     vf._osSearchCache = vf._osSearchCache || new Map();
     vf._osSearchInflight = vf._osSearchInflight || new Map();
     vf._subSyncState = vf._subSyncState || new Map(); // cacheKey -> looksSynced (skip alass when true)
-    vf._subSyncFail = vf._subSyncFail || new Map();   // syncKey -> {tries,timedOut,at} (stop doomed re-syncs)
+    vf._subSyncFail = vf._subSyncFail || new Map();   // syncKey -> {tries,timedOut,at,atSec} (stop doomed re-syncs)
+    vf._subSyncAt = vf._subSyncAt || new Map();       // syncKey -> second the correction was measured at
+    vf._subSyncShift = vf._subSyncShift || new Map(); // syncKey -> ms the words were moved (+ later, - earlier)
     const catalogId = searchImdbId || tmdbId;
     // subMode is part of the cache key: an admin flipping the provider policy mid-mount must not
     // be served the previous mix from the per-mount variants cache. catalogId already carries the
     // resolved episode imdb (unique per episode), so drop the s/e suffix when we searched by it.
-    const searchKey = `${subMode}:${lang}:${catalogId}${hasSearchEpisode ? `:s${searchSeason}e${searchEpisode}` : ''}`;
+    const searchBase = `${subMode}:${lang}:${catalogId}${hasSearchEpisode ? `:s${searchSeason}e${searchEpisode}` : ''}`;
     const subtitleFailure = (e) => {
       const noSubs = isNoSubtitleError(e);
       return {
@@ -9562,7 +9774,8 @@ Object.assign(H, {
         },
       };
     };
-    const getVariants = async () => {
+    const getVariants = async ({ hashWaitMs = 2500 } = {}) => {
+      const searchKey = `${searchBase}:${vf._moviehash || 'nohash'}`;
       if (!vf._osSearchCache.has(searchKey)) {
         if (!vf._osSearchInflight.has(searchKey)) {
           // Query the ACTIVE providers in parallel (per the admin's subtitleSource policy), then
@@ -9574,28 +9787,45 @@ Object.assign(H, {
             // rethrown when the combined set is empty; openSubtitlesVariantsForMount never throws.
             const [wySettled, osData] = await Promise.all([
               wyzieActive ? searchOnlineSubs(subOpts).then((d) => ({ d }), (e) => ({ e })) : Promise.resolve({ d: [] }),
-              osActive ? openSubtitlesVariantsForMount(vf, { imdbId: searchImdbId, tmdbId, lang, query: subQuery,
+              osActive ? openSubtitlesVariantsForMount(vf, { imdbId: searchImdbId, tmdbId, lang, query: subQuery, hashWaitMs,
                 ...(hasSearchEpisode ? { season: searchSeason, episode: searchEpisode } : {}) }) : Promise.resolve([]),
             ]);
             const wyData = Array.isArray(wySettled.d) ? wySettled.d : [];
             const wyErr = wySettled.e || null;
-            const combined = [...wyData, ...osData];
+            let combined = [...wyData, ...osData];
+            // OpenSubtitles-only can still hand back another show (Mario got Forensic Files
+            // S13E10). A configured Wyzie key is the rescue when nothing left is this title.
+            const rankOpts = {
+              durationSeconds: vf._tracks && vf._tracks.duration, sdhPref, preferProvider,
+              season: rankSeason, episode: rankEpisode,
+            };
+            const usableOf = (rows) => usableVariants(rankSubs(rows, releaseName, rankOpts), { releaseName, season: rankSeason, episode: rankEpisode });
+            if (key && !wyzieActive && !hasConfidentAutoPick(usableOf(combined), { releaseName, season: rankSeason, episode: rankEpisode })) {
+              try {
+                const wy = await searchOnlineSubs(subOpts);
+                if (Array.isArray(wy) && wy.length) combined = [...wy, ...osData];
+              } catch {}
+            }
             // With Wyzie disabled there is no wyErr to relay — an empty OpenSubtitles result is a
             // clean title-level miss, not a provider failure.
             if (!combined.length) throw (wyErr || Object.assign(new Error('No subtitles found for this title'), { noSubtitles: true }));
+            // Trim wrong-episode / non-text rows so the menu only advertises subtitles that can
+            // actually play for this file (the "House shows many options but most don't work" fix).
             const ranked = rankSubs(combined, releaseName, {
               durationSeconds: vf._tracks && vf._tracks.duration, sdhPref, preferProvider,
               season: rankSeason, episode: rankEpisode,
             });
-            // Trim wrong-episode / non-text rows so the menu only advertises subtitles that can
-            // actually play for this file (the "House shows many options but most don't work" fix).
             const variants = usableVariants(ranked, { releaseName, season: rankSeason, episode: rankEpisode }).slice(0, 12);
-            vf._osSearchCache.set(searchKey, variants); capMap(vf._osSearchCache, 8);
+            // Store under the fingerprint this search actually used. A list built before the
+            // hash existed must not answer a later search that has the hash.
+            const usedHash = (osData && osData.usedHash) || '';
+            const storeKey = `${searchBase}:${usedHash || 'nohash'}`;
+            vf._osSearchCache.set(storeKey, variants); capMap(vf._osSearchCache, 8);
             return variants;
           })().finally(() => vf._osSearchInflight.delete(searchKey));
           vf._osSearchInflight.set(searchKey, work);
         }
-        await vf._osSearchInflight.get(searchKey);
+        return await vf._osSearchInflight.get(searchKey);
       }
       return vf._osSearchCache.get(searchKey) || [];
     };
@@ -9621,7 +9851,17 @@ Object.assign(H, {
       }
     }
     if (clientGone) return;
-    const cacheKey = variant ? `${lang}:${catalogId}:${variant}` : `${lang}:${catalogId}:auto`;
+    // Play waits for this file's fingerprint so the first subtitle can be the exact match.
+    // The CC menu stays on the short cap inside getVariants. Eight seconds is the ceiling;
+    // a slow mount still gets the closest name, then audio sync.
+    if (!variant && vf._moviehash === undefined) {
+      await Promise.race([
+        moviehashForMount(vf).catch(() => null),
+        new Promise((r) => { const t = setTimeout(() => r(null), 8000); if (t.unref) t.unref(); }),
+      ]);
+      if (clientGone) return;
+    }
+    const cacheKey = variant ? `${lang}:${catalogId}:${variant}` : `${lang}:${catalogId}:auto:${vf._moviehash || 'nohash'}`;
     if (!vf._osCache.has(cacheKey)) {
       if (!vf._osInflight.has(cacheKey)) {
         const work = (async () => {
@@ -9654,7 +9894,13 @@ Object.assign(H, {
           // Both auto-pick and explicit-variant go through the ranked list so we always know the
           // chosen subtitle's metadata — that's what tells us whether it's ALREADY in sync
           // (release/hash match) and lets the auto-sync step skip alass when no sync is needed.
-          const variants = await getVariants();
+          // A menu pick must keep the row the user tapped, even if that list was built
+          // before the file hash arrived. Auto-pick already waited, so it searches with
+          // the hash (or accepts nohash after the 8s ceiling).
+          const pickedList = variant && vf._osSearchCache
+            ? [...vf._osSearchCache.values()].find((list) => (list || []).some((v) => v.id === variant))
+            : null;
+          const variants = pickedList || await getVariants({ hashWaitMs: variant ? 2500 : 0 });
           // Auto-select safety: never silently serve a confirmed wrong-episode sub. If the user
           // did NOT pick a specific version and nothing in the list is a confident match for this
           // file (right episode or generic), treat it as a clean no-subtitles miss instead of
@@ -9759,12 +10005,23 @@ Object.assign(H, {
         return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
           { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': looksSynced ? 'synced' : 'unavailable' });
       }
-      const syncKey = `${cacheKey}:synced`;
-      // Terminal failure = a 300s timeout (the audio provably can't be pulled in time — retrying
-      // can NEVER succeed and each attempt re-downloads GBs from the provider) or 3 strikes (the
-      // deliberate cold-audio warm-up retries fail fast; a persistent alass error doesn't heal).
-      // Without this the status stayed 'pending' forever and the native client's 12-retry loop
-      // re-ran the doomed full-audio pull on every playback.
+      const atSec = Math.max(0, parseFloat(ctx.url.searchParams.get('at') || '0') || 0);
+      const audioIndex = Math.max(0, Math.min(15, parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0));
+      // Italian is often track 0. A correction measured on that track must not be
+      // reused when the viewer is hearing English. The opening logos are a different
+      // clock from minute 40, so a sample taken while Continue Watching was still
+      // buffering must not answer the real minute.
+      const syncKey = `${cacheKey}:synced:a${audioIndex}`;
+      const sampledAt = vf._subSyncAt.get(syncKey);
+      if (vf._osCache.has(syncKey) && sampledAt != null && sampledAt < 20 && atSec > sampledAt + 45) {
+        vf._osCache.delete(syncKey);
+        vf._subSyncAt.delete(syncKey);
+        vf._subSyncFail.delete(syncKey);
+      }
+      const moved = vf._subSyncFail.get(syncKey);
+      if (moved && Math.abs((moved.atSec || 0) - atSec) > 45) vf._subSyncFail.delete(syncKey);
+      // Three failures stop it. Each try reads thirty seconds of audio again, so a subtitle that
+      // cannot be aligned must not stay 'pending' and let the TV ask forever.
       const syncTerminal = () => { const f = vf._subSyncFail.get(syncKey); return !!(f && (f.timedOut || f.tries >= 3)); };
       if (syncTerminal()) {
         return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
@@ -9772,10 +10029,24 @@ Object.assign(H, {
       }
       if (!vf._osCache.has(syncKey)) {
         if (!vf._osInflight.has(syncKey)) {
-          const work = onDemandSubSync(vf, vtt, ctx.claims.uid)
-            .then((synced) => {
-              vf._osCache.set(syncKey, synced); capMap(vf._osCache, 12); vf._subSyncFail.delete(syncKey);
-              story.noteMount(vf.id, 'subtitle sync corrected the words');
+          const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+          console.log(`[subsync ${vf.id}] measuring at ${mmss(atSec)} on audio track ${audioIndex}`);
+          const work = onDemandSubSync(vf, vtt, ctx.claims.uid, atSec, audioIndex)
+            .then((res) => {
+              const synced = res.vtt;
+              const secs = (Math.abs(res.shiftMs) / 1000).toFixed(2);
+              const dir = res.shiftMs >= 0 ? 'later' : 'earlier';
+              vf._osCache.set(syncKey, synced); capMap(vf._osCache, 12);
+              vf._subSyncAt.set(syncKey, atSec);
+              vf._subSyncShift.set(syncKey, res.shiftMs); capMap(vf._subSyncShift, 24);
+              vf._subSyncFail.delete(syncKey);
+              console.log(`[subsync ${vf.id}] moved the words ${secs}s ${dir} (heard ${mmss(res.originSec)} to ${mmss(res.originSec + 30)}, ${res.cues} lines, ${res.agreed === 2 ? 'two slices agree' : 'one slice'})`);
+              story.noteMount(vf.id, `subtitle sync moved the words ${secs}s ${dir}`);
+              if (res.driftMsPer30s) {
+                const line = `subtitle drifts ${Math.abs(res.driftMsPer30s)}ms every 30s (framerate mismatch) — right at ${mmss(atSec)}, will slide later; pick another subtitle if it goes off`;
+                console.log(`[subsync ${vf.id}] ${line}`);
+                story.noteMount(vf.id, line);
+              }
               return synced;
             })
             .finally(() => vf._osInflight.delete(syncKey));
@@ -9783,8 +10054,8 @@ Object.assign(H, {
         }
         try { await vf._osInflight.get(syncKey); } catch (e) {
           const msg = String(e && e.message || e);
-          const prev = vf._subSyncFail.get(syncKey) || { tries: 0, timedOut: false };
-          vf._subSyncFail.set(syncKey, { tries: prev.tries + 1, timedOut: prev.timedOut || /timed out/i.test(msg), at: Date.now() });
+          const prev = vf._subSyncFail.get(syncKey) || { tries: 0, timedOut: false, atSec };
+          vf._subSyncFail.set(syncKey, { tries: prev.tries + 1, timedOut: prev.timedOut || /timed out/i.test(msg), at: Date.now(), atSec });
           capMap(vf._subSyncFail, 24);
           console.error(`[subsync ${vf.id}] ${msg.slice(0, 160)}`);
           story.noteMount(vf.id, `subtitle sync failed — ${msg.slice(0, 160)}`);
@@ -9792,7 +10063,8 @@ Object.assign(H, {
       }
       const synced = vf._osCache.get(syncKey);
       if (synced) return send(ctx.res, 200, shift ? shiftVtt(synced, shift) : synced,
-        { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'corrected' });
+        { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'corrected',
+          'x-triboon-subsync-shift': String(vf._subSyncShift.get(syncKey) ?? 0) });
       if (syncTerminal()) {
         return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
           { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'failed' });
@@ -9801,7 +10073,8 @@ Object.assign(H, {
     // Tell the player whether an automatic background sync is worth requesting: 'pending' = not a
     // confident match and alass is available; 'failed' = sync definitively failed (stop asking);
     // 'synced' = already matched (skip); else 'unavailable'.
-    const _sf = vf._subSyncFail.get(`${cacheKey}:synced`);
+    const _sfAudio = Math.max(0, Math.min(15, parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0));
+    const _sf = vf._subSyncFail.get(`${cacheKey}:synced:a${_sfAudio}`);
     const syncHdr = looksSynced ? 'synced'
       : (_sf && (_sf.timedOut || _sf.tries >= 3)) ? 'failed'
       : (detectSubSync() && vf._subSyncState.has(cacheKey) ? 'pending' : 'unavailable');
@@ -10541,6 +10814,7 @@ async function jellyfinPlay(ctx, body) {
     armRuntimeCheck(vf, policy, candidate, body);
     rememberMountOwner(vf, ctx.user.id);
     trimUserMounts(ctx.user.id, vf.id);
+    bindMountTrouble(vf);
     story.bindMount(vf.id, ctx.user.id, session.id, {
       title: body.q,
       file: candidate.name,
@@ -11124,10 +11398,23 @@ const server = http.createServer(async (req, res) => {
     }
     // Errors that carry an explicit status are intentional client-facing messages; anything
     // else is internal — log it fully here, return a generic line (no paths/URLs/creds).
-    if (!res.headersSent) {
-      if (!e.status) console.error('[500]', p, e.message);
-      return send(res, e.status || 500, { error: e.status ? e.message : 'internal error' });
+    // A 5xx with a status is still a failure the owner needs to see (a 502 "provider
+    // unreachable" on /api/stream is a broken movie); 4xx stays quiet — that is the
+    // caller's mistake, and the route already said so in its reply.
+    const status = Number(e && e.status) || 0;
+    const route = `${req.method} ${p}`;
+    if (!status) {
+      const top = String((e && e.stack) || '').split('\n').slice(1, 3).map((l) => l.trim()).join(' <- ');
+      debug.fail('http', `${route} crashed: ${(e && e.message) || e}${top ? ` @ ${top}` : ''}`);
+    } else if (status >= 500) {
+      debug.fail('http', `${route} ${status}: ${e.message}`);
     }
+    if (!res.headersSent) {
+      return send(res, status || 500, { error: status ? e.message : 'internal error' });
+    }
+    // Headers already went out: the client sees a cut stream, not a status. Say so here,
+    // or a movie that stops at 41:00 leaves nothing in the log at all.
+    if (status < 500 && status) debug.fail('http', `${route} failed after the reply started (${status}): ${e.message}`);
     try { res.end(); } catch {}
   }
 });

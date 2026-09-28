@@ -615,7 +615,7 @@ function detectSubSync() {
 // Align `inPath` (an unsynced .srt) to `refPath` and write `outPath`. The reference may be the
 // playback stream URL (alass extracts audio via ffmpeg) or another subtitle file. alass auto-
 // corrects both offset and framerate ratio, so no extra flags are needed.
-function spawnSubSync(refPath, inPath, outPath) {
+function spawnSubSync(refPath, inPath, outPath, extraArgs = []) {
   const al = detectSubSync();
   if (!al) throw new Error('alass not available');
   const ff = detectFfmpeg();
@@ -624,7 +624,8 @@ function spawnSubSync(refPath, inPath, outPath) {
   if (ff) env.ALASS_FFMPEG_PATH = ff.path;
   const fp = detectFfprobe();
   if (fp) env.ALASS_FFPROBE_PATH = fp.path;
-  return spawn(al.path, [refPath, inPath, outPath],
+  const args = (Array.isArray(extraArgs) ? extraArgs : []).concat([refPath, inPath, outPath]);
+  return spawn(al.path, args,
     { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
 }
 
