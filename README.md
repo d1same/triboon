@@ -76,6 +76,8 @@ reuses that mount instead of starting from zero.
 - Movies and TV with TMDB metadata, seasons, watchlist, and Continue Watching.
 - Best-source search across Newznab indexers, with health checks and failover.
 - Usenet streaming from archives while they are still remote, with seeking.
+  Extra providers can be marked **Backup only** so they dial in only when the
+  primary accounts fail.
 - Local libraries for owned media.
 - Live TV through M3U or Xtream playlists you already have.
 - Wyzie / OpenSubtitles captions, Trakt, Music, Audiobooks, and multi-user

@@ -54,7 +54,8 @@ plain — use SSL), **username**, **password**, and your plan's **max
 connections**.
 
 In Triboon: **Settings → Usenet** → add the provider → Save. You can add more
-than one provider; Triboon combines their capacity.
+than one provider; Triboon combines their capacity. Tick **Backup only** on a
+block or spare account so it is used only when every primary account fails.
 
 ## 3. Indexer — finds NZBs by title (required)
 

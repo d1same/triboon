@@ -168,12 +168,11 @@ fails to produce a playable stream. Budgets default to feels-local targets
 2026-09-28, main (post-v3.3.1) — "Backup only" usenet accounts + subtitle
 clock double-check on Windows, Android, Jellyfin, and Cast:
 
-- Example: Eweka is the biggest plan in the list, so the idle tie dialed it
-  first for every episode and it answered `480 Authentication Required`
-  (2-minute quiet, log spam). Tick **Backup only** on it: the primaries share
-  the pieces; Eweka is dialed only when they all fail. (Also found: the house
-  Eweka entry has no saved login — it will 480 until a username/password is
-  saved. Backup only hides the symptom, not the cause.)
+- Example: the biggest plan in the list got the idle tie, so it was dialed
+  first for every episode and answered `480 Authentication Required`. Tick
+  **Backup only** on that account: the primaries share the pieces; the backup
+  is dialed only when they all fail. An account with no saved username also
+  answers 480 until a login is saved. Backup only does not add credentials.
 - Code: `server/nntp.js` `ProviderPool.isBackup()`, `_ordered()` partition
   `[usable primaries] → [backups] → [dark/no-room primaries]`, hedge never
   speculates onto a backup, `warm()` picks the first primary, `stats().backup`;
