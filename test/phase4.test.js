@@ -2580,6 +2580,17 @@ test('logging contract: every failure names its cause — ffmpeg tail, HTTP 5xx,
 
   // Play failure: each tried source or failed indexer is named WITH its reason.
   assert.match(serverSrc, /function playFailDetail\(e\)[\s\S]+return name && why \? `\$\{name\}: \$\{why\}` : \(name \|\| why\);[\s\S]+` — tried: \$\{rows\.join\(' \| '\)\}`/);
+  // Play success: the ok line says where the time went (search + gate-wait + nzb + mount + health),
+  // both for /api/play and the Jellyfin play, and a start over 4s is written as an issue.
+  const pipelineSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(pipelineSrc, /const nzbT0 = Date\.now\(\);\s*let xml = await this\._cachedNzb\(candidate\.nzbUrl\);/);
+  assert.match(pipelineSrc, /const nzbMs = Date\.now\(\) - nzbT0;/);
+  assert.match(pipelineSrc, /gateWaitMs: Math\.max\(0, Number\(mountOpts\.gateWaitMs\) \|\| 0\),[^\n]*\n\s*nzbMs,\s*mountMs: gateT0 - mountT0,/);
+  assert.match(pipelineSrc, /this\._runCandidateFresh\(candidate, \{ \.\.\.mountOpts, gateWaitMs: Date\.now\(\) - gateWaitT0 \}\)/);
+  assert.match(pipelineSrc, /if \(r && typeof r === 'object'\) r\.searchMs = searchMs;/);
+  assert.match(serverSrc, /function noteStartupTime\(vf, candidate, totalMs, searchMs, label = '', requestT0 = 0\)[\s\S]+?return ' \(warm mount\)';[\s\S]+?`gate-wait \$\{su\.gateWaitMs\}`[\s\S]+?`nzb \$\{su\.nzbMs\}`[\s\S]+?`mount \$\{su\.mountMs\}`[\s\S]+?`health \$\{su\.gateMs\}`[\s\S]+?if \(totalMs > SLOW_START_MS && vf && !vf\._slowStartNoted\)[\s\S]+?debug\.issue\(line\);/);
+  assert.match(serverSrc, /debug\.log\('play', `ok "\$\{candidate\.name\}" mount=\$\{vf\.id\} session=\$\{session\.id\} ms=\$\{mountMs\}\$\{where\} live=/);
+  assert.match(serverSrc, /debug\.log\('play', `ok \(jellyfin\) "\$\{candidate\.name\}" mount=\$\{vf\.id\} session=\$\{session\.id\} ms=\$\{totalMs\}\$\{where\} live=/);
 
   // Pieces: the file stream writes slow and dead pieces into the story of the mount that owns it.
   assert.match(serverSrc, /function bindMountTrouble\(vf\)[\s\S]+v\.onTrouble = \(text\) => story\.noteMount\(vf\.id, text\)/);

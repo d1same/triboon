@@ -595,6 +595,16 @@ When changing persistence, update:
   verbatim LGPL license, and exact source/rebuild/replacement instructions.
   Windows client and Windows server installers are separate release assets.
 
+## Startup Timing
+
+Every successful Play writes one `ok` line with the time split by stage:
+`search` (indexer fan-out), `gate-wait` (startup-slot queue), `nzb` (indexer
+NZB fetch), `mount` (first usenet bytes + archive map), `health` (bounded
+500ms gate). A joined warm mount says `(warm mount)` instead of the prepare's
+numbers. Anything over 4s is also written as an issue and into the play story.
+Code: `pipeline.js` `_runCandidateFresh` (`vf._su`), `index.js`
+`noteStartupTime`.
+
 ## Failure Logging
 
 Every failure a viewer can hit is written with its CAUSE, once, not as noise.

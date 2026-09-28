@@ -5018,6 +5018,31 @@ function bindMountTrouble(vf) {
     if (v && typeof v === 'object') v.onTrouble = (text) => story.noteMount(vf.id, text);
   }
 }
+// Where a Play's time went, from the pipeline breadcrumb: "search 3010 + nzb 4100 + mount 1900 +
+// health 500". A 9s cold start used to be one number. Over 4s it is also written as an issue.
+const SLOW_START_MS = 4000;
+function noteStartupTime(vf, candidate, totalMs, searchMs, label = '', requestT0 = 0) {
+  const su = (vf && vf._su) || {};
+  // A joined warm mount carries the PREPARE's stage times, not this Play's. Say "warm" instead.
+  if (requestT0 && Number.isFinite(su.t0) && su.t0 < requestT0) {
+    return ' (warm mount)';
+  }
+  const spent = [
+    Number.isFinite(searchMs) ? `search ${searchMs}` : null,
+    su.gateWaitMs ? `gate-wait ${su.gateWaitMs}` : null,
+    Number.isFinite(su.nzbMs) ? `nzb ${su.nzbMs}` : null,
+    Number.isFinite(su.mountMs) ? `mount ${su.mountMs}` : null,
+    Number.isFinite(su.gateMs) ? `health ${su.gateMs}` : null,
+  ].filter(Boolean);
+  const where = spent.length ? ` (${spent.join(' + ')})` : '';
+  if (totalMs > SLOW_START_MS && vf && !vf._slowStartNoted) {
+    vf._slowStartNoted = true;
+    const line = `slow start ${totalMs}ms${label ? ` ${label}` : ''} — "${(candidate && candidate.name) || vf.name || 'file'}"${where}`;
+    debug.issue(line);
+    if (vf.id) story.noteMount(vf.id, line);
+  }
+  return where;
+}
 // One short clause per account for the playback log: "eweka 0/40 open, 12 waiting, quiet".
 // Host and counts only — the same fields the Activity screen already shows.
 function usenetLinesSnapshot() {
@@ -5933,7 +5958,7 @@ const H = {
     // Explicit resolution pick (4K toggle): boost matching releases — but only within the cap,
     // so a capped user can't smuggle UHD past their ceiling via the preference.
     try {
-      const { session, vf, candidate, attempts, relaxedResolution } = await pipeline.play(
+      const { session, vf, candidate, attempts, relaxedResolution, searchMs } = await pipeline.play(
         {
           ...playSearchParams(body),
           pick: body.pick, pickKey: body.pickKey,
@@ -5970,7 +5995,8 @@ const H = {
         if (others.length >= 3) break;
       }
       const also = others.length ? ` also="${others.join('; ')}"` : '';
-      debug.log('play', `ok "${candidate.name}" mount=${vf.id} session=${session.id} ms=${mountMs} live=${mounts.size}${also}`);
+      const where = noteStartupTime(vf, candidate, mountMs, searchMs, '', t0);
+      debug.log('play', `ok "${candidate.name}" mount=${vf.id} session=${session.id} ms=${mountMs}${where} live=${mounts.size}${also}`);
       bindMountTrouble(vf);
       story.bindMount(vf.id, ctx.user.id, session.id, {
         title: body.q,
@@ -10799,11 +10825,16 @@ async function jellyfinPlay(ctx, body) {
     // player copied every frame into memory until the computer filled up.
     const policy = playbackPolicyFor(ctx.user, { ...body, maxResolutionRank: JELLYFIN_MAX_RANK });
     policy.noResolutionWiden = true;
-    const { session, vf, candidate, attempts } = await pipeline.play(
+    const { session, vf, candidate, attempts, searchMs } = await pipeline.play(
       { ...playSearchParams(body), resumeFrac: Math.max(0, Math.min(0.98, Number(body.resumeFrac) || 0)) },
       policy
     );
     if (!(await maturityAllowed)) { discardDeniedMount(session, vf); return { status: 403, body: { error: 'restricted' } }; }
+    {
+      const totalMs = Date.now() - t0;
+      const where = noteStartupTime(vf, candidate, totalMs, searchMs, '(jellyfin)', t0);
+      debug.log('play', `ok (jellyfin) "${candidate.name}" mount=${vf.id} session=${session.id} ms=${totalMs}${where} live=${mounts.size}`);
+    }
     session.uid = ctx.user.id;
     session.lastSeen = Date.now();
     releaseUserPlaySessions(ctx.user.id, session.id);

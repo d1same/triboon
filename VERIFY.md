@@ -163,6 +163,20 @@ subtitle sync, and search double-check:
   (installed on the emulator only), Android ExoPlayer stress. Windows Rust
   `--features player` compiles under MSVC locally; link needs CI's
   `mpv.lib`, so the Rust unit tests run in CI. Windows GPU/HDR: not run.
+- Release: tag `v3.3.0` on `eb8ec03`; GitHub Actions published
+  `triboon-v3.3.0.apk` + `triboon.apk`, `Triboon-Windows-Server-v3.3.0.exe`
+  + alias, `Triboon-Windows-Client-v3.3.0.exe` + alias, `SHA256SUMS.txt`;
+  public container verified by CI.
+- Source-finding audit after the tag (main, not re-tagged): 86 realistic
+  movie/episode names against `parseWantedTitle`+`releaseMatches` behaved as
+  designed (season/multi-season packs and range posts accepted for the wanted
+  episode, other episodes/years/countries/spin-offs rejected); three ranking
+  sets (1080p episode on a Shield-class box, explicit 4K with Atmos/DV, old
+  film on Chrome) picked the expected file. Follow-up: the `ok` play line now
+  says where a cold start's time went (`search + gate-wait + nzb + mount +
+  health`), for `/api/play` and Jellyfin, and a start over 4s is written as an
+  issue — the 9.6s FROM start above was one number with no stage. `npm.cmd
+  test` 776/776 after that change.
 
 2026-09-27, failure logging review (folded into v3.3.0):
 

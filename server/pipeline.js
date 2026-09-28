@@ -2822,6 +2822,7 @@ class Pipeline {
 
   async _tryCandidateFresh(candidate, mountOpts = {}) {
     let ticket;
+    const gateWaitT0 = Date.now();
     try {
       ticket = await this._startupGate.acquire({
         signal: mountOpts && mountOpts.signal,
@@ -2835,7 +2836,7 @@ class Pipeline {
       throw e;
     }
     try {
-      return await this._runCandidateFresh(candidate, mountOpts);
+      return await this._runCandidateFresh(candidate, { ...mountOpts, gateWaitMs: Date.now() - gateWaitT0 });
     } finally {
       ticket.release();
     }
@@ -2853,6 +2854,7 @@ class Pipeline {
       // episode behind the release-wide NZB/title keys; the current request still fails/advances.
       if (!selectionEpisodeScoped) this._recordVerdict(candidate, verdict, detail);
     };
+    const nzbT0 = Date.now();
     let xml = await this._cachedNzb(candidate.nzbUrl);
     if (!xml) {
       const pendingNzb = this.nzbInflight.get(candidate.nzbUrl);
@@ -2878,6 +2880,7 @@ class Pipeline {
       }
       }
     }
+    const nzbMs = Date.now() - nzbT0;
     applyNzbFingerprintFields(candidate, xml);
     const fpAfterNzb = releaseFingerprint(candidate);
     const deadAfterNzb = fpAfterNzb && this.verdicts.get(fpAfterNzb);
@@ -3100,6 +3103,8 @@ class Pipeline {
     // append when serving. Pure diagnostic data — no effect on playback behaviour.
     vf._su = {
       t0: mountT0,
+      gateWaitMs: Math.max(0, Number(mountOpts.gateWaitMs) || 0), // startup-slot queue before this run began
+      nzbMs,
       mountMs: gateT0 - mountT0,
       gateMs,
       name: vf.name,
@@ -3164,11 +3169,13 @@ class Pipeline {
       }).catch(() => {});
       return committed;
     }
+    const searchT0 = Date.now();
     let { candidates, errors: searchErrors } = await this.search(params, policy);
     if (!(candidates && candidates.length)) {
       const stale = await this.search(params, policy, { allowStale: true });
       if (stale.candidates && stale.candidates.length) candidates = stale.candidates;
     }
+    const searchMs = Date.now() - searchT0;
     let playable = this._playableCandidates(candidates, params);
     const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
     if (explicitPick && !playable.length) throw new Error('picked source not found');
@@ -3215,9 +3222,11 @@ class Pipeline {
     // starves the same NNTP slots the warmup already holds. One hedge is enough to skip a
     // dead top pick; waiting on Details stays instant because the mount is already live.
     const width = explicitPick ? 1 : (joiningPrepare ? 2 : PLAY_RACE_WIDTH);
-    debug.log('play', `advance width=${width} joiningPrepare=${!!joiningPrepare} explicitPick=${!!explicitPick}`);
+    debug.log('play', `advance width=${width} joiningPrepare=${!!joiningPrepare} explicitPick=${!!explicitPick} searchMs=${searchMs}`);
     try {
-      return await this._advance(session, mountOpts, { width });
+      const r = await this._advance(session, mountOpts, { width });
+      if (r && typeof r === 'object') r.searchMs = searchMs;
+      return r;
     } catch (e) {
       // Owner rule: keep trying the preferred resolution until one works; ONLY when EVERY healthy
       // 4K source is exhausted (all rotted/removed/incomplete) fall back to the best lower-res
