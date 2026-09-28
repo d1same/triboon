@@ -896,7 +896,10 @@ class ProviderPool {
     return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
-  _openLimit() {
+  // Lines this account may hold under the household cap once the other accounts' lines are
+  // counted. No floor — the routing sort uses this to put a "no room, no line" account behind
+  // one that already has a login up.
+  _roomForNewLine() {
     const cap = this._playbackCap();
     if (!cap) return this.size;
     const open = typeof this.householdOpen === 'function'
@@ -904,6 +907,23 @@ class ProviderPool {
       : (this.conns.length + this.connecting);
     const others = Math.max(0, open - this.conns.length - this.connecting);
     return Math.min(this.size, Math.max(0, cap - others));
+  }
+
+  _hasPendingWork() {
+    for (const t of this.queue) if (!signalAborted(t.signal)) return true;
+    return false;
+  }
+
+  _openLimit() {
+    let room = this._roomForNewLine();
+    // The whole household share is held by OTHER accounts' lines (at boot that is the one warm
+    // login) while this account has real work queued and no line of its own. Nothing ever
+    // closes a peer's idle line on this account's behalf, so the work parked forever — Now
+    // Watching read "0 open · 24 queued" for hours. Allow ONE line while the work lasts; the
+    // over-share cull in _pumpNow drops it again once the queue is empty, and the peer's idle
+    // line goes the same way, so the single login simply moves to the account that needs it.
+    if (room === 0 && this._playbackCap() && this.conns.length <= 1 && this._hasPendingWork()) room = 1;
+    return room;
   }
 
   _pipelineDepth() {
@@ -1042,9 +1062,14 @@ class NntpPool {
     // in the dark queue for the 8s half-open probe ("easynews 0/0 busy (1
     // waiting)" while the player waited). Dark goes last; it is still a fallback.
     const dark = (p) => !live(p) && typeof p.down === 'function' && p.down();
+    // Under the household cap, an account with no line up and no room to open one (the
+    // share is held by a peer's login) is not the place for the next piece either: at boot
+    // the 60-plan account won the idle tie on headroom while the one warm login sat on the
+    // 40-plan account, and every health check parked there. Reuse the login that is up.
+    const noRoom = (p) => !live(p) && typeof p._roomForNewLine === 'function' && p._roomForNewLine() === 0;
     return [...list].sort((a, b) => {
-      const da = dark(a);
-      const db = dark(b);
+      const da = dark(a) || noRoom(a);
+      const db = dark(b) || noRoom(b);
       if (da !== db) return da ? 1 : -1;
       const ha = providerHeadroom(a);
       const hb = providerHeadroom(b);

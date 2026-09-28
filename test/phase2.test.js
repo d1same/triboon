@@ -5815,6 +5815,30 @@ test('nntp: parked work with no line open re-pumps itself (no zombie queue after
     await withTimeout(parked, 1500, 'stayOnLive STAT with no live line');
     assert.strictEqual(p.queue.length, 0, 'nothing left parked');
   } finally { pool.close(); await mock.close(); }
+
+  // 3) Household cap of 1 (nothing playing) and the one warm login sits on account A. Work
+  //    routed to account B (a 430 failover, or the idle tie) had no room to open a line and
+  //    parked forever. B may hold ONE line while it has work; the sort also stops sending the
+  //    next piece to a no-room account while A's login is up.
+  const mockA = createMockNntp({ articles: r.articles }); const portA = await mockA.listen();
+  const mockB = createMockNntp({ articles: r.articles }); const portB = await mockB.listen();
+  const two = new NntpPool([
+    { host: '127.0.0.1', port: portA, tls: false, connections: 40 },
+    { host: '127.0.0.1', port: portB, tls: false, connections: 60 },
+  ], 60);
+  const [a, b] = two.providers;
+  try {
+    two.setPlaybackOpenCap(1);
+    a.warm(1);
+    await withTimeout(new Promise((res) => { const t = setInterval(() => { if (a.conns.length === 1) { clearInterval(t); res(); } }, 10); }), 1500, 'warm line on A');
+    assert.strictEqual(two._ordered()[0], a, 'the account with the login up takes the next piece, not the bigger idle plan');
+    assert.strictEqual(b._roomForNewLine(), 0, 'B has no room under the household cap');
+    await withTimeout(b.stat(id, 'health'), 1500, 'STAT on the no-room account');
+    assert.strictEqual(b.queue.length, 0, 'B ran its work on a floor line');
+    await new Promise((res) => setTimeout(res, 50));
+    assert.ok(a.conns.length + b.conns.length <= 1,
+      `the household is back to one login once the work is done (A ${a.conns.length}, B ${b.conns.length})`);
+  } finally { two.close(); await mockA.close(); await mockB.close(); }
 });
 
 test('scoring: sample-size stubs and foreign-language dubs sink; duals stay honest fallbacks', () => {

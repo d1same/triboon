@@ -179,6 +179,18 @@ Example: Easynews 480s, its last line closes, 24 health STATs sit behind it —
 8s later the pool dials one probe line and drains them instead of waiting for a
 restart.
 
+The other half of that stall was the household cap itself. With nothing
+playing the cap is 1 login for the whole house, and it sits on whichever
+account warmed at boot. The idle tie-break then sent the first health checks
+to the bigger *plan* (Newshosting 60 over Easynews 40) — an account with no
+line and, under the cap, no room to open one, so they parked. Two rules now:
+`_ordered()` treats "no line up and no room under the cap" like a dark account
+(behind any account whose login is already up), and `_openLimit()` lets an
+account with real work queued and no line hold ONE line even when peers hold
+the whole share; the over-share cull drops it — and the peer's idle line — the
+moment its queue is empty, so the single login moves to the account that needs
+it instead of two logins staying up.
+
 **Hedged multi-provider failover.** Failover is not purely exception-based.
 For active-player BODY work (startup/seek/playback), if the chosen provider has
 not answered within `HEDGE_MS_DEFAULT` (3s) — because its connections are queued,

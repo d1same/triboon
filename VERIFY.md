@@ -195,11 +195,20 @@ subtitle sync, and search double-check:
   on events, so work parked with no line open never dialed again and that
   account sat unused. `server/nntp.js` `_watchParked()` re-pumps on the probe
   cadence; a `stayOnLive` piece counts as pending once no live socket
-  remains. New test `nntp: parked work with no line open re-pumps itself`
-  (failed before the fix, 110ms after). Also the detail bookmark tooltip now
-  says "Remove from watchlist" once added (`paintDetailWatchlist`). Docs:
-  `docs-streaming-performance.md` "Parked work re-pumps itself". `npm.cmd
-  test` 777/777. House process restarted on this main commit.
+  remains. Restarting showed the second half: at boot the household cap is 1
+  login (on Easynews) and the idle tie-break sent the first health checks to
+  the 60-plan account, which had no room to open a line — `0 open / 4 q` on
+  three accounts 30s after start. `_ordered()` now puts "no line + no room"
+  behind an account whose login is up, and `_openLimit()` gives an account
+  with queued work one floor line (culled again once its queue is empty).
+  After the second restart: `EASYNEWS 1 open/0 q`, every other account
+  `0 open/0 q`; Resume on the 4K episode started in 1.5s with 4 lines, +30s
+  skip fine. New test `nntp: parked work with no line open re-pumps itself`
+  covers all three shapes (the first two failed before the fix). Also the
+  detail bookmark tooltip now says "Remove from watchlist" once added
+  (`paintDetailWatchlist`). Docs: `docs-streaming-performance.md` "Parked
+  work re-pumps itself". `npm.cmd test` 777/777. House process restarted on
+  this main commit.
 
 2026-09-27, failure logging review (folded into v3.3.0):
 
