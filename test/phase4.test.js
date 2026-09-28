@@ -12,7 +12,7 @@ const path = require('path');
 const http = require('http');
 const zlib = require('zlib');
 const { spawnSync } = require('child_process');
-const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, spawnRemux, spawnHls, spawnLiveRemux, spawnTranscode, spawnSubtitleExtract, supportsFfmpegHttpOption } = require('../server/transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, spawnRemux, spawnHls, spawnLiveRemux, spawnTranscode, spawnSubtitleExtract, supportsFfmpegHttpOption, ffprobeKeyframeAtOrBefore } = require('../server/transcode');
 
 const HAS_FFMPEG = !!detectFfmpeg();
 const HAS_FFPROBE = !!detectFfprobe();
@@ -278,18 +278,22 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
     nativeTried: {}, duration: 0, nativeDuration: 0, playbackToken: 91,
   } };
   const window = { TriboonTV: { playVideo: (raw) => payloads.push(JSON.parse(raw)) } };
-  const tryNativeVideoPlayer = new Function('S', 'canUseNativeVideoPlayer', 'remuxPlaybackUrl',
+  // remuxKeyframeStart: the keyframe at-or-before the ask (v3.3.1). Sync when known, a promise otherwise.
+  const buildTryNative = (remuxKeyframeStart) => new Function('S', 'canUseNativeVideoPlayer', 'remuxPlaybackUrl',
     'nativeVideoSubtitleRel', 'nativeSubtitlePayload', 'updatePlayerMeta', 'episodePlayerMeta',
     'absoluteArtworkUrl', 'nativeMimeForKind', 'nativeQualityLabel', 'applySubSize',
     'nativeSubtitleChoices', 'nativeEpisodeChoices', 'loadSubShift', 'traktResumeFractionForItem',
     'prefLang', 'nativeAudioChoices', 'prefAudioLang', 'audioLangKey', 'applyInitialAudioPreference',
+    'remuxKeyframeStart', 'startSource',
     'window', 'location', `${ui.slice(overlayStart, overlayEnd)}\n${ui.slice(nativeStart, nativeEnd)}\nreturn tryNativeVideoPlayer;`)(
       state, () => true, (_p, at) => `/api/remux/one?start=${at}`, () => ({ blocked: false, rel: '' }),
       () => ({ rel: '', url: '', lang: '', label: '', shift: 0 }), () => {},
       (it) => ({ title: it.title, subline: '' }), () => '', () => '', () => '4K', () => 'M',
       () => [], () => [], () => 0, traktResumeFractionForItem,
       () => '', () => [], () => 'eng', () => 'en', () => {},
+      remuxKeyframeStart, () => { throw new Error('web fallback must not run'); },
       window, { origin: 'http://triboon.test' });
+  const tryNativeVideoPlayer = buildTryNative((_p, at) => at); // already-known start: today's synchronous shape
   assert.strictEqual(tryNativeVideoPlayer('direct', 0), true);
   assert.strictEqual(payloads[0].startFraction, 0.42,
     'direct ExoPlayer receives the imported fraction while seconds are unknown');
@@ -302,6 +306,29 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
   assert.strictEqual(payloads[2].startOffset, 100);
   assert.strictEqual(payloads[2].percentResume, true);
 
+  // v3.3.1: the keyframe answer arrives late → the handoff waits for it and hands ExoPlayer the
+  // stream from the keyframe (97.002s), with startOffset to match. A newer seek in the meantime
+  // voids the older answer so the picture never restarts behind the user.
+  let resolveKf;
+  const lateKf = buildTryNative((_p, at) => at === 100 ? new Promise((r) => { resolveKf = r; }) : at);
+  assert.strictEqual(lateKf('remux', 100, { quietSeek: true }), true, 'the ladder is told "handled" while the probe runs');
+  assert.strictEqual(payloads.length, 3, 'no payload until the true start is known');
+  assert.strictEqual(state.playing.usingNative, true, 'the ladder must not try a second kind meanwhile');
+  return (async () => {
+    resolveKf(97.002);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.strictEqual(payloads.length, 4, 'the handoff fires once the keyframe is known');
+    assert.strictEqual(payloads[3].startOffset, 97.002, 'startOffset is the keyframe second, not the ask');
+    assert.match(payloads[3].url, /start=97\.002$/, 'ExoPlayer is asked for the stream from the keyframe');
+    const stale = buildTryNative((_p, at) => at === 200 ? new Promise((r) => { resolveKf = r; }) : at);
+    assert.strictEqual(stale('remux', 200, { quietSeek: true }), true);
+    assert.strictEqual(stale('remux', 300, { quietSeek: true }), true, 'a newer seek with a known start plays at once');
+    assert.strictEqual(payloads[4].startOffset, 300);
+    resolveKf(195);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.strictEqual(payloads.length, 5, 'the late answer for the older seek is dropped');
+  })().then(() => runAndroidContracts());
+  function runAndroidContracts() {
   assert.match(android, /private void resolveNativePercentStartIfKnown\(\) \{[\s\S]+Math\.round\(d \* nativePendingStartFraction\)[\s\S]+nativePendingStartFraction = 0\.0;[\s\S]+nativePendingStartMs = target;/,
     'Android converts the imported fraction to seconds exactly once after duration is known');
   assert.match(android, /if \(nativeServerSeekMode\(\) && nativePercentResumePending\) \{[\s\S]+nativePendingStartMs = 0L;[\s\S]+requestNativeVideoSeek\(target, false, true\);/,
@@ -314,6 +341,7 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
     'the 1s progress driver completes a direct cached seek even without a second READY transition, while suppressing false zero progress');
   assert.match(android, /private void completeNativePercentResume\(\) \{[\s\S]+nativePercentResumePending = false;[\s\S]+nativePlayer\.isPlaying\(\)[\s\S]+nativeVideoStarted = true;[\s\S]+hideNativeLoading\(\);[\s\S]+__tvNativeVideoPlaying/,
     'a direct percent resume already playing at its target must commit the real-playing boundary and clear the loader');
+  }
 });
 
 test('returning from Details repaints Home from the latest resume cache before background refresh', () => {
@@ -4914,6 +4942,39 @@ test('Android native player: direct source and native chrome stay out of the web
     'native subtitles should respect manual mode before considering saved online subtitle choices');
   assert.match(ui, /function subtitleMediaNow\(p\) \{[\s\S]+p\._subFrozen[\s\S]+p\._subSlip[\s\S]+jump > 30[\s\S]+function activeSubtitleCues\(tt\) \{[\s\S]+subtitleMediaNow\(S\.playing\)[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
     'captions follow the picture clock, hold a skip, and drop a stall jump instead of the browser cue scheduler');
+  // Seen live 2026-09-28: Resume at 4:51, CC turned on 5s later → the resume-point line stuck
+  // for the rest of the 20s landing window because |clock 5s − landing 0s| > 3. The landing
+  // check must allow the picture to have run since the seek was armed.
+  const landedSrc = ui.slice(ui.indexOf('function subtitleSeekLanded(p, raw, now = Date.now()) {'), ui.indexOf('function armSubtitleSeekLanding(p, landAt) {'));
+  const landed = new Function(`${landedSrc} return subtitleSeekLanded;`)();
+  const armed = { _subSeekAt: 0, _subSeekWall: 10_000 };
+  assert.strictEqual(landed(armed, 5.2, 10_000 + 5_500), true, 'captions arriving 5s into a resumed remux follow the picture');
+  assert.strictEqual(landed(armed, 45, 10_000 + 1_000), false, 'the OLD clock still talking after a server seek is held on the new minute');
+  assert.strictEqual(landed({ _subSeekAt: 300, _subSeekWall: 10_000 }, 600, 10_000 + 2_000), false, 'a direct-play skip back holds the words on the target while the old clock is still ahead');
+  assert.strictEqual(landed({ _subSeekAt: 300, _subSeekWall: 10_000 }, 301.5, 10_000 + 500), true, 'landing within 3s counts at once');
+  assert.match(ui, /function armSubtitleSeekLanding\(p, landAt\) \{[\s\S]+p\._subSeekUntil = Date\.now\(\) \+ 20000;\s*p\._subSeekWall = Date\.now\(\);/,
+    'every seek/start landing window records when it was armed');
+  assert.match(ui, /armSubtitleSeekLanding\(p, serverSeek \? 0 : atSeconds\);\s*resetSubtitleClock\(p, p\._subSeekAt\);/,
+    'startWebPlayback arms the landing window through the shared helper');
+  assert.match(ui, /if \(!subtitleSeekLanded\(p, raw, now\)\) \{/, 'subtitleMediaNow uses the shared landing rule');
+  assert.match(ui, /if \(!subtitleSeekLanded\(p, raw\)\) return null;/, 'auto-sync waits on the same landing rule');
+  // v3.3.1: a copy-remux starts on the keyframe at-or-before the ask, and every player believed
+  // 0:00 == the ask — captions and the clock ran up to one GOP early after each Resume/skip.
+  // Every remux start now asks the server where the stream really starts and requests it there.
+  assert.match(ui, /function remuxKeyframeStart\(p, seconds\) \{[\s\S]+\/api\/keyframe\/\$\{m\[1\]\}\?at=\$\{t\}&before=1&t=\$\{m\[2\]\}[\s\S]+Math\.min\(k, t\) \+ 0\.002/,
+    'web asks for the keyframe at-or-before the seek and lands 2ms past it (never one GOP early on a rounded pts)');
+  assert.match(ui, /function startSource\(kind, atSeconds, opts = \{\}\) \{[\s\S]+p\._remuxStartSeq = \(p\._remuxStartSeq \|\| 0\) \+ 1;[\s\S]+if \(kind === 'remux' && !\(p\.item && p\.item\.type === 'live'\) && askedStart > 0\) \{\s*withRemuxStart\(p, askedStart, \(seekStart\) => \{\s*p\.startOffset = seekStart;\s*startSourceMedia\(/,
+    'browser remux start/seek waits for the true keyframe start and makes it the startOffset');
+  assert.match(ui, /function tryNativeVideoPlayer\(kind, atSeconds, opts = \{\}\) \{[\s\S]+if \(kind === 'remux' && askedStart > 0\) \{\s*const start = remuxKeyframeStart\(p, askedStart\);[\s\S]+return nativeVideoHandoff\(p, kind, atSeconds, start, sub, opts\);/,
+    'Android/Windows handoff carries the true keyframe start so their startOffset, progress, and captions agree with the picture');
+  assert.match(ui, /function withRemuxStart\(p, seconds, go\) \{[\s\S]+if \(S\.playing === p && p\._remuxStartSeq === seq\) go\(s\);/,
+    'a late keyframe answer for an older ask must not restart the picture behind the user');
+  assert.match(ui, /ctl\.abort\(\), 1500\)/, 'a slow keyframe probe never holds a seek for more than 1.5s');
+  assert.match(ui, /if \(kind === 'remux'\) remuxKeyframeStart\(p, at\); \/\/ learn the true start during the wait/,
+    'native D-pad skips learn the true start during the existing 320ms debounce');
+  const srvIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(srvIndex, /if \(ctx\.url\.searchParams\.get\('before'\) === '1'\) \{[\s\S]+ffprobeKeyframeAtOrBefore\(selfUrl, at\)[\s\S]+exact: Number\.isFinite\(k\) && k >= 0/,
+    'the stream-scoped /api/keyframe route answers before=1 with the keyframe at-or-before and says whether it is exact');
   assert.match(ui, /function subtitleSyncPlayhead\(p\) \{[\s\S]+bufferedSec[\s\S]+readyState < 3[\s\S]+function autoSyncSubtitle\(p, rel, baseUrl\)[\s\S]+subtitleSyncPlayhead\(p\)/,
     'auto-sync waits until the picture has buffered at the real minute, including Continue Watching');
   assert.match(android, /nativeSubtitleMediaMs\(\)[\s\S]+nativePlayer\.isPlaying\(\)[\s\S]+nativeSubtitleSlipMs/,
@@ -8782,4 +8843,43 @@ test('v3.1.12: Music/Audiobooks TV D-pad + Large text/cover on every section', (
     'IPTV channel cards follow cover size instead of a locked 185px');
   assert.match(ui, /#chBody\.liveGuideShell \.liveChannelPane \.chGrid\{margin:0;grid-template-columns:repeat\(auto-fill,minmax\(var\(--poster\),1fr\)\)/,
     'Live TV guide channel tiles follow cover size');
+});
+
+// v3.3.1: measured, not assumed. A copy-remux asked to start at N really starts on the keyframe
+// at-or-before N (make_zero then stamps that frame 0:00). `ffprobeKeyframeAtOrBefore` must name
+// that second, and remuxing FROM it (plus the web's 2ms slack) must yield a stream whose 0:00 is
+// that second � the picture the player claims to be at.
+test('v3.3.1: remux clock � the keyframe-before probe names where a copy-remux really starts', { skip: !HAS_FFMPEG || !HAS_FFPROBE }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-kf-'));
+  const clip = path.join(dir, 'gop5.mp4');
+  const gen = spawnSync(detectFfmpeg().path, ['-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+    '-t', '30', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '120', '-keyint_min', '120', '-sc_threshold', '0',
+    '-c:a', 'aac', '-shortest', clip], { timeout: 60000 });
+  assert.strictEqual(gen.status, 0, `fixture encode failed: ${gen.stderr}`);
+  const outDuration = (file) => parseFloat(spawnSync(detectFfprobe().path, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { timeout: 20000 }).stdout.toString());
+  try {
+    for (const [ask, keyframe] of [[7, 5], [12.5, 10], [19, 15]]) {
+      const k = await ffprobeKeyframeAtOrBefore(clip, ask);
+      assert.ok(Number.isFinite(k), `probe answers for ${ask}s`);
+      assert.ok(Math.abs(k - keyframe) < 0.1, `ask ${ask}s ? keyframe ${keyframe}s (got ${k})`);
+      // The old contract: remux from the ask itself starts ~ (ask - keyframe) s EARLY.
+      const naive = path.join(dir, `naive-${ask}.mp4`);
+      spawnSync(detectFfmpeg().path, ['-hide_banner', '-loglevel', 'error', '-y', '-noaccurate_seek', '-ss', String(ask), '-i', clip,
+        '-map', '0:v:0', '-map', '0:a:0', '-c', 'copy', '-avoid_negative_ts', 'make_zero', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', naive], { timeout: 30000 });
+      const naiveStart = 30 - outDuration(naive);
+      assert.ok(Math.abs(naiveStart - keyframe) < 0.2, `asked ${ask}s, the copy really began at ${naiveStart.toFixed(2)}s (the bug this release fixes)`);
+      // The new contract: request the remux from keyframe + 2ms ? 0:00 IS the keyframe second.
+      const fixed = path.join(dir, `fixed-${ask}.mp4`);
+      const start = Math.round((k + 0.002) * 1000) / 1000;
+      spawnSync(detectFfmpeg().path, ['-hide_banner', '-loglevel', 'error', '-y', '-noaccurate_seek', '-ss', String(start), '-i', clip,
+        '-map', '0:v:0', '-map', '0:a:0', '-c', 'copy', '-avoid_negative_ts', 'make_zero', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', fixed], { timeout: 30000 });
+      const fixedStart = 30 - outDuration(fixed);
+      assert.ok(Math.abs(fixedStart - start) < 0.2, `requesting ${start}s starts the stream at ${fixedStart.toFixed(2)}s � clock and captions agree`);
+    }
+    assert.strictEqual(await ffprobeKeyframeAtOrBefore(clip, 0), null, 'a 0s ask needs no probe');
+    assert.strictEqual(await ffprobeKeyframeAtOrBefore(path.join(dir, 'missing.mp4'), 7), null, 'an unreadable input answers null, so the caller keeps the asked second');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

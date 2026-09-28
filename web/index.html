@@ -13382,15 +13382,27 @@ function startSource(kind, atSeconds, opts = {}) {
   p.usingLiveMse = false;
   p.usingLiveHls = false;
   updatePlayerMeta();
+  p._remuxStartSeq = (p._remuxStartSeq || 0) + 1; // any pending keyframe answer for an older ask is void
   const serverSeek = p.usingRemux || p.usingTranscode;
-  const seekStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
-  p.startOffset = seekStart;
+  const askedStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
+  p.startOffset = askedStart;
   // Remux/transcode restart the video clock at 0, which is the minute we asked for.
   // Direct play keeps movie time, so the words wait on that minute until the picture arrives.
-  p._subSeekAt = serverSeek ? 0 : Math.max(0, Number(atSeconds) || 0);
-  p._subSeekUntil = Date.now() + 20000;
+  armSubtitleSeekLanding(p, serverSeek ? 0 : atSeconds);
   resetSubtitleClock(p, p._subSeekAt);
   cleanupLiveMse();
+  // A copy-remux starts on the keyframe at-or-before the ask. Learn that second first (sync
+  // when known, else a sub-second probe) so 0:00 == startOffset holds for clock and captions.
+  if (kind === 'remux' && !(p.item && p.item.type === 'live') && askedStart > 0) {
+    withRemuxStart(p, askedStart, (seekStart) => {
+      p.startOffset = seekStart;
+      startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds);
+    });
+    return true;
+  }
+  return startSourceMedia(p, v, kind, askedStart, serverSeek, atSeconds);
+}
+function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
   if (p.item && p.item.type === 'live') {
     // iPhone/iPad only: play the tokened provider HLS in <video>. MSE remux stays on every
     // other browser (desktop Chrome/Edge/Firefox, Windows WebView2). Android never reaches
@@ -13987,15 +13999,40 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   if (!baseUrl) return false;
   if (!opts.quietSeek) applyInitialAudioPreference(p);
   const serverSeek = kind === 'remux' || kind === 'transcode';
-  const seekStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
+  const askedStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
+  p._remuxStartSeq = (p._remuxStartSeq || 0) + 1; // any pending keyframe answer for an older ask is void
+  const sub = nativeVideoSubtitleRel(p);
+  if (sub.blocked) return false;
+  // A copy-remux starts on the keyframe at-or-before the ask. The native shell gets startOffset
+  // once, at handoff, so learn that second first (sync when known, else a sub-second probe) and
+  // hand over a stream whose 0:00 really is startOffset. Direct/transcode are exact already.
+  if (kind === 'remux' && askedStart > 0) {
+    const start = remuxKeyframeStart(p, askedStart);
+    if (typeof start !== 'number') {
+      p.usingNative = true; // the ladder must not try a second kind while we wait
+      const seq = p._remuxStartSeq;
+      start.then((s) => {
+        if (S.playing !== p || p._remuxStartSeq !== seq) return;
+        if (!nativeVideoHandoff(p, kind, atSeconds, s, sub, opts)) {
+          p.usingNative = false;
+          startSource(kind, s, opts); // the bridge threw late: play the same second in the web player
+        }
+      });
+      return true;
+    }
+    return nativeVideoHandoff(p, kind, atSeconds, start, sub, opts);
+  }
+  return nativeVideoHandoff(p, kind, atSeconds, askedStart, sub, opts);
+}
+function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
+  const baseUrl = kind === 'remux' ? p.remuxUrl : (kind === 'transcode' ? p.transcodeUrl : p.streamUrl);
+  const serverSeek = kind === 'remux' || kind === 'transcode';
   let nativeUrl = baseUrl;
   if (kind === 'transcode') {
     nativeUrl = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
   } else if (kind === 'remux') {
     nativeUrl = remuxPlaybackUrl(p, seekStart, { native: true }); // native ExoPlayer → 5.1, not the stereo audioSafe path
   }
-  const sub = nativeVideoSubtitleRel(p);
-  if (sub.blocked) return false;
   const subPayload = nativeSubtitlePayload(p, sub.rel || '', 'startup');
   p.usingNative = true;
   if (opts.quietSeek) p._nativeResuming = true;
@@ -14003,7 +14040,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   p.usingTranscode = kind === 'transcode';
   updatePlayerMeta();
   p.startOffset = seekStart;
-  p.nativePos = Math.max(0, atSeconds || 0);
+  p.nativePos = serverSeek ? seekStart : Math.max(0, atSeconds || 0);
   p.nativeDuration = p.duration || 0;
   const playerMeta = episodePlayerMeta(p.item);
   const payload = {
@@ -14298,6 +14335,51 @@ function forwardRemuxResumeSec(p, at) {
     })
     .catch(() => t);
 }
+// Where a copy-remux asked to start at `seconds` REALLY starts. ffmpeg can only cut a copied
+// picture on a keyframe: asked for 12:30 it starts at the keyframe before it (12:27) and stamps
+// that frame 0:00. Every player then believed 0:00 == 12:30, so the clock, the saved progress,
+// and every caption ran up to one GOP early (measured 2–4s) after each Resume or skip. Ask the
+// server for that keyframe and request the remux from THERE, so 0:00 really is the second we
+// claim. One seek + one packet on the server; answers are kept per (mount, second) so a repeat
+// or a D-pad burst costs nothing. Anything odd → the asked second, exactly today's behavior.
+const _remuxStartCache = new Map();
+function remuxKeyframeStart(p, seconds) {
+  const t = Math.max(0, Math.round((+seconds || 0) * 1000) / 1000);
+  if (!p || !p.remuxUrl || !(t > 0)) return t;
+  const m = String(p.remuxUrl).match(/\/api\/remux\/(\w+)\?t=([^&]+)/);
+  if (!m) return t;
+  const key = `${m[1]}:${Math.round(t * 1000)}`;
+  if (_remuxStartCache.has(key)) return _remuxStartCache.get(key);
+  const ctl = new AbortController();
+  // A cold far seek measured ~900ms (the probe fetches the same first pieces the remux needs next, so
+  // the remux then starts in ~250ms instead of ~500ms: the wait moves, the total barely does). Past
+  // 1.5s the seek goes ahead uncorrected rather than hang.
+  const timer = setTimeout(() => ctl.abort(), 1500);
+  const req = fetch(`/api/keyframe/${m[1]}?at=${t}&before=1&t=${m[2]}`, { signal: ctl.signal })
+    .then((r) => r.json())
+    .then((body) => {
+      const k = body && Number(body.k);
+      // 2ms PAST the keyframe: ffmpeg lands on the keyframe at-or-before the ask, so a pts rounded
+      // down must not send it one whole GOP earlier. The clock is then off by 2ms, not seconds.
+      const start = body && body.exact && Number.isFinite(k) && k >= 0 && k <= t + 0.01 ? Math.round((Math.min(k, t) + 0.002) * 1000) / 1000 : t;
+      if (_remuxStartCache.size > 300) _remuxStartCache.delete(_remuxStartCache.keys().next().value);
+      _remuxStartCache.set(key, start);
+      return start;
+    })
+    .catch(() => { _remuxStartCache.delete(key); return t; })
+    .finally(() => clearTimeout(timer));
+  _remuxStartCache.set(key, req);
+  return req;
+}
+// Sync when already known (a D-pad burst prefetched it; a repeat seek), a promise otherwise.
+// A newer start/seek bumps `_remuxStartSeq` (startSource / tryNativeVideoPlayer), so a late
+// answer for an older ask is dropped instead of restarting the picture behind the user.
+function withRemuxStart(p, seconds, go) {
+  const start = remuxKeyframeStart(p, seconds);
+  if (typeof start === 'number') { go(start); return; }
+  const seq = p._remuxStartSeq;
+  start.then((s) => { if (S.playing === p && p._remuxStartSeq === seq) go(s); });
+}
 window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   const p = S.playing;
   if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
@@ -14335,6 +14417,7 @@ window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   // User remux/transcode skip cannot seek the pipe. Rapid Left was one ffmpeg per press.
   // Wait out the same 320ms window as nudgeSeek and remount only the last target.
   if (!resume && (kind === 'remux' || kind === 'transcode')) {
+    if (kind === 'remux') remuxKeyframeStart(p, at); // learn the true start during the wait, not after it
     clearTimeout(p._remuxSeekT);
     p._remuxSeekT = setTimeout(() => {
       if (!current()) return;
@@ -16699,7 +16782,7 @@ $('seek').addEventListener('click', (e) => {
 // Rapid skip presses coalesce into ONE seek: each remux/transcode seek restarts ffmpeg, so
 // five quick +30s taps must cost one restart at +150s, not five. The bar previews the target
 // live; the real seek fires 320ms after the last press.
-let _nudgeSum = 0, _nudgeBase = null, _nudgeT = null, _nudgeStreak = 0, _nudgeLastAt = 0, _nudgeLastDir = 0;
+let _nudgeSum = 0, _nudgeBase = null, _nudgeT = null, _nudgeKfT = null, _nudgeStreak = 0, _nudgeLastAt = 0, _nudgeLastDir = 0;
 function nudgeSeek(delta) {
   const p = S.playing; if (!p) return;
   if (_nudgeBase === null) _nudgeBase = currentTime();
@@ -16720,6 +16803,12 @@ function nudgeSeek(delta) {
   setPlayerTimes(target, d);
   showOsd();
   previewSeekThumb(target);
+  if (p.usingRemux && !p.castingActive && !p.usingJellyfinDesktop && !(p.usingNative && canUseNativeVideoPlayer())) {
+    // Learn the true start during the debounce, not after it. A short quiet gap, so a rapid
+    // burst probes the landing point rather than every second it passed through.
+    clearTimeout(_nudgeKfT);
+    _nudgeKfT = setTimeout(() => { if (S.playing === p) remuxKeyframeStart(p, target); }, 120);
+  }
   clearTimeout(_nudgeT);
   _nudgeT = setTimeout(() => { const t = target; _nudgeSum = 0; _nudgeBase = null; seekTo(t); }, 320);
 }
@@ -16757,8 +16846,7 @@ function seekTo(seconds) {
     notePlaybackIssue('skip', `skip ${delta >= 0 ? 'forward' : 'back'} from ${from.toFixed(1)}s to ${seconds.toFixed(1)}s`, Math.abs(Math.round(delta)));
   }
   if (!(p.usingRemux || p.usingTranscode) && !(p.usingNative && canUseNativeVideoPlayer())) {
-    p._subSeekAt = seconds;
-    p._subSeekUntil = Date.now() + 20000;
+    armSubtitleSeekLanding(p, seconds);
   }
   resetSubtitleClock(p, (p.usingRemux || p.usingTranscode) ? Math.max(0, seconds - (p.startOffset || 0)) : seconds);
   if (p.castingActive) { // seek the TV, not the idle local element
@@ -17698,8 +17786,7 @@ function subtitleSyncPlayhead(p) {
   if (p._subSeekUntil && Date.now() < p._subSeekUntil) {
     const v = $('video');
     const raw = v && Number.isFinite(v.currentTime) ? v.currentTime : 0;
-    const land = Number(p._subSeekAt);
-    if (Number.isFinite(land) && Math.abs(raw - land) > 3) return null;
+    if (!subtitleSeekLanded(p, raw)) return null;
   }
   if (p._seekLandUntil && appMs() < p._seekLandUntil) {
     const land = Number(p._seekLandAt);
@@ -18070,6 +18157,22 @@ function resetSubtitleClock(p, videoSeconds) {
   p._subShownWall = Date.now();
   p._subFrozen = false;
 }
+// Has the picture reached the minute a seek/start asked for? "Within 3s" alone froze the words
+// on the FIRST line after a resume: captions that arrived 5s into playback (a cold Wyzie fetch,
+// or CC turned on by hand) saw the clock at 5s vs a landing point of 0 and held the resume-point
+// line for the rest of the 20s window. The picture may have been running since the seek landed
+// before the first caption tick — allow the clock to have moved on by that much wall time.
+function subtitleSeekLanded(p, raw, now = Date.now()) {
+  const landAt = Number(p._subSeekAt);
+  if (!Number.isFinite(landAt) || landAt < 0) return true;
+  const sinceArm = Math.max(0, (now - (Number(p._subSeekWall) || now)) / 1000);
+  return Math.abs(raw - landAt) <= 3 + sinceArm;
+}
+function armSubtitleSeekLanding(p, landAt) {
+  p._subSeekAt = Math.max(0, Number(landAt) || 0);
+  p._subSeekUntil = Date.now() + 20000;
+  p._subSeekWall = Date.now();
+}
 // A freeze/buffer/disconnect must not walk the captions. While the picture is stuck,
 // keep the last line. If the media clock then jumps by about that wait, drop the jump
 // so the words stay with the frame the person is looking at. A real seek resets this.
@@ -18085,7 +18188,7 @@ function subtitleMediaNow(p) {
   const landUntil = Number(p._subSeekUntil) || 0;
   const landAt = Number(p._subSeekAt);
   if (landUntil && now <= landUntil && Number.isFinite(landAt) && landAt >= 0) {
-    if (Math.abs(raw - landAt) > 3) {
+    if (!subtitleSeekLanded(p, raw, now)) {
       p._subShown = landAt;
       p._subSlip = 0;
       p._subFrozen = true;

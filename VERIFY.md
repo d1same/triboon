@@ -126,6 +126,56 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-28, v3.3.1 ship — subtitle sync double-check (two real bugs fixed):
+
+- Version contract: `package.json` 3.3.1; Android `versionName` 3.3.1 /
+  `versionCode` 404; Windows client package/Tauri/Cargo(.lock) 3.3.1.
+- Example 1: you Resume at 4:51 and captions arrive 6 seconds later (a cold
+  online fetch, or you turn CC on by hand). Before: the resume-point line
+  stayed on screen for 20 seconds while the actors were already on the next
+  verse. Now the words follow the picture from the first tick.
+- Example 2: you Resume at 19:43. ffmpeg cannot cut a copied picture
+  mid-way, so the stream really began at the keyframe before it (19:35) —
+  yet every player believed 0:00 == 19:43, so the clock, the saved progress,
+  and every caption ran 7.7 seconds early. Now the player asks the server
+  where the stream will really start and plays from THAT second.
+- Code: `web/index.html` `subtitleSeekLanded` (+ `armSubtitleSeekLanding`)
+  — the seek landing guard allows the clock to have moved on since it was
+  armed; `remuxKeyframeStart` / `withRemuxStart` / `startSourceMedia` /
+  `nativeVideoHandoff` — every remux start (browser, Android, Windows
+  handoff payload) uses the keyframe at-or-before the ask as `startOffset`
+  and requests the remux from there (+2ms); `server/transcode.js`
+  `ffprobeKeyframeAtOrBefore` (one seek + one packet); `server/index.js`
+  `/api/keyframe/<mount>?before=1` (stream scope, per-mount answer cache).
+- Measured (this fixture and the house server): a 5s-GOP clip asked at
+  7 / 12.5 / 19s really began at 5.0 / 10.0 / 15.0s (captions 2.0 / 2.5 /
+  4.0s early); requesting from the probed keyframe starts exactly there.
+  Live on Lizzie Borden S01E02: Resume asked 1183s → real start 1175.3s
+  (7.7s early before); skips +1200/+500/-900s corrected by 1.3/2.1/2.4s,
+  probe 302–657ms, picture playing 0.67–1.07s after the press. Late-CC
+  resume: CC attached at 6.1s into the picture, every sampled line matched
+  the picture (was the frozen resume-point line before).
+- Tests: `test/phase4.test.js` runs `subtitleSeekLanded` directly (late
+  attach, old clock after a server seek, skip back, quick land) and a real
+  ffmpeg/ffprobe measurement "v3.3.1: remux clock" (naive start vs
+  corrected start on a 5s-GOP clip, null on 0s / unreadable input) plus web
+  and server contracts. Docs: `docs-architecture.md` Subtitle Model,
+  `docs-player-regression-map.md` P11 (late captions) + P11/P14 (remux
+  clock). Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 778/778. `npm.cmd run verify:full` PASS on the
+  house process v3.3.1 + `emulator-5554` (never the Shield): whitespace, JS
+  syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite, isolated
+  `/api/server` 3.3.1, household VOD play/seek/resume/CC (Mario 4K ready
+  250ms, 1stByte 4ms, seek 99ms, resume 22ms, CC 200; FROM ready 39ms,
+  1stByte 4ms, seek 282ms, resume 9ms, CC 200; both remux, health
+  verified), household IPTV first-byte + retune (ABC web 1339ms / native
+  3ms, ESPN web 399ms / native 3ms), household overlapping Play, Android
+  lint + native unit tests + debug build (installed on the emulator only),
+  Android ExoPlayer stress (one earlier run failed its Live TV zap loop
+  because the WebView page reloaded mid-zap — no server-side live error,
+  Live TV code untouched; the rerun passed). Windows Rust tests run in CI.
+  Windows GPU/HDR: not run.
+
 2026-09-28, v3.3.0 ship — start/resume/continue-watching, source pick,
 subtitle sync, and search double-check:
 

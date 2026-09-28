@@ -521,6 +521,31 @@ them when the table is reorganized:
   `subtitle_delay`, `strip_shift_param`; `server/index.js` `onDemandSubSync`.
   Verification: the resume/subtitle/search contract in `test/phase4.test.js`
   and the Rust unit tests in `player.rs`.
+- **P11 - late captions follow the picture after a resume.** Every web
+  start/seek arms a 20s landing window that holds the last line while the
+  picture clock is still far from the seek target (so the OLD clock cannot
+  walk the words during a server seek). "Far" is `3s + wall time since
+  arming` (`subtitleSeekLanded`). Seen live 2026-09-28 (v3.3.1): Resume at
+  4:51 with CC attaching 5s later held the resume-point line for the rest of
+  the window because `|5s − 0s| > 3`. Code: `web/index.html`
+  `armSubtitleSeekLanding`, `subtitleSeekLanded`, `subtitleMediaNow`,
+  `subtitleSyncPlayhead`. Verification: `test/phase4.test.js` runs
+  `subtitleSeekLanded` directly (late attach, old clock, skip back, quick
+  land) plus the arming/usage contracts.
+- **P11/P14 - the remux clock starts where the picture starts.** A copy-remux
+  begins on the keyframe at-or-before the asked second and stamps it 0:00; the
+  players assumed 0:00 == the ask, so captions, the clock, and saved progress
+  ran up to one GOP early after every Resume/skip (measured 2–4s on a 5s-GOP
+  fixture, 7.7s on a real resume, v3.3.1). Every remux start now asks
+  `/api/keyframe/<mount>?at=N&before=1` and requests the stream from that
+  second (+2ms); the corrected second is `startOffset` in the browser and in
+  the Android/Windows handoff payload. The probe is capped at 1.5s and falls
+  back to the ask. Code: `server/transcode.js` `ffprobeKeyframeAtOrBefore`;
+  `server/index.js` `H.keyframe` (`before=1`); `web/index.html`
+  `remuxKeyframeStart`, `withRemuxStart`, `startSource`/`startSourceMedia`,
+  `tryNativeVideoPlayer`/`nativeVideoHandoff`. Verification:
+  `test/phase4.test.js` "v3.3.1: remux clock" (real ffmpeg: naive start vs
+  corrected start on a 5s-GOP clip) plus the web/server contracts.
 - **P1 - Start over is one press.** `_startOver` zeroes the resume for that
   Play only. Coming back to the movie from the Live TV guide
   (`returnToSavedVod`) drops the flag and lands on the minute you left.

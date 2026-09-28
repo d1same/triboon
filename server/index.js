@@ -33,7 +33,7 @@ const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInW
 const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter, recallProbe, rememberProbe, probeCacheKey } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey } = require('./transcode');
 const { spawn: spawnResumePad } = require('child_process');
 let resumePadReady = null;
 function ensureResumePad() {
@@ -9222,6 +9222,25 @@ Object.assign(H, {
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     const at = parseFloat(ctx.url.searchParams.get('at') || '0') || 0;
     if (!(at > 0) || !detectFfprobe()) return send(ctx.res, 200, { k: Math.max(0, at) });
+    // `before=1`: where a copy-remux asked to start at `at` REALLY starts — the keyframe at-or-before
+    // it. The player then requests the remux from THAT second and its clock, progress, and captions
+    // agree with the picture (a 0:00 == `at` assumption showed every caption up to one GOP early).
+    // One demuxer seek + one packet, so a user seek can afford it; keyframes never move for a mount,
+    // so each answer is kept per (mount, second) and a repeat ask or a stacked ask shares one probe.
+    if (ctx.url.searchParams.get('before') === '1') {
+      vf._kfBefore = vf._kfBefore || new Map();
+      const key = Math.round(at * 1000);
+      let job = vf._kfBefore.get(key);
+      if (!job) {
+        const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
+        job = ffprobeKeyframeAtOrBefore(selfUrl, at).catch(() => null);
+        vf._kfBefore.set(key, job);
+        job.then((k) => { if (!(Number.isFinite(k) && k >= 0)) vf._kfBefore.delete(key); }); // a miss may retry
+        if (vf._kfBefore.size > 400) vf._kfBefore.delete(vf._kfBefore.keys().next().value);
+      }
+      const k = await job;
+      return send(ctx.res, 200, { k: Number.isFinite(k) && k >= 0 && k <= at + 0.01 ? Math.min(at, k) : at, exact: Number.isFinite(k) && k >= 0 });
+    }
     // One ffprobe at a time per mount. A stacked reconnect probe is a second /api/stream
     // reader on top of the remux that just dropped — that is what froze the house.
     // A second stall must wait for the probe already running. Answering with the

@@ -267,6 +267,32 @@ stream clock at zero. Alass on-demand sync measures two 30-second witness
 slices; a disagreement over 1.5s rejects the measurement, and one over 600ms
 is logged as framerate drift while the slice nearest the playhead still wins.
 
+The web caption clock (`subtitleMediaNow`) follows the picture, not the browser
+cue scheduler. Every start and seek arms a 20-second landing window
+(`armSubtitleSeekLanding`): while the picture clock is still far from the seek
+target the last line is held, so the OLD clock cannot walk the words during a
+server-side seek. "Far" is `3s + wall time since arming` (`subtitleSeekLanded`),
+because captions can attach seconds after the picture started (a cold online
+fetch, or CC turned on by hand); a fixed 3s froze the resume-point line for the
+rest of the window. Alass auto-sync waits on the same rule.
+
+A copy-remux can only start on a keyframe. Asked for 12:30, ffmpeg
+(`-noaccurate_seek -ss`) begins at the keyframe before it and `make_zero`
+stamps that frame 0:00. Every player used to assume 0:00 == the asked second,
+so the clock, saved progress, and captions ran up to one GOP early (measured
+2–4s on a 5s-GOP clip, 7.7s on a real resume) after each Resume or skip.
+`GET /api/keyframe/<mount>?at=N&before=1` (stream scope) answers the keyframe
+at-or-before N via one demuxer seek plus one packet
+(`ffprobeKeyframeAtOrBefore`); answers are kept per (mount, second). The web
+player (`remuxKeyframeStart`, `withRemuxStart`) asks first — synchronously
+when already known, otherwise a sub-second probe capped at 1.5s — then
+requests the remux from that second (+2ms so a rounded pts can never land
+one GOP early) and makes it `startOffset`. The same corrected second goes into
+the Android/Windows handoff payload (`nativeVideoHandoff`), so native
+`startOffset + position` is the picture too. Transcode (`-ss` on a re-encode)
+and direct play are exact and skip the probe. A probe that fails or times out
+falls back to the asked second, which is the pre-3.3.1 behavior.
+
 ## Streaming Performance / Multi-User Capacity
 
 Triboon treats performance as a capacity model, not a single "more connections"

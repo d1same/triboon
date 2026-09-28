@@ -68,6 +68,38 @@ function ffprobeKeyframeAtOrAfter(streamUrl, targetSec, { timeoutMs = 8000 } = {
   });
 }
 
+// The keyframe AT-OR-BEFORE `targetSec`: where a copy-remux asked to start at `targetSec` REALLY
+// starts. `-noaccurate_seek -ss N -c copy` lands on the keyframe before N and make_zero stamps
+// that frame as 0:00, so a player that believes 0:00 == N shows every caption (and the clock)
+// up to one GOP early — measured 2.0–4.0s on a 5s-GOP clip, 3.4s on a real release. One demuxer
+// seek plus ONE packet (`%+#1`): the packet a seek lands on is the keyframe. Resolves null when
+// ffprobe is missing, times out, or reports nothing usable → the caller keeps today's behavior.
+function ffprobeKeyframeAtOrBefore(streamUrl, targetSec, { timeoutMs = 3000 } = {}) {
+  return new Promise((resolve) => {
+    const fp = detectFfprobe();
+    if (!fp || !(targetSec > 0)) return resolve(null);
+    const args = ['-v', 'error', '-select_streams', 'v:0', '-read_intervals', `${targetSec}%+#1`,
+      '-show_entries', 'packet=pts_time,dts_time,flags', '-of', 'csv=p=0', streamUrl];
+    const p = spawn(fp.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let out = '', done = false;
+    const finish = (v) => { if (done) return; done = true; clearTimeout(killer); resolve(v); };
+    const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} finish(null); }, timeoutMs);
+    p.stdout.on('data', (d) => { out += d; });
+    p.on('error', () => finish(null));
+    p.on('close', () => {
+      for (const line of out.split(/\r?\n/)) {
+        const [pts, dts, flags] = line.split(',');
+        const t = parseFloat(pts);
+        const ts = Number.isFinite(t) ? t : parseFloat(dts);
+        if (!Number.isFinite(ts) || !/K/.test(String(flags || ''))) continue;
+        // ≤ target with a hair of slack for pts rounding; never a keyframe AFTER the ask
+        return finish(ts <= targetSec + 0.01 ? Math.max(0, ts) : null);
+      }
+      finish(null);
+    });
+  });
+}
+
 let _ffmpegHttpOptions; // cached protocol option help text
 function supportsFfmpegHttpOption(option) {
   const ff = detectFfmpeg();
@@ -662,4 +694,4 @@ function probeCacheKey(name, size) {
   return `${label}|${bytes}`;
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, recallProbe, rememberProbe, probeCacheKey };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey };
