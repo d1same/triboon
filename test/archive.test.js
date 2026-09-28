@@ -816,6 +816,39 @@ test('failover: a piece corrupt on EVERY provider is dead — health says blocke
   }
 });
 
+test('failover: corrupt copies on two providers kill the piece even if a third provider only times out', async () => {
+  const data = seededPayload(90000, 0xc0c0);
+  const { articles, nzb } = makeArchiveNzb([{ name: 'TwoBad.mkv', data }], 30000, { junk: false });
+  const bad = new Map(articles);
+  bad.set('f1s2@triboon.test', corruptYenc(articles.get('f1s2@triboon.test')));
+  const mockA = createMockNntp({ articles: bad });
+  const mockB = createMockNntp({ articles: bad });
+  const portA = await mockA.listen();
+  const portB = await mockB.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: portA, tls: false, label: 'news-a' },
+    { host: '127.0.0.1', port: portB, tls: false, label: 'news-b' },
+    { host: '127.0.0.1', port: 1, tls: false, label: 'down' }, // line fault, not a verdict on the article
+  ], 3);
+  try {
+    const vf = await mountNzb(pool, nzb);
+    await assert.rejects(
+      () => readAll(vf, 0, vf.size),
+      (e) => e.everyProviderDefinitive === true && e.corruptProviders >= 2,
+      'two corrupt accounts mark the piece dead even when a third never gave a verdict',
+    );
+    assert.ok(mockA.bodyCount('f1s2@triboon.test') >= 1 && mockB.bodyCount('f1s2@triboon.test') >= 1,
+      'both corrupt providers were asked');
+    assert.strictEqual(vf.deadPieceCount(), 1, 'two corrupt accounts make the piece dead even when a third never answered');
+    const h = await vf.triage();
+    assert.strictEqual(h.verdict, 'blocked', 'health flips to blocked so the player switches releases');
+  } finally {
+    pool.close();
+    await mockA.close();
+    await mockB.close();
+  }
+});
+
 test('failover: a timeout mixed into the failures does NOT kill the piece (only "no for good" does)', async () => {
   const data = seededPayload(60000, 0x7177);
   const { articles, nzb } = makeArchiveNzb([{ name: 'Flaky.mkv', data }], 30000, { junk: false });

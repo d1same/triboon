@@ -163,7 +163,11 @@ function Ensure-EmulatorServerRoute {
   }
 }
 function Get-WebViewSocket {
-  $deadline = (Get-Date).AddSeconds(45)
+  # A cold emulator verifies the whole app before the page exists. That can
+  # take several minutes on a tired Android TV image (2026-09-28). A warm
+  # start still returns as soon as the page is up.
+  $deadline = (Get-Date).AddMinutes(8)
+  $nextNote = (Get-Date).AddSeconds(20)
   do {
     try {
       $unix = Invoke-Adb shell cat /proc/net/unix
@@ -176,14 +180,36 @@ function Get-WebViewSocket {
       $m = [regex]::Match([string]$line, "webview_devtools_remote_[0-9]+")
       if ($m.Success) { return $m.Value }
     }
+    if ((Get-Date) -gt $nextNote) {
+      Write-Host "Still waiting for the emulator page..."
+      $nextNote = (Get-Date).AddSeconds(20)
+    }
     Start-Sleep -Milliseconds 500
   } while ((Get-Date) -lt $deadline)
   throw "No WebView DevTools socket found"
 }
+function Wait-DevtoolsAnswer {
+  # The debug socket can exist while the emulator is still busy verifying the
+  # app. /json/list then sits there until the page can actually answer.
+  $deadline = (Get-Date).AddMinutes(6)
+  $nextNote = (Get-Date)
+  do {
+    try {
+      $res = Invoke-WebRequest -Uri "http://127.0.0.1:$DevtoolsPort/json/list" -TimeoutSec 3 -UseBasicParsing
+      if ($res.StatusCode -eq 200 -and $res.Content -match 'webSocketDebuggerUrl') { return }
+    } catch {}
+    if ((Get-Date) -gt $nextNote) {
+      Write-Host "Emulator page is open. Waiting until it can answer..."
+      $nextNote = (Get-Date).AddSeconds(20)
+    }
+    Start-Sleep -Seconds 2
+  } while ((Get-Date) -lt $deadline)
+  throw "Emulator page did not answer"
+}
 function Connect-Devtools {
   $socket = Get-WebViewSocket
   Invoke-Adb forward "tcp:$DevtoolsPort" "localabstract:$socket" | Out-Null
-  Start-Sleep -Milliseconds 250
+  Wait-DevtoolsAnswer
   return $socket
 }
 function Invoke-CdpJson {

@@ -163,6 +163,10 @@ function providerLabel(p) {
   const o = (p && p.opts) || {};
   return String(o.label || o.name || o.host || 'provider');
 }
+function providerHostKey(p) {
+  const o = (p && p.opts) || {};
+  return `${String(o.host || '').toLowerCase()}:${o.port != null ? o.port : ''}`;
+}
 
 // 480 = authentication required, 481/482 = authentication rejected/out of sequence (RFC 4643).
 function isAuthLostStatus(status) {
@@ -1231,19 +1235,21 @@ class NntpPool {
     // double-fetch): a 430/connection error advances immediately to the next provider.
     if (ordered.length === 1 || !HEDGE_PRIORITIES.has(priority)) {
       let lastErr;
-      let failures = 0, definitive = 0;
+      let failures = 0, definitive = 0, corruptErr = null;
+      const corruptHosts = new Set();
       for (const p of ordered) {
         if (this.missCache.has(p, msgId)) continue;
         try { return await this._verifiedBody(p, msgId, priority, opts); }
         catch (e) {
           if (isAbortError(e)) throw e;
           if (isDefinitiveMiss(e)) this.missCache.mark(p, msgId);
+          if (isCorruptArticle(e)) { corruptHosts.add(providerHostKey(p)); corruptErr = e; }
           failures++;
           if (isDefinitiveFailure(e)) definitive++;
           lastErr = e;
         }
       }
-      throw this._finalBodyError(lastErr, failures, definitive);
+      throw this._finalBodyError(lastErr, failures, definitive, corruptHosts.size, corruptErr);
     }
     return this._hedgedBody(ordered, msgId, priority, opts);
   }
@@ -1258,11 +1264,18 @@ class NntpPool {
     return raw;
   }
 
-  // Tell the caller whether EVERY provider that answered said no for good. A mount only gives a
-  // piece up (health → blocked → next release) on that signal; a timeout mixed in means retry.
-  _finalBodyError(lastErr, failures, definitive) {
-    const e = lastErr || new Error('no usenet provider could serve the article');
+  // Tell the caller whether this article is dead. A mount only gives a piece up (health →
+  // blocked → next release) on that signal. One corrupt copy plus a timeout still retries —
+  // the next account may have the real bytes. Two different accounts that both returned a
+  // corrupt copy means the article itself is bad (same message-id on Newshosting and Eweka).
+  // A third account that only timed out must not keep that file on screen.
+  _finalBodyError(lastErr, failures, definitive, corruptProviders = 0, corruptErr = null) {
+    const e = (corruptProviders >= 2 && corruptErr) ? corruptErr : (lastErr || new Error('no usenet provider could serve the article'));
     if (failures > 0 && definitive === failures) e.everyProviderDefinitive = true;
+    if (corruptProviders >= 2) {
+      e.everyProviderDefinitive = true;
+      e.corruptProviders = corruptProviders;
+    }
     return e;
   }
 
@@ -1277,8 +1290,9 @@ class NntpPool {
     return new Promise((resolve, reject) => {
       if (signalAborted(external)) return reject(abortError());
       let idx = 0, pending = 0, settled = false, lastErr = null, hedgeTimer = null;
-      let failures = 0, definitive = 0;
-      const giveUp = () => settle(() => reject(this._finalBodyError(lastErr, failures, definitive)));
+      let failures = 0, definitive = 0, corruptErr = null;
+      const corruptHosts = new Set();
+      const giveUp = () => settle(() => reject(this._finalBodyError(lastErr, failures, definitive, corruptHosts.size, corruptErr)));
       const controllers = [];
       let extCleanup = () => {};
       const clearHedge = () => { if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; } };
@@ -1326,6 +1340,7 @@ class NntpPool {
             if (ac.signal.aborted && isAbortError(e)) return; // a loser we aborted on success — ignore
             if (isAbortError(e) && signalAborted(external)) return settle(() => reject(e));
             if (isDefinitiveMiss(e)) this.missCache.mark(p, msgId);
+            if (isCorruptArticle(e)) { corruptHosts.add(providerHostKey(p)); corruptErr = e; }
             failures++;
             if (isDefinitiveFailure(e)) definitive++;
             lastErr = e;

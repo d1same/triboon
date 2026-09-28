@@ -126,6 +126,29 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-28, main — a chunk corrupt on two providers switches releases:
+
+- Example: Dickensian S01E03 stayed on a file whose article was corrupt on
+  Newshosting and Eweka. A third account that only refused the connection
+  kept the rotten file on screen. The picture waited, then the same copy
+  continued.
+- Fix: two different accounts returning a corrupt copy mark the piece dead
+  even if another account only times out (`everyProviderDefinitive` plus
+  `corruptProviders`). A 2-second stall reads `GET /api/health/:id?cached=1`
+  (the verdict already in memory, no new usenet lines) and switches to the
+  next release at the same minute. One corrupt copy plus one timeout still
+  retries. Quality cap is unchanged: a title with no releases stays missing.
+- The emulator page wait in `bench/android-tv-stress.ps1` now lasts until
+  the page exists and can answer (a cold Android TV image can spend minutes
+  verifying the app). A warm start still returns immediately.
+- Gate: `npm.cmd test` 790/790. `verify:full` PASS on a fresh
+  `emulator-5554` (Shield untouched): Mario ready 19ms, 1stByte 7ms, seek
+  2ms, resume 21ms, cc=200; FROM ready 154ms, 1stByte 3ms, seek 124ms,
+  resume 11ms, cc=200; overlapping Play 6ms / 17ms; IPTV ABC web 1360ms /
+  native 3ms, ESPN web 1351ms / native 2ms; Android lint + unit + debug
+  build PASS; Android ExoPlayer stress PASS (`ok: true`, no warnings).
+  Windows GPU/HDR: not run. Not tagged.
+
 2026-09-28, main — mid-movie buffer with only 1 MB ahead (Lanterns soak):
 
 - Example: a piece sat 45s on the playback lane while later read-ahead held

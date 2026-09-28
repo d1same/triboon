@@ -217,14 +217,18 @@ backbone failed the piece while another backbone had a clean one (Dickensian
 S01E03 looped on `segment 6 CRC mismatch` with two idle providers).
 
 When every provider that answered says no for good (430/451 or corrupt on each),
-the error carries `everyProviderDefinitive`. `vfs.js` remembers that piece as
-dead and `triage()` reports the mount `blocked` with `reason: piece N/M
-unreadable on every provider`. STAT alone cannot see a corrupt copy, so without
-this the mount stayed `verified` while the player died at the same second on
-every remount. The health poll then auto-advances the player to the next
-release and the pipeline records the playback-failed verdict. Timeouts,
-resets, refused logins, and unreachable providers are never definitive — a
-piece with one of those mixed in is retried, not killed.
+the error carries `everyProviderDefinitive`. The same flag is set when two
+different accounts both return a corrupt copy, even if another account only
+timed out — that article is bad, and one slow login must not keep the file.
+`vfs.js` remembers that piece as dead and `triage()` reports the mount
+`blocked` with `reason: piece N/M unreadable on every provider`. STAT alone
+cannot see a corrupt copy, so without this the mount stayed `verified` while
+the player died at the same second on every remount. The health poll then
+auto-advances the player to the next release and the pipeline records the
+playback-failed verdict. A stall also reads `GET /api/health/:id?cached=1`
+(the in-memory verdict, no new STAT) and advances immediately when it is
+already `blocked`. One corrupt copy mixed with a timeout, reset, refused
+login, or unreachable provider is still retried, not killed.
 
 **Backup only accounts (2026-09-28).** Settings → Usenet providers has a
 per-account **Backup only** checkbox (`providers[].backup`, boolean, default

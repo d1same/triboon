@@ -12904,6 +12904,25 @@ function notePlaybackTrace(detail) {
   p._traceKey = key;
   notePlaybackIssue('trace', detail, 0);
 }
+// The picture already waited. If the server already knows this file's chunk is
+// rotten, switch to the next release now. cached=1 does not open new usenet
+// lines — a slow picture with a healthy file stays on that file.
+function maybeAdvanceBlockedMount(p) {
+  if (!p || !p.mountId || p._sourceAdvancePending || (p.item && p.item.type === 'live')) return;
+  const now = appMs();
+  if (p._blockedKickAt && now - p._blockedKickAt < 4000) return;
+  p._blockedKickAt = now;
+  api('/api/health/' + p.mountId + '?cached=1').then((h) => {
+    if (S.playing !== p || S.view !== 'player' || p._sourceAdvancePending) return;
+    if (!h || h.verdict !== 'blocked') return;
+    if (S.healthTimer) clearInterval(S.healthTimer);
+    if (S._healthKickT) clearTimeout(S._healthKickT);
+    S.healthTimer = null;
+    S._healthKickT = null;
+    saveWatch(true);
+    autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: 'source health blocked' });
+  }).catch(() => {});
+}
 function markPictureWait(p, why) {
   if (!p || !vodPlaybackStarted(p) || p._issueWaitAt) return;
   p._issueWaitAt = appMs();
@@ -12918,6 +12937,7 @@ function markPictureWait(p, why) {
     const ahead = Math.round(clientBufferedAheadSec(p) || 0);
     const why = p._issueWaitWhy || 'the picture waited for bytes';
     notePlaybackIssue(issueKindFor(why), why + (ahead ? ', ' + ahead + 's already ahead' : ', nothing ahead'), waited);
+    maybeAdvanceBlockedMount(p);
   }, 8000);
 }
 function markPictureMoving(p) {
@@ -12928,7 +12948,10 @@ function markPictureMoving(p) {
   p._issueWaitAt = 0;
   p._issueWaitT = null;
   p._issueWaitNoted = false;
-  if (waited >= 2) notePlaybackIssue(issueKindFor(why), why, waited);
+  if (waited >= 2) {
+    notePlaybackIssue(issueKindFor(why), why, waited);
+    maybeAdvanceBlockedMount(p);
+  }
 }
 function armWebRebufferRecovery(v, p) {
   if (S._webRebufferT || !v || !p || p.usingNative
@@ -27343,6 +27366,7 @@ function connRowHtml(p = {}) {
   const openPct = size ? Math.min(100 - inUsePct, (Math.max(0, open - inUse) / size) * 100) : 0;
   const q = (+p.queued || 0) > 0 ? `<span class="connQ">${esc(p.queued)} queued</span>` : '';
   const status = p.down ? '<span class="connQ" style="color:var(--danger)">offline</span>'
+    : p.noLogin ? '<span class="connQ" style="color:var(--danger)" title="This account asks for a login but no username is saved. Triboon skips it until you save one in Settings → Usenet providers.">no login saved</span>'
     : p.authBroken ? '<span class="connQ" style="color:var(--danger)" title="The provider accepts the login, then answers 480 to every article. Usually an exhausted block account, too many sessions, or a suspended plan. Other providers take over.">login rejected</span>'
     : q;
   return `<div class="connRow${p.down || p.authBroken ? ' down' : ''}">

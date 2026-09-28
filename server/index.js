@@ -5889,6 +5889,12 @@ const H = {
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
+    // A stall check only needs the verdict already in memory. triage() STATs usenet and would
+    // steal lines while the picture is waiting. The player calls this when the picture has
+    // already waited, and switches releases only if a piece was already marked dead.
+    if (ctx.url.searchParams.get('cached') === '1') {
+      return send(ctx.res, 200, vf.health || { verdict: 'unverified' });
+    }
     send(ctx.res, 200, await vf.triage());
   },
 

@@ -4323,6 +4323,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Continue Watching must run the same live source-health recheck as web playback');
   assert.match(ui, /function startHealthPoll\(id\) \{[\s\S]+const poll = async \(\) => \{[\s\S]+p\.mountId !== id[\s\S]+h\.verdict === 'blocked'[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason: 'source health blocked' \}\)[\s\S]+S\._healthKickT = setTimeout\(poll, 1200\);[\s\S]+S\.healthTimer = setInterval\(poll, 20000\);/,
     'blocked resume sources should advance promptly on both web and native without waiting for a media timeout');
+  assert.match(ui, /function maybeAdvanceBlockedMount\(p\) \{[\s\S]+\/api\/health\/' \+ p\.mountId \+ '\?cached=1'[\s\S]+h\.verdict !== 'blocked'[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason: 'source health blocked' \}\)/,
+    'a picture that already waited should switch releases immediately when the cached verdict is blocked');
+  assert.match(ui, /function markPictureMoving\(p\) \{[\s\S]+if \(waited >= 2\) \{[\s\S]+maybeAdvanceBlockedMount\(p\);/,
+    'the two-second stall note is what kicks the cached health check');
   assert.match(ui, /async function loadTracks\(\) \{[\s\S]+if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) \{[\s\S]+p\.nativeDuration = p\.duration \|\| p\.nativeDuration \|\| 0;[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+return;[\s\S]+\}/,
     'track probing should feed native duration and subtitle choices without starting web playback');
   assert.match(ui, /function startSource\(kind, atSeconds, opts = \{\}\) \{[\s\S]+if \(p && p\.usingNative && canUseNativeVideoPlayer\(\)\) return false;/,

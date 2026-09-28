@@ -546,10 +546,11 @@ class NzbFileStream {
     }).finally(release);
   }
 
-  // Every provider that answered said no for good (430/451 or a corrupt copy on each). STAT still
-  // says the article exists, so triage alone kept this mount "verified" while the player died at
-  // the same second on every remount. Remember the piece; triage reports the mount blocked and the
-  // health poll moves the player to the next release. Timeouts and refused logins never land here.
+  // Every provider that answered said no for good (430/451 or a corrupt copy on each), or two
+  // different accounts both returned a corrupt copy. STAT still says the article exists, so
+  // triage alone kept this mount "verified" while the player died at the same second on every
+  // remount. Remember the piece; triage reports the mount blocked and the health poll moves the
+  // player to the next release. One timeout mixed with a single corrupt copy never lands here.
   _noteDeadPiece(i, e) {
     if (!e || !e.everyProviderDefinitive) return;
     this._deadPieces = this._deadPieces || new Map();
