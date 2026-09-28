@@ -151,15 +151,18 @@ subtitle sync, and search double-check:
 - Docs: `docs-architecture.md` "Failure Logging" + Subtitle Model;
   `docs-player-regression-map.md` P14 dark account, P11 nudge-once, P1 start
   over. Code graph refreshed with `graphify update .`.
-- Gate: `npm.cmd test` 776/776. `npm.cmd run verify:full` on the house
-  process v3.3.0 + `emulator-5554` (never the Shield): PASS whitespace, JS
+- Gate: `npm.cmd test` 776/776. `npm.cmd run verify:full` PASS on the house
+  process v3.3.0 + `emulator-5554` (never the Shield): whitespace, JS
   syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full suite, isolated
-  `/api/server` 3.3.0, Android lint + native unit tests + debug build
-  (installed on the emulator only). Household VOD/IPTV/overlapping Play and
-  Android ExoPlayer stress: PENDING the owner's login (stale token → 401,
-  emulator at `gateLogin`); the tag waits for that PASS. Windows Rust
+  `/api/server` 3.3.0, household VOD play/seek/resume/CC (Mario 4K ready
+  2914ms, 1stByte 298ms, seek 168ms, resume 74ms, CC 200; FROM ready 9591ms
+  SLOW on a cold first source find of the night, 1stByte 440ms, seek 103ms,
+  resume 19ms, CC 200; both playable, health verified), household IPTV
+  first-byte + retune, household overlapping Play (FROM 15ms / Mario 30ms
+  ready on the warm mounts), Android lint + native unit tests + debug build
+  (installed on the emulator only), Android ExoPlayer stress. Windows Rust
   `--features player` compiles under MSVC locally; link needs CI's
-  `mpv.lib`, so the Rust unit tests run in CI.
+  `mpv.lib`, so the Rust unit tests run in CI. Windows GPU/HDR: not run.
 
 2026-09-27, failure logging review (folded into v3.3.0):
 
