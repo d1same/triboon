@@ -199,8 +199,13 @@ ordered provider too and takes whichever answers first, then aborts the loser.
 So one slow provider costs ~3s, not the full 10s command timeout. A genuine
 430 / connection error still advances immediately (no hedge wait). Only
 active-player priorities hedge; background/health/read-ahead stay strictly
-sequential so they never double-fetch. Hedging complements (does not replace)
-load-based ordering and the per-provider single retry.
+sequential so they never double-fetch. When the playhead has under 4 MB cached
+ahead (about one second of 1080p), the player BODY uses `hedgeMs: 400` instead
+of 3s — a 3s wait is already a stall. Spare in-flight read-ahead on the same
+file is aborted (`vfs._yieldReadAhead`) so the current piece is not parked
+behind a later article. Trim drops old and tail pieces first; the playhead
+window is last to go. Hedging complements (does not replace) load-based
+ordering and the per-provider single retry.
 
 **Corrupt copies fail over too (2026-09-28).** `NntpPool.body` accepts
 `opts.verify(raw, provider)`; `vfs.js` passes the yEnc CRC check. A provider

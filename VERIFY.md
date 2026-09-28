@@ -126,6 +126,20 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-28, main — mid-movie buffer with only 1 MB ahead (Lanterns soak):
+
+- Example: a piece sat 45s on the playback lane while later read-ahead held
+  the only line. The TV had 1 MB left (~1s of 1080p) and froze.
+- Fix: abort spare read-ahead when the player needs the current piece
+  (`vfs._yieldReadAhead`); hedge the next provider in 400ms when ahead is
+  under 4 MB; trim drops old/tail pieces first so the playhead window is
+  last to go.
+- Tests: `test/e2e.test.js` (yield, thin hedge, trim keep-ahead). An account with no
+  saved username is skipped for good (`noLogin`) instead of a 480 every two minutes.
+- Gate: `npm.cmd test` 789/789. `verify:full` PASS (emulator only): Mario ready
+  2955ms, FROM cold ready 12568ms SLOW / seek 2415ms SLOW then warm overlap
+  OK, IPTV ABC/ESPN OK, Android stress PASS.
+
 2026-09-28, main (post-v3.3.2) — false "server restart" remounts mid-episode:
 
 - Example from the house log: The Rookie S08E10 playing fine at 13:21. At

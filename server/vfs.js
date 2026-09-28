@@ -78,13 +78,29 @@ class SharedCacheBudget {
     }
   }
 
+  _isPlayheadWindow(owner, index) {
+    const part = owner && owner.partSize;
+    const off = owner && Number(owner.lastPlaybackOffset);
+    if (!(part > 0) || !Number.isFinite(off) || off < 0) return false;
+    const start = Math.floor(off / part);
+    const keep = start + Math.max(4, Number(owner.readAhead) || 0);
+    return index >= start && index <= keep;
+  }
+
   trim() {
     // Preserve the newest decoded article if a provider uses articles larger than the configured
-    // cap; the caller still needs that one Buffer to complete its current read. Otherwise the
-    // aggregate remains strictly within the mount-wide byte allowance.
+    // cap; the caller still needs that one Buffer to complete its current read. Never drop the
+    // pieces sitting on the playhead — that is the "1 MB already ahead" stall: a tail warmup or
+    // an old article evicts the next second the TV is about to play.
     while (this.bytes > this.maxBytes && this.entries > 1) {
-      let rec = null;
-      while (this.order.length && !(rec = this.order.shift()).active) rec = null;
+      let rec = this.order.find((r) => r.active && !this._isPlayheadWindow(r.owner, r.index));
+      if (!rec) {
+        rec = this.order.reduce((best, r) => {
+          if (!r.active) return best;
+          if (!best || r.index > best.index) return r;
+          return best;
+        }, null);
+      }
       if (!rec) break;
       this._removeRecord(rec);
       if (rec.owner && typeof rec.owner._cacheDrop === 'function') {
@@ -360,10 +376,21 @@ class NzbFileStream {
   }
 
   trimCache() {
+    const play = Number.isFinite(this.lastPlaybackOffset) && this.partSize > 0
+      ? this._segForOffset(this.lastPlaybackOffset) : -1;
+    const keep = play >= 0 ? play + Math.max(4, this.readAhead || 0) : -1;
+    const inWindow = (index) => play >= 0 && index >= play && index <= keep;
     while (this.cache.size > 1
         && (this.cache.size > this.cacheMax || this.cacheBytes > this.cacheMaxBytes)) {
-      const index = this.cacheOrder.shift();
-      if (index === undefined) break;
+      let index = this.cacheOrder.find((i) => this.cache.has(i) && !inWindow(i));
+      if (index === undefined) {
+        let far = -1;
+        for (const i of this.cache.keys()) if (i > far) far = i;
+        index = far;
+      }
+      if (index === undefined || index < 0) break;
+      const at = this.cacheOrder.indexOf(index);
+      if (at >= 0) this.cacheOrder.splice(at, 1);
       this._cacheDrop(index);
     }
   }
@@ -426,10 +453,18 @@ class NzbFileStream {
         return true;
       } catch { return false; }
     };
-    const bodyOpts = (sig) => ({
-      signal: sig, verify, drainMs: this.abortDrainMs,
-      needSlots: streamStartupNeedSlots(this.size, priority, this._releaseName || this.name),
-    });
+    const bodyOpts = (sig) => {
+      const ahead = this.aheadCacheBytes();
+      const player = priority === 'playback' || priority === 'seek' || priority === 'startup';
+      const thin = player && Number.isFinite(ahead) && ahead < 4 * 1024 * 1024;
+      return {
+        signal: sig, verify, drainMs: this.abortDrainMs,
+        needSlots: streamStartupNeedSlots(this.size, priority, this._releaseName || this.name),
+        // 1 MB ahead is ~1s of 1080p. A 3s hedge is too late — the TV is already empty.
+        ...(thin ? { hedgeMs: 400 } : {}),
+      };
+    };
+    if (priority === 'playback' || priority === 'seek' || priority === 'startup') this._yieldReadAhead(i);
     const decodeAndCache = (raw, skip) => {
       let dec = (skip <= 0 && verified && verified.raw === raw) ? verified.dec : decode(raw, skip > 0 ? { skipDecoded: skip } : undefined);
       // A mid-segment skip past this article's real decoded size (short last/uneven
@@ -533,6 +568,16 @@ class NzbFileStream {
 
   cancelReadAhead() {
     this.readAheadEpoch++;
+  }
+
+  // The player needs piece N now. Later articles already on the only line would make N wait
+  // 40s (house soak: 1 MB ahead, piece took 45s). Drop spare read-ahead so that line is free.
+  _yieldReadAhead(keepIndex) {
+    for (const [i, rec] of this.inflight) {
+      if (i === keepIndex || !rec) continue;
+      if (priorityRank(rec.priority) < priorityRank('readAhead')) continue;
+      try { rec.controller.abort(); } catch {}
+    }
   }
 
   // Read [start, end) — returns an async generator of Buffers, with read-ahead.

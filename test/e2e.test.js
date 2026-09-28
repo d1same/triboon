@@ -298,6 +298,72 @@ test('vfs: caller priority reaches article reads and aborted reads do not fetch'
   assert.strictEqual(bodyAborted, true, 'aborting the last reader should abort the in-flight article BODY');
 });
 
+test('vfs: a player piece drops spare read-ahead so the only line is not stuck on later articles', async () => {
+  const { articles, nzb } = makeRelease('Yield.ReadAhead.mkv', 160000, 40000);
+  const aborted = [];
+  const pool = {
+    body: async (msgId, priority = 'playback', opts = {}) => {
+      if (priority === 'readAhead') {
+        return new Promise((_resolve, reject) => {
+          const sig = opts && opts.signal;
+          if (!sig) return reject(new Error('read-ahead missing signal'));
+          sig.addEventListener('abort', () => {
+            aborted.push(msgId);
+            const e = new Error('aborted');
+            e.code = 'ABORT_ERR';
+            reject(e);
+          }, { once: true });
+        });
+      }
+      return articles.get(msgId);
+    },
+    stat: async () => true,
+  };
+  const vf = new VirtualFile(pool, nzb, { readAhead: 0 });
+  await vf.mount();
+  vf.cache.clear(); vf.cacheOrder = []; vf.inflight.clear();
+  vf._fetchSegment(2, 'readAhead').catch(() => {});
+  vf._fetchSegment(3, 'readAhead').catch(() => {});
+  await new Promise((r) => setImmediate(r));
+  const data = await vf._fetchSegment(1, 'playback');
+  assert.ok(data.length > 0);
+  assert.ok(aborted.includes('seg3@triboon.test') && aborted.includes('seg4@triboon.test'),
+    `later articles must stand down: ${aborted.join(',')}`);
+  assert.ok(!aborted.includes('seg2@triboon.test'), 'the piece the player asked for is not cancelled');
+});
+
+test('vfs: a thin buffer asks the next provider in 400ms, not 3s', async () => {
+  const { articles, nzb } = makeRelease('Thin.Hedge.mkv', 160000, 40000);
+  let seen = null;
+  const pool = {
+    body: async (msgId, _priority, opts = {}) => { seen = opts; return articles.get(msgId); },
+    stat: async () => true,
+  };
+  const vf = new VirtualFile(pool, nzb, { readAhead: 0 });
+  await vf.mount();
+  vf.cache.clear(); vf.cacheOrder = []; vf.cacheBytes = 0; vf.inflight.clear();
+  vf.lastPlaybackOffset = 0;
+  await vf._fetchSegment(1, 'playback');
+  assert.strictEqual(seen && seen.hedgeMs, 400, '1 MB ahead is already a stall — do not wait 3s to try the other account');
+});
+
+test('vfs: trim keeps the pieces sitting on the playhead, not the tail warmup', async () => {
+  const { nzb } = makeRelease('Keep.Ahead.mkv', 200000, 40000);
+  const pool = { body: async () => Buffer.alloc(100), stat: async () => true };
+  const vf = new VirtualFile(pool, nzb, { readAhead: 2, cacheSegments: 2, cacheBytes: 90 });
+  vf.partSize = 40;
+  vf.size = 200;
+  vf.lastPlaybackOffset = 80; // piece 3 (0-based index 2)
+  for (let i = 0; i < 5; i++) {
+    vf.cache.set(i, Buffer.alloc(40));
+    vf.cacheBytes += 40;
+    vf.cacheOrder.push(i);
+  }
+  vf.trimCache();
+  assert.ok(vf.cache.has(2) && vf.cache.has(3), 'playhead and the next piece stay');
+  assert.ok(!vf.cache.has(0), 'old pieces behind the playhead go first');
+});
+
 test('vfs: playback upgrades a segment already queued by read-ahead', async () => {
   const { articles, nzb } = makeRelease('Priority.Upgrade.Test.mkv', 160000, 40000);
   const calls = [];

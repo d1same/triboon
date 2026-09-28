@@ -459,6 +459,19 @@ class ProviderPool {
   // article, and Status shows "login rejected". Self-heals when the window passes.
   noteAuthLost(conn) {
     const now = Date.now();
+    // No username saved: we never sent AUTHINFO, so every line on this account will 480.
+    // The 2-minute quiet window used to end and dial it again, forever. Settings changes
+    // rebuild the pool, which is the only thing that can fix this.
+    if (!this.opts.user) {
+      if (!this.noLogin) {
+        this.noLogin = true;
+        const line = `${(this.opts && this.opts.host) || 'usenet'} asks for a login but none is saved — skipping it until a username is saved in Settings → Usenet providers`;
+        debug.fail('buffer', line);
+        debug.issue(`login refused — reason: ${line}`);
+        story.noteOpen(`login refused — reason: ${line}`);
+      }
+      return;
+    }
     const fresh = conn && conn.connectedAt && now - conn.connectedAt < AUTH_LOST_FRESH_MS;
     if (fresh) {
       this.authLostAt = this.authLostAt.filter((t) => now - t < AUTH_BROKEN_WINDOW_MS);
@@ -519,6 +532,7 @@ class ProviderPool {
     story.noteOpen(`login refused — reason: ${refused}`);
   }
   authBroken() {
+    if (this.noLogin) return true;
     const now = Date.now();
     let n = 0;
     for (const t of this.authLostAt) if (now - t < AUTH_BROKEN_WINDOW_MS) n++;
@@ -981,6 +995,7 @@ class ProviderPool {
       queued: this.queue.length,
       down: this.down(),
       authBroken: this.authBroken(),
+      noLogin: !!this.noLogin,
       quiet: this.refusingNewLogins(),
       backup: this.isBackup(),
     };
