@@ -5008,7 +5008,7 @@ function activityConnectionStats() {
     return {
       label: n > 1 ? `${host} (${n})` : host,
       inUse: p.inUse, open: p.open, connecting: p.connecting, size: p.size, queued: p.queued, down: !!p.down,
-      authBroken: !!p.authBroken, backup: !!p.backup,
+      authBroken: !!p.authBroken, noLogin: !!p.noLogin, backup: !!p.backup,
     };
   });
   return { providers, inUse: stats.inUse, open: stats.open, size: stats.size, queued: stats.queued };
@@ -5060,7 +5060,8 @@ function usenetLinesSnapshot() {
     if (p.connecting > 0) flags.push(`${p.connecting} dialing`);
     if (p.quiet) flags.push('quiet after 480');
     if (p.down) flags.push('down');
-    if (p.authBroken) flags.push('login rejected');
+    if (p.noLogin) flags.push('no login saved');
+    else if (p.authBroken) flags.push('login rejected');
     return `${host} ${p.inUse}/${p.open} busy${flags.length ? ` (${flags.join(', ')})` : ''}`;
   }).join('; ');
 }

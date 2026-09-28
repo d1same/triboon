@@ -5861,6 +5861,37 @@ test('nntp: a backup is preferred over a primary that is dark (connect failure, 
   } finally { pool.close(); await backup.close(); }
 });
 
+test('nntp: an account with no username that answers 480 is skipped for good, not re-dialed every two minutes', async () => {
+  const payload = seededPayload(8 * 1024, 0x57);
+  const r = nzbFor(writeRar4Store([{ name: 'nologin.mkv', data: payload }], { base: 'nl' }), 30000, 'nl');
+  const id = [...r.articles.keys()][0];
+  const locked = createMockNntp({ articles: r.articles, requireAuth: true }); // Eweka with no username saved
+  const good = createMockNntp({ articles: r.articles });
+  const lockedPort = await locked.listen();
+  const goodPort = await good.listen();
+  // The no-login account has the bigger plan, so the idle-tie rule dials it first.
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: lockedPort, tls: false, connections: 40 },
+    { host: '127.0.0.1', port: goodPort, tls: false, connections: 8, user: 'u', pass: 'p' },
+  ], 8);
+  try {
+    const first = await pool.body(id, 'playback');
+    assert.ok(first.length > 0, 'the piece still plays from the account that has a login');
+    const noLogin = pool.providers[0];
+    assert.strictEqual(noLogin.noLogin, true, 'the 480 on a line that never sent AUTHINFO marks the account "no login saved"');
+    assert.strictEqual(noLogin.authBroken(), true);
+    assert.strictEqual(noLogin.stats().noLogin, true, 'Activity can say why it is skipped');
+    // The two-minute quiet window ends. Before the fix this is where it was dialed (and 480ed) again.
+    noLogin.capHitAt = Date.now() - 10 * 60 * 1000;
+    noLogin.authLostAt = [];
+    const dialed = locked.connCount();
+    for (let i = 0; i < 4; i++) assert.ok((await pool.body(id, 'playback')).equals(first));
+    await pool.stat(id, 'health');
+    assert.strictEqual(locked.connCount(), dialed, 'no new login on the no-username account after the quiet window');
+    assert.strictEqual(pool._ordered(0)[0].opts.port, goodPort, 'the working account leads');
+  } finally { pool.close(); await locked.close(); await good.close(); }
+});
+
 test('nntp: circuit-breaker half-open probe recovers a provider before the full backoff', async () => {
   const payload = seededPayload(24 * 1024, 0x53);
   const r = nzbFor(writeRar4Store([{ name: 'probe.mkv', data: payload }], { base: 'probe' }), 30000, 'probe');
