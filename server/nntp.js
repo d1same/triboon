@@ -672,6 +672,32 @@ class ProviderPool {
   }
 
   _pump() {
+    this._pumpNow();
+    this._watchParked();
+  }
+
+  // _pumpNow only runs on events: a task finishing, a socket connecting, the quiet-window
+  // wake. Work queued while NO line is open and nothing is dialing (probe throttle, a cap hit
+  // that closed the last line, a "stay on a live line" piece whose line then went away) has no
+  // event coming — it sat as "0 open · 24 queued" for hours and that account was never used
+  // again, because the load-sort routes new work to the less-loaded peers. Re-pump on the
+  // probe cadence until a line is open or the queue is empty.
+  _watchParked() {
+    const parked = !this.closed && this.queue.length > 0 && this.conns.length === 0 && this.connecting === 0;
+    if (!parked) {
+      if (this._parkedWakeTimer) { clearTimeout(this._parkedWakeTimer); this._parkedWakeTimer = null; }
+      return;
+    }
+    if (this._parkedWakeTimer) return;
+    const ms = Math.max(50, this.opts.reconnectProbeMs || 8000);
+    this._parkedWakeTimer = setTimeout(() => {
+      this._parkedWakeTimer = null;
+      if (!this.closed) { try { this._pump(); } catch {} }
+    }, ms);
+    if (this._parkedWakeTimer.unref) this._parkedWakeTimer.unref();
+  }
+
+  _pumpNow() {
     // Cull FIRST: dead sockets and long-idle ones (NAT/provider silently drops idle NNTP
     // connections — writing into one hangs until the command timeout). Culling before the
     // _ensure accounting also guarantees dead conns never block reconnection.
@@ -726,7 +752,13 @@ class ProviderPool {
     // a single STAT. Opening the whole share on the first command is what made
     // Easynews and Eweka answer 480 before the movie had started.
     let pending = 0;
-    for (const t of this.queue) if (!signalAborted(t.signal) && !t.stayOnLive) pending++;
+    // "Stay on a live line" only means something while a line is live. Once the last one is
+    // gone (idle cull, its own 480) the piece is ordinary pending work again, or it never dials.
+    const anyLive = this.hasLiveSocket();
+    for (const t of this.queue) {
+      if (!anyLive) t.stayOnLive = false;
+      if (!signalAborted(t.signal) && !t.stayOnLive) pending++;
+    }
     const openNow = this.conns.length + this.connecting;
     const need = Math.min(ceiling, Math.max(openNow, pending));
     if (pending && openNow < need) this._ensure(need);
@@ -914,6 +946,7 @@ class ProviderPool {
   close() {
     this.closed = true;
     if (this._quietWakeTimer) { clearTimeout(this._quietWakeTimer); this._quietWakeTimer = null; }
+    if (this._parkedWakeTimer) { clearTimeout(this._parkedWakeTimer); this._parkedWakeTimer = null; }
     for (const c of this.conns) c.close();
     this.conns = [];
   }

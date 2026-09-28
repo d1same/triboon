@@ -10663,9 +10663,16 @@ function pickNextUp(show, seasons) {
   checkAvailability(show);
 }
 
+// The bookmark's tooltip/label follows its state — it read "Add to watchlist" after adding.
+function paintDetailWatchlist(on) {
+  const b = $('dWatchlist');
+  b.classList.toggle('on', on);
+  b.title = on ? 'Remove from watchlist' : 'Add to watchlist';
+  b.setAttribute('aria-label', b.title);
+}
 function syncDetailButtons(it) {
   if (!it) return;
-  $('dWatchlist').classList.toggle('on', !!(S.watchlistMap && S.watchlistMap[it.key]));
+  paintDetailWatchlist(!!(S.watchlistMap && S.watchlistMap[it.key]));
   const w = (S.watchMap || {})[it.key];
   $('dPlayed').classList.toggle('on', !!(w && w.watched));
   if (it.type === 'tv') {
@@ -10830,7 +10837,7 @@ $('qToggle').addEventListener('click', (e) => {
 $('dWatchlist').addEventListener('click', async () => {
   const it = S.detailItem; if (!it) return;
   const on = !(S.watchlistMap && S.watchlistMap[it.key]);
-  $('dWatchlist').classList.toggle('on', on);
+  paintDetailWatchlist(on);
   S.watchlistMap = S.watchlistMap || {};
   if (on) S.watchlistMap[it.key] = { meta: wlMeta(it) }; else delete S.watchlistMap[it.key];
   try { await api('/api/watchlist', { method: 'POST', body: { key: it.key, on, meta: wlMeta(it) } }); toast(on ? 'Added to watchlist' : 'Removed from watchlist'); }

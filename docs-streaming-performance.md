@@ -166,6 +166,19 @@ after the full `reconnectBackoffMs` (60s). A live connection clears the down
 state; a failed probe refreshes the backoff. This matters most for
 single-provider setups, where the down provider is the only option.
 
+**Parked work re-pumps itself.** The pool's dispatcher runs on events (a task
+finishing, a socket connecting, the quiet-window wake). Work queued while NO
+line is open and nothing is dialing had no event coming — a cap hit that closed
+the last line inside the probe throttle, or a "stay on a live line" piece whose
+line was then idle-culled — and Now Watching showed one account stuck at
+`0 open · 24 queued` for hours while the load-sort routed everything to its
+peers. `ProviderPool._watchParked()` now re-pumps on the probe cadence
+(`reconnectProbeMs`) until a line is open or the queue is empty, and a
+`stayOnLive` piece counts as ordinary pending work once no live socket remains.
+Example: Easynews 480s, its last line closes, 24 health STATs sit behind it —
+8s later the pool dials one probe line and drains them instead of waiting for a
+restart.
+
 **Hedged multi-provider failover.** Failover is not purely exception-based.
 For active-player BODY work (startup/seek/playback), if the chosen provider has
 not answered within `HEDGE_MS_DEFAULT` (3s) — because its connections are queued,

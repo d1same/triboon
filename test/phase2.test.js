@@ -5785,6 +5785,38 @@ test('nntp: circuit-breaker half-open probe recovers a provider before the full 
   } finally { pool.close(); await mock.close(); }
 });
 
+test('nntp: parked work with no line open re-pumps itself (no zombie queue after a cap hit or a lost line)', async () => {
+  // Owner saw Now Watching stuck at "0 open · 24 queued" on one account for hours while nobody
+  // watched: the queue had work, no line was open, and nothing ever dialed again because _pump
+  // only runs on events (a task finishing, a socket connecting) and none were coming.
+  const payload = seededPayload(24 * 1024, 0x54);
+  const r = nzbFor(writeRar4Store([{ name: 'park.mkv', data: payload }], { base: 'park' }), 30000, 'park');
+  const id = [...r.articles.keys()][0];
+  const mock = createMockNntp({ articles: r.articles });
+  const port = await mock.listen();
+  const pool = new NntpPool([{ host: '127.0.0.1', port, tls: false, reconnectBackoffMs: 60000, reconnectProbeMs: 40 }], 4);
+  const p = pool.providers[0];
+  const withTimeout = (pr, ms, what) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} still parked after ${ms}ms`)), ms))]);
+  try {
+    // 1) A cap hit closed the last line a moment ago: _ensure is inside the probe throttle, so the
+    //    first pump does nothing — and with no more events the STAT used to sit there forever.
+    p.capHitAt = Date.now(); p.lastProbeAt = Date.now();
+    await withTimeout(pool.stat(id, 'health'), 1500, 'STAT after a cap hit');
+    assert.ok(p.conns.length > 0, 'the retry pump dialed a probe line and ran the work');
+    // 2) A piece was told to "stay on a live line", then that line went away (idle cull / 480).
+    //    With no live socket there is nothing to stay on: it must count as pending and dial.
+    for (const c of p.conns) { try { c.close(); } catch {} c.alive = false; }
+    p.conns = [];
+    p.capHitAt = 0; p.lastProbeAt = 0;
+    const parked = new Promise((resolve, reject) => {
+      p.queue.push({ fn: (c) => c.stat(id), resolve, reject, priority: 'health', stayOnLive: true });
+    });
+    p._pump();
+    await withTimeout(parked, 1500, 'stayOnLive STAT with no live line');
+    assert.strictEqual(p.queue.length, 0, 'nothing left parked');
+  } finally { pool.close(); await mock.close(); }
+});
+
 test('scoring: sample-size stubs and foreign-language dubs sink; duals stay honest fallbacks', () => {
   // The 68MB "2160p" sample post is disqualified outright on its DECLARED size…
   const ranked = rankReleases([

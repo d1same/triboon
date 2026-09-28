@@ -177,6 +177,29 @@ subtitle sync, and search double-check:
   health`), for `/api/play` and Jellyfin, and a start over 4s is written as an
   issue — the 9.6s FROM start above was one number with no stage. `npm.cmd
   test` 776/776 after that change.
+- Final walkthrough of the web UI on the house process (main after the tag,
+  browser at 1920x1080, signed in as the owner): every rail page (Home with
+  Continue Watching + hero, Watchlist, Discover, Calendar, Movies, TV, Live
+  TV guide + favorites, Kids, both IR libraries, Audiobooks; Music is hidden
+  here because this PC has no yt-dlp), search type/submit/results, movie and
+  show detail (Resume/Start over, quality chips, Sources drawer open/close,
+  cast → person page → back, watchlist add/remove), web player on a 4K
+  episode (started in 5.1s cold / 1.5s warm, online English subtitles 788
+  cues drawn, +30s skip kept the words, pause/play, quality + audio menus,
+  stats, back → Continue Watching repainted 7%), Live TV channel play
+  (0.5s / 1.0s to first frame, in-player guide Back→category→close,
+  favorite), all 17 Preferences/Server tabs, profile switch gate. Zero page
+  JS errors, zero unhandled rejections.
+- Found + fixed: Now Watching showed `NEWS.EASYNEWS.COM 0 / 40 in use · 0
+  open · 24 queued` for hours while nobody watched — the pool only re-pumps
+  on events, so work parked with no line open never dialed again and that
+  account sat unused. `server/nntp.js` `_watchParked()` re-pumps on the probe
+  cadence; a `stayOnLive` piece counts as pending once no live socket
+  remains. New test `nntp: parked work with no line open re-pumps itself`
+  (failed before the fix, 110ms after). Also the detail bookmark tooltip now
+  says "Remove from watchlist" once added (`paintDetailWatchlist`). Docs:
+  `docs-streaming-performance.md` "Parked work re-pumps itself". `npm.cmd
+  test` 777/777. House process restarted on this main commit.
 
 2026-09-27, failure logging review (folded into v3.3.0):
 
