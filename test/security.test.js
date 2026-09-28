@@ -178,6 +178,9 @@ test('boot: fresh server requires setup, then issues a working admin token', asy
   assert.strictEqual(s.json.needsSetup, true);
   assert.strictEqual(s.json.builtInSubtitlesEnabled, false,
     'built-in subtitles default to off while online-only testing is enabled');
+  assert.match(String(s.json.boot || ''), /^[0-9a-f]{16}$/, '/api/server carries a per-process boot id');
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.boot, s.json.boot,
+    'the boot id is stable for the life of the process — the player remounts only when it changes');
 
   admin = await setupAdmin(srv.port);
   const me = await httpJson(srv.port, 'GET', '/api/me', null, admin);

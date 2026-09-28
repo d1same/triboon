@@ -90,6 +90,7 @@ const APP_VERSION = (() => {
   try { return require('../package.json').version || 'dev'; }
   catch { return 'dev'; }
 })();
+const BOOT_ID = require('crypto').randomBytes(8).toString('hex'); // one per process start
 
 // ---------- state ----------
 // Resolve %VAR% in TRIBOON_DATA before anything reads it. On Windows the WinSW service passes
@@ -5575,6 +5576,9 @@ const H = {
     castReceiverAppId: effectiveCastReceiverAppId(),
     // First private IPv4 the TV can fetch when the sender is on localhost/127.0.0.1.
     lanOrigin: advertisedLanOrigin(),
+    // Changes only when this process starts. The player's VOD watch remounts when it sees a NEW
+    // id, never because a poll merely timed out — a slow answer is not a restart.
+    boot: BOOT_ID,
   }),
 
   // Custom Web Receiver page (Cast Phase 2). PUBLIC by design: the Cast DEVICE (not a signed-in

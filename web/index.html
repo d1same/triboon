@@ -14866,17 +14866,34 @@ function startVodServerWatch() {
   stopVodServerWatch();
   const playing = S.playing;
   if (!playing || !playing.item || playing.item.type === 'live') return;
-  let misses = 0;
+  // A restart is proven by a NEW boot id from /api/server, never by a slow answer. Two timed-out
+  // polls used to tear down a playing episode and restart its remux ("server restart" twice in
+  // 21s on the house log while the box was merely busy); the picture jumped and re-buffered
+  // for nothing. Now a quiet server only freezes the last frame when the buffer is nearly out,
+  // and the stream's own error path remounts if the mount is really gone.
+  let misses = 0, held = false;
   S._vodServerWatchT = setInterval(async () => {
     const p = S.playing;
     if (!p || !p.item || p.item.type === 'live' || S.view !== 'player' || p._reMounting) return;
+    let info = null;
     try {
       const r = await fetch('/api/server', { signal: AbortSignal.timeout(2500) });
-      if (r.ok) { misses = 0; return; }
+      if (r.ok) info = await r.json();
     } catch {}
+    if (info) {
+      misses = 0;
+      if (held) { held = false; try { hideSeekHoldFrame(); } catch {} }
+      const boot = String(info.boot || '');
+      if (!boot) return;
+      if (!S._serverBoot) { S._serverBoot = boot; return; }
+      if (boot === S._serverBoot) return;
+      S._serverBoot = boot;
+      reMountAndResume('server restart');
+      return;
+    }
     misses += 1;
-    if (misses < 2) return;
-    reMountAndResume('server restart');
+    if (misses < 2 || held) return;
+    if (vodRestartHoldNeeded(p)) { held = true; holdPlaybackAcrossRestart(); }
   }, 4000);
 }
 // Unraid image pulls often take longer than 90s. Stay on the last frame and keep
@@ -31320,6 +31337,7 @@ async function restoreSavedSession() {
   try { info = await api('/api/server'); } catch { document.body.innerHTML = '<p style="padding:40px">Triboon server unreachable.</p>'; return; }
   splashStage(40); // server answered — the session decision is next
   S.serverInfo = info;
+  S._serverBoot = String(info.boot || ''); // the VOD watch remounts only when this changes
   relayCastReceiverAppId();
   // The scroll-fade stays a DETAIL-page behavior only (wired to .detailScroll where detail opens).
   // It was briefly wired to #rows/#grid too, and on a TV that killed the backdrop after ONE row:

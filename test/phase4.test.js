@@ -3111,6 +3111,20 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'a swept mount 404 must mint a new mount for the same title, not retry the dead URL');
   assert.match(ui, /function startVodServerWatch\(\) \{[\s\S]+playing\.item\.type === 'live'[\s\S]+reMountAndResume\('server restart'\)/,
     'movies/shows/local poll /api/server so a restart remounts while leftover buffer still plays; Live TV does not');
+  const watch = ui.slice(ui.indexOf('function startVodServerWatch() {'), ui.indexOf('async function waitForTriboonServer('));
+  assert.match(watch, /const boot = String\(info\.boot \|\| ''\);[\s\S]+if \(boot === S\._serverBoot\) return;\s*S\._serverBoot = boot;\s*reMountAndResume\('server restart'\);/,
+    'a remount needs a NEW boot id from /api/server');
+  assert.doesNotMatch(watch.slice(watch.indexOf('misses += 1;')), /reMountAndResume/,
+    'timed-out polls never remount — the house saw two false "server restart" teardowns in 21s while the box was only busy');
+  assert.match(watch, /misses \+= 1;\s*if \(misses < 2 \|\| held\) return;\s*if \(vodRestartHoldNeeded\(p\)\) \{ held = true; holdPlaybackAcrossRestart\(\); \}/,
+    'a quiet server only freezes the last frame once the on-device leftover is nearly out');
+  assert.match(watch, /if \(held\) \{ held = false; try \{ hideSeekHoldFrame\(\); \} catch \{\} \}/,
+    'when the server answers again with the same boot id the held frame lifts and playback simply continues');
+  assert.match(ui, /S\._serverBoot = String\(info\.boot \|\| ''\); \/\/ the VOD watch remounts only when this changes/,
+    'the boot id is seeded at app start so a restart before the first poll is still caught');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /const BOOT_ID = require\('crypto'\)\.randomBytes\(8\)\.toString\('hex'\);/, 'one boot id per process');
+  assert.match(server, /lanOrigin: advertisedLanOrigin\(\),[\s\S]{0,400}boot: BOOT_ID,/, '/api/server carries it');
   assert.match(ui, /function vodRestartHoldNeeded\(p = S\.playing\) \{[\s\S]+clientBufferedAheadSec\(p\) < 8/,
     'a restart holds the last frame only after the on-device leftover is under 8s');
   assert.match(ui, /maybeHoldPlaybackAcrossRestart\(p\);[\s\S]+const at = currentTime\(\);/,

@@ -126,6 +126,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-28, main (post-v3.3.2) — false "server restart" remounts mid-episode:
+
+- Example from the house log: The Rookie S08E10 playing fine at 13:21. At
+  13:27:27 and again at 13:27:48 the player logged
+  `why=remount reason="server restart"` and restarted the remux at 806s then
+  825s — but the server never restarted (the same warm mount `2e8f9cf0e72a`
+  was re-joined both times). The VOD watch polled `/api/server` every 4s with
+  a 2.5s timeout and treated two slow answers as a restart while the box was
+  busy (a newshosting BODY stall at the same moment). That teardown is the
+  "buffers in the middle / jumps" the owner saw.
+- Fix: `/api/server` carries a per-process `boot` id (`server/index.js`
+  `BOOT_ID`); `web/index.html` `startVodServerWatch` remounts only when the id
+  CHANGES; timed-out polls never remount — after two misses it only freezes
+  the last frame if the on-device leftover is under 8s, and lifts it when the
+  same id answers again. Seeded at app boot (`S._serverBoot`). Stream 404s
+  still remount through the existing `mountGone` path.
+- Tests: `test/phase4.test.js` watch contracts (boot compare, no remount
+  after `misses += 1`, hold/lift), `test/security.test.js` (`boot` is 16 hex,
+  stable across calls). `docs-player-regression-map.md` P5 updated.
+- Gate: `npm.cmd test` 785/785; `npm.cmd run verify:full` PASS on the house
+  server (emulator only): Mario/FROM play+seek+resume+CC OK (warm), IPTV
+  ABC/ESPN OK, Android lint + unit + debug build PASS, ExoPlayer stress PASS.
+  (One earlier run tripped on "No WebView DevTools socket found" right after
+  the emulator reinstall — a timing flake; the rerun passed.)
+
 2026-09-28, main (post-v3.3.1) — "Backup only" usenet accounts + subtitle
 clock double-check on Windows, Android, Jellyfin, and Cast:
 
