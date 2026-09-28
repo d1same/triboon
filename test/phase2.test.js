@@ -5766,6 +5766,43 @@ test('nntp: hedged failover advances immediately on a 430 (does not wait out the
   } finally { pool.close(); await p0.close(); await p1.close(); }
 });
 
+test('nntp: hedged failover — a copy that fails opts.verify (bad CRC) advances to the next provider, and is never miss-cached', async () => {
+  const payload = seededPayload(24 * 1024, 0x54);
+  const r = nzbFor(writeRar4Store([{ name: 'crc.mkv', data: payload }], { base: 'crc' }), 30000, 'crc');
+  const id = [...r.articles.keys()][0];
+  const good = r.articles.get(id);
+  const bad = Buffer.from(good); bad[Math.floor(bad.length / 2)] ^= 0x01; // provider 0 serves a damaged copy
+  const p0 = createMockNntp({ articles: new Map([[id, bad]]) });
+  const p1 = createMockNntp({ articles: r.articles });
+  const port0 = await p0.listen();
+  const port1 = await p1.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: port0, tls: false },
+    { host: '127.0.0.1', port: port1, tls: false },
+  ], 2);
+  try {
+    const seen = [];
+    const verify = (raw) => { const ok = raw.equals(good); seen.push(ok); return ok; };
+    const body = await pool.body(id, 'playback', { hedgeMs: 5000, verify });
+    assert.ok(body.equals(good), 'the clean copy from the second provider is what the caller gets');
+    assert.strictEqual(seen[seen.length - 1], true, 'the pool kept asking until a copy verified');
+    if (p0.bodyCount(id) > 0) assert.strictEqual(seen[0], false, 'provider 0 answered a damaged copy first and was rejected without waiting out the hedge');
+    assert.strictEqual(p1.bodyCount(id), 1, 'the clean provider was asked exactly once');
+    assert.ok(!pool.missCache.has(pool.providers[0], id), 'a corrupt copy is not a 430 — never miss-cached');
+    // Every provider corrupt → the error says so, so the mount can give the piece up for good.
+    const both = new NntpPool([
+      { host: '127.0.0.1', port: port0, tls: false },
+      { host: '127.0.0.1', port: port0, tls: false },
+    ], 2);
+    try {
+      await assert.rejects(() => both.body(id, 'playback', { verify: () => false }),
+        (e) => e.code === 'CORRUPT_ARTICLE' && e.everyProviderDefinitive === true);
+      await assert.rejects(() => both.body(id, 'background', { verify: () => false }),
+        (e) => e.code === 'CORRUPT_ARTICLE' && e.everyProviderDefinitive === true, 'sequential lanes report the same');
+    } finally { both.close(); }
+  } finally { pool.close(); await p0.close(); await p1.close(); }
+});
+
 test('nntp: circuit-breaker half-open probe recovers a provider before the full backoff', async () => {
   const payload = seededPayload(24 * 1024, 0x53);
   const r = nzbFor(writeRar4Store([{ name: 'probe.mkv', data: payload }], { base: 'probe' }), 30000, 'probe');

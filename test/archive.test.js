@@ -738,6 +738,105 @@ test('failover: pool fetches from the second provider when the first is missing 
   await mockB.close();
 });
 
+// Flip one payload byte of a yEnc article: the provider still answers 222 with a full body, but
+// the decoded bytes no longer match the CRC — a corrupt copy on that backbone.
+function corruptYenc(body) {
+  const s = body.toString('latin1');
+  const headEnd = s.indexOf('\r\n', s.indexOf('=ypart') >= 0 ? s.indexOf('=ypart') : s.indexOf('=ybegin')) + 2;
+  const tail = s.indexOf('\r\n=yend');
+  assert.ok(headEnd > 1 && tail > headEnd, 'fixture has a yEnc payload to corrupt');
+  const out = Buffer.from(body);
+  for (let k = Math.floor((headEnd + tail) / 2); k < tail; k++) {
+    const c = out[k];
+    if (c === 0x3d || c === 0x0d || c === 0x0a || c === 0x2e) continue; // = CR LF .
+    out[k] = c === 0x41 ? 0x42 : 0x41;
+    return out;
+  }
+  assert.fail('no safe payload byte to corrupt');
+}
+
+test('failover: a corrupt copy on the first provider is fetched clean from the second (Dickensian S01E03 loop)', async () => {
+  const data = seededPayload(120000, 0xc4c4);
+  const { articles, nzb } = makeArchiveNzb([{ name: 'Corrupt.mkv', data }], 30000, { junk: false });
+  // Provider A returns a full 222 body whose CRC does not match for segment 3; provider B is clean.
+  const articlesA = new Map(articles);
+  articlesA.set('f1s3@triboon.test', corruptYenc(articles.get('f1s3@triboon.test')));
+  const mockA = createMockNntp({ articles: articlesA });
+  const mockB = createMockNntp({ articles });
+  const portA = await mockA.listen();
+  const portB = await mockB.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: portA, tls: false },
+    { host: '127.0.0.1', port: portB, tls: false },
+  ], 4);
+  try {
+    const vf = await mountNzb(pool, nzb);
+    const full = await readAll(vf, 0, vf.size);
+    assert.strictEqual(sha(full), sha(data), 'the piece came clean from provider B, byte-exact');
+    assert.ok(mockB.bodyCount('f1s3@triboon.test') >= 1, 'the pool asked provider B for the corrupt piece');
+    assert.strictEqual(vf.deadPieceCount(), 0, 'a piece another provider served is not dead');
+    assert.notStrictEqual((await vf.triage()).verdict, 'blocked', 'health stays healthy when a backbone heals the piece');
+  } finally {
+    pool.close();
+    await mockA.close();
+    await mockB.close();
+  }
+});
+
+test('failover: a piece corrupt on EVERY provider is dead — health says blocked so the player moves on', async () => {
+  const data = seededPayload(90000, 0xdead1);
+  const { articles, nzb } = makeArchiveNzb([{ name: 'Rotten.mkv', data }], 30000, { junk: false });
+  const bad = new Map(articles);
+  bad.set('f1s2@triboon.test', corruptYenc(articles.get('f1s2@triboon.test')));
+  const mockA = createMockNntp({ articles: bad });
+  const mockB = createMockNntp({ articles: bad });
+  const portA = await mockA.listen();
+  const portB = await mockB.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: portA, tls: false },
+    { host: '127.0.0.1', port: portB, tls: false },
+  ], 4);
+  try {
+    const vf = await mountNzb(pool, nzb);
+    assert.strictEqual((await vf.triage()).verdict, 'verified', 'STAT alone cannot see a corrupt copy');
+    await assert.rejects(() => readAll(vf, 0, vf.size), /corrupt article/, 'the read fails with the corrupt-copy reason');
+    assert.ok(mockA.bodyCount('f1s2@triboon.test') >= 1 && mockB.bodyCount('f1s2@triboon.test') >= 1,
+      'both providers were asked before the piece was given up');
+    assert.strictEqual(vf.deadPieceCount(), 1, 'the piece is remembered as dead');
+    const h = await vf.triage();
+    assert.strictEqual(h.verdict, 'blocked', 'health flips to blocked (the health poll auto-advances the player)');
+    assert.match(String(h.reason || ''), /piece 2\/3 unreadable on every provider/, 'the verdict names the piece');
+    // Every other piece still streams; only the rotten one is refused.
+    const head = await readAll(vf, 0, 30000);
+    assert.strictEqual(sha(head), sha(data.subarray(0, 30000)), 'healthy pieces of a blocked mount still serve');
+  } finally {
+    pool.close();
+    await mockA.close();
+    await mockB.close();
+  }
+});
+
+test('failover: a timeout mixed into the failures does NOT kill the piece (only "no for good" does)', async () => {
+  const data = seededPayload(60000, 0x7177);
+  const { articles, nzb } = makeArchiveNzb([{ name: 'Flaky.mkv', data }], 30000, { junk: false });
+  const bad = new Map(articles);
+  bad.set('f1s2@triboon.test', corruptYenc(articles.get('f1s2@triboon.test')));
+  const mockA = createMockNntp({ articles: bad });
+  const portA = await mockA.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: portA, tls: false },
+    { host: '127.0.0.1', port: 1, tls: false }, // refuses instantly: a line fault, not a verdict on the article
+  ], 2);
+  try {
+    const vf = await mountNzb(pool, nzb);
+    await assert.rejects(() => readAll(vf, 0, vf.size));
+    assert.strictEqual(vf.deadPieceCount(), 0, 'an unreachable provider means "retry later", not "dead"');
+  } finally {
+    pool.close();
+    await mockA.close();
+  }
+});
+
 test('failover: single-provider pool still fails cleanly on a truly missing article', async () => {
   const data = seededPayload(60000, 0xdead);
   const { articles, nzb } = makeArchiveNzb([{ name: 'Dead.mkv', data }], 30000, { junk: false });

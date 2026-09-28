@@ -414,8 +414,24 @@ class NzbFileStream {
         if (sliced.length) return Promise.resolve(sliced);
       }
     }
+    // The pool checks the CRC BEFORE it accepts a provider's copy, so a corrupt article on one
+    // backbone fails over to the next provider instead of failing the piece. The accepted copy is
+    // decoded once here and reused below (a skip-decode still re-decodes from its offset).
+    let verified = null; // { raw, dec } for the copy the pool accepted
+    const verify = (raw) => {
+      try {
+        const dec = decode(raw);
+        if (!dec.crcOk) return false;
+        verified = { raw, dec };
+        return true;
+      } catch { return false; }
+    };
+    const bodyOpts = (sig) => ({
+      signal: sig, verify, drainMs: this.abortDrainMs,
+      needSlots: streamStartupNeedSlots(this.size, priority, this._releaseName || this.name),
+    });
     const decodeAndCache = (raw, skip) => {
-      let dec = decode(raw, skip > 0 ? { skipDecoded: skip } : undefined);
+      let dec = (skip <= 0 && verified && verified.raw === raw) ? verified.dec : decode(raw, skip > 0 ? { skipDecoded: skip } : undefined);
       // A mid-segment skip past this article's real decoded size (short last/uneven
       // yEnc part, or a partSize grid that drifted) used to return 0 bytes. Remux
       // then threw "read out of range" and the player froze on Preparing.
@@ -443,9 +459,7 @@ class NzbFileStream {
     };
     let rec = this.inflight.get(i);
     if (rec && priorityRank(priority) < priorityRank(rec.priority) && priorityRank(priority) <= priorityRank('playback')) {
-      return this.pool.body(this.segments[i].msgId, priority, {
-        signal, drainMs: this.abortDrainMs, needSlots: streamStartupNeedSlots(this.size, priority, this._releaseName || this.name),
-      })
+      return this.pool.body(this.segments[i].msgId, priority, bodyOpts(signal))
         .then((raw) => decodeAndCache(raw, 0))
         .catch((e) => {
           if (signalAborted(signal) || e.code === 'ABORT_ERR') throw e;
@@ -460,12 +474,10 @@ class NzbFileStream {
       // cache, connection preserved) instead of destroying the connection; a still-queued fetch is
       // dequeued immediately either way. This is what keeps a 4K pause/skip storm from killing the
       // whole pool's connections and lagging the next seek behind a reconnect storm.
-      rec.promise = this.pool.body(this.segments[i].msgId, priority, {
-        signal: controller.signal, drainMs: this.abortDrainMs, needSlots: streamStartupNeedSlots(this.size, priority, this._releaseName || this.name),
-      }).then((raw) => {
+      rec.promise = this.pool.body(this.segments[i].msgId, priority, bodyOpts(controller.signal)).then((raw) => {
         this.inflight.delete(i);
         return decodeAndCache(raw, skipDecoded);
-      }).catch((e) => { this.inflight.delete(i); throw e; });
+      }).catch((e) => { this.inflight.delete(i); this._noteDeadPiece(i, e); throw e; });
       this.inflight.set(i, rec);
     }
     rec.consumers++;
@@ -497,6 +509,26 @@ class NzbFileStream {
       }
       throw e;
     }).finally(release);
+  }
+
+  // Every provider that answered said no for good (430/451 or a corrupt copy on each). STAT still
+  // says the article exists, so triage alone kept this mount "verified" while the player died at
+  // the same second on every remount. Remember the piece; triage reports the mount blocked and the
+  // health poll moves the player to the next release. Timeouts and refused logins never land here.
+  _noteDeadPiece(i, e) {
+    if (!e || !e.everyProviderDefinitive) return;
+    this._deadPieces = this._deadPieces || new Map();
+    if (this._deadPieces.has(i)) return;
+    this._deadPieces.set(i, String(e.message || e.code || 'unreadable'));
+    if (this.health && this.health.verdict !== 'blocked') this.health = { ...this.health, verdict: 'blocked', dead: this._deadPieces.size };
+  }
+  deadPieceCount() {
+    return this._deadPieces ? this._deadPieces.size : 0;
+  }
+  deadPieceReason() {
+    if (!this._deadPieces || !this._deadPieces.size) return '';
+    const [i, why] = this._deadPieces.entries().next().value;
+    return `piece ${i + 1}/${this.segments.length} unreadable on every provider: ${why}`;
   }
 
   cancelReadAhead() {
@@ -676,12 +708,15 @@ class NzbFileStream {
     });
     const reached = results.filter((r) => !r.unreachable);
     const missing = reached.filter((r) => !r.ok).length;
+    const dead = this.deadPieceCount();
     this.health = {
-      verdict: missing === 0 ? 'verified' : missing >= reached.length / 2 ? 'blocked' : 'degraded',
+      verdict: dead > 0 ? 'blocked' : missing === 0 ? 'verified' : missing >= reached.length / 2 ? 'blocked' : 'degraded',
       missing,
       sampled: reached.length,
       checkedAt: new Date().toISOString(),
     };
+    // A piece that decodes wrong on every provider still STATs fine. That is not "degraded".
+    if (dead > 0) { this.health.dead = dead; this.health.reason = this.deadPieceReason(); }
     return this.health;
   }
 }

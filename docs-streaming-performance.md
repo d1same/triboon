@@ -202,6 +202,25 @@ active-player priorities hedge; background/health/read-ahead stay strictly
 sequential so they never double-fetch. Hedging complements (does not replace)
 load-based ordering and the per-provider single retry.
 
+**Corrupt copies fail over too (2026-09-28).** `NntpPool.body` accepts
+`opts.verify(raw, provider)`; `vfs.js` passes the yEnc CRC check. A provider
+that answers 222 with bytes whose CRC does not match is treated like a
+per-provider failure (`CORRUPT_ARTICLE`): the pool asks the next provider at
+once, and the copy is never miss-cached (it is not a 430). Before this the CRC
+was checked only after the pool had accepted one provider's copy, so one bad
+backbone failed the piece while another backbone had a clean one (Dickensian
+S01E03 looped on `segment 6 CRC mismatch` with two idle providers).
+
+When every provider that answered says no for good (430/451 or corrupt on each),
+the error carries `everyProviderDefinitive`. `vfs.js` remembers that piece as
+dead and `triage()` reports the mount `blocked` with `reason: piece N/M
+unreadable on every provider`. STAT alone cannot see a corrupt copy, so without
+this the mount stayed `verified` while the player died at the same second on
+every remount. The health poll then auto-advances the player to the next
+release and the pipeline records the playback-failed verdict. Timeouts,
+resets, refused logins, and unreachable providers are never definitive — a
+piece with one of those mixed in is retried, not killed.
+
 ## Priority Lanes
 
 Provider work is scheduled by priority:
@@ -542,6 +561,11 @@ background; do not start a second health-probe batch for the same candidate.
 
 Do not make health checks outrank active playback or startup. That turns
 protection into the thing causing slowness.
+
+Triage is STAT-based, so it proves an article *exists*, not that it decodes.
+A piece the player already tried and found corrupt on every provider (see
+"Corrupt copies fail over too") overrides the sample: `triage()` reports
+`blocked` with `dead` and `reason` fields even when every STAT answers 223.
 
 ### Cold Candidate Hedge
 

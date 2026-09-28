@@ -143,6 +143,27 @@ function isDefinitiveMiss(e) {
   return code === '430' || code === '451';
 }
 
+// A provider answered 222 with bytes whose yEnc CRC does not match. That copy is bad on THAT
+// account; another backbone usually still has a clean one. Not a miss (never miss-cached) and not
+// a line fault (the socket is fine) — the pool simply asks the next provider.
+function corruptArticleError(provider, msgId) {
+  const e = new Error(`corrupt article from ${providerLabel(provider)}: <${msgId}>`);
+  e.code = 'CORRUPT_ARTICLE';
+  return e;
+}
+function isCorruptArticle(e) {
+  return !!(e && e.code === 'CORRUPT_ARTICLE');
+}
+// "Every provider we could ask said no for good" (430/451 or a corrupt copy). Timeouts, resets,
+// and refused logins are NOT definitive — those can heal on the next socket or the next minute.
+function isDefinitiveFailure(e) {
+  return isDefinitiveMiss(e) || isCorruptArticle(e);
+}
+function providerLabel(p) {
+  const o = (p && p.opts) || {};
+  return String(o.label || o.name || o.host || 'provider');
+}
+
 // 480 = authentication required, 481/482 = authentication rejected/out of sequence (RFC 4643).
 function isAuthLostStatus(status) {
   return /^48[012]\b/.test(String(status || ''));
@@ -1174,18 +1195,39 @@ class NntpPool {
     // double-fetch): a 430/connection error advances immediately to the next provider.
     if (ordered.length === 1 || !HEDGE_PRIORITIES.has(priority)) {
       let lastErr;
+      let failures = 0, definitive = 0;
       for (const p of ordered) {
         if (this.missCache.has(p, msgId)) continue;
-        try { return await p.body(msgId, priority, opts); }
+        try { return await this._verifiedBody(p, msgId, priority, opts); }
         catch (e) {
           if (isAbortError(e)) throw e;
           if (isDefinitiveMiss(e)) this.missCache.mark(p, msgId);
+          failures++;
+          if (isDefinitiveFailure(e)) definitive++;
           lastErr = e;
         }
       }
-      throw lastErr || new Error('no usenet provider could serve the article');
+      throw this._finalBodyError(lastErr, failures, definitive);
     }
     return this._hedgedBody(ordered, msgId, priority, opts);
+  }
+
+  // opts.verify(raw, provider) → false means "these bytes are not the article" (yEnc CRC). The
+  // caller used to check the CRC AFTER the pool had already picked one provider's copy, so a
+  // corrupt article on one backbone failed the piece outright while the other backbone had a
+  // clean copy (Dickensian S01E03 looped on "segment 6 CRC mismatch" with two idle providers).
+  async _verifiedBody(p, msgId, priority, opts) {
+    const raw = await p.body(msgId, priority, opts);
+    if (typeof opts.verify === 'function' && !opts.verify(raw, p)) throw corruptArticleError(p, msgId);
+    return raw;
+  }
+
+  // Tell the caller whether EVERY provider that answered said no for good. A mount only gives a
+  // piece up (health → blocked → next release) on that signal; a timeout mixed in means retry.
+  _finalBodyError(lastErr, failures, definitive) {
+    const e = lastErr || new Error('no usenet provider could serve the article');
+    if (failures > 0 && definitive === failures) e.everyProviderDefinitive = true;
+    return e;
   }
 
   // Hedged failover across providers: start provider 0; if it hasn't answered within HEDGE_MS
@@ -1199,6 +1241,8 @@ class NntpPool {
     return new Promise((resolve, reject) => {
       if (signalAborted(external)) return reject(abortError());
       let idx = 0, pending = 0, settled = false, lastErr = null, hedgeTimer = null;
+      let failures = 0, definitive = 0;
+      const giveUp = () => settle(() => reject(this._finalBodyError(lastErr, failures, definitive)));
       const controllers = [];
       let extCleanup = () => {};
       const clearHedge = () => { if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; } };
@@ -1228,14 +1272,14 @@ class NntpPool {
           while (idx < ordered.length && !(ordered[idx].conns || []).some((c) => c.alive)) idx++;
         }
         if (idx >= ordered.length) {
-          if (pending === 0) settle(() => reject(lastErr || new Error('no usenet provider could serve the article')));
+          if (pending === 0) giveUp();
           return;
         }
         const p = ordered[idx++];
         pending++;
         const ac = new AbortController();
         controllers.push(ac);
-        p.body(msgId, priority, { ...opts, signal: ac.signal }).then(
+        this._verifiedBody(p, msgId, priority, { ...opts, signal: ac.signal }).then(
           (v) => settle(() => resolve(v)),
           (e) => {
             pending--;
@@ -1243,9 +1287,11 @@ class NntpPool {
             if (ac.signal.aborted && isAbortError(e)) return; // a loser we aborted on success — ignore
             if (isAbortError(e) && signalAborted(external)) return settle(() => reject(e));
             if (isDefinitiveMiss(e)) this.missCache.mark(p, msgId);
+            failures++;
+            if (isDefinitiveFailure(e)) definitive++;
             lastErr = e;
             startNext(); // failure advances immediately, don't wait out the hedge window
-            if (pending === 0 && idx >= ordered.length) settle(() => reject(lastErr || new Error('no usenet provider could serve the article')));
+            if (pending === 0 && idx >= ordered.length) giveUp();
           },
         );
         armHedge();
@@ -1281,4 +1327,5 @@ module.exports = {
   NntpConnection, NntpPool, ProviderPool, ArticleMissCache, TransferMeter, isTooManyConnections,
   providerPickScore, providerHeadroom, streamStartupNeedSlots,
   learnedConnectionLimit, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS, CONNECT_BURST,
+  isCorruptArticle, isDefinitiveFailure,
 };

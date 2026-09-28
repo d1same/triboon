@@ -126,6 +126,50 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-28, main (post-v3.3.1) — a corrupt piece on one provider no longer
+kills the show, and a piece corrupt everywhere no longer loops:
+
+- Example: Dickensian S01E03 played to 1:06 and stopped. The house log
+  showed `part04.rar piece 7/21 — segment 6 CRC mismatch` on every lane, the
+  remux restarting at 66s again and again (11:18:14, :17, :24, :54 …), and
+  two idle providers never asked. The CRC was checked AFTER the pool had
+  accepted one provider's copy, so the bad backbone's copy failed the piece
+  outright. And health stayed `verified` (STAT says the article exists), so
+  the player retried the SAME release instead of moving to the next one.
+- Fix 1 (`server/nntp.js`, `server/vfs.js`): `NntpPool.body` takes
+  `opts.verify(raw)`; vfs passes the yEnc CRC check. A copy that fails is a
+  per-provider failure (`CORRUPT_ARTICLE`) — next provider at once, never
+  miss-cached, hedged and sequential lanes alike. The accepted copy is
+  decoded once and reused.
+- Fix 2 (`server/vfs.js`): when every provider that answered says no for
+  good (430/451 or corrupt on each — `everyProviderDefinitive`), the piece
+  is remembered dead and `triage()` reports `blocked` with `reason: piece
+  N/M unreadable on every provider`. The existing health poll then
+  auto-advances the player (web + native) and the pipeline records the
+  playback-failed verdict, so the next Play ranks that release down.
+  Timeouts, resets, refused logins, and unreachable accounts never count.
+- Tests (`test/archive.test.js`, `test/phase2.test.js`): corrupt copy on
+  provider A → byte-exact from B, health stays healthy; corrupt on every
+  provider → read fails with the reason, both providers asked,
+  `deadPieceCount()===1`, triage `blocked` naming piece 2/3, healthy pieces
+  still serve; one unreachable provider mixed in → NOT dead; pool-level
+  hedged verify (bad copy rejected without waiting out the hedge, not
+  miss-cached, `everyProviderDefinitive` on both lanes).
+- Docs: `docs-streaming-performance.md` (Provider Combining, Health Checks).
+  Code graph refreshed with `graphify update .`.
+- Gate: `npm.cmd test` 782/782. `npm.cmd run verify:full` PASS on the
+  house process (restarted on this code) + `emulator-5554` (never the
+  Shield): whitespace, JS syntax, web parse, IPTV/P9, VOD/P14, CC/P11, full
+  suite, isolated `/api/server`, household VOD play/seek/resume/CC (Mario
+  4K ready 3148ms SLOW on a cold just-restarted server, 1stByte 131ms, seek
+  562ms, resume 24ms, CC 200; FROM ready 2889ms, 1stByte 32ms, seek 172ms,
+  resume 9ms, CC 200; both remux, health verified), household IPTV
+  first-byte + retune (ABC web 1353ms / native 1082ms, ESPN web 383ms /
+  native 4ms), household overlapping Play (FROM ready 6ms, Mario 15ms),
+  Android lint + native unit tests + debug build (emulator only), Android
+  ExoPlayer stress PASS. Not shipped as a tag yet (owner did not ask to
+  ship). Windows GPU/HDR: not run.
+
 2026-09-28, v3.3.1 ship — subtitle sync double-check (two real bugs fixed):
 
 - Version contract: `package.json` 3.3.1; Android `versionName` 3.3.1 /
