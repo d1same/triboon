@@ -241,12 +241,75 @@ function inferredEditionFromDuration(durationSeconds) {
   return n >= 3.5 * 3600 ? 'extended' : '';
 }
 function episodeKey(s) {
+  const keys = episodeKeysIn(s);
+  return keys[0] || '';
+}
+// Every episode a subtitle file actually covers. "S06E04-E05" and "S06E04+E05" are one
+// hour split across two catalog numbers (Niagara, Launch Party). The first number alone
+// used to hide that file from the second half, so the CC list looked empty.
+function episodeKeysIn(s) {
   const x = String(s || '').toLowerCase();
+  const keys = [];
+  const add = (season, ep) => {
+    if (!(season >= 0 && season < 100 && ep > 0 && ep < 1000)) return;
+    const k = `s${String(season).padStart(2, '0')}e${String(ep).padStart(2, '0')}`;
+    if (!keys.includes(k)) keys.push(k);
+  };
+  const range = /\bs(\d{1,2})\s?e(\d{1,3})\s*[-+&]\s*(?:s(\d{1,2})\s?)?e(\d{1,3})\b/i.exec(x);
+  if (range) {
+    const season = +range[1];
+    const otherSeason = range[3] != null && range[3] !== '' ? +range[3] : season;
+    if (otherSeason === season) {
+      const lo = Math.min(+range[2], +range[4]);
+      const hi = Math.max(+range[2], +range[4]);
+      if (hi - lo <= 3) {
+        for (let ep = lo; ep <= hi; ep++) add(season, ep);
+        return keys;
+      }
+    }
+  }
   const se = /\bs(\d{1,2})\s?e(\d{1,3})\b/i.exec(x);
-  if (se) return `s${String(+se[1]).padStart(2, '0')}e${String(+se[2]).padStart(2, '0')}`;
+  if (se) { add(+se[1], +se[2]); return keys; }
   const xe = /\b(\d{1,2})x(\d{1,3})\b/i.exec(x);
-  if (xe) return `s${String(+xe[1]).padStart(2, '0')}e${String(+xe[2]).padStart(2, '0')}`;
-  return '';
+  if (xe) add(+xe[1], +xe[2]);
+  return keys;
+}
+function episodeMatchScore(rel, myEpisode) {
+  const keys = episodeKeysIn(rel);
+  if (!myEpisode) return keys.length ? -1000 : 0;
+  if (keys.includes(myEpisode)) return 260;
+  if (keys.length) return -1000;
+  return -80;
+}
+// "(Pt1)&(Pt2)" or an SxxEyy-Ezz name is the full hour. "Part 1" alone is one half.
+function subtitleSpansParts(text) {
+  const x = String(text || '').toLowerCase();
+  const bothNamed = /\b(?:pt|part)\s?1\b/.test(x) && /\b(?:pt|part)\s?2\b/.test(x);
+  return bothNamed || episodeKeysIn(x).length >= 2;
+}
+function subtitleOnePart(text) {
+  const x = String(text || '').toLowerCase();
+  const p1 = /\b(?:pt|part)\s?1\b/.test(x);
+  const p2 = /\b(?:pt|part)\s?2\b/.test(x);
+  return (p1 || p2) && !(p1 && p2);
+}
+// The Office stores one episode number for three different clocks: the half-hour,
+// the long "extended" cut, and the two halves glued together. DVD words are timed
+// for the disc, so they slide on a WEB or Blu-ray file.
+function cutFitBonus(releaseName, rel, durationSeconds) {
+  let s = 0;
+  const mine = releaseSourceTag(releaseName);
+  const theirs = releaseSourceTag(rel);
+  if ((mine === 'web' || mine === 'bluray') && theirs === 'dvd') s -= 180;
+  else if (mine === 'dvd' && (theirs === 'web' || theirs === 'bluray')) s -= 180;
+  const dur = Number(durationSeconds) || 0;
+  if (dur >= 35 * 60) {
+    if (subtitleSpansParts(rel)) s += 160;
+    else if (subtitleOnePart(rel)) s -= 120;
+  } else if (dur >= 18 * 60 && dur <= 32 * 60 && subtitleSpansParts(rel)) {
+    s -= 160;
+  }
+  return s;
 }
 // The player knows the episode even when the file name is a hash. That episode wins over
 // whatever SxxExx happens to be inside the release name, so episode 5 cannot inherit
@@ -509,16 +572,12 @@ function pickSub(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid
     const rel = subtitleMatchText(d).toLowerCase();
     const relKey = releaseKey(rel);
     const relEdition = editionTags(rel);
-    const relEpisode = episodeKey(rel);
     let s = 0;
     if (!/^(srt|vtt|)$/i.test(String(d.format || ''))) s -= 500; // sub/idx etc. can't become VTT
     if (d.moviehashMatch) s += 1000; // hash-exact wins outright (OpenSubtitles), same as rankSubs
     if (myReleaseKey && relKey && relKey.includes(myReleaseKey)) s += 650; // Stremio-style exact file/release hint
     else if (myReleaseKey && relKey && myReleaseKey.includes(relKey) && relKey.length > 20) s += 220;
-    if (myEpisode && relEpisode === myEpisode) s += 260;
-    else if (myEpisode && relEpisode) s -= 1000;
-    else if (myEpisode) s -= 80;
-    else if (relEpisode) s -= 1000; // a TV episode is not this movie
+    s += episodeMatchScore(rel, myEpisode);
     s += groupFitBonus(releaseName, rel);
     const matchedEdition = [...myEdition].some((tag) => relEdition.has(tag));
     for (const tag of myEdition) {
@@ -530,6 +589,7 @@ function pickSub(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
     if ((myWeb && /blu|bd|remux/.test(rel)) || (myBlu && /web/.test(rel))) s -= 80; // wrong cut
     s += sourceFitBonus(releaseName, rel);
+    s += cutFitBonus(releaseName, rel, durationSeconds);
     if (subtitleIsForced(d)) s -= 700; // forced/foreign-only is never the full-CC auto-pick
     s += popularityBonus(d); // tie-breaker only — capped below release/episode signals
     s += sdhBias(d, sdhPref);
@@ -553,6 +613,7 @@ function subtitleSourceLabel(rel) {
   if (/\bweb[-. ]?dl\b/.test(x)) return 'WEB-DL';
   if (/\bweb[-. ]?rip\b/.test(x)) return 'WEBRip';
   if (/\bhdtv\b/.test(x)) return 'HDTV';
+  if (/\bdvd(rip|scr)?\b/.test(x)) return 'DVD';
   if (/\b(bd)?remux\b/.test(x)) return 'BluRay Remux';
   if (/blu[-. ]?ray|\bbdrip\b|\bbd\b/.test(x)) return 'BluRay';
   if (/\bweb\b|amzn|nf(?=[. ])|hulu|atvp|dsnp/i.test(x)) return 'WEB';
@@ -576,7 +637,8 @@ function subtitleVariantLabel(d) {
   else if (tags.has('directors')) parts.push("Director's cut");
   else if (tags.has('unrated')) parts.push('Unrated');
   else if (tags.has('uncut')) parts.push('Uncut');
-  else if (tags.has('imax')) parts.push('IMAX');
+  else   if (tags.has('imax')) parts.push('IMAX');
+  if (subtitleSpansParts(rel)) parts.push('Both parts');
   const source = subtitleSourceLabel(rel);
   if (source) parts.push(source);
   const group = subtitleGroupLabel(d);
@@ -739,7 +801,6 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoi
     const rel = subtitleMatchText(d).toLowerCase();
     const relKey = releaseKey(rel);
     const relEdition = editionTags(rel);
-    const relEpisode = episodeKey(rel);
     let s = 0;
     if (!/^(srt|vtt|)$/i.test(String(d.format || ''))) s -= 500;
     // Hash-exact (OpenSubtitles moviehash) is the strongest in-sync signal there is — it must
@@ -747,10 +808,7 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoi
     if (d.moviehashMatch) s += 1000;
     if (myReleaseKey && relKey && relKey.includes(myReleaseKey)) s += 650;
     else if (myReleaseKey && relKey && myReleaseKey.includes(relKey) && relKey.length > 20) s += 220;
-    if (myEpisode && relEpisode === myEpisode) s += 260;
-    else if (myEpisode && relEpisode) s -= 1000;
-    else if (myEpisode) s -= 80;
-    else if (relEpisode) s -= 1000; // a TV episode is not this movie
+    s += episodeMatchScore(rel, myEpisode);
     s += groupFitBonus(releaseName, rel);
     const matchedEdition = [...myEdition].some((tag) => relEdition.has(tag));
     for (const tag of myEdition) {
@@ -762,6 +820,7 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoi
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
     if ((myWeb && /blu|bd|remux/.test(rel)) || (myBlu && /web/.test(rel))) s -= 80;
     s += sourceFitBonus(releaseName, rel);
+    s += cutFitBonus(releaseName, rel, durationSeconds);
     if (subtitleIsForced(d)) s -= 700; // forced/foreign-only stays in the list but never auto-picks
     s += popularityBonus(d); // tie-breaker only — capped below release/episode/hash signals
     s += sdhBias(d, sdhPref);
@@ -822,10 +881,10 @@ function usableVariants(ranked, { releaseName = '', season = null, episode = nul
   const myEpisode = requestedEpisodeKey(releaseName, { season, episode });
   const playable = list.filter((v) => {
     if (!/^(srt|vtt|)$/i.test(String(v.format || ''))) return false; // bitmap can't render as text
+    const relKeys = episodeKeysIn(subtitleMatchText(v.raw || v));
     if (myEpisode) {
-      const relEp = episodeKey(subtitleMatchText(v.raw || v));
-      if (relEp && relEp !== myEpisode) return false;               // confirmed wrong episode
-    } else if (episodeKey(subtitleMatchText(v.raw || v))) {
+      if (relKeys.length && !relKeys.includes(myEpisode)) return false; // confirmed wrong episode
+    } else if (relKeys.length) {
       return false; // Forensic Files S13E10 is not a movie
     }
     return true;
@@ -854,7 +913,8 @@ function distinctVariants(variants, { max = 8 } = {}) {
     // Edition is part of the bucket: an Extended cut and a Theatrical cut are genuinely different
     // choices (they sync differently), so they must never collapse into each other.
     const edition = [...editionTags(text)].sort().join(',');
-    const key = `${episodeKey(text)}|${subtitleSourceLabel(text)}|${edition}|${v.hearingImpaired ? 'sdh' : ''}|${v.language || ''}`;
+    const shape = subtitleSpansParts(text) ? 'both' : (subtitleOnePart(text) ? 'one' : '');
+    const key = `${episodeKey(text)}|${shape}|${subtitleSourceLabel(text)}|${edition}|${v.hearingImpaired ? 'sdh' : ''}|${v.language || ''}`;
     if (buckets.has(key)) { buckets.get(key).dupes = (buckets.get(key).dupes || 0) + 1; continue; }
     v.dupes = 0; buckets.set(key, v); out.push(v);
     if (out.length >= max) break;
@@ -876,8 +936,8 @@ function hasConfidentAutoPick(variants, { releaseName = '', season = null, episo
   if (!myEpisode) return list.some((v) => isText(v) && !episodeKey(subtitleMatchText(v.raw || v)));
   return list.some((v) => {
     if (!isText(v)) return false;
-    const relEp = episodeKey(subtitleMatchText(v.raw || v));
-    return !relEp || relEp === myEpisode; // right episode or generic/no-episode
+    const relKeys = episodeKeysIn(subtitleMatchText(v.raw || v));
+    return !relKeys.length || relKeys.includes(myEpisode); // right episode, both halves, or generic
   });
 }
 

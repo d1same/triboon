@@ -126,6 +126,26 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-28, v3.3.3 — a file that names a different episode is skipped:
+
+- Example: The Office guide says Launch Party, but the file is named
+  Dunder Mifflin Infinity. The words that load are the other episode.
+  The same skip applies to any show when the season names are known.
+  A file with no episode title still plays. A short name like Money is
+  left alone. Movies stay on the title and year check.
+- Subtitles for every title prefer the cut that matches the file: a long
+  file keeps a both-parts subtitle, a half-hour does not get the hour,
+  and a web or Blu-ray file ranks a DVD subtitle lower.
+- Gate: `npm.cmd test` 792/792, fail 0. `verify:full` PASS on a fresh
+  `emulator-5554` (Shield untouched): Mario ready 2924ms, 1stByte 35ms,
+  seek 559ms, resume 64ms, cc=200; FROM ready 2519ms, 1stByte 56ms,
+  seek 175ms, resume 11ms, cc=200; overlapping Play 7ms / 16ms; IPTV ABC
+  web 1349ms / native 1075ms, ESPN web 359ms / native 3ms; Android lint
+  + unit + debug build PASS; Android ExoPlayer stress PASS (`ok: true`,
+  no warnings). Windows GPU/HDR: not run.
+- Version contract: `package.json` 3.3.3; Android `versionName` 3.3.3 /
+  `versionCode` 406; Windows client package/Tauri/Cargo(.lock) 3.3.3.
+
 2026-09-28, main — a chunk corrupt on two providers switches releases:
 
 - Example: Dickensian S01E03 stayed on a file whose article was corrupt on

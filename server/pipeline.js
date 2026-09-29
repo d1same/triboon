@@ -459,6 +459,28 @@ function collectArticleSiblings(catalogTitle, catalogYear, rows, selfId, fields 
 //     the unique name (Lioness.S02E01, Fellowship.of.the.Ring.2001). The shared franchise half is
 //     never enough on its own, so Two Towers cannot play for Fellowship and Dragon cannot play
 //     for House of the Dragon.
+// A release can carry the right SxxExx and still be a different episode. The Office season 4
+// file "S04E03 Dunder Mifflin Infinity Part 1" is not Launch Party. Subtitles then follow the
+// catalog number and the words are the wrong story. A name with no episode title still plays.
+// A one-word title shorter than 7 letters ("Money", "The List") is too common to trust.
+function episodeTitlePhrase(title) {
+  const words = foldDiacritics(String(title || '')).toLowerCase()
+    .replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/)
+    .filter((w) => w && !OPTIONAL_TITLE_ARTICLES.has(w) && !/^(?:part|pt)$/.test(w) && !/^\d{1,2}$/.test(w));
+  if (words.length >= 2 && words.every((w) => w.length >= 3)) return words;
+  if (words.length === 1 && words[0].length >= 7) return words;
+  return null;
+}
+function episodeTitleConflicts(norm, wanted) {
+  const others = Array.isArray(wanted && wanted.otherEpisodeTitles) ? wanted.otherEpisodeTitles : [];
+  if (!others.length) return false;
+  const mine = episodeTitlePhrase(wanted.episodeTitle);
+  if (mine && norm.includes(` ${mine.join(' ')} `)) return false;
+  return others.some((title) => {
+    const phrase = episodeTitlePhrase(title);
+    return !!(phrase && norm.includes(` ${phrase.join(' ')} `));
+  });
+}
 function releaseMatches(name, wanted) {
   // Indexer rows are already unwrapped by newznab.parseNewznabRss; strip again here so cached
   // rows, tests, and direct callers with raw subjects get the same anchored check.
@@ -590,6 +612,7 @@ function releaseMatches(name, wanted) {
       && !/\b(?:2160p|1080p|720p|576p|480p|4k|uhd|x26[45]|h\.?26[45]|hevc|avc|av1|xvid|web-?dl|webrip|web|bluray|blu-ray|bdrip|brrip|remux|hdtv|dvdrip|mkv|mp4)\b/i.test(String(name || ''))) {
     return false;
   }
+  if (wanted.s !== null && episodeTitleConflicts(norm, wanted)) return false;
   return true;
 }
 
@@ -2518,6 +2541,12 @@ class Pipeline {
     // catalog lookup found that other work, the article is no longer optional.
     if (wanted && Array.isArray(policy.articleSiblings) && policy.articleSiblings.length) {
       wanted.blockedArticles = new Set(policy.articleSiblings.map((a) => String(a || '').toLowerCase()).filter(Boolean));
+    }
+    // Same-season episode titles. Used only to reject a release that names a different episode.
+    // Absent on movies and on any play where TMDB did not return the season list.
+    if (wanted && policy.episodeTitle) wanted.episodeTitle = String(policy.episodeTitle);
+    if (wanted && Array.isArray(policy.otherEpisodeTitles) && policy.otherEpisodeTitles.length) {
+      wanted.otherEpisodeTitles = policy.otherEpisodeTitles.map((t) => String(t || '')).filter(Boolean).slice(0, 40);
     }
     // TV episode context for scoring: a whole-season PACK must not be size-cap-disqualified — only ONE
     // episode streams from it (it's still size-SHAPED, so it stays a low-ranked fallback below singles).

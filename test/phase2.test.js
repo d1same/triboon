@@ -171,6 +171,28 @@ test('scoring: soundtracks, bonus discs and bare audio rips are disqualified out
     'a COMPLETE season encode is not a disc image');
 });
 
+test('title verification: a file that names a different episode is skipped', () => {
+  const { parseWantedTitle, releaseMatches } = require('../server/pipeline');
+  const launch = parseWantedTitle('The Office S04E03');
+  launch.year = 2005;
+  launch.episodeTitle = 'Launch Party';
+  launch.otherEpisodeTitles = ['Fun Run', 'Dunder Mifflin Infinity', 'Money', 'The Dundies', 'The List'];
+  const wrong = 'The.Office.US.S04E03.Dunder.Mifflin.Infinity.Part.1.1080p.Extended.Cut.AMZN.WEB-DL.DDP5.1.H.264-FLUX';
+  assert.ok(!releaseMatches(wrong, launch), 'S04E03 named Dunder Mifflin Infinity is not Launch Party');
+  assert.ok(releaseMatches('The.Office.US.S04E03.Launch.Party.1080p.WEB-DL.x265', launch), 'the file that names Launch Party still plays');
+  assert.ok(releaseMatches('The.Office.US.S04E03.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX', launch), 'a file with no episode title still plays');
+  assert.ok(releaseMatches('The.Office.US.S04E03.Money.In.The.Bank.1080p.WEB-DL', launch), 'a short episode title like Money is not trusted on its own');
+  const dundies = parseWantedTitle('The Office S02E01');
+  dundies.year = 2005;
+  dundies.episodeTitle = 'The Dundies';
+  dundies.otherEpisodeTitles = ['Sexual Harassment', 'Office Olympics', 'The Fire'];
+  assert.ok(releaseMatches('The.Office.S02E01.The.Dundies.1080p.AMZN.WEB-DL', dundies), 'the named episode still matches');
+  assert.ok(releaseMatches('The.Office.S02E01.2005.1080p.Amazon.WEB-DL.AVC.DDP.2.0-DBTV', dundies), 'a normal Office episode with no title in the name still plays');
+  const bare = parseWantedTitle('The Office S04E03');
+  bare.year = 2005;
+  assert.ok(releaseMatches(wrong, bare), 'without a season title list the old number check is unchanged');
+});
+
 test('title verification: short titles match only releases that ARE that title', () => {
   // Real incident: pressing Play on "From" S01E01 streamed "Stranger Things Tales From 85"
   // — the old check accepted the title words ANYWHERE in the name, so every one-word title
@@ -1309,6 +1331,34 @@ test('subs: usableVariants trims the wrong-episode / unplayable rows from the me
   const fallback = usableVariants(rankSubs(allWrong, release), { releaseName: release });
   assert.strictEqual(fallback.length, 2, 'when nothing matches the episode we keep best-effort rows rather than show nothing');
   assert.ok(fallback.some((v) => v.selected), 'a best-effort row is still marked selected');
+});
+
+test('subs: Office two-part files stay with both halves and the cut follows the runtime', () => {
+  const { pickSub, rankSubs, usableVariants, distinctVariants } = require('../server/opensubs');
+  // Niagara is one hour that the catalog splits into episode 4 and episode 5.
+  // The subtitle is named S06E04-E05. Episode 5 must still be allowed to use it.
+  const niagara = [
+    { id: 'both', url: 'http://x/both.srt', format: 'srt', display: 'The.Office.US.S06E04-E05.Niagara.720p.BluRay.x264-CLUE' },
+    { id: 'only4', url: 'http://x/e4.srt', format: 'srt', display: 'The.Office.US.S06E04.720p.BluRay.x264-CLUE' },
+  ];
+  const playing5 = 'The.Office.US.S06E05.720p.BluRay.x264-CLUE.mkv';
+  const menu = usableVariants(rankSubs(niagara, playing5, { season: 6, episode: 5 }), { releaseName: playing5, season: 6, episode: 5 });
+  assert.ok(menu.some((v) => v.id === 'both'), 'episode 5 keeps the subtitle that covers E04 and E05');
+  assert.ok(!menu.some((v) => v.id === 'only4'), 'a file that is only episode 4 stays hidden');
+
+  // Launch Party is about 42 minutes. The disc subtitle and the first-half subtitle
+  // are the wrong clock. The row that says both parts is the one that matches.
+  const launch = [
+    { id: 'hour', url: 'http://x/hour.srt', format: 'srt', display: 'The Office S04E03 Launch Party (Pt1)&(Pt2)' },
+    { id: 'dvd', url: 'http://x/dvd.srt', format: 'srt', display: 'Office S04E03 Launch Party.DVD.NonHI.en', downloadCount: 5000, fromTrusted: true },
+    { id: 'half', url: 'http://x/half.srt', format: 'srt', display: 'The.Office.US.S04E03.Launch.Party.Part.1.1080p.WEB-DL.x264-XEON' },
+  ];
+  const file = 'The.Office.US.S04E03.1080p.WEB-DL.x264-NTb.mkv';
+  assert.strictEqual(pickSub(launch, file, { durationSeconds: 42 * 60, season: 4, episode: 3 }).id, 'hour', 'a 42-minute play picks the two-part subtitle');
+  assert.notStrictEqual(pickSub(launch, file, { durationSeconds: 22 * 60, season: 4, episode: 3 }).id, 'hour', 'a 22-minute play does not pick the glued hour');
+  const rows = distinctVariants(rankSubs(launch, file, { durationSeconds: 42 * 60, season: 4, episode: 3 }), { season: 4, episode: 3 });
+  assert.ok(rows.some((v) => /Both parts/.test(v.label)), 'the glued hour stays as its own row');
+  assert.ok(rows.some((v) => /DVD/.test(v.label)), 'the disc subtitle stays visible instead of being the only choice');
 });
 
 test('subs: provider priority wins ties but never beats correctness signals', () => {

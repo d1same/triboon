@@ -4343,7 +4343,7 @@ const catalogFactsCache = new Map();
 const normFactTitle = (s) => pipelineFoldDiacritics(String(s || '')).toLowerCase().replace(/['’`]/g, '').replace(/&/g, ' and ')
   .replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter((w) => w && !['the', 'a', 'an'].includes(w)).join(' ');
 async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
-  const out = { year: parseCatalogYear(year) ? year : undefined, akaTitles: [], otherYears: [], articleSiblings: [], runtimeMin: 0 };
+  const out = { year: parseCatalogYear(year) ? year : undefined, akaTitles: [], otherYears: [], articleSiblings: [], episodeTitle: '', otherEpisodeTitles: [], runtimeMin: 0 };
   const id = parseInt(tmdbId, 10);
   if (!id || !settings.get().tmdbKey) return out;
   const type = mediaType === 'tv' ? 'tv' : 'movie';
@@ -4448,6 +4448,24 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
       catalogFactsCache.set(ekey, { runtimeMin: rt });
     }
     out.runtimeMin = (catalogFactsCache.get(ekey) || {}).runtimeMin || 0;
+    // The whole season's episode names, so Play can skip a file that uses the right number
+    // for a different episode (Office S04E03 "Dunder Mifflin Infinity" is not Launch Party).
+    const seasonKey = `${key}:season-names:${s}`;
+    if (!catalogFactsCache.has(seasonKey)) {
+      let names = [];
+      try {
+        const seasonDoc = await tmdb.get(`/tv/${id}/season/${s}`);
+        names = (seasonDoc && seasonDoc.episodes || []).map((row) => ({
+          n: Number(row && row.episode_number),
+          name: String(row && row.name || '').trim(),
+        })).filter((row) => Number.isInteger(row.n) && row.n > 0 && row.name);
+      } catch { names = []; }
+      catalogFactsCache.set(seasonKey, names);
+    }
+    const names = catalogFactsCache.get(seasonKey) || [];
+    const mine = names.find((row) => row.n === e);
+    out.episodeTitle = mine ? mine.name : '';
+    out.otherEpisodeTitles = names.filter((row) => row.n !== e).map((row) => row.name).slice(0, 40);
   }
   return out;
 }
@@ -4482,12 +4500,16 @@ function armRuntimeCheck(vf, policy, candidate, body) {
   vf._runtimeCheck = { runtimeMin, tmdbId, title: String((body && body.q) || '').replace(/\s+(19|20)\d{2}$/, ''), candidate: { nzbUrl: candidate.nzbUrl, name: candidate.name }, done: false };
   if (vf._tracks) noteRuntimeCheck(vf); // probe already landed (prepared mount reused)
 }
-function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, articleSiblings, runtimeMin, tmdbId, caps: rawCaps } = {}) {
+function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, articleSiblings, episodeTitle, otherEpisodeTitles, runtimeMin, tmdbId, caps: rawCaps } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
   if (Array.isArray(akaTitles) && akaTitles.length) policy.akaTitles = akaTitles.slice(0, 6).map(String);
   if (Array.isArray(otherYears) && otherYears.length) policy.otherYears = otherYears.map(Number).filter((y) => Number.isInteger(y));
   if (Array.isArray(articleSiblings) && articleSiblings.length) {
     policy.articleSiblings = articleSiblings.map((a) => String(a || '').toLowerCase()).filter((a) => a === 'the' || a === 'a' || a === 'an').slice(0, 3);
+  }
+  if (episodeTitle) policy.episodeTitle = String(episodeTitle).slice(0, 120);
+  if (Array.isArray(otherEpisodeTitles) && otherEpisodeTitles.length) {
+    policy.otherEpisodeTitles = otherEpisodeTitles.map((t) => String(t || '')).filter(Boolean).slice(0, 40);
   }
   // Catalog identity for title-scoped verdicts (wrong-runtime) and the film runtime for the probe check.
   if (parseInt(tmdbId, 10) > 0) policy.catalogTmdbId = parseInt(tmdbId, 10);
