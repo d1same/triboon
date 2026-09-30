@@ -126,6 +126,24 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-09-30, v3.3.4 — Jellyfin follows the website, and a fast caption file is stretched:
+
+- Example: you open a movie in Jellyfin and Continue Watching shows the same
+  card as the website, including the next episode after you finish one.
+  Play joins the search that already started. A caption file that runs
+  about 1.5 seconds fast every half minute (The Alliance) is stretched so
+  the words do not slide later and later. A file that only needs one small
+  nudge (Health Care) stays a single nudge.
+- Gate: `npm.cmd test` 796/796, fail 0. `verify:full` PASS on a fresh
+  `emulator-5554` (Shield untouched): Mario ready 20308ms SLOW, 1stByte
+  209ms, seek 264ms, resume 30ms, cc=200; FROM ready 11583ms SLOW, 1stByte
+  248ms, seek 146ms, resume 17ms, cc=200; overlapping Play 14ms / 27ms;
+  IPTV first-byte + retune PASS (8930 channels, 2 video picks); Android
+  lint + unit + debug build PASS; Android ExoPlayer stress PASS (`ok: true`,
+  no warnings, hostVersion 3.3.4). Windows GPU/HDR: not run.
+- Version contract: `package.json` 3.3.4; Android `versionName` 3.3.4 /
+  `versionCode` 407; Windows client package/Tauri/Cargo(.lock) 3.3.4.
+
 2026-09-28, v3.3.3 — a file that names a different episode is skipped:
 
 - Example: The Office guide says Launch Party, but the file is named
