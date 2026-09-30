@@ -7,7 +7,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { NntpPool, NntpConnection } = require('./nntp');
+const { NntpPool, NntpConnection, providersReadyToDial } = require('./nntp');
 const { mountNzb } = require('./archive');
 const { configureSegmentDisk, getSegmentDisk } = require('./segment-cache');
 const { configureNzbStore } = require('./nzb-store');
@@ -19,9 +19,9 @@ const { resolveLibraryPath, existingMediaPath } = require('./library-path');
 const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const {
-  JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors,
+  JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
   attachJellyfinSocket, closeJellyfinSockets,
-  streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist, loadingCardPng, loadingHoldPlaylist,
+  streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard,
 } = require('./jellyfin-api');
 const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch, articleFlipQuery, collectArticleSiblings } = require('./pipeline');
 const {
@@ -443,7 +443,7 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
     // bypasses the active-player connection reserve — so enabling CC mid-playback would steal
     // connections from the live video and cause buffering. Local add-ins skip the HTTP hop.
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
-    const shiftMs = await measureSubSyncWindow(dir, 'a', selfUrl, spoken, audioIndex);
+    let shiftMs = await measureSubSyncWindow(dir, 'a', selfUrl, spoken, audioIndex);
     // Second witness. Five lines in thirty seconds can lock onto the neighbouring line
     // when the gap is close to the spacing between lines (proven offline: a 5.2s-late
     // caption came back as 0.2s). The slice already played is cheap; the slice after the
@@ -456,17 +456,27 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
     let driftMsPer30s = 0;
     if (witness) {
       const second = await measureSubSyncWindow(dir, 'b', selfUrl, witness, audioIndex);
+      let paired = second;
       if (Math.abs(second - shiftMs) > 1500) {
-        throw new Error(`subtitle sync witnesses disagree (${shiftMs}ms vs ${second}ms)`);
+        // One slice grabbed the next line (several seconds off) and the other did not.
+        // A third slice breaks the tie. Two that agree win. Three that disagree still
+        // throw the correction away, so a real multi-second gap is not replaced by noise.
+        const tieAt = before ? spoken.originMs + 30000
+          : (spoken.originMs >= 30000 ? spoken.originMs - 30000 : spoken.originMs + 60000);
+        const tie = windowSrt(srt, tieAt, 30000);
+        const third = tie ? await measureSubSyncWindow(dir, 'c', selfUrl, { ...tie, originMs: tieAt }, audioIndex) : null;
+        if (third != null && Math.abs(third - shiftMs) <= 1500) paired = third;
+        else if (third != null && Math.abs(third - second) <= 1500) shiftMs = second;
+        else throw new Error(`subtitle sync witnesses disagree (${shiftMs}ms vs ${second}ms)`);
       }
       agreed = 2;
       // Two slices thirty seconds apart that agree on direction but not on size is a
       // framerate mismatch (23.976 vs 25 fps slides ~1.3s every 30s), not noise. The
       // nearest slice is still right for THIS minute; the log says why later minutes slide.
-      const gap = Math.abs(second - shiftMs);
-      if (gap > 600) driftMsPer30s = Math.round(shiftMs - second) * (spoken.originMs > witness.originMs ? 1 : -1);
+      const gap = Math.abs(paired - shiftMs);
+      if (gap > 600) driftMsPer30s = Math.round(shiftMs - paired) * (spoken.originMs > witness.originMs ? 1 : -1);
     }
-    return { vtt: shiftVtt(vtt, shiftMs / 1000), shiftMs, originSec: origin, cues: spoken.count, agreed, driftMsPer30s };
+    return { vtt: shiftVtt(vtt, shiftMs / 1000, driftMsPer30s, origin), shiftMs, originSec: origin, cues: spoken.count, agreed, driftMsPer30s };
   } finally {
     fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -838,7 +848,14 @@ async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
 
 let pool = null, poolKey = '';
 function getPool() {
-  const list = providerList();
+  // This PC keeps a copy of the house logins. A local boot used to dial Usenet
+  // and the provider dropped the TV. Set TRIBOON_SKIP_USENET=1 to open the page only.
+  if (process.env.TRIBOON_SKIP_USENET === '1') {
+    const e = new Error('usenet is paused on this copy');
+    e.status = 409;
+    throw e;
+  }
+  const list = providersReadyToDial(providerList());
   if (!list.length) { const e = new Error('no usenet provider configured'); e.status = 409; throw e; }
   const key = JSON.stringify(list.map((p) => [p.host, p.port, p.user, p.connections, p.pipelineDepth || 0, p.backup === true]));
   if (pool && poolKey === key) return pool;
@@ -3969,6 +3986,30 @@ function streamScopeOk(ctx, resource) {
 }
 // ---- profile avatar storage (custom uploads live under data/avatars, never the web root) ----
 const AVATARS_DIR = path.join(DATA_DIR, 'avatars');
+const JELLYFIN_COVERS_DIR = path.join(DATA_DIR, 'jellyfin-covers');
+const JELLYFIN_COVER_FILES = {
+  movies: 'movies.png',
+  shows: 'shows.png',
+  library: 'library.png',
+  'custom-movies': 'custom-movies.jpg',
+  'custom-shows': 'custom-shows.jpg',
+};
+function jellyfinCoverCustom(slot) {
+  if (!JELLYFIN_COVER_FILES[slot]) return '';
+  const file = path.join(JELLYFIN_COVERS_DIR, `${slot}.img`);
+  return fs.existsSync(file) ? file : '';
+}
+function jellyfinCoverPath(slot) {
+  const custom = jellyfinCoverCustom(slot);
+  if (custom) return custom;
+  const name = JELLYFIN_COVER_FILES[slot];
+  if (!name) return '';
+  const built = path.join(__dirname, '..', 'web', 'jellyfin-covers', name);
+  return fs.existsSync(built) ? built : '';
+}
+function jellyfinServerName(value) {
+  return String(value || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 40);
+}
 function avatarFilePath(uid, pid) {
   // uid/pid are server-minted hex ids, and the routes constrain them to \w+ — belt & braces.
   return path.join(AVATARS_DIR, `${String(uid).replace(/\W/g, '')}-${String(pid).replace(/\W/g, '')}.img`);
@@ -4054,17 +4095,30 @@ async function ensureHlsSegment(sess, index, req) {
     if (!sess.seekLock) sess.seekLock = repositionHls(sess, index).finally(() => { sess.seekLock = null; });
     await sess.seekLock;
   }
-  const full = path.join(sess.dir, `seg${String(index).padStart(5, '0')}.m4s`);
-  const deadline = Date.now() + 12000;
+  const name = `seg${String(index).padStart(5, '0')}.m4s`;
+  const full = path.join(sess.dir, name);
+  const deadline = Date.now() + 20000;
   while (Date.now() < deadline) {
     if (req && (req.destroyed || req.aborted)) return null;
+    // The file grows while it is written. Handing that half-written piece to
+    // the desktop player is the "loading failed" dialog. The playlist line is
+    // added only after the piece is closed.
+    let listed = false;
     try {
-      const stat = await fs.promises.stat(full);
-      if (stat.size > 0) return stat;
+      const text = await fs.promises.readFile(path.join(sess.dir, 'index.m3u8'), 'utf8');
+      listed = text.includes(name);
     } catch {}
+    if (listed) {
+      try {
+        const stat = await fs.promises.stat(full);
+        if (stat.size > 0) return stat;
+      } catch {}
+    }
     await new Promise((r) => setTimeout(r, 200));
   }
   try {
+    const text = await fs.promises.readFile(path.join(sess.dir, 'index.m3u8'), 'utf8');
+    if (!text.includes(name)) return null;
     const stat = await fs.promises.stat(full);
     return stat.size > 0 ? stat : null;
   } catch { return null; }
@@ -8414,10 +8468,14 @@ Object.assign(H, {
       }
       if (profile !== 'default' && b.watched === false && b.unwatch) deleteWatchKeyForProfile(all, ctx.user.id, profile, b.key);
       becameWatched = !!b.watched && !(prev && prev.watched);
+      const traktPct = b.traktPct != null ? Number(b.traktPct) : Number(prev && prev.traktPct) || 0;
       all[k] = {
         position: b.position || 0, duration: b.duration || 0, watched: !!b.watched,
         meta: sanitizeStoredMediaMeta(b.meta), updatedAt: nextStamp(),
       };
+      // A Trakt percent is the website's Continue Watching bar when no minute is saved yet.
+      if (traktPct > 0) all[k].traktPct = traktPct;
+      if (prev && prev.fromTrakt) all[k].fromTrakt = true;
       return all;
     });
     if (b.remove) {
@@ -8661,6 +8719,37 @@ Object.assign(H, {
     send(ctx.res, 200, { ok: true });
   },
 
+  jellyfinCoverGet: async (ctx) => {
+    const file = jellyfinCoverPath(ctx.m[1]);
+    if (!file) return send(ctx.res, 404, { error: 'unknown card' });
+    let buf;
+    try { buf = await fs.promises.readFile(file); } catch { return send(ctx.res, 404, { error: 'no picture' }); }
+    const mime = sniffAvatarMime(buf) || 'application/octet-stream';
+    ctx.res.writeHead(200, {
+      'content-type': mime, 'content-length': buf.length,
+      'cache-control': 'private, no-cache', 'x-content-type-options': 'nosniff',
+    });
+    ctx.res.end(buf);
+  },
+  jellyfinCoverSet: async (ctx) => {
+    const slot = ctx.m[1];
+    if (!JELLYFIN_COVER_FILES[slot]) return send(ctx.res, 404, { error: 'unknown card' });
+    let buf;
+    try { buf = await readBody(ctx.req, 1536 * 1024); }
+    catch (e) { return send(ctx.res, e.status || 413, { error: 'image too large (1.5MB max)' }); }
+    const mime = sniffAvatarMime(buf);
+    if (!mime || buf.length < 100) return send(ctx.res, 400, { error: 'image must be a JPEG, PNG, or WebP file' });
+    await fs.promises.mkdir(JELLYFIN_COVERS_DIR, { recursive: true });
+    await fs.promises.writeFile(path.join(JELLYFIN_COVERS_DIR, `${slot}.img`), buf);
+    send(ctx.res, 200, { ok: true, slot, custom: true });
+  },
+  jellyfinCoverClear: async (ctx) => {
+    const slot = ctx.m[1];
+    if (!JELLYFIN_COVER_FILES[slot]) return send(ctx.res, 404, { error: 'unknown card' });
+    await fs.promises.rm(path.join(JELLYFIN_COVERS_DIR, `${slot}.img`), { force: true });
+    send(ctx.res, 200, { ok: true, slot, custom: false });
+  },
+
   settingsGet: async (ctx) => {
     const s = settings.get();
     const iptvSources = iptvSourcesFromSettings(s);
@@ -8701,6 +8790,9 @@ Object.assign(H, {
       iptvUsers: primaryIptv.users || [], // user ids, not secrets
       audiobooksEnabled: s.audiobooksEnabled !== false, // default ON
       jellyfinApps: s.jellyfinApps === true, // default OFF — Jellyfin apps stay dark until an admin opts in
+      jellyfinServerName: jellyfinServerName(s.jellyfinServerName),
+      jellyfinQuickConnect: s.jellyfinQuickConnect !== false,
+      jellyfinCovers: Object.fromEntries(Object.keys(JELLYFIN_COVER_FILES).map((slot) => [slot, !!jellyfinCoverCustom(slot)])),
       audiobooksUsers: Array.isArray(s.audiobooksUsers) ? s.audiobooksUsers : [],
       sizeCapMode: s.sizeCapMode || 'auto',
       sizeCap4kGb: s.sizeCap4kGb || null,
@@ -8894,6 +8986,12 @@ Object.assign(H, {
         // Audiobooks: admin on/off (default ON) + optional user allowlist (empty = everyone).
         audiobooksEnabled: b.audiobooksEnabled !== undefined ? b.audiobooksEnabled !== false : (s.audiobooksEnabled !== false),
         jellyfinApps: b.jellyfinApps !== undefined ? b.jellyfinApps === true : s.jellyfinApps === true,
+        jellyfinServerName: b.jellyfinServerName !== undefined
+          ? jellyfinServerName(b.jellyfinServerName)
+          : jellyfinServerName(s.jellyfinServerName),
+        jellyfinQuickConnect: b.jellyfinQuickConnect !== undefined
+          ? b.jellyfinQuickConnect !== false
+          : s.jellyfinQuickConnect !== false,
         audiobooksUsers: b.audiobooksUsers !== undefined
           ? (Array.isArray(b.audiobooksUsers) ? b.audiobooksUsers.map(String).slice(0, 100) : [])
           : (s.audiobooksUsers || []),
@@ -9558,14 +9656,21 @@ Object.assign(H, {
         const realPieces = raw ? (raw.match(/seg\d+\.m4s/g) || []).length : 0;
         if (pieces >= minPieces || (raw && /#EXT-X-ENDLIST/.test(raw))) break;
         // No picture yet. Answer with the Loading card instead of holding the
-        // phone on a frozen poster until the movie opens.
-        if (jellyfinPlaylist && sessionStart < 1 && realPieces === 0 && (sess.loadHold || i >= 8)) break;
+        // phone on a frozen poster until the movie opens. A resume does this too,
+        // so the saved minute is not a blank spinner.
+        if (jellyfinPlaylist && realPieces === 0 && (sess.loadHold || i >= 8)) break;
+        // The desktop gives up if this list takes about ten seconds. Answer
+        // with the card, or with the pieces already made.
+        if (jellyfinPlaylist && sessionStart < 1 && i >= 8 && realPieces < minPieces) break;
         if (jellyfinPlaylist && sessionStart < 1 && sess.loadHold && realPieces < minPieces) break;
       } catch {}
       if (i + 1 < waitTicks) await new Promise((r) => setTimeout(r, 100));
     }
     const realPieces = raw ? (raw.match(/seg\d+\.m4s/g) || []).length : 0;
-    if (jellyfinPlaylist && sessionStart < 1 && realPieces < minPieces && (sess.loadHold || realPieces === 0)) {
+    // Once any movie piece exists, keep it. Replacing it with a longer card
+    // and later swapping the card for the movie is what the desktop calls
+    // "loading failed".
+    if (jellyfinPlaylist && sessionStart < 1 && realPieces === 0) {
       if (await ensureResumePad()) {
         sess.loadHold = Math.min(40, (sess.loadHold || 0) + 2);
         raw = loadingHoldPlaylist(sess.loadHold);
@@ -9583,11 +9688,18 @@ Object.assign(H, {
     // The Jellyfin list re-encodes its picture, so the pieces really begin at the saved
     // second (measured 12.42s for a 12.5s ask) and the pad clock ends there. Do not move
     // the pads to the keyframe before it — that is a copy-path fact, not this path's.
+    if (jellyfinPlaylist && sessionStart >= 1 && realPieces === 0 && await ensureResumePad()) {
+      sess.loadHold = Math.min(40, (sess.loadHold || 0) + 2);
+      raw = loadingHoldPlaylist(sess.loadHold);
+    }
     if (jellyfinPlaylist && sessionStart >= 1 && await ensureResumePad()) raw = resumeClockPlaylist(raw, sessionStart);
     // Name every piece through the real runtime. The bar is then the whole
     // movie, and a drag asks for that minute instead of stopping early.
     // iOS keeps the short rolling list and must not get this.
     if (jellyfinPlaylist && (sess.duration || knownDur) >= 1 && /seg\d+\.m4s/.test(raw)) raw = fullTimelinePlaylist(raw, sess.duration || knownDur, 2);
+    // The first answer was the Loading card. Keep those same pieces, then the
+    // movie. Swapping piece 0 for the movie is the desktop "loading failed" dialog.
+    if (jellyfinPlaylist && sessionStart < 1 && sess.loadHold && /seg\d+\.m4s/.test(raw)) raw = pictureAfterLoadingCard(sess.loadHold, raw);
     // A growing list with no end is a live channel to the phone. It then sits
     // a few seconds from the newest piece and spins whenever that piece is
     // late. TIME-OFFSET=0 starts at the beginning, so the phone can keep a
@@ -9609,8 +9721,11 @@ Object.assign(H, {
     // Keep the movie id on every piece. The phone reads it from the address,
     // and a piece without one makes play say "source error".
     const movie = ctx.m[2] ? `/${ctx.m[2]}` : '';
-    const rewritten = raw.replace(/^(init\.mp4|padinit\.mp4|pad\.m4s|seg\d+\.m4s)$/gm, (m) => `/api/hls/${vf.id}${movie}/${m}${q}`)
-      .replace(/URI="(init\.mp4|padinit\.mp4)"/g, (m, f) => `URI="/api/hls/${vf.id}${movie}/${f}${q}"`);
+    // The phone playlist names the house it already opened. A bare /api/hls
+    // path is read as a file on the TV, so the picture never starts.
+    const origin = jellyfinPlaylist ? clientAddress(ctx) : '';
+    const rewritten = raw.replace(/^(init\.mp4|padinit\.mp4|pad\.m4s|seg\d+\.m4s)$/gm, (m) => `${origin}/api/hls/${vf.id}${movie}/${m}${q}`)
+      .replace(/URI="(init\.mp4|padinit\.mp4)"/g, (m, f) => `URI="${origin}/api/hls/${vf.id}${movie}/${f}${q}"`);
     send(ctx.res, 200, rewritten, { 'content-type': 'application/vnd.apple.mpegurl', 'cache-control': 'no-store' });
   },
 
@@ -10098,9 +10213,14 @@ Object.assign(H, {
       // buffering must not answer the real minute.
       const syncKey = `${cacheKey}:synced:a${audioIndex}`;
       const sampledAt = vf._subSyncAt.get(syncKey);
-      if (vf._osCache.has(syncKey) && sampledAt != null && sampledAt < 20 && atSec > sampledAt + 45) {
+      // A correction belongs to the minute it was heard. The opening can match
+      // while a later minute does not, and a skip must not keep the other minute's words.
+      vf._subSyncWant = vf._subSyncWant || new Map();
+      vf._subSyncWant.set(syncKey, atSec);
+      if (vf._osCache.has(syncKey) && sampledAt != null && Math.abs(atSec - sampledAt) > 45) {
         vf._osCache.delete(syncKey);
         vf._subSyncAt.delete(syncKey);
+        vf._subSyncShift.delete(syncKey);
         vf._subSyncFail.delete(syncKey);
       }
       const moved = vf._subSyncFail.get(syncKey);
@@ -10113,11 +10233,16 @@ Object.assign(H, {
           { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'failed' });
       }
       if (!vf._osCache.has(syncKey)) {
+        vf._subSyncInflightAt = vf._subSyncInflightAt || new Map();
+        const inflightAt = vf._subSyncInflightAt.get(syncKey);
+        if (vf._osInflight.has(syncKey) && inflightAt != null && Math.abs(inflightAt - atSec) > 20) vf._osInflight.delete(syncKey);
         if (!vf._osInflight.has(syncKey)) {
           const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
           console.log(`[subsync ${vf.id}] measuring at ${mmss(atSec)} on audio track ${audioIndex}`);
+          vf._subSyncInflightAt.set(syncKey, atSec);
           const work = onDemandSubSync(vf, vtt, ctx.claims.uid, atSec, audioIndex)
             .then((res) => {
+              if (Math.abs((vf._subSyncWant.get(syncKey) ?? atSec) - atSec) > 20) return null;
               const synced = res.vtt;
               const secs = (Math.abs(res.shiftMs) / 1000).toFixed(2);
               const dir = res.shiftMs >= 0 ? 'later' : 'earlier';
@@ -10839,6 +10964,9 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/mount$/, auth: 'admin', h: H.mount },
   { m: 'GET', re: /^\/api\/settings$/, auth: 'admin', h: H.settingsGet },
   { m: 'POST', re: /^\/api\/settings$/, auth: 'admin', h: H.settingsSet },
+  { m: 'GET', re: /^\/api\/settings\/jellyfin-cover\/([a-z-]+)$/, auth: 'admin', h: H.jellyfinCoverGet },
+  { m: 'POST', re: /^\/api\/settings\/jellyfin-cover\/([a-z-]+)$/, auth: 'admin', h: H.jellyfinCoverSet },
+  { m: 'DELETE', re: /^\/api\/settings\/jellyfin-cover\/([a-z-]+)$/, auth: 'admin', h: H.jellyfinCoverClear },
   { m: 'POST', re: /^\/api\/segment-cache\/clear$/, auth: 'admin', h: H.segmentCacheClear },
   { m: 'POST', re: /^\/api\/streaming\/recommend$/, auth: 'admin', h: H.streamingRecommend },
   { m: 'POST', re: /^\/api\/test\/provider$/, auth: 'admin', h: H.testProvider },
@@ -10899,6 +11027,7 @@ async function jellyfinPlay(ctx, body) {
     releaseUserPlaySessions(ctx.user.id, session.id);
     vf._q = body.q;
     vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
+    vf._jellyfinSubAt = Math.round((Number(body.resumeFrac) || 0) * (Number(body.runtime) || 0) * 60);
     vf._caps = parseCaps(body.caps);
     session.caps = vf._caps;
     armRuntimeCheck(vf, policy, candidate, body);
@@ -10925,11 +11054,39 @@ async function jellyfinPlay(ctx, body) {
   }
 }
 
+function jellyfinPrepare(ctx, body) {
+  if (process.env.TRIBOON_SKIP_USENET === '1') return;
+  if (!body || !body.q || !ctx || !ctx.user) return;
+  return (async () => {
+    const spec = { ...body };
+    Object.assign(spec, await catalogFactsFor(spec.year, spec.tmdbId, spec.mediaType, spec.season, spec.ep));
+    const policy = playbackPolicyFor(ctx.user, { ...spec, maxResolutionRank: JELLYFIN_MAX_RANK });
+    policy.noResolutionWiden = true;
+    const prepared = await pipeline.prepare(
+      { ...playSearchParams(spec), resumeFrac: Math.max(0, Math.min(0.98, Number(spec.resumeFrac) || 0)) },
+      policy
+    );
+    const vf = prepared && prepared.vf;
+    if (!vf) return;
+    vf._q = spec.q;
+    vf._subQuery = episodeSubtitleQuery(spec.q, spec.season, spec.ep);
+    vf._jellyfinSubAt = Math.round((Number(spec.resumeFrac) || 0) * (Number(spec.runtime) || 0) * 60);
+    rememberMountOwner(vf, ctx.user.id);
+    trimUserMounts(ctx.user.id, vf.id);
+    if (prepared.candidate) armRuntimeCheck(vf, policy, prepared.candidate, spec);
+  })().catch(() => {});
+}
+
 function jellyfinStream(mountId, uid) {
   const vf = mounts.get(String(mountId || ''));
   if (!vf || !uid) return null;
   const payload = mountPayload(vf, uid);
   return { remuxUrl: payload.remuxUrl || '', hlsUrl: payload.hlsUrl || '' };
+}
+
+function jellyfinLocalSearch(ctx, query, limit) {
+  const libs = jellyfinLocalLibraries(ctx);
+  return searchLibraryRecords(query, libs.map((lib) => lib.id), limit);
 }
 
 function jellyfinNextCatalog(ctx) {
@@ -10980,20 +11137,25 @@ async function jellyfinSubtitleStreams(ctx, mountId, startIndex, spec) {
         return vf._jellyfinOnlineSub;
       });
     }
-    const vtt = await vf._jellyfinOnlineSub;
-    if (vtt) {
-      streams.push({
-        Index: index,
-        Type: 'Subtitle',
-        Codec: 'webvtt',
-        Language: 'en',
-        DisplayTitle: 'English',
-        IsExternal: true,
-        DeliveryMethod: 'External',
-        IsForced: false,
-      });
-      map.push({ index, online: true });
+    const vtt = await Promise.race([
+      vf._jellyfinOnlineSub,
+      new Promise((resolve) => setTimeout(() => resolve(null), 200)),
+    ]);
+    if (vtt === '') {
+      vf._jellyfinSubMap = map;
+      return streams;
     }
+    streams.push({
+      Index: index,
+      Type: 'Subtitle',
+      Codec: 'webvtt',
+      Language: 'en',
+      DisplayTitle: 'English',
+      IsExternal: true,
+      DeliveryMethod: 'External',
+      IsForced: false,
+    });
+    map.push({ index, online: true });
   }
   vf._jellyfinSubMap = map;
   return streams;
@@ -11005,8 +11167,21 @@ async function jellyfinSubtitleBody(ctx, mountId, streamIndex) {
   const hit = (vf._jellyfinSubMap || []).find((row) => row.index === Number(streamIndex));
   if (!hit) return null;
   if (hit.online) {
-    const vtt = typeof vf._jellyfinOnlineSub === 'string' ? vf._jellyfinOnlineSub : '';
-    return vtt && vtt.includes('WEBVTT') ? vtt : null;
+    let vtt = vf._jellyfinOnlineSub;
+    if (vtt && typeof vtt.then === 'function') vtt = await vtt;
+    if (!vtt || !String(vtt).includes('WEBVTT')) return null;
+    // Words line up with the voices after play has started. A release subtitle
+    // that already matches the file is not sent through this.
+    if (process.env.TRIBOON_SKIP_USENET !== '1' && detectSubSync()) {
+      try {
+        const synced = await Promise.race([
+          onDemandSubSync(vf, vtt, ctx.user.id, Math.max(0, Number(vf._jellyfinSubAt) || 0), 0),
+          new Promise((resolve) => setTimeout(() => resolve(null), 12000)),
+        ]);
+        if (synced && synced.vtt) return synced.vtt;
+      } catch {}
+    }
+    return vtt;
   }
   if (!hit.releaseId || typeof vf.readReleaseSub !== 'function') return null;
   const sub = (vf.releaseSubs || []).find((row) => String(row.id) === String(hit.releaseId));
@@ -11102,6 +11277,8 @@ function jellyfinWatchSave(ctx, key, patch) {
       meta: sanitizeStoredMediaMeta({ ...(prev.meta || {}), ...(patch.meta || {}) }),
       updatedAt: nextStamp(),
     };
+    if (Number(prev.traktPct) > 0) all[storeKey].traktPct = Number(prev.traktPct);
+    if (prev.fromTrakt) all[storeKey].fromTrakt = true;
     return all;
   });
 }
@@ -11112,12 +11289,48 @@ function jellyfinWatchRows(ctx) {
     .filter((row) => row && !row.hidden && !String(row.key).startsWith('live:') && !String(row.key).startsWith('audiobook:'));
 }
 
+function jellyfinCleanTitle(s) {
+  return String(s || '').toLowerCase()
+    .replace(/\s*(?:-|\u2013|\u2014)\s*s\d{1,2}e\d{1,3}.*$/i, '')
+    .replace(/\b(2160p|1080p|720p|576p|480p|4k|uhd|hdr10?|dv|dolby\s*vision|web[-.\s]?dl|webrip|bluray|brrip|remux|x26[45]|h\.?26[45]|hevc|avc)\b/gi, ' ')
+    .replace(/[._()[\]{}]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function jellyfinResumeIdentity(row) {
+  const key = String(row && row.key || '');
+  const show = /^tmdb:tv:(\d+)/i.exec(key);
+  if (show) return `tv:${show[1]}`;
+  const movie = /^tmdb:movie:(\d+)/i.exec(key);
+  if (movie) return `movie:${movie[1]}`;
+  const raw = String(row && row.meta && row.meta.title || '');
+  const title = jellyfinCleanTitle(raw);
+  const kind = row && row.meta && row.meta.type;
+  const looksEpisode = kind === 'episode' || kind === 'tv' || /\bs\d{1,2}e\d{1,3}\b/i.test(raw);
+  if (title && looksEpisode) return `tv:${title}`;
+  if (title && kind === 'movie') return `movie:${title}`;
+  return key;
+}
+
 function jellyfinWatchResume(ctx) {
   if (!ctx || !ctx.user) return [];
-  return watchRowsForProfileFromAll(store.read('watch', {}), ctx.user.id, 'default')
-    .filter((row) => row && !row.watched && !row.hidden && (row.position || 0) > 30
+  const rows = watchRowsForProfileFromAll(store.read('watch', {}), ctx.user.id, 'default')
+    .filter((row) => row && !row.watched && !row.hidden
+      && ((row.position || 0) > 30 || (row.traktPct || 0) > 2)
       && !/^tmdb:tv:\d+$/.test(String(row.key || ''))
       && !String(row.key).startsWith('live:') && !String(row.key).startsWith('audiobook:'));
+  // The website shows one card per show. Two paused episodes of the same show
+  // would otherwise be two Jellyfin cards.
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const id = jellyfinResumeIdentity(row);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(row);
+  }
+  return out;
 }
 
 function jellyfinLocalImage(ctx, libId, idx, wide) {
@@ -11234,9 +11447,9 @@ function jellyfinLocalFacets(ctx, libId) {
   return libraryDb.facets(libId);
 }
 
-bindJellyfin({
+const mediaAppDeps = {
   auth, settings, send, readJson, throttled, clientIp, tmdb,
-  jellyfinPlay, jellyfinStream, jellyfinLocalPlay, jellyfinNextCatalog,
+  jellyfinPlay, jellyfinPrepare, jellyfinStream, jellyfinLocalPlay, jellyfinNextCatalog, jellyfinCoverFile: jellyfinCoverCustom,
   jellyfinSubtitleStreams, jellyfinSubtitleBody,
   localLibraries: jellyfinLocalLibraries,
   localPage: jellyfinLocalPage,
@@ -11246,9 +11459,11 @@ bindJellyfin({
   localSubtitles: jellyfinLocalSubtitles,
   localSubtitleBody: jellyfinLocalSubtitleBody,
   localFacets: jellyfinLocalFacets,
+  localSearch: jellyfinLocalSearch,
   jellyfinWatchGet, jellyfinWatchSave, jellyfinWatchResume, jellyfinWatchRows,
   clearLoginThrottle: (key) => limiter.clear(key),
-});
+};
+bindJellyfin(mediaAppDeps);
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml',
   '.js': 'text/javascript', '.css': 'text/css', '.ico': 'image/x-icon', '.woff2': 'font/woff2',

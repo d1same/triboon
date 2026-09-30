@@ -1522,6 +1522,27 @@ body.tv #settings>.setGrid,body.tv #prefs>.setGrid{
 .settingsActions .btn.primary{min-width:160px}
 .settingsActions .btn.ghost{min-width:128px}
 .settingsStatus{margin-top:14px;line-height:1.55;word-break:normal;overflow-wrap:anywhere}
+.jfCovers{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px 14px;margin:6px 0 18px}
+.jfCover{display:grid;justify-items:center;align-content:start;gap:8px;min-width:0}
+.jfPoster{display:block;position:relative;overflow:hidden;width:100%;aspect-ratio:2/3;border:0;border-radius:14px;padding:0;cursor:pointer;
+  appearance:none;-webkit-appearance:none;
+  background:
+    linear-gradient(165deg,rgba(255,255,255,.10),transparent 42%),
+    linear-gradient(160deg,#3a2248 0%,#16121c 55%,#4a2a22 100%);
+  background-size:cover;background-position:center;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.12),0 10px 24px rgba(0,0,0,.28)}
+.jfPoster img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}
+.jfPoster img[hidden]{display:none!important}
+.jfPoster:hover{box-shadow:inset 0 0 0 1px rgba(255,255,255,.34),0 12px 28px rgba(0,0,0,.34)}
+.jfPoster:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+.jfName{font:600 13px/1.3 "Albert Sans",system-ui,sans-serif;text-align:center;color:var(--text);max-width:100%}
+.jfActions{display:flex;align-items:center;justify-content:center;gap:10px;min-height:16px}
+.jfChange,.jfReset{border:0;background:none;padding:0;margin:0;min-height:0;cursor:pointer;font:600 12px/1 "Albert Sans",system-ui,sans-serif}
+.jfChange{color:rgba(var(--fg),.62)}
+.jfChange:hover,.jfReset:hover{color:var(--text)}
+.jfReset{color:var(--amber)}
+.jfChange[hidden],.jfReset[hidden]{display:none!important}
+@media (max-width:860px){.jfCovers{grid-template-columns:repeat(3,minmax(0,1fr))}}
 .kv{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .kv span:last-child{font-family:"JetBrains Mono";color:rgba(var(--fg),.76);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hint{font:500 11px "JetBrains Mono";color:rgba(var(--fg),.76);margin-top:10px;word-break:break-all}
@@ -2284,13 +2305,11 @@ body.mobileShell .seekLine{grid-template-columns:46px minmax(0,1fr) 54px;gap:8px
 body.mobileShell .seekTime{font-size:11px}
 body.mobileShell #seek{height:8px}
 body.mobileShell #seek .knob{width:18px;height:18px}
-body.mobileShell #osd .ctl{display:flex;grid-template-columns:none;gap:8px;overflow-x:auto;overflow-y:visible;
-  justify-content:flex-start;align-items:center;padding:3px 4px 8px;margin:0 -4px;scroll-padding:0 12px;
-  scrollbar-width:none;-webkit-overflow-scrolling:touch;touch-action:pan-x}
-body.mobileShell #osd .ctl::-webkit-scrollbar{display:none}
+body.mobileShell #osd .ctl{display:flex;flex-wrap:wrap;grid-template-columns:none;gap:8px;overflow:visible;
+  justify-content:center;align-items:center;padding:3px 0 8px;margin:0}
 body.mobileShell #osd .ctlGroup{flex:0 0 auto;gap:8px}
-body.mobileShell #osd .ctlLeft,body.mobileShell #osd .ctlCenter,body.mobileShell #osd .ctlRight{justify-content:flex-start}
-body.mobileShell #osd .ctlRight{flex-wrap:nowrap}
+body.mobileShell #osd .ctlLeft,body.mobileShell #osd .ctlCenter,body.mobileShell #osd .ctlRight{justify-content:center}
+body.mobileShell #osd .ctlRight{flex-wrap:wrap;max-width:100%}
 body.mobileShell #player:not(.live) #chGuide{display:none}
 body.mobileShell .cbtn{width:44px;height:44px;flex:0 0 44px}
 body.mobileShell .cbtn.big{width:52px;height:52px;flex-basis:52px}
@@ -2317,12 +2336,11 @@ body.iosPhone .seekLine{grid-template-columns:46px minmax(0,1fr) 54px;gap:8px}
 body.iosPhone .seekTime{font-size:11px}
 body.iosPhone #seek{height:8px}
 body.iosPhone #seek .knob{width:18px;height:18px}
-body.iosPhone #osd .ctl{display:flex;grid-template-columns:none;gap:8px;overflow-x:auto;overflow-y:visible;
-  justify-content:flex-start;align-items:center;padding:3px 4px 8px;margin:0 -4px;scroll-padding:0 12px;
-  scrollbar-width:none;-webkit-overflow-scrolling:touch;touch-action:pan-x}
-body.iosPhone #osd .ctl::-webkit-scrollbar{display:none}
+body.iosPhone #osd .ctl{display:flex;flex-wrap:wrap;grid-template-columns:none;gap:8px;overflow:visible;
+  justify-content:center;align-items:center;padding:3px 0 8px;margin:0}
 body.iosPhone #osd .ctlGroup{flex:0 0 auto;gap:8px}
-body.iosPhone #osd .ctlLeft,body.iosPhone #osd .ctlCenter,body.iosPhone #osd .ctlRight{justify-content:flex-start}
+body.iosPhone #osd .ctlLeft,body.iosPhone #osd .ctlCenter,body.iosPhone #osd .ctlRight{justify-content:center}
+body.iosPhone #osd .ctlRight{flex-wrap:wrap;max-width:100%}
 body.iosPhone #player:not(.live) #chGuide{display:none}
 body.iosPhone .cbtn{width:44px;height:44px;flex:0 0 44px}
 body.iosPhone .cbtn.big{width:52px;height:52px;flex-basis:52px}
@@ -2377,13 +2395,11 @@ body.iosPhone #volSlider{display:none}
   .seekTime{font-size:11px}
   #seek{height:8px}
   #seek .knob{width:18px;height:18px}
-  #osd .ctl{display:flex;grid-template-columns:none;gap:8px;overflow-x:auto;overflow-y:visible;
-    justify-content:flex-start;align-items:center;padding:3px 4px 8px;margin:0 -4px;scroll-padding:0 12px;
-    scrollbar-width:none;-webkit-overflow-scrolling:touch;touch-action:pan-x}
-  #osd .ctl::-webkit-scrollbar{display:none}
+  #osd .ctl{display:flex;flex-wrap:wrap;grid-template-columns:none;gap:8px;overflow:visible;
+    justify-content:center;align-items:center;padding:3px 0 8px;margin:0}
   #osd .ctlGroup{flex:0 0 auto;gap:8px}
-  #osd .ctlLeft,#osd .ctlCenter,#osd .ctlRight{justify-content:flex-start}
-  #osd .ctlRight{flex-wrap:nowrap}
+  #osd .ctlLeft,#osd .ctlCenter,#osd .ctlRight{justify-content:center}
+  #osd .ctlRight{flex-wrap:wrap;max-width:100%}
   #player:not(.live) #chGuide{display:none}
   .cbtn{width:44px;height:44px;flex:0 0 44px}
   .cbtn.big{width:52px;height:52px;flex-basis:52px}
@@ -2396,6 +2412,18 @@ body.iosPhone #volSlider{display:none}
   #chBar #chSearch{width:100%}
   .card.liveCard .lcl img{max-width:90px}
   #guide .gTick{font-size:9px}
+}
+/* A browser window snapped to the side is too narrow for the TV control row.
+   Show every button. Do not tuck subtitles, audio, or fullscreen into a sideways scroll. */
+@media (max-width:1100px){
+  #volSlider{display:none}
+  #osd .ctl{display:flex;flex-wrap:wrap;grid-template-columns:none;gap:8px;overflow:visible;
+    justify-content:center;align-items:center;min-width:0}
+  #osd .ctlGroup{flex:0 0 auto;gap:8px}
+  #osd .ctlLeft,#osd .ctlCenter,#osd .ctlRight{justify-content:center}
+  #osd .ctlRight{flex-wrap:wrap;max-width:100%}
+  #osd .cbtn{flex:0 0 44px;width:44px;height:44px}
+  #osd .cbtn.big{flex:0 0 52px;width:52px;height:52px}
 }
 
 /* Branded loaders so nothing ever looks frozen. */
@@ -5195,9 +5223,18 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <div class="panel"><h2>Jellyfin apps</h2>
     <p>Official Jellyfin apps can sign in with a Triboon name and play movies and shows from this server. They keep Jellyfin’s own screens. Leave this off until you want that.</p>
     <label class="catRow" style="margin-bottom:10px"><input type="checkbox" id="jellyfinAppsEnabled"><span class="cgN">Allow Jellyfin apps</span></label>
+    <div id="jellyfinAppsOptions" hidden>
+      <p>These change the Jellyfin app on a TV or phone. Triboon itself stays the same.</p>
+      <div class="field"><input id="jellyfinServerName" maxlength="40" placeholder="Name on the TV (Triboon)"></div>
+      <label class="catRow" style="margin-bottom:12px"><input type="checkbox" id="jellyfinQuickConnect" checked><span class="cgN">Let a TV sign in with a code</span></label>
+      <p style="margin:4px 0 8px"><b>Home pictures</b></p>
+      <p class="hint" style="margin-top:0;word-break:normal">Click a poster to change it. The TV shows the new one after you leave the app and open it again.</p>
+      <div id="jellyfinCovers"></div>
+    </div>
     <button class="btn primary focusable" id="jellyfinAppsSave">Save</button>
     <div class="hint" id="jellyfinAppsStatus"></div>
   </div>
+
   </div>
 
   <div class="setGrid" data-stab="catalog" hidden>
@@ -13473,7 +13510,7 @@ function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
   }
   applySubtitleTrack(); // re-attach CC after the src swap
   applyVolume();
-  requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());
+  requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); hideSeekHoldFrame(); if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());
   return true;
 }
 // The full ladder, in policy order: direct play → remux (container swap) → transcode
@@ -14376,24 +14413,33 @@ function remuxKeyframeStart(p, seconds) {
   if (!m) return t;
   const key = `${m[1]}:${Math.round(t * 1000)}`;
   if (_remuxStartCache.has(key)) return _remuxStartCache.get(key);
-  const ctl = new AbortController();
-  // A cold far seek measured ~900ms (the probe fetches the same first pieces the remux needs next, so
-  // the remux then starts in ~250ms instead of ~500ms: the wait moves, the total barely does). Past
-  // 1.5s the seek goes ahead uncorrected rather than hang.
-  const timer = setTimeout(() => ctl.abort(), 1500);
-  const req = fetch(`/api/keyframe/${m[1]}?at=${t}&before=1&t=${m[2]}`, { signal: ctl.signal })
+  // Past 1.5s the seek goes ahead so a slow probe cannot freeze the skip. The
+  // picture still starts on the keyframe BEFORE the minute you asked for, which
+  // left every caption a few seconds early. When that keyframe arrives, move
+  // the words onto it. Do not cancel the probe.
+  let settled = false;
+  const probe = fetch(`/api/keyframe/${m[1]}?at=${t}&before=1&t=${m[2]}`)
     .then((r) => r.json())
     .then((body) => {
       const k = body && Number(body.k);
       // 2ms PAST the keyframe: ffmpeg lands on the keyframe at-or-before the ask, so a pts rounded
       // down must not send it one whole GOP earlier. The clock is then off by 2ms, not seconds.
-      const start = body && body.exact && Number.isFinite(k) && k >= 0 && k <= t + 0.01 ? Math.round((Math.min(k, t) + 0.002) * 1000) / 1000 : t;
+      return body && body.exact && Number.isFinite(k) && k >= 0 && k <= t + 0.01 ? Math.round((Math.min(k, t) + 0.002) * 1000) / 1000 : t;
+    })
+    .catch(() => t);
+  const req = new Promise((resolve) => {
+    const hurry = setTimeout(() => { if (!settled) { settled = true; resolve(t); } }, 1500);
+    probe.then((start) => {
+      clearTimeout(hurry);
       if (_remuxStartCache.size > 300) _remuxStartCache.delete(_remuxStartCache.keys().next().value);
       _remuxStartCache.set(key, start);
-      return start;
-    })
-    .catch(() => { _remuxStartCache.delete(key); return t; })
-    .finally(() => clearTimeout(timer));
+      if (!settled) { settled = true; resolve(start); return; }
+      if (!(start + 0.05 < t) || S.playing !== p) return;
+      if (Math.abs((p.startOffset || 0) - t) > 0.25) return;
+      p.startOffset = start;
+      applySubtitleTrack();
+    });
+  });
   _remuxStartCache.set(key, req);
   return req;
 }
@@ -16621,17 +16667,38 @@ function playerSurfaceClick(e) {
 }
 function playerOverlayAwayClick(e) {
   const onAboutCard = !!e.target.closest('.paCard');
+  const onAboutBtn = !!e.target.closest('#aboutBtn');
   const onEpisodes = !!e.target.closest('#playerEpisodes');
-  const onChrome = !!e.target.closest('#osd .top,.playerMetaRow,.seekLine,.ctl,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea');
-  if ($('playerAbout').classList.contains('open') && !onAboutCard && !onChrome) {
+  const onStats = !!e.target.closest('#playerStats');
+  const onStatsBtn = !!e.target.closest('#statsBtn');
+  const onTrack = !!e.target.closest('#trackMenu');
+  const onTrackBtn = !!e.target.closest('#ccBtn,#audBtn,#qualBtn,#srndBtn');
+  // A click on the picture, or anywhere outside the sheet, puts it away.
+  // The button that opened it is left to its own toggle.
+  if ($('playerStats').classList.contains('open') && !onStats && !onStatsBtn) {
+    closePlayerStats();
+    return true;
+  }
+  if ($('trackMenu').classList.contains('open') && !onTrack && !onTrackBtn) {
+    closeTrackMenu({ restoreFocus: false });
+    return true;
+  }
+  if ($('playerAbout').classList.contains('open') && !onAboutCard && !onAboutBtn) {
     closePlayerAbout();
     return true;
   }
-  if ($('playerEpisodes').classList.contains('open') && !onEpisodes && !onChrome) {
+  if ($('playerEpisodes').classList.contains('open') && !onEpisodes) {
     closePlayerEpisodes();
     return true;
   }
   return false;
+}
+function browserTapLeavesPlayback() {
+  // A tap on the picture in a normal browser only wakes the controls.
+  // Play and pause stay on the play button. TV and the Android/Windows apps keep a surface tap.
+  return !document.body.classList.contains('tv')
+    && !document.body.classList.contains('androidApp')
+    && !document.body.classList.contains('windowsDesktop');
 }
 function playerSingleClick(e) {
   showOsd();
@@ -16645,6 +16712,7 @@ function playerSingleClick(e) {
       return;
     }
   }
+  if (browserTapLeavesPlayback()) return;
   clearTimeout(_playerSurfaceClickT);
   _playerSurfaceClickT = setTimeout(() => {
     _playerSurfaceClickT = null;
@@ -16922,6 +16990,7 @@ function seekTo(seconds) {
     else if (p.usingRemux) startSource('remux', seconds, { quietSeek: true });
     else v.currentTime = seconds;
   }
+  if (Math.abs(delta) > 20) resyncSubtitleAfterSkip(p);
   showOsd();
   maybeShowUpNext(seconds, totalDuration(), (p.usingNative || p.castingActive) ? { native: true } : {});
 }
@@ -17824,7 +17893,10 @@ function subtitleSyncPlayhead(p) {
   else if (p.usingJellyfinDesktop) at = Math.max(0, Number(p.jfPos) || offset);
   else at = Math.max(0, Number(currentTime()) || 0);
   const want = Math.max(resume, offset, percentAt);
-  if (want > 20 && at + 8 < want * 0.5) return null;
+  // Continue Watching still sitting on 0:00 must not be sampled. A skip that has
+  // already landed is the minute they asked for, even when that minute is the start.
+  const landedOnPurpose = p._subSeekWall && !(Number(p._subSeekUntil) > Date.now());
+  if (want > 20 && at + 8 < want * 0.5 && !landedOnPurpose) return null;
   if (pct > 0.02 && at < 15 && percentAt <= 0) return null;
   if (p._subSeekUntil && Date.now() < p._subSeekUntil) {
     const v = $('video');
@@ -17862,6 +17934,14 @@ function subtitleSyncToast(shiftHeader) {
 // Background subtitle sync: re-request the same online sub with &sync=1 (the server runs alass
 // against the audio), then hot-swap the corrected cues if the user is still on that track. The
 // unsynced track plays meanwhile, so this never blocks the subtitle from appearing.
+function resyncSubtitleAfterSkip(p) {
+  // The caption file can match the opening and miss a later minute. A skip asks
+  // again for the minute on screen instead of keeping the opening's timing.
+  if (!p || typeof p.subTrack !== 'string' || !p.subTrack.startsWith('os:')) return;
+  if (p.usingNative) { autoSyncNative(p, p.subTrack); return; }
+  if (!p._subSyncBase) return;
+  autoSyncSubtitle(p, p.subTrack, p._subSyncBase);
+}
 function autoSyncSubtitle(p, rel, baseUrl) {
   // The subtitle response already said "pending". That is the live answer. A page opened
   // before the sync tool was on must not keep the words on the wrong timing.
@@ -17904,9 +17984,16 @@ async function runPendingWebSync() {
     const verdict = r.headers.get('x-triboon-subsync');
     if (verdict === 'failed') { p._pendingWebSync = null; notePlaybackIssue('subs', 'subtitle sync gave up', 0); return; }
     if (verdict === 'synced' || verdict === 'unavailable') { p._pendingWebSync = null; return; }
+    const heardNow = subtitleSyncPlayhead(p);
+    if (heardNow != null && Math.abs(heardNow - at) > 20) {
+      p._webSyncTries = Math.max(0, (p._webSyncTries || 1) - 1);
+      p._webSyncNextAt = 0;
+      return;
+    }
     if (verdict !== 'corrected') { p._webSyncNextAt = Date.now() + 60000; return; }
     const synced = await r.text();
-    if (!S.playing || S.playing !== p || p.subTrack !== rel || !synced || synced === p._subVttText) return;
+    if (!S.playing || S.playing !== p || p.subTrack !== rel || !synced) return;
+    if (synced === p._subVttText) { p._pendingWebSync = null; return; }
     if ((parseInt(p.audioTrack, 10) || 0) !== audio) return;
     p._pendingWebSync = null;
     p._subVttText = synced; p._subVttRel = rel;
@@ -18098,6 +18185,7 @@ async function setSubtitle(rel, opts = {}) {
       }
       p._subVttText = await r.text();
       p._subVttRel = rel;
+      if (rel.startsWith('os:')) p._subSyncBase = url;
       // Automatic sync: if the server flags this online sub as not-already-in-sync and alass is
       // available, correct it in the background and hot-swap the cues in — the user sees the sub
       // immediately, then it snaps into sync a few seconds later. Release/hash matches return
@@ -18198,6 +18286,8 @@ function resetSubtitleClock(p, videoSeconds) {
   p._subSlip = 0;
   p._subShown = Math.max(0, Number(videoSeconds) || 0);
   p._subShownWall = Date.now();
+  p._subSlipGrace = Date.now() + 5000;
+  p._subPaceWall = 0;
   p._subFrozen = false;
 }
 // Has the picture reached the minute a seek/start asked for? "Within 3s" alone froze the words
@@ -18242,6 +18332,9 @@ function subtitleMediaNow(p) {
     p._subShown = landed;
     p._subShownWall = now;
     p._subSlip = 0;
+    // The new picture's first ticks can leap a few seconds. That is the seek, not a stall.
+    // Treating it as a stall left the words behind for the rest of the scene.
+    p._subSlipGrace = now + 5000;
     p._subFrozen = false;
     return landed;
   }
@@ -18251,7 +18344,8 @@ function subtitleMediaNow(p) {
     return Math.max(0, p._subShown - (p._subSlip || 0));
   }
   const jump = raw - p._subShown;
-  if (p._subShownWall && jump > 2) {
+  if (p._subSlipGrace && now < p._subSlipGrace) p._subSlip = 0;
+  else if (p._subShownWall && jump > 2) {
     const wallSec = Math.max(0, (now - p._subShownWall) / 1000);
     // A late tick while the movie kept playing has jump ≈ wall. Follow it.
     // Only a clock that leaps past the wait is a stall, not a new minute.
@@ -18263,7 +18357,28 @@ function subtitleMediaNow(p) {
   p._subFrozen = false;
   p._subShown = raw;
   p._subShownWall = now;
-  return Math.max(0, raw - (p._subSlip || 0));
+  return subtitlePace(p, Math.max(0, raw - (p._subSlip || 0)), true, now);
+}
+// Chrome's video clock stays with the voices while you watch straight through.
+// After a seek it sits behind them. The TV app does not use this clock.
+// If the browser clock falls behind the time the show has actually been playing,
+// move the words forward onto the voices.
+function subtitlePace(p, shown, moving, now) {
+  if (!p || !moving) { if (p) p._subPaceWall = 0; return shown; }
+  if (!p._subPaceWall) { p._subPaceWall = now; p._subPaceBase = shown; return shown; }
+  const ahead = ((now - p._subPaceWall) / 1000) - (shown - p._subPaceBase);
+  if (ahead > 0.45) return shown + ahead;
+  if (ahead < -0.45) { p._subPaceWall = now; p._subPaceBase = shown; }
+  return shown;
+}
+// A remux skip restarts the video at 0:00, which is really a later minute. The caption
+// file still uses the episode clock. Adding that minute back here keeps the words on
+// the picture. Rewriting every caption time did not: at the start there is nothing to
+// add, so it looked fine, and a skip threw the words off.
+function subtitleCueNow(p) {
+  const raw = subtitleMediaNow(p);
+  if (!p || (p.item && p.item.type === 'live') || !(p.usingRemux || p.usingTranscode)) return raw;
+  return raw + Math.max(0, Number(p.startOffset) || 0);
 }
 function activeSubtitleCues(tt) {
   if (!tt || tt.mode === 'disabled') return [];
@@ -18271,7 +18386,7 @@ function activeSubtitleCues(tt) {
   if (!cues.length) return [];
   // activeCues follows the browser cue scheduler. After a stall that scheduler stays
   // on the old line (or skips ahead by the wait). The video clock is the picture.
-  const now = subtitleMediaNow(S.playing);
+  const now = subtitleCueNow(S.playing);
   return cues.filter((c) => now + 0.05 >= c.startTime && now <= c.endTime + 0.05);
 }
 function renderSubCues() {
@@ -18293,7 +18408,6 @@ function renderSubCues() {
 function applySubtitleTrack() {
   const v = $('video'); const p = S.playing; if (!p) return;
   const seq = (p._subSeq || 0) + 1; p._subSeq = seq;
-  p._subRebaseTries = 0;
   if (p._subBlobUrl) {
     try { URL.revokeObjectURL(p._subBlobUrl); } catch {}
     p._subBlobUrl = '';
@@ -18328,27 +18442,16 @@ function applySubtitleTrack() {
       // so a resume used to paint the movie's opening lines over minute 5.
       p._textTrack = tt;
       tt.mode = 'hidden';
-      // SEEK SYNC: server-seek restarts make the <video> timeline 0-based at the seek
-      // point, but the VTT cues are movie-absolute — unshifted, the subtitles "start from
-      // scratch". Rebase every cue by the stream's start offset. Cues that ENDED before the
-      // seek point are REMOVED — clamping them to [0,0] made every line since the episode
-      // start paint at once after a skip (the wall-of-text screenshot).
-      const off = p.startOffset || 0;
+      // Caption times stay on the episode clock. subtitleCueNow adds the remux
+      // start back on, so a skip does not rewrite every line.
       const cuesReady = !!(tt.cues && tt.cues.length);
-      if (off > 0 && cuesReady) {
-        for (const c of [...tt.cues]) {
-          if (c._shifted) continue;
-          if (c.endTime - off <= 0.2) { try { tt.removeCue(c); } catch {} continue; }
-          c.startTime = Math.max(0, c.startTime - off);
-          c.endTime = Math.max(0.05, c.endTime - off);
-          c._shifted = true;
-        }
-      } else if (off > 0 && (p._subRebaseTries = (p._subRebaseTries || 0) + 1) < 40) {
+      if (!cuesReady && (p._subArmTries = (p._subArmTries || 0) + 1) < 40) {
         setTimeout(arm, 200);
         return;
       }
+      p._subArmTries = 0;
       applySubShiftToCues(tt, p._subShift || 0);
-      tt.oncuechange = () => { if ((p.startOffset || 0) > 0 && tt.cues && [...tt.cues].some((c) => !c._shifted)) arm(); else renderSubCues(); };
+      tt.oncuechange = () => renderSubCues();
       renderSubCues();
     } catch {}
   };
@@ -27605,6 +27708,9 @@ async function refreshSettings(opts = {}) {
     }, s.streamingPerformance || {});
     S.settingsCache = s; // for the ✎ edit flow (secrets stay redacted)
     if ($('jellyfinAppsEnabled')) $('jellyfinAppsEnabled').checked = s.jellyfinApps === true;
+    if ($('jellyfinServerName')) $('jellyfinServerName').value = s.jellyfinServerName || '';
+    if ($('jellyfinQuickConnect')) $('jellyfinQuickConnect').checked = s.jellyfinQuickConnect !== false;
+    paintJellyfinOptions(s);
     $('npList').innerHTML = s.providers.length ? s.providers.map((p, i) =>
       `<div class="kv"><span>${esc(p.host)}:${esc(p.port)} ${p.tls ? '🔒' : ''} ${p.user ? '· <span style="color:var(--amber)">login saved ✓</span>' : ''}${p.backup ? ' · <span class="chip" title="Dialed only when every primary account fails">backup only</span>' : ''}</span>
        <span>×${esc(p.connections)} <button class="testBtn" data-tp="${i}" title="Test connection">test</button>
@@ -28008,10 +28114,131 @@ $('osSave').addEventListener('click', async () => {
   if ($('osPass')) $('osPass').value = '';
   refreshSettings({ force: true });
 });
+const JELLYFIN_COVERS = [
+  { id: 'movies', label: 'Movies' },
+  { id: 'shows', label: 'TV shows' },
+  { id: 'custom-movies', label: 'Movie folders' },
+  { id: 'custom-shows', label: 'Show folders' },
+  { id: 'library', label: 'Other' },
+];
+function paintJellyfinOptions(s) {
+  const box = $('jellyfinAppsOptions');
+  if (!box || !$('jellyfinAppsEnabled')) return;
+  const on = $('jellyfinAppsEnabled').checked;
+  box.hidden = !on;
+  if (!on) return;
+  const covers = (s && s.jellyfinCovers) || (S.settingsCache && S.settingsCache.jellyfinCovers) || {};
+  const host = $('jellyfinCovers');
+  if (!host || host.dataset.ready === '1') {
+    JELLYFIN_COVERS.forEach((row) => {
+      const reset = host && host.querySelector(`[data-jf-reset="${row.id}"]`);
+      if (reset) reset.hidden = !covers[row.id];
+    });
+    if (host && host.dataset.ready === '1') return;
+  }
+  if (!host) return;
+  host.dataset.ready = '1';
+  host.className = 'jfCovers';
+  host.innerHTML = JELLYFIN_COVERS.map((row) => `<div class="jfCover">
+    <button type="button" class="jfPoster focusable" data-jf-preview="${row.id}" data-jf-pick="${row.id}" aria-label="Change the ${esc(row.label)} picture"><img alt="" hidden></button>
+    <span class="jfName">${esc(row.label)}</span>
+    <span class="jfActions">
+      <button class="jfChange focusable" type="button" data-jf-pick="${row.id}">Change</button>
+      <button class="jfReset focusable" type="button" data-jf-reset="${row.id}" ${covers[row.id] ? '' : 'hidden'}>Use ours</button>
+    </span></div>`).join('');
+  JELLYFIN_COVERS.forEach((row) => loadJellyfinCoverPreview(row.id));
+}
+async function loadJellyfinCoverPreview(slot) {
+  const poster = document.querySelector(`[data-jf-preview="${slot}"]`);
+  if (!poster) return;
+  const r = await fetch(`/api/settings/jellyfin-cover/${slot}`, { headers: { authorization: 'Bearer ' + tokenStore.get() } });
+  if (!r.ok) return;
+  const blob = await r.blob();
+  const img = poster.querySelector('img');
+  if (!img) return;
+  // The page picture rule allows data: images. A blob link is blocked, so the poster stays blank.
+  const dataUrl = await new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = () => rej(new Error('could not show that picture'));
+    fr.readAsDataURL(blob);
+  });
+  img.onload = () => { img.hidden = false; };
+  img.src = dataUrl;
+}
+async function jellyfinCoverJpeg(file) {
+  let img;
+  try { img = await createImageBitmap(file); }
+  catch { throw new Error('could not read that image'); }
+  try {
+    const w = 800, h = 1200;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    const scale = Math.max(w / img.width, h / img.height);
+    const dw = img.width * scale, dh = img.height * scale;
+    g.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
+    if (!blob) throw new Error('could not convert that image');
+    return blob;
+  } finally { img.close(); }
+}
+$('jellyfinAppsEnabled') && $('jellyfinAppsEnabled').addEventListener('change', () => paintJellyfinOptions(S.settingsCache));
+$('jellyfinCovers') && $('jellyfinCovers').addEventListener('click', async (ev) => {
+  const pick = ev.target && ev.target.closest && ev.target.closest('[data-jf-pick]');
+  const reset = ev.target && ev.target.closest && ev.target.closest('[data-jf-reset]');
+  const slot = (pick && pick.dataset.jfPick) || (reset && reset.dataset.jfReset);
+  if (!slot) return;
+  try {
+    if (reset) {
+      await api(`/api/settings/jellyfin-cover/${slot}`, { method: 'DELETE' });
+      if (S.settingsCache && S.settingsCache.jellyfinCovers) S.settingsCache.jellyfinCovers[slot] = false;
+      reset.hidden = true;
+      await loadJellyfinCoverPreview(slot);
+      toast('Picture put back');
+      return;
+    }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/jpeg,image/png,image/webp';
+    input.onchange = async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        const blob = await jellyfinCoverJpeg(file);
+        const r = await fetch(`/api/settings/jellyfin-cover/${slot}`, {
+          method: 'POST', body: blob,
+          headers: { authorization: 'Bearer ' + tokenStore.get(), 'content-type': 'image/jpeg' },
+        });
+        const json = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(json.error || 'upload failed');
+        if (S.settingsCache) {
+          S.settingsCache.jellyfinCovers = S.settingsCache.jellyfinCovers || {};
+          S.settingsCache.jellyfinCovers[slot] = true;
+        }
+        const again = document.querySelector(`[data-jf-reset="${slot}"]`);
+        if (again) again.hidden = false;
+        await loadJellyfinCoverPreview(slot);
+        toast('Picture saved. Leave the Jellyfin app and open it again.');
+      } catch (e) { toast(e.message || 'upload failed'); }
+    };
+    input.click();
+  } catch (e) { toast(e.message || 'could not change that picture'); }
+});
 $('jellyfinAppsSave') && $('jellyfinAppsSave').addEventListener('click', async () => {
   try {
-    await api('/api/settings', { method: 'POST', body: { jellyfinApps: $('jellyfinAppsEnabled').checked } });
+    await api('/api/settings', { method: 'POST', body: {
+      jellyfinApps: $('jellyfinAppsEnabled').checked,
+      jellyfinServerName: ($('jellyfinServerName') && $('jellyfinServerName').value) || '',
+      jellyfinQuickConnect: $('jellyfinQuickConnect') ? $('jellyfinQuickConnect').checked : true,
+    } });
+    S.settingsCache = {
+      ...(S.settingsCache || {}),
+      jellyfinApps: $('jellyfinAppsEnabled').checked,
+      jellyfinServerName: (($('jellyfinServerName') && $('jellyfinServerName').value) || '').trim(),
+      jellyfinQuickConnect: $('jellyfinQuickConnect') ? $('jellyfinQuickConnect').checked : true,
+    };
     $('jellyfinAppsStatus').textContent = 'Saved ✓';
+    paintJellyfinOptions(S.settingsCache);
     toast($('jellyfinAppsEnabled').checked ? 'Jellyfin apps can sign in' : 'Jellyfin apps turned off');
   } catch (e) { $('jellyfinAppsStatus').textContent = 'Save failed: ' + e.message; }
 });

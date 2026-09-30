@@ -1377,8 +1377,18 @@ class NntpPool {
   close() { for (const p of this.providers) p.close(); }
 }
 
+// A saved password with a blank username still looks like a free account.
+// Playback then asks it first, gets "not logged in", and the desktop gives up
+// before an account that can sign in gets the movie.
+function providersReadyToDial(list) {
+  const rows = Array.isArray(list) ? list : [];
+  const ready = rows.filter((p) => p && String(p.user || '').trim());
+  return ready.length ? ready : rows;
+}
+
 module.exports = {
   NntpConnection, NntpPool, ProviderPool, ArticleMissCache, TransferMeter, isTooManyConnections,
+  providersReadyToDial,
   providerPickScore, providerHeadroom, streamStartupNeedSlots,
   learnedConnectionLimit, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS, CONNECT_BURST,
   isCorruptArticle, isDefinitiveFailure,

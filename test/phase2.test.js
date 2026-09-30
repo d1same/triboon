@@ -986,6 +986,8 @@ test('opensubs: SRT→VTT conversion + search-query parsing', () => {
   assert.strictEqual(srtToVtt('WEBVTT\n\nalready vtt'), 'WEBVTT\n\nalready vtt', 'VTT passes through');
   assert.match(shiftVtt(vtt, 0.5), /00:00:01\.500 --> 00:00:03\.000/, 'positive shift moves cues later');
   assert.match(shiftVtt(vtt, -2), /00:00:00\.000 --> 00:00:00\.500/, 'negative shift clamps cue starts at zero');
+  const speeding = 'WEBVTT\n\n00:01:00.000 --> 00:01:02.000\nLater\n';
+  assert.match(shiftVtt(speeding, 0, 1500, 20), /00:01:02\.000 --> 00:01:04\.100/, 'a framerate slide moves a later cue by the extra seconds');
   // Hours are OPTIONAL in WebVTT ("01:23.456" is valid) — genuine-VTT subs use them, and the
   // manual sync-adjust used to silently no-op on those files (regex demanded HH:MM:SS).
   const hourless = 'WEBVTT\n\n01:23.456 --> 01:27.000 align:middle\nHi\n';
@@ -1522,6 +1524,58 @@ test('subs: sync shift is one gap, and a multi-minute jump is rejected', () => {
   assert.equal(slice.count, 4);
   assert.match(slice.srt, /00:00:10,000 -->/);
   assert.doesNotMatch(slice.srt, /open|end/);
+});
+
+test('subs: a one-second gap keeps the playhead slice when a neighbour line disagrees', () => {
+  const { pickAgreedSyncShift } = require('../server/opensubs');
+  // Lanterns S01E02: the minute you are watching is about 1s late, and the next
+  // slice locked onto a different line. The playhead answer stays.
+  assert.deepEqual(pickAgreedSyncShift([-1007, 2279, -980]), { shiftMs: -1007, agreed: 2 });
+  // A bad first slice (0.2s) against a real 5.2s gap loses to the two slices that agree.
+  assert.deepEqual(pickAgreedSyncShift([200, 5200, 5000]), { shiftMs: 5200, agreed: 2 });
+  assert.deepEqual(pickAgreedSyncShift([-1100, -1000]), { shiftMs: -1100, agreed: 2 });
+  assert.equal(pickAgreedSyncShift([-1007, 2279]), null);
+  assert.equal(pickAgreedSyncShift([200, 5200, -3000]), null);
+});
+
+test('subs: a short exchange does not get to veto the conversation you are watching', () => {
+  const { nextStrongSyncWindow, syncSliceIsStrong } = require('../server/opensubs');
+  assert.equal(syncSliceIsStrong(4, 6300), false);
+  assert.equal(syncSliceIsStrong(8, 23700), true);
+  const line = (n, start, text) => `${n}\n${start} --> ${start.replace(/,000$/, ',400')}\n${text}`;
+  // 38:50 is four lines in six seconds. The real back-and-forth is forty seconds earlier.
+  const srt = [
+    line(1, '00:38:11,000', 'one'),
+    line(2, '00:38:16,000', 'two'),
+    line(3, '00:38:21,000', 'three'),
+    line(4, '00:38:22,000', 'thanks'),
+    line(5, '00:38:24,000', 'decaf'),
+    line(6, '00:38:26,000', 'of course'),
+    line(7, '00:38:28,000', 'yeah'),
+  ].join('\n\n');
+  const witness = nextStrongSyncWindow(srt, 2330 * 1000, -1);
+  assert.equal(witness.originMs, 2290 * 1000);
+  assert.ok(witness.spanMs >= 12000);
+  const { syncWitnessWindow } = require('../server/opensubs');
+  assert.equal(syncWitnessWindow(srt, 2330 * 1000, -1).originMs, 2290 * 1000);
+});
+
+test('subs: the conversation next door beats the theme song', () => {
+  const { syncWitnessWindow } = require('../server/opensubs');
+  const line = (n, start, text) => `${n}\n${start} --> ${start.replace(/,000$/, ',400')}\n${text}`;
+  const srt = [
+    line(1, '00:01:40,000', 'theme one'),
+    line(2, '00:01:48,000', 'theme two'),
+    line(3, '00:01:56,000', 'theme three'),
+    line(4, '00:02:04,000', 'theme four'),
+    line(5, '00:02:12,000', 'theme five'),
+    line(6, '00:02:32,000', 'jim'),
+    line(7, '00:02:38,000', 'pam'),
+    line(8, '00:02:44,000', 'dwight'),
+    line(9, '00:02:50,000', 'michael'),
+    line(10, '00:02:56,000', 'andy'),
+  ].join('\n\n');
+  assert.equal(syncWitnessWindow(srt, 180 * 1000, -1).originMs, 150 * 1000);
 });
 
 test('subs: a quiet opening still finds the next spoken stretch', () => {

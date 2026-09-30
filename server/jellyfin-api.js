@@ -1,14 +1,15 @@
 'use strict';
 // Jellyfin app door. Off unless settings.jellyfinApps is exactly true.
 // Apps sign in with a Triboon name. Movies and episodes come from the catalog.
-// Opening a poster does not mount usenet. Pressing play does, through the
-// same path as the Triboon Play button, and the link is a start-at-the-beginning
-// remux so a player cannot steal connections by reading the end of the file.
+// Opening a movie or episode starts the same file search the website starts
+// on the details page, so Play can join it. Browsing a row does not.
 
 const crypto = require('crypto');
 const fs = require('fs');
+const https = require('https');
 const path = require('path');
 const zlib = require('zlib');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const debug = require('./debug');
 
 // Phone and TV apps accept a Jellyfin version with three numbers.
@@ -21,12 +22,20 @@ const PREFIXES = [
   '/system', '/users', '/useritems', '/userviews', '/items', '/library', '/shows',
   '/displaypreferences', '/quickconnect', '/branding', '/sessions',
   '/plugins', '/startup', '/localization', '/videos', '/livetv', '/playback',
-  '/mediasegments', '/socket',
+  '/mediasegments', '/socket', '/search',
 ];
 
 let deps = null;
+// These stay closed. Emby apps are not a door on this server.
+let embyDoorOpen = () => false;
+let embySocketOpen = () => false;
+const doorStore = new AsyncLocalStorage();
 
 function bindJellyfin(next) { deps = next; }
+
+function setEmbyDoorCheck(fn) { embyDoorOpen = typeof fn === 'function' ? fn : () => false; }
+
+function setEmbySocketCheck(fn) { embySocketOpen = typeof fn === 'function' ? fn : () => false; }
 
 function jellyfinEnabled(settings) {
   return !!(settings && settings.jellyfinApps === true);
@@ -39,6 +48,14 @@ function isJellyfinPath(pathname) {
 
 function serverId(secret) {
   return crypto.createHash('sha256').update(`triboon-jellyfin-id:${String(secret || '')}`).digest('hex').slice(0, 32);
+}
+
+function doorServerId() {
+  const ctx = doorStore.getStore();
+  const salt = ctx && ctx.brand && ctx.brand.idSalt;
+  const secret = deps && deps.auth ? deps.auth.secret : '';
+  if (salt) return crypto.createHash('sha256').update(`${salt}:${String(secret || '')}`).digest('hex').slice(0, 32);
+  return serverId(secret);
 }
 
 function jellyfinToken(req) {
@@ -72,28 +89,53 @@ function firstHeader(value) {
   return String(value || '').split(',')[0].trim();
 }
 
-// The address the app should keep using. Behind Unraid, Caddy, or any
+// 10.1.20.120 is the house. 127.0.0.1 is the public site's proxy, which
+// still has to follow the https name in front of it.
+function isLanHost(host) {
+  const name = String(host || '').split(':')[0];
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(name)) return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(name)) return true;
+  return /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(name);
+}
+
+// The address the app should keep using. A phone that opened the house IP
+// keeps pictures and the movie on that IP. Behind Unraid, Caddy, or any
 // proxy, the public https name wins. A direct house connection stays http.
 function clientAddress(ctx) {
   const hdr = (ctx.req && ctx.req.headers) || {};
+  const rawHost = firstHeader(hdr.host);
+  if (isLanHost(rawHost)) return `http://${rawHost}`;
   let proto = firstHeader(hdr['x-forwarded-proto']).toLowerCase();
   if (proto !== 'https' && proto !== 'http') {
     const match = firstHeader(hdr.forwarded).match(/proto=(https?)/i);
     proto = match ? match[1].toLowerCase() : 'http';
   }
-  const host = firstHeader(hdr['x-forwarded-host']) || firstHeader(hdr.host) || 'localhost';
+  const host = firstHeader(hdr['x-forwarded-host']) || rawHost || 'localhost';
   return `${proto}://${host}`;
 }
 
+function jellyfinServerName() {
+  const s = deps.settings && deps.settings.get ? deps.settings.get() : {};
+  const name = String(s.jellyfinServerName || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 40);
+  return name || 'Triboon';
+}
+
+function jellyfinQuickConnectOn() {
+  const s = deps.settings && deps.settings.get ? deps.settings.get() : {};
+  return s.jellyfinQuickConnect !== false;
+}
+
 function publicInfo(ctx) {
-  const { auth } = deps;
+  const brand = ctx && ctx.brand;
+  let address = clientAddress(ctx);
+  if (brand && brand.addressSuffix) address += brand.addressSuffix;
   return {
-    LocalAddress: clientAddress(ctx),
-    ServerName: 'Triboon',
-    Version: SERVER_VERSION,
-    ProductName: 'Jellyfin Server',
+    LocalAddress: address,
+    ServerName: brand && brand.serverName ? brand.serverName : jellyfinServerName(),
+    Version: brand && brand.version ? brand.version : SERVER_VERSION,
+    ProductName: brand && brand.productName ? brand.productName : 'Jellyfin Server',
     OperatingSystem: 'Triboon',
-    Id: serverId(auth.secret),
+    Id: doorServerId(),
     StartupWizardCompleted: true,
   };
 }
@@ -111,10 +153,9 @@ function userFromJellyfinId(id) {
 }
 
 function userDto(user) {
-  const { auth } = deps;
   return {
     Name: user.name,
-    ServerId: serverId(auth.secret),
+    ServerId: doorServerId(),
     Id: jellyfinUserId(user),
     HasPassword: true,
     HasConfiguredPassword: true,
@@ -394,7 +435,87 @@ function posterUrl(file, kind) {
   const p = String(file || '');
   if (!p.startsWith('/')) return '';
   const size = kind === 'backdrop' ? 'w1280' : 'w500';
-  return `https://image.tmdb.org/t/p/${size}${p}`;
+  const loc = `https://image.tmdb.org/t/p/${size}${p}`;
+  // Only the picture host. A folder name must not become a fetch to somewhere else.
+  if (!/^https:\/\/image\.tmdb\.org\/t\/p\/w\d+\/[A-Za-z0-9._~/-]+$/.test(loc)) return '';
+  return loc;
+}
+
+const posterCache = new Map();
+const POSTER_BYTES_MAX = 2 * 1024 * 1024;
+
+function imageType(buf) {
+  if (!buf || buf.length < 12) return '';
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg';
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image/png';
+  if (buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  return '';
+}
+
+function fetchPosterBytes(loc, hops = 0) {
+  return new Promise((resolve) => {
+    if (!loc || hops > 2) return resolve(null);
+    const req = https.get(loc, { headers: { 'user-agent': 'Triboon', accept: 'image/*' }, timeout: 8000 }, (res) => {
+      const next = res.statusCode >= 300 && res.statusCode < 400 ? String(res.headers.location || '') : '';
+      if (next) {
+        res.resume();
+        if (!next.startsWith('https://image.tmdb.org/')) return resolve(null);
+        return resolve(fetchPosterBytes(next, hops + 1));
+      }
+      if (res.statusCode !== 200) { res.resume(); return resolve(null); }
+      const chunks = [];
+      let size = 0;
+      let tooBig = false;
+      res.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > POSTER_BYTES_MAX) { tooBig = true; req.destroy(); return; }
+        chunks.push(chunk);
+      });
+      res.on('end', () => {
+        if (tooBig) return resolve(null);
+        const body = Buffer.concat(chunks);
+        const type = imageType(body);
+        resolve(type ? { type, body } : null);
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+}
+
+// The TV asked this server for the picture. Hand back the bytes. A jump to
+// image.tmdb.org is a different site, and the house Wi-Fi app leaves it blank.
+async function sendPoster(ctx, cors, file, wide) {
+  const { send } = deps;
+  const loc = posterUrl(file, wide ? 'backdrop' : 'poster');
+  if (!loc) return send(ctx.res, 404, { error: 'not found' }, cors);
+  if (process.env.TRIBOON_POSTER_STUB === '1') {
+    const body = Buffer.from([0xFF, 0xD8, 0xFF, 0xD9]);
+    ctx.res.writeHead(200, {
+      ...cors,
+      'content-type': 'image/jpeg',
+      'content-length': body.length,
+      'cache-control': 'public, max-age=86400',
+      'x-triboon-poster': String(file || ''),
+    });
+    return ctx.res.end(body);
+  }
+  let fetched = posterCache.get(loc);
+  if (!fetched) {
+    fetched = await fetchPosterBytes(loc);
+    if (fetched) {
+      if (posterCache.size > 100) posterCache.delete(posterCache.keys().next().value);
+      posterCache.set(loc, fetched);
+    }
+  }
+  if (!fetched) return send(ctx.res, 404, { error: 'not found' }, cors);
+  ctx.res.writeHead(200, {
+    ...cors,
+    'content-type': fetched.type,
+    'content-length': fetched.body.length,
+    'cache-control': 'public, max-age=86400',
+  });
+  return ctx.res.end(fetched.body);
 }
 
 function ticks(minutes) {
@@ -404,9 +525,40 @@ function ticks(minutes) {
 }
 
 function shelfCoverFile(which) {
-  const name = which === 'shows' ? 'shows.png' : which === 'library' ? 'library.png' : 'movies.png';
+  if (typeof deps.jellyfinCoverFile === 'function') {
+    const custom = deps.jellyfinCoverFile(which);
+    if (custom && fs.existsSync(custom)) return custom;
+  }
+  const names = {
+    shows: 'shows.png',
+    library: 'library.png',
+    'custom-movies': 'custom-movies.jpg',
+    'custom-shows': 'custom-shows.jpg',
+  };
+  const name = names[which] || 'movies.png';
   const file = path.join(__dirname, '..', 'web', 'jellyfin-covers', name);
   return fs.existsSync(file) ? file : '';
+}
+
+function coverArtTag(poster, cover) {
+  const which = cover || (poster === 'xshow' ? 'custom-shows' : poster === 'xmovie' ? 'custom-movies' : 'library');
+  const file = typeof deps.jellyfinCoverFile === 'function' ? deps.jellyfinCoverFile(which) : '';
+  let stamp = '';
+  if (file) {
+    try { stamp = String(Math.floor(fs.statSync(file).mtimeMs)); } catch { stamp = ''; }
+  }
+  if (poster === 'shelf' || poster === 'home') return stamp ? `home${stamp}` : 'home1';
+  if (poster === 'xmovie' || poster === 'xshow') return stamp ? `${poster}${stamp}` : poster;
+  return 'p';
+}
+
+// A person's own folder is not the built-in Movies or Shows card.
+// Movie folders get the popcorn picture. Show folders get the cinema sign.
+// Music, sports, and other folders keep the Library shelf.
+function shelfCoverForKind(kind) {
+  if (kind === 'tv') return 'custom-shows';
+  if (kind === 'movie') return 'custom-movies';
+  return 'library';
 }
 
 // The home cards are JPEG photos saved with a .png name. Roku and Android TV
@@ -447,11 +599,13 @@ function episodePicture(ctx, libId, idx, wide) {
 function baseItem(fields) {
   const imageTags = {};
   const homeArt = fields.poster === 'shelf' || fields.poster === 'home';
+  const extraArt = fields.poster === 'xmovie' || fields.poster === 'xshow';
   const episodeArt = fields.type === 'Episode';
-  if (fields.poster) imageTags.Primary = homeArt ? 'home1' : episodeArt ? 'still1' : fields.poster === 'local' ? 'disk2' : 'p';
-  if (fields.thumb) imageTags.Thumb = (fields.thumb === 'shelf' || fields.thumb === 'home') ? 'home1' : episodeArt ? 'still1' : 't';
+  const shelfTag = (homeArt || extraArt) ? coverArtTag(fields.poster, fields.cover) : '';
+  if (fields.poster) imageTags.Primary = shelfTag || (episodeArt ? 'still1' : fields.poster === 'local' ? 'disk2' : 'p');
+  if (fields.thumb) imageTags.Thumb = shelfTag || (episodeArt ? 'still1' : 't');
   return stampItem({
-    ServerId: serverId(deps.auth.secret),
+    ServerId: doorServerId(),
     ImageTags: imageTags,
     BackdropImageTags: fields.backdrop ? [episodeArt ? 'still1' : 'b'] : [],
     PrimaryImageAspectRatio: fields.aspect || (fields.poster ? 0.6666667 : null),
@@ -892,8 +1046,8 @@ function pageOf(items, ctx) {
 }
 
 function libraryFolder(id) {
-  if (id === 'viewmovies') return baseItem({ id, name: 'Movies', type: 'CollectionFolder', poster: 'shelf', thumb: 'shelf', aspect: 0.6666667, extra: { CollectionType: 'movies', IsFolder: true } });
-  if (id === 'viewshows') return baseItem({ id, name: 'Shows', type: 'CollectionFolder', poster: 'shelf', thumb: 'shelf', aspect: 0.6666667, extra: { CollectionType: 'tvshows', IsFolder: true } });
+  if (id === 'viewmovies') return baseItem({ id, name: 'Movies', type: 'CollectionFolder', poster: 'shelf', thumb: 'shelf', cover: 'movies', aspect: 0.6666667, extra: { CollectionType: 'movies', IsFolder: true } });
+  if (id === 'viewshows') return baseItem({ id, name: 'Shows', type: 'CollectionFolder', poster: 'shelf', thumb: 'shelf', cover: 'shows', aspect: 0.6666667, extra: { CollectionType: 'tvshows', IsFolder: true } });
   return null;
 }
 
@@ -954,10 +1108,17 @@ function watchKeyFromId(id) {
 function userDataFromRow(row, fallbackSeconds, itemId) {
   const position = Math.max(0, Number(row && row.position) || 0);
   const duration = Math.max(0, Number(row && row.duration) || fallbackSeconds || 0);
+  const pct = Number(row && row.traktPct) || 0;
+  // A Trakt import often has a percent and no minute. The bar and the Resume
+  // button need a clock, or the TV starts that movie at the beginning.
+  const clock = position > 30 ? position : (pct > 2 && duration > 0 ? Math.round(duration * pct / 100) : position);
+  const playedPct = position > 30 && duration
+    ? Math.round((position / duration) * 1000) / 10
+    : (pct > 2 ? pct : (duration ? Math.round((position / duration) * 1000) / 10 : 0));
   const short = internalItemId(itemId);
   return {
-    PlaybackPositionTicks: Math.round(position * 10000000),
-    PlayedPercentage: duration ? Math.round((position / duration) * 1000) / 10 : 0,
+    PlaybackPositionTicks: Math.round(clock * 10000000),
+    PlayedPercentage: playedPct,
     PlayCount: row && row.watched ? 1 : 0,
     IsFavorite: !!(row && row.favorite),
     Played: !!(row && row.watched),
@@ -1047,12 +1208,15 @@ function itemFromWatchRow(ctx, row) {
 }
 
 function localFolder(lib) {
+  const cover = shelfCoverForKind(lib.kind);
+  const poster = cover === 'custom-shows' ? 'xshow' : cover === 'custom-movies' ? 'xmovie' : 'home';
   return baseItem({
     id: `l${lib.id}`,
     name: lib.name || 'Library',
     type: 'CollectionFolder',
-    poster: 'home',
-    thumb: 'home',
+    poster,
+    thumb: poster,
+    cover,
     aspect: 0.6666667,
     extra: { CollectionType: lib.kind === 'tv' ? 'tvshows' : 'movies', IsFolder: true },
   });
@@ -1294,6 +1458,7 @@ async function itemsFor(ctx) {
     });
     return { items: items.slice(start, start + limit), total: items.length, paged: true };
   }
+  if (!parent && view.search) return searchShelf(ctx, types, start, limit, view);
   if (parent === 'viewmovies' || (!parent && types.includes('movie'))) {
     if (onlyMarked) return watchShelf(ctx, 'movie', start, limit, view);
     return trimCatalog(ctx, await catalogList('movie', start, limit, view), view);
@@ -1311,6 +1476,31 @@ async function itemsFor(ctx) {
     return { items: movies.items.concat(shows.items), total: movies.total + shows.total, paged: true };
   }
   return [];
+}
+
+async function searchShelf(ctx, types, start, limit, view) {
+  const wanted = String(types || '').split(',').map((part) => part.trim()).filter(Boolean);
+  const wantMovie = !wanted.length || wanted.includes('movie');
+  const wantShow = !wanted.length || wanted.includes('series') || wanted.includes('episode');
+  const jobs = [];
+  if (wantMovie) jobs.push(catalogList('movie', 0, Math.max(limit, 1), view));
+  if (wantShow) jobs.push(catalogList('series', 0, Math.max(limit, 1), view));
+  const pages = await Promise.all(jobs);
+  let items = [];
+  if (typeof deps.localSearch === 'function') {
+    for (const hit of deps.localSearch(ctx, view.search, limit) || []) {
+      const item = hit && localJellyItem(hit.item, hit.libId);
+      if (item) items.push(item);
+    }
+  }
+  for (const page of pages) items = items.concat((page && page.items) || []);
+  const seen = new Set();
+  items = items.filter((item) => {
+    if (!item || !item.Id || seen.has(item.Id)) return false;
+    seen.add(item.Id);
+    return true;
+  });
+  return { items: items.slice(start, start + limit), total: items.length, paged: true };
 }
 
 async function seasonsFor(tmdbId) {
@@ -1358,6 +1548,17 @@ async function episodesFor(tmdbId, season) {
       ...detailExtra({ vote_average: ep.vote_average, credits: { cast: ep.guest_stars, crew: ep.crew } }, 'tv'),
     },
   }));
+}
+
+function warmJellyfinPlay(ctx, itemId, parsed) {
+  if (!parsed || (parsed.type !== 'movie' && parsed.type !== 'episode')) return;
+  if (typeof deps.jellyfinPrepare !== 'function') return;
+  // The details page starts the file search. Play joins it instead of starting over.
+  playSpec(parsed).then((spec) => {
+    if (!spec) return;
+    spec.resumeFrac = resumeFracFor(resumeStartSeconds(ctx, itemId, null, spec.runtime), spec.runtime);
+    deps.jellyfinPrepare(ctx, spec);
+  }).catch(() => {});
 }
 
 async function playSpec(parsed) {
@@ -1411,6 +1612,26 @@ function resumeFracFor(startSeconds, runtimeMinutes) {
   return Math.min(0.98, start / runtime);
 }
 
+// The TV sends 0 when it has no saved minute. A Trakt percent is that minute.
+// A real pause already rides in StartTimeTicks, and 0 then means "play from the start".
+function traktResumeSeconds(row, runtimeMinutes) {
+  if (!row || row.watched) return 0;
+  const pos = Math.max(0, Number(row.position) || 0);
+  if (pos > 30) return 0;
+  const pct = Number(row.traktPct) || 0;
+  const runtime = Math.max(0, Number(runtimeMinutes) || 0) * 60;
+  if (!(pct > 2) || !(runtime > 60)) return 0;
+  return Math.min(Math.floor(runtime * 0.98), Math.round((runtime * pct) / 100));
+}
+
+function resumeStartSeconds(ctx, itemId, body, runtimeMinutes) {
+  const asked = streamStart(ctx, body);
+  if (asked >= 1) return asked;
+  const key = watchKeyFromId(itemId);
+  if (!key || typeof deps.jellyfinWatchGet !== 'function') return 0;
+  return traktResumeSeconds(deps.jellyfinWatchGet(ctx, key), runtimeMinutes);
+}
+
 function itemUuid(id) {
   const s = String(id || '').toLowerCase();
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s) ? s : '';
@@ -1438,21 +1659,52 @@ function playPath(payload, startSeconds, audioRel, itemId, durationSeconds) {
   const audio = Math.max(0, parseInt(audioRel, 10) || 0);
   const dur = Math.round(Number(durationSeconds) || 0);
   const durQ = dur >= 1 && dur <= 10 * 3600 ? `&dur=${dur}` : '';
-  // A relative path lets the app prefix its server. Skip then asks again with
-  // a new start, because the live pipe itself cannot jump.
+  // Skip asks again with a new start, because the live pipe itself cannot jump.
   return `${pathOnly}${join}start=${start}&audio=${audio}&audioSafe=1${durQ}`;
 }
 
-function playLink(ctx, payload, startSeconds) {
-  const rel = playPath(payload, startSeconds);
+// The full address of the house the app already opened. A path with no host
+// makes the TV look on itself, so the movie never starts.
+function servedPlayUrl(ctx, payload, startSeconds, audioRel, itemId, durationSeconds) {
+  const rel = playPath(payload, startSeconds, audioRel, itemId, durationSeconds);
   if (!rel) return '';
+  if (/^https?:\/\//i.test(rel)) return rel;
   return `${clientAddress(ctx)}${rel}`;
 }
 
+// Emby Windows and Jellyfin Desktop glue the server address onto the front of
+// whatever we send. An address that already has http:// becomes two addresses
+// stuck together, and the desktop says the movie failed to load.
+function desktopWebPlayer(ctx) {
+  const hdr = (ctx && ctx.req && ctx.req.headers) || {};
+  const blob = `${hdr['user-agent'] || ''} ${hdr.authorization || ''} ${hdr['x-emby-authorization'] || ''}`;
+  if (/Android/i.test(blob)) return false;
+  if (/Emby/i.test(blob) && /Windows/i.test(blob)) return true;
+  if (/JellyfinDesktop/i.test(blob)) return true;
+  return /Chrome\/|Edg\/|Firefox\/|Safari\//i.test(blob);
+}
+
+function playUrlForClient(ctx, payload, startSeconds, audioRel, itemId, durationSeconds) {
+  const rel = playPath(payload, startSeconds, audioRel, itemId, durationSeconds);
+  if (!rel) return '';
+  if (desktopWebPlayer(ctx)) return rel;
+  return servedPlayUrl(ctx, payload, startSeconds, audioRel, itemId, durationSeconds);
+}
+
+function playLink(ctx, payload, startSeconds) {
+  return servedPlayUrl(ctx, payload, startSeconds);
+}
+
 async function handleKind(kind, ctx) {
+  if (doorStore.getStore() !== ctx) return doorStore.run(ctx, () => handleKind(kind, ctx));
   const { auth, send, readJson, throttled, clientIp, clearLoginThrottle } = deps;
   const cors = jellyfinCors();
-  if (!jellyfinEnabled(deps.settings.get())) return send(ctx.res, 404, { error: 'not found' });
+  const brand = ctx && ctx.brand;
+  if (ctx && ctx.door === 'emby') {
+    if (!embyDoorOpen()) return send(ctx.res, 404, { error: 'not found' });
+  } else if (!jellyfinEnabled(deps.settings.get())) {
+    return send(ctx.res, 404, { error: 'not found' });
+  }
   if (kind === 'emptyPage' && ctx.m && ctx.m[1] && !owns(ctx, ctx.m[1])) {
     return send(ctx.res, 403, { error: 'not your shelf' }, cors);
   }
@@ -1467,7 +1719,7 @@ async function handleKind(kind, ctx) {
   }
   if (kind === 'systemConfig' || kind === 'startup') {
     return send(ctx.res, 200, {
-      ServerName: 'Triboon',
+      ServerName: brand && brand.serverName ? brand.serverName : jellyfinServerName(),
       IsStartupWizardCompleted: true,
       UICulture: 'en-US',
       MetadataCountryCode: 'US',
@@ -1476,7 +1728,52 @@ async function handleKind(kind, ctx) {
   if (kind === 'branding') {
     return send(ctx.res, 200, { LoginDisclaimer: '', CustomCss: '', SplashscreenEnabled: false }, cors);
   }
-  if (kind === 'quickConnect') return send(ctx.res, 200, { Enabled: false }, cors);
+  if (kind === 'quickConnect') {
+    const enabled = brand ? !!brand.quickConnect : jellyfinQuickConnectOn();
+    return send(ctx.res, 200, { Enabled: enabled }, cors);
+  }
+  if (kind === 'qcInitiate') {
+    const enabled = brand ? !!brand.quickConnect : jellyfinQuickConnectOn();
+    if (!enabled) return send(ctx.res, 400, { error: 'quick connect is off' }, cors);
+    if (throttled(ctx, `jfqc:${clientIp(ctx)}`, { max: 30, windowMs: 600000, lockMs: 600000 })) return;
+    // Three minutes: the code is on the TV, and the person approves it in the Triboon app.
+    const created = auth.qcCreate((brand && brand.qcLabel) || 'Jellyfin', 3 * 60 * 1000);
+    return send(ctx.res, 200, {
+      Authenticated: false,
+      Secret: created.secret,
+      Code: created.code,
+      DateAdded: new Date().toISOString(),
+    }, cors);
+  }
+  if (kind === 'qcConnect') {
+    const q = ctx.url && ctx.url.searchParams;
+    const secret = q && (q.get('secret') || q.get('Secret'));
+    const code = auth.qcFindBySecret(secret);
+    const polled = code ? auth.qcPoll(code) : { status: 'expired' };
+    if (!polled || polled.status !== 'approved' || !polled.token) {
+      return send(ctx.res, 404, { error: 'pending' }, cors);
+    }
+    const claims = auth.verifyToken(polled.token, 'session');
+    const user = claims && auth.getUser(claims.uid);
+    if (!user) return send(ctx.res, 404, { error: 'pending' }, cors);
+    return send(ctx.res, 200, {
+      User: userDto(user),
+      AccessToken: polled.token,
+      ServerId: doorServerId(),
+    }, cors);
+  }
+  if (kind === 'qcAuthorize') {
+    let body = {};
+    try { body = await readJson(ctx.req); } catch { body = {}; }
+    const q = ctx.url && ctx.url.searchParams;
+    const code = String((body && (body.Code || body.code)) || (q && (q.get('code') || q.get('Code'))) || '');
+    try {
+      auth.qcApprove(code, ctx.user.id);
+      return send(ctx.res, 200, { Authenticated: true }, cors);
+    } catch (e) {
+      return send(ctx.res, 400, { error: e.message || 'code expired or unknown' }, cors);
+    }
+  }
   if (kind === 'locale') {
     return send(ctx.res, 200, { PreferredMetadataLanguage: 'en', MetadataCountryCode: 'US' }, cors);
   }
@@ -1537,8 +1834,47 @@ async function handleKind(kind, ctx) {
     }
     const rows = typeof deps.jellyfinWatchResume === 'function' ? deps.jellyfinWatchResume(ctx) : [];
     const { start, limit } = windowOf(ctx);
-    const items = rows.slice(start, start + limit).map((row) => itemFromWatchRow(ctx, row)).filter(Boolean);
-    return send(ctx.res, 200, { Items: items, TotalRecordCount: rows.length, StartIndex: start }, cors);
+    const ranked = [];
+    const busyShows = new Set();
+    for (const row of rows) {
+      const item = itemFromWatchRow(ctx, row);
+      if (!item) continue;
+      ranked.push({ at: row.updatedAt || 0, item });
+      const show = /^tmdb:tv:(\d+)/i.exec(String(row.key || ''));
+      if (show) busyShows.add(show[1]);
+    }
+    // The website puts the next episode on the same Continue Watching row.
+    if (typeof deps.jellyfinNextCatalog === 'function') {
+      const catalog = await deps.jellyfinNextCatalog(ctx);
+      for (const row of catalog || []) {
+        if (!row || !row.tmdbId || busyShows.has(String(row.tmdbId))) continue;
+        busyShows.add(String(row.tmdbId));
+        ranked.push({
+          at: row.updatedAt || 0,
+          item: baseItem({
+            id: `e${row.tmdbId}s${row.season}e${row.episode}`,
+            name: row.episodeName || `Episode ${row.episode}`,
+            overview: row.overview || '',
+            type: 'Episode',
+            poster: row.tmdbId ? 'tmdb' : '',
+            thumb: row.tmdbId ? 'tmdb' : '',
+            backdrop: row.tmdbId ? 'tmdb' : '',
+            runtime: 0,
+            aspect: 1.7777778,
+            extra: {
+              MediaType: 'Video',
+              SeriesId: `t${row.tmdbId}`,
+              SeriesName: row.title || '',
+              ParentIndexNumber: row.season,
+              IndexNumber: row.episode,
+            },
+          }),
+        });
+      }
+    }
+    ranked.sort((a, b) => b.at - a.at);
+    const items = ranked.slice(start, start + limit).map((row) => row.item);
+    return send(ctx.res, 200, { Items: items, TotalRecordCount: ranked.length, StartIndex: start }, cors);
   }
   if (kind === 'progress') {
     let body = {};
@@ -1590,8 +1926,32 @@ async function handleKind(kind, ctx) {
     if (userId && !owns(ctx, userId)) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
     const item = await itemById(itemId, ctx);
     if (!item) return send(ctx.res, 404, { error: 'not found' }, cors);
-    await attachLocalMedia(ctx, item, parseItemId(itemId));
+    const parsedItem = parseItemId(itemId);
+    await attachLocalMedia(ctx, item, parsedItem);
+    warmJellyfinPlay(ctx, itemId, parsedItem);
     return send(ctx.res, 200, paintWatch(ctx, item), cors);
+  }
+  if (kind === 'search') {
+    const q = ctx.url && ctx.url.searchParams;
+    const term = String((q && (q.get('searchTerm') || q.get('SearchTerm'))) || '').trim();
+    const limit = Math.min(50, Math.max(1, queryInt(q, ['Limit', 'limit'], 24)));
+    if (term.length < 2) return send(ctx.res, 200, { SearchHints: [], TotalRecordCount: 0 }, cors);
+    const view = queryView(ctx);
+    view.search = term;
+    const found = await searchShelf(ctx, 'movie,series', 0, limit, view);
+    const hints = (found.items || []).map((item) => ({
+      ItemId: item.Id,
+      Id: item.Id,
+      Name: item.Name,
+      Type: item.Type,
+      MediaType: item.MediaType || (item.Type === 'Series' ? 'Video' : 'Video'),
+      ProductionYear: item.ProductionYear || null,
+      PrimaryImageTag: item.ImageTags && item.ImageTags.Primary || null,
+      PrimaryImageAspectRatio: item.PrimaryImageAspectRatio || 0.6666667,
+      RunTimeTicks: item.RunTimeTicks || 0,
+      IsFolder: item.IsFolder === true || item.Type === 'Series',
+    }));
+    return send(ctx.res, 200, { SearchHints: hints, TotalRecordCount: found.total || hints.length }, cors);
   }
   if (kind === 'shelf' || kind === 'latest') {
     if (ctx.m && ctx.m[1] && !owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
@@ -1686,7 +2046,9 @@ async function handleKind(kind, ctx) {
       const cover = shelfCoverFile(short === 'viewshows' ? 'shows' : 'movies');
       if (cover && pipeFile(cover)) return;
     } else if (parsed && parsed.type === 'locallib') {
-      const cover = shelfCoverFile('library');
+      const libs = typeof deps.localLibraries === 'function' ? deps.localLibraries(ctx) : [];
+      const lib = libs.find((row) => row.id === parsed.libId);
+      const cover = shelfCoverFile(shelfCoverForKind(lib && lib.kind));
       if (cover && pipeFile(cover)) return;
       if (typeof deps.localPage === 'function' && typeof deps.localImage === 'function') {
         const page = deps.localPage(ctx, parsed.libId, 0, 24, null, { sort: 'title.asc' });
@@ -1739,10 +2101,7 @@ async function handleKind(kind, ctx) {
         return;
       }
     }
-    const loc = posterUrl(file, wide ? 'backdrop' : 'poster');
-    if (!loc) return send(ctx.res, 404, { error: 'not found' }, cors);
-    ctx.res.writeHead(302, { ...cors, location: loc, 'cache-control': 'public, max-age=86400' });
-    return ctx.res.end();
+    return sendPoster(ctx, cors, file, wide || imageKind === 'thumb');
   }
   if (kind === 'video') {
     const q = ctx.url && ctx.url.searchParams;
@@ -1750,6 +2109,7 @@ async function handleKind(kind, ctx) {
     const found = mountId && typeof deps.jellyfinStream === 'function'
       ? deps.jellyfinStream(mountId, ctx.user && ctx.user.id) : null;
     let rel = found && (found.hlsUrl || found.remuxUrl);
+    let startRuntime = 0;
     if (!rel) {
       const parsed = parseItemId(ctx.m[1]);
       let played = null;
@@ -1758,6 +2118,8 @@ async function handleKind(kind, ctx) {
       } else {
         const spec = await playSpec(parsed);
         if (!spec || typeof deps.jellyfinPlay !== 'function') return send(ctx.res, 404, { error: 'not found' }, cors);
+        startRuntime = spec.runtime;
+        spec.resumeFrac = resumeFracFor(resumeStartSeconds(ctx, ctx.m[1], null, spec.runtime), spec.runtime);
         played = await deps.jellyfinPlay(ctx, spec);
       }
       if (played && played.sent) return;
@@ -1767,11 +2129,10 @@ async function handleKind(kind, ctx) {
       rel = played.body && (played.body.hlsUrl || played.body.remuxUrl);
     }
     if (!rel) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
-    const host = (ctx.req.headers && ctx.req.headers.host) || 'localhost';
-    const abs = rel.startsWith('http') ? rel : `http://${host}${rel}`;
-    const join = abs.includes('?') ? '&' : '?';
-    const start = streamStart(ctx, null);
-    ctx.res.writeHead(302, { location: `${abs}${join}start=${start}&audio=0&audioSafe=1`, 'cache-control': 'no-store' });
+    const start = resumeStartSeconds(ctx, ctx.m[1], null, startRuntime);
+    const url = servedPlayUrl(ctx, { hlsUrl: rel }, start, 0, ctx.m[1], startRuntime ? Math.round(Number(startRuntime) * 60) : 0);
+    if (!url) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
+    ctx.res.writeHead(302, { ...cors, location: url, 'cache-control': 'no-store' });
     return ctx.res.end();
   }
   if (kind === 'subtitle') {
@@ -1835,7 +2196,7 @@ async function handleKind(kind, ctx) {
       spec = await playSpec(parsed);
       if (!spec) return send(ctx.res, 404, { error: 'not found' }, cors);
       if (typeof deps.jellyfinPlay !== 'function') return send(ctx.res, 404, { error: 'not found' }, cors);
-      spec.resumeFrac = resumeFracFor(streamStart(null, body), spec.runtime);
+      spec.resumeFrac = resumeFracFor(resumeStartSeconds(ctx, ctx.m[1], body, spec.runtime), spec.runtime);
       const played = await deps.jellyfinPlay(ctx, spec);
       if (played && played.sent) return;
       if (!played || played.status !== 200) {
@@ -1856,12 +2217,17 @@ async function handleKind(kind, ctx) {
       const more = await deps.jellyfinSubtitleStreams(ctx, playedBody.id, streams.length, spec);
       if (more && more.length) streams = streams.concat(more.map(completeStream));
     }
-    const resumeAt = streamStart(null, body);
+    const resumeAt = resumeStartSeconds(ctx, ctx.m[1], body, spec && spec.runtime);
     rememberResumeOrigin(uid, ctx.m[1], resumeAt);
     const durationSeconds = spec && spec.runtime ? Math.round(Number(spec.runtime) * 60) : 0;
-    const url = playPath(playedBody, resumeAt, audioRelFromStreams(streams, body.AudioStreamIndex || body.audioStreamIndex), ctx.m[1], durationSeconds);
+    const url = playUrlForClient(ctx, playedBody, resumeAt, audioRelFromStreams(streams, body.AudioStreamIndex || body.audioStreamIndex), ctx.m[1], durationSeconds);
+    const desktop = desktopWebPlayer(ctx);
     if (!url) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
     stampSubtitleUrls(streams, ctx.m[1], playedBody.id);
+    const origin = clientAddress(ctx);
+    for (const row of streams) {
+      if (row && typeof row.DeliveryUrl === 'string' && row.DeliveryUrl.startsWith('/')) row.DeliveryUrl = origin + row.DeliveryUrl;
+    }
     const runtimeTicks = spec ? ticks(spec.runtime) : 0;
     const hls = url.includes('/api/hls/');
     const source = completeSource({
@@ -1869,13 +2235,13 @@ async function handleKind(kind, ctx) {
       // else is dropped, and pressing play again crashes on the empty list.
       // The id has to be the one the TV sent, or that second press crashes too.
       Id: String(body.MediaSourceId || body.mediaSourceId || playedBody.id),
-      Protocol: 'File',
+      Protocol: desktop ? 'Http' : 'File',
       Container: 'mp4',
       Name: (playedBody.candidate && playedBody.candidate.name) || (spec && spec.q) || '',
       SupportsDirectPlay: false,
       SupportsDirectStream: false,
       SupportsTranscoding: true,
-      IsRemote: false,
+      IsRemote: desktop,
       TranscodingUrl: url,
       TranscodingSubProtocol: hls ? 'hls' : 'http',
       TranscodingContainer: 'mp4',
@@ -1967,7 +2333,7 @@ async function handleKind(kind, ctx) {
     return send(ctx.res, 200, {
       User: userDto(user),
       AccessToken: result.token,
-      ServerId: serverId(auth.secret),
+      ServerId: doorServerId(),
     }, cors);
   }
   return send(ctx.res, 404, { error: 'not found' }, cors);
@@ -2075,11 +2441,12 @@ function closeJellyfinSockets() {
 function openJellyfinSocket(req, socket, head) {
   let pathname = '/';
   try { pathname = new URL(req.url || '/', 'http://x').pathname.toLowerCase(); } catch {}
-  if (pathname !== '/socket') {
+  const embyLine = pathname === '/embywebsocket' || pathname === '/emby/embywebsocket' || pathname === '/emby/socket';
+  if (pathname !== '/socket' && !embyLine) {
     socket.destroy();
     return;
   }
-  const enabled = !!(deps && jellyfinEnabled(deps.settings.get()));
+  const enabled = embyLine ? !!embySocketOpen() : !!(deps && jellyfinEnabled(deps.settings.get()));
   const token = jellyfinToken(req);
   if (!enabled) return rejectUpgrade(socket, 404, 'not found');
   const claims = token && deps.auth.verifyToken(token, 'session');
@@ -2177,6 +2544,9 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/startup\/configuration$/, auth: 'public', kind: 'startup', h: serveJellyfin },
   { m: 'GET', re: /^\/branding\/configuration$/, auth: 'public', kind: 'branding', h: serveJellyfin },
   { m: 'GET', re: /^\/quickconnect\/enabled$/, auth: 'public', kind: 'quickConnect', h: serveJellyfin },
+  { m: 'POST', re: /^\/quickconnect\/initiate$/, auth: 'public', kind: 'qcInitiate', h: serveJellyfin },
+  { m: 'GET', re: /^\/quickconnect\/connect$/, auth: 'public', kind: 'qcConnect', h: serveJellyfin },
+  { m: 'POST', re: /^\/quickconnect\/authorize$/, auth: 'user', kind: 'qcAuthorize', h: serveJellyfin },
   { m: 'GET', re: /^\/localization\/options$/, auth: 'public', kind: 'locale', h: serveJellyfin },
   { m: 'GET', re: /^\/localization\/cultures$/, auth: 'public', kind: 'cultures', h: serveJellyfin },
   { m: 'POST', re: /^\/users\/authenticatebyname$/, auth: 'public', kind: 'login', h: serveJellyfin },
@@ -2210,6 +2580,7 @@ const JELLYFIN_ROUTES = [
   { m: 'POST', re: /^\/items\/([a-z0-9-]{1,64})\/playbackinfo$/, auth: 'user', kind: 'playback', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'item', h: serveJellyfin },
   { m: 'GET', re: /^\/items$/, auth: 'user', kind: 'shelf', h: serveJellyfin },
+  { m: 'GET', re: /^\/search\/hints$/, auth: 'user', kind: 'search', h: serveJellyfin },
   { m: 'GET', re: /^\/library\/mediafolders$/, auth: 'user', kind: 'views', h: serveJellyfin },
   { m: 'GET', re: /^\/shows\/([a-z0-9-]{1,64})\/seasons$/, auth: 'user', kind: 'seasons', h: serveJellyfin },
   { m: 'GET', re: /^\/shows\/([a-z0-9-]{1,64})\/episodes$/, auth: 'user', kind: 'episodes', h: serveJellyfin },
@@ -2319,6 +2690,21 @@ function loadingCardPng() {
   ]);
 }
 
+// The first list was the Loading card. The movie has to follow those same
+// pieces. Replacing the card with seg00000 makes the desktop player say
+// "loading failed", because piece 0 changed under it.
+function pictureAfterLoadingCard(count, raw) {
+  const n = Math.max(0, Number(count) || 0);
+  const text = String(raw || '');
+  if (!(n >= 1) || !/seg\d+\.m4s/.test(text)) return text;
+  const inf = text.search(/^#EXTINF:/m);
+  if (inf < 0) return text;
+  const head = text.slice(0, inf);
+  const map = (head.match(/#EXT-X-MAP:[^\n]*\n/) || [''])[0];
+  const card = loadingHoldPlaylist(n).replace(/\s*$/, '\n');
+  return `${card}#EXT-X-DISCONTINUITY\n${map}${text.slice(inf)}`;
+}
+
 // A short event list of that card. Each reload is longer, so the phone keeps
 // the card on screen instead of treating the wait as a stuck movie.
 function loadingHoldPlaylist(count) {
@@ -2338,9 +2724,10 @@ function loadingHoldPlaylist(count) {
 }
 
 module.exports = {
-  JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors,
+  JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
+  setEmbyDoorCheck, setEmbySocketCheck,
   attachJellyfinSocket, closeJellyfinSockets,
   mediaStreamsFromProbe, streamsWithSubtitles, tmdbSort, genreIdsFromNames,
-  resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor,
-  loadingCardPng, loadingHoldPlaylist,
+  resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor, traktResumeSeconds,
+  loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard,
 };

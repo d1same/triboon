@@ -138,13 +138,16 @@ flowchart LR
 
 Jellyfin reads the same default-profile watch rows as the Triboon app.
 
-- Continue Watching is the movie or episode you paused, past 30 seconds, and
-  not finished. A finished episode leaves that row.
+- Continue Watching matches the website row: a movie or episode paused past
+  30 seconds, a Trakt percent with no minute yet, and the next episode after
+  you finish one. One card per show. A finished episode leaves that row.
 - Play Next is the following episode. The card says the show name. The episode
   you are in the middle of stays on Continue Watching, not on Play Next.
 - A pause in either app is the same minute. Pressing play in Jellyfin warms
-  that minute. While the picture is not ready, the screen shows a Loading card
-  instead of a frozen black frame. Play from the start still starts at 0.
+  that minute. While the picture is not ready, from the start or at a resume,
+  the screen shows a Loading card instead of a frozen black frame. Opening the
+  movie starts the file search, so Play can join it. Search finds movies, shows,
+  and your own folders.
 
 ## Change Checklist
 

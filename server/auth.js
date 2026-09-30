@@ -628,21 +628,34 @@ class Auth {
   }
 
   // ---- Quick Connect (TV enters a code, phone approves) ----
-  qcCreate(deviceName = 'TV') {
+  qcCreate(deviceName = 'TV', ttlMs = QC_TTL_MS) {
     let code;
     do { code = String(crypto.randomInt(0, 1000000)).padStart(6, '0'); } while (this.quickConnect.has(code));
-    this.quickConnect.set(code, { createdAt: Date.now(), deviceName, token: null });
-    return { code, ttlMs: QC_TTL_MS };
+    const secret = crypto.randomBytes(16).toString('hex');
+    const ttl = Math.max(1000, Number(ttlMs) || QC_TTL_MS);
+    this.quickConnect.set(code, { createdAt: Date.now(), deviceName, token: null, secret, ttlMs: ttl });
+    return { code, secret, ttlMs: ttl };
+  }
+  _qcTtl(entry) {
+    return Math.max(1000, Number(entry && entry.ttlMs) || QC_TTL_MS);
   }
   _qcGet(code) {
     const e = this.quickConnect.get(code);
     if (!e) return null;
-    if (Date.now() - e.createdAt > QC_TTL_MS) { this.quickConnect.delete(code); return null; }
+    if (Date.now() - e.createdAt > this._qcTtl(e)) { this.quickConnect.delete(code); return null; }
     return e;
+  }
+  qcFindBySecret(secret) {
+    const want = String(secret || '');
+    if (!want) return null;
+    for (const [code, e] of this.quickConnect) {
+      if (e.secret === want) return this._qcGet(code) ? code : null;
+    }
+    return null;
   }
   sweepQuickConnect() { // expired codes are otherwise only purged on access
     const now = Date.now();
-    for (const [code, e] of this.quickConnect) if (now - e.createdAt > QC_TTL_MS) this.quickConnect.delete(code);
+    for (const [code, e] of this.quickConnect) if (now - e.createdAt > this._qcTtl(e)) this.quickConnect.delete(code);
   }
   qcApprove(code, approverUid) {
     const e = this._qcGet(code);

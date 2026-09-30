@@ -207,17 +207,23 @@ function formatVttTimestamp(ms) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(n).padStart(3, '0')}`;
 }
 
-function shiftVtt(vtt, seconds = 0) {
+function shiftVtt(vtt, seconds = 0, driftMsPer30s = 0, originSec = 0) {
   const delta = Math.round((Number(seconds) || 0) * 1000);
+  // A caption file at the other framerate slides about 1.3s every 30s. One nudge
+  // is right at the minute we measured and wrong for the rest of the episode.
+  // Stretch only when the slide is that big. A smaller disagreement is noise.
+  const drift = Math.abs(Number(driftMsPer30s) || 0) >= 1000 ? Math.round(Number(driftMsPer30s) || 0) : 0;
+  const origin = Math.max(0, Number(originSec) || 0);
   const body = String(vtt || '');
-  if (!delta) return body;
+  if (!delta && !drift) return body;
+  const bump = (ms) => ms + delta + (drift ? Math.round(drift * (ms / 1000 - origin) / 30) : 0);
   return body.replace(/((?:\d{2,}:)?\d{2}:\d{2}\.\d{3})\s*-->\s*((?:\d{2,}:)?\d{2}:\d{2}\.\d{3})([^\r\n]*)/g,
     (line, start, end, rest) => {
       const a = parseVttTimestamp(start);
       const b = parseVttTimestamp(end);
       if (a === null || b === null) return line;
-      const shiftedStart = Math.max(0, a + delta);
-      const shiftedEnd = Math.max(shiftedStart, b + delta);
+      const shiftedStart = Math.max(0, bump(a));
+      const shiftedEnd = Math.max(shiftedStart, bump(b));
       return `${formatVttTimestamp(shiftedStart)} --> ${formatVttTimestamp(shiftedEnd)}${rest || ''}`;
     });
 }
@@ -416,6 +422,53 @@ function syncShiftMs(inputText, outputText) {
   if (agree < Math.ceil(deltas.length * 0.7)) return null;
   return med;
 }
+// Two hearing slices can lock onto neighbouring lines when the real gap is about one
+// second. Lanterns stayed a second late because -1007ms and +2279ms were thrown away.
+// The slice at the playhead wins when any other slice agrees with it. Otherwise two
+// other slices that agree with each other win. Nothing in agreement returns null.
+function pickAgreedSyncShift(samples) {
+  const xs = (Array.isArray(samples) ? samples : []).filter((n) => Number.isFinite(n));
+  const close = (a, b) => Math.abs(a - b) <= 1500;
+  if (!xs.length) return null;
+  if (xs.length === 1) return { shiftMs: xs[0], agreed: 1 };
+  if (close(xs[0], xs[1])) return { shiftMs: xs[0], agreed: 2 };
+  if (xs.length >= 3 && close(xs[0], xs[2])) return { shiftMs: xs[0], agreed: 2 };
+  if (xs.length >= 3 && close(xs[1], xs[2])) return { shiftMs: xs[1], agreed: 2 };
+  return null;
+}
+// Four lines crammed into a few seconds (a "thanks" at the counter, then silence) make
+// alass lock onto the neighbouring line. A real conversation spreads across the slice.
+function syncSliceIsStrong(count, spanMs) {
+  return count >= 5 && spanMs >= 12000;
+}
+// The next 30s of actual conversation, at least 20s away from the playhead slice.
+// A fixed 30s step can land on the bunched lines and veto a good one-second correction.
+function nextStrongSyncWindow(srt, originMs, dir) {
+  const sign = dir < 0 ? -1 : 1;
+  for (let away = 20000; away <= 180000; away += 10000) {
+    const next = originMs + sign * away;
+    if (next < 0) continue;
+    const hit = windowSrt(srt, next, 30000);
+    if (hit && syncSliceIsStrong(hit.count, hit.spanMs)) return { ...hit, originMs: next };
+  }
+  return null;
+}
+// The 30 seconds next to the minute you are watching. That nearby slice is what lined
+// The Office up. A window a minute away can be the theme song, which is a different clock.
+function adjacentSyncWindow(srt, originMs, dir) {
+  const next = originMs + (dir < 0 ? -30000 : 30000);
+  if (next < 0) return null;
+  const hit = windowSrt(srt, next, 30000);
+  if (!hit) return null;
+  return { ...hit, originMs: next };
+}
+function syncWitnessWindow(srt, originMs, dir) {
+  const adjacent = adjacentSyncWindow(srt, originMs, dir);
+  if (adjacent && syncSliceIsStrong(adjacent.count, adjacent.spanMs)) return adjacent;
+  const strong = nextStrongSyncWindow(srt, originMs, dir);
+  if (strong && Math.abs(strong.originMs - originMs) <= 45000) return strong;
+  return adjacent || strong;
+}
 // Cues that belong to one short audio sample, with times moved so 0 is the sample start.
 // alass then hears that slice only. Giving it the whole movie plus a two-minute clip makes
 // it jump the words to the wrong scene.
@@ -423,6 +476,8 @@ function windowSrt(srt, originMs, spanMs = 120000) {
   const blocks = String(srt || '').replace(/\r/g, '').split(/\n{2,}/);
   const hi = originMs + spanMs;
   const lines = [];
+  let firstStart = null;
+  let lastStart = null;
   for (const block of blocks) {
     const m = /(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})/.exec(block);
     if (!m) continue;
@@ -431,12 +486,14 @@ function windowSrt(srt, originMs, spanMs = 120000) {
     if (start == null || end == null || start < originMs || start > hi) continue;
     const body = block.slice(m.index + m[0].length).replace(/^\n/, '').trim();
     if (!body) continue;
+    if (firstStart == null) firstStart = start;
+    lastStart = start;
     const relStart = start - originMs;
     const relEnd = Math.max(relStart + 200, end - originMs);
     lines.push(`${lines.length + 1}\n${formatSrtStamp(relStart)} --> ${formatSrtStamp(relEnd)}\n${body}`);
   }
   if (lines.length < 4) return null;
-  return { srt: `${lines.join('\n\n')}\n`, count: lines.length };
+  return { srt: `${lines.join('\n\n')}\n`, count: lines.length, spanMs: lastStart - firstStart };
 }
 // Logos and quiet stretches have fewer than four lines, so a sample taken right
 // at the playhead comes back empty and the raw caption stays on screen. The
@@ -1214,5 +1271,5 @@ module.exports = {
   _subtitleDownloadCanFallback: subtitleDownloadCanFallback,
   _redactSubUrl: redactSubUrl,
   _toIso6391: toIso6391,
-  subtitleLooksSynced, subSyncResultOk, syncShiftMs, windowSrt, speechWindow,
+  subtitleLooksSynced, subSyncResultOk, syncShiftMs, pickAgreedSyncShift, syncSliceIsStrong, nextStrongSyncWindow, syncWitnessWindow, windowSrt, speechWindow,
 };

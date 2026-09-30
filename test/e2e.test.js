@@ -8,12 +8,21 @@ const crypto = require('crypto');
 const http = require('http');
 const { encodePart, decode, crc32 } = require('../server/yenc');
 const { parseNzb, pickPrimaryFile } = require('../server/nzb');
-const { NntpPool, ProviderPool, NntpConnection, CONNECT_BURST, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS } = require('../server/nntp');
+const { NntpPool, ProviderPool, NntpConnection, CONNECT_BURST, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS, providersReadyToDial } = require('../server/nntp');
 const debug = require('../server/debug');
 const { VirtualFile, SharedCacheBudget } = require('../server/vfs');
 const { createMockNntp } = require('./mock-nntp');
 
 // ---------- helpers ----------
+test('nntp: a blank username is not dialed while another account can sign in', () => {
+  const out = providersReadyToDial([
+    { host: 'news.eweka.nl', user: '', pass: 'kept' },
+    { host: 'news.easynews.com', user: 'someone', pass: 'kept' },
+  ]);
+  assert.deepStrictEqual(out.map((p) => p.host), ['news.easynews.com']);
+  assert.strictEqual(providersReadyToDial([{ host: 'news.eweka.nl', user: '  ' }]).length, 1);
+});
+
 test('nntp: startup work outranks queued read-ahead when a provider is saturated', async () => {
   const pool = new ProviderPool({}, 1);
   pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });

@@ -2916,8 +2916,8 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
   // too, or enabling CC mid-playback steals the player's connections (startup/seek lane) and buffers.
   assert.match(server, /async function measureSubSyncWindow\(dir, tag, streamUrl, windowed, audioIndex\) \{[\s\S]+extractSyncSample\(streamUrl, wav, windowed\.originMs \/ 1000, audioIndex\);[\s\S]+spawnSubSync\(wav, inSrt, outSrt, \['--no-split', '--disable-fps-guessing'\]\)[\s\S]+syncShiftMs\(windowed\.srt, out\)/,
     'one sync slice pulls its own 30s of audio and hands alass only the lines from that slice');
-  assert.match(server, /async function onDemandSubSync\(vf, vtt, uid, atSec = 0, audioIndex = 0\) \{[\s\S]+speechWindow\(srt, Math\.round\(Math\.max\(0, at - 30\) \* 1000\)\)[\s\S]+const selfUrl = localMediaInput\(vf\) \|\| `http:\/\/127\.0\.0\.1:\$\{server\.address\(\)\.port\}\/api\/stream\/\$\{vf\.id\}\?t=\$\{auth\.streamToken\(uid, vf\.id\)\}&priority=background`;[\s\S]+measureSubSyncWindow\(dir, 'a', selfUrl, spoken, audioIndex\)[\s\S]+measureSubSyncWindow\(dir, 'b', selfUrl, witness, audioIndex\)[\s\S]+Math\.abs\(second - shiftMs\) > 1500[\s\S]+witnesses disagree/,
-    'on-demand subtitle sync samples the spoken stretch near the playhead and a second slice must agree before the gap is applied');
+  assert.match(server, /async function onDemandSubSync\(vf, vtt, uid, atSec = 0, audioIndex = 0\) \{[\s\S]+speechWindow\(srt, Math\.round\(Math\.max\(0, at - 30\) \* 1000\)\)[\s\S]+const selfUrl = localMediaInput\(vf\) \|\| `http:\/\/127\.0\.0\.1:\$\{server\.address\(\)\.port\}\/api\/stream\/\$\{vf\.id\}\?t=\$\{auth\.streamToken\(uid, vf\.id\)\}&priority=background`;[\s\S]+measureSubSyncWindow\(dir, 'a', selfUrl, spoken, audioIndex\)[\s\S]+measureSubSyncWindow\(dir, 'b', selfUrl, witness, audioIndex\)[\s\S]+Math\.abs\(second - shiftMs\) > 1500[\s\S]+measureSubSyncWindow\(dir, 'c', selfUrl, \{ \.\.\.tie, originMs: tieAt \}, audioIndex\)[\s\S]+witnesses disagree/,
+    'on-demand subtitle sync keeps a gap when two slices agree, and a wild slice needs a third slice before the correction is thrown away');
   assert.match(server, /'x-triboon-subsync-shift': String\(vf\._subSyncShift\.get\(syncKey\) \?\? 0\)/,
     'the corrected subtitle reports how far the words moved');
   assert.match(ui, /function subtitleSyncToast\(shiftHeader\)[\s\S]+Subtitles moved \$\{\(Math\.abs\(ms\) \/ 1000\)\.toFixed\(1\)\}s/,
@@ -3095,8 +3095,8 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'native quality 1080↔4K must reuse ExoPlayer instead of Release+Init');
   assert.match(android, /nativeSeekHoldDisplayMs = Math\.max\(nativeStartOffsetMs \+ nativeRawPositionMs\(\), startOffsetMs\)/,
     'quiet remux +30 must freeze the clock before swapping startOffset so 10:00 does not become 20:30');
-  assert.match(ui, /c\.startTime = Math\.max\(0, c\.startTime - off\);[\s\S]+c\.endTime = Math\.max\(0\.05, c\.endTime - off\);[\s\S]+c\._shifted = true;/,
-    'web remux CC shift must mark _shifted only after both cue times write');
+  assert.match(ui, /function subtitleCueNow\(p\) \{[\s\S]+p\.usingRemux \|\| p\.usingTranscode[\s\S]+return raw \+ Math\.max\(0, Number\(p\.startOffset\) \|\| 0\)/,
+    'a remux skip adds the start back onto the video clock instead of rewriting caption times');
   assert.match(ui, /p\._nativeSeekGen = \(p\._nativeSeekGen \|\| 0\) \+ 1/,
     'rapid remux FF must ignore stale keyframe remounts');
   assert.match(android, /remountNativeRemuxAtResume\(\) \{[\s\S]+setPlayWhenReady\(false\);[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
@@ -3737,16 +3737,16 @@ test('Android native player: direct source and native chrome stay out of the web
     && ui.includes('body.mobileShell .qToggle button{height:42px;padding:0 16px;font-size:12px}'),
     'phone and tablet detail Play starts at the left edge with no leftover gutter');
   assert.ok(ui.includes("if (document.querySelector('#detail.open,#person.open,#settings.open,#prefs.open,#music.open')) return false;")
-    && ui.includes('#osd .ctl{display:flex;grid-template-columns:none;gap:8px;overflow-x:auto;overflow-y:visible')
+    && ui.includes('#osd .ctl{display:flex;flex-wrap:wrap;grid-template-columns:none;gap:8px;overflow:visible')
     && ui.includes('#player:not(.live) #chGuide{display:none}')
     && ui.includes('#trackMenu{left:12px;right:12px;bottom:84px;width:auto;min-width:0;max-height:calc(100vh - 144px);border-radius:12px}')
-    && ui.includes('body.mobileShell #osd .ctl{display:flex;grid-template-columns:none;gap:8px;overflow-x:auto;overflow-y:visible')
+    && ui.includes('body.mobileShell #osd .ctl{display:flex;flex-wrap:wrap;grid-template-columns:none;gap:8px;overflow:visible')
     && ui.includes('body.mobileShell #trackMenu{left:12px;right:12px;bottom:84px;width:auto;min-width:0;max-height:calc(100vh - 144px);border-radius:12px}'),
-    'mobile browser and phone WebView player controls should use a scrollable touch strip and never sit behind the screensaver');
+    'mobile browser and phone WebView player controls should wrap onto the screen instead of a sideways scroll');
   assert.ok(ui.includes('function showVodPlayPrompt()')
     && ui.includes("pReady && pReady.item && pReady.item.type !== 'live' && !pReady.started && v.readyState >= 2 && v.paused")
     && ui.includes("$('playerLoader').classList.remove('show');")
-    && ui.includes("requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());"),
+    && ui.includes("requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); hideSeekHoldFrame(); if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());"),
     'mobile browser VOD should reveal a tappable play control when autoplay is blocked after buffering');
   assert.ok(ui.includes('#person .personHead{flex-direction:column;align-items:center;gap:16px')
     && ui.includes('#person .personHead .pInfo{width:100%;text-align:center}')
@@ -4607,8 +4607,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'opening web About should keep the OSD up so play/seek stay on screen');
   assert.match(ui, /\$\('aboutBtn'\)\.addEventListener\('click', \(\) => \{[\s\S]+closePlayerAbout\(\);[\s\S]+else openPlayerAbout\(\);/,
     'clicking About again should close the card without hiding the controller');
-  assert.match(ui, /function playerOverlayAwayClick\(e\) \{[\s\S]+closePlayerAbout\(\);[\s\S]+closePlayerEpisodes\(\);[\s\S]+if \(playerOverlayAwayClick\(e\)\) return;/,
-    'clicking the dimmed player (not the About card or controls) should close About and the episode strip');
+  assert.match(ui, /function playerOverlayAwayClick\(e\) \{[\s\S]+closePlayerStats\(\);[\s\S]+closeTrackMenu\(\{ restoreFocus: false \}\);[\s\S]+closePlayerAbout\(\);[\s\S]+closePlayerEpisodes\(\);[\s\S]+if \(playerOverlayAwayClick\(e\)\) return;/,
+    'clicking away from About, playback info, subtitles, or the episode strip should close that sheet');
+  assert.match(android, /private void toggleNativeChromeByTouch\(\) \{[\s\S]+if \(nativeSheetOpen\(\)\) \{ hideNativeSheet\(\); return; \}[\s\S]+if \(nativeAboutOpen\) \{ hideNativeTitleInfo\(\); return; \}[\s\S]+if \(nativeEpisodeStripOpen\) \{ closeNativeEpisodeStrip\(\); return; \}/,
+    'a tap on the Android picture closes playback info and About instead of leaving them up');
   assert.match(ui, /if \(\$\('playerAbout'\)\.classList\.contains\('open'\)\) return;/,
     'an open About card should not keep restarting the OSD show timer');
   assert.match(ui, /\.paPoster\{flex:0 0 148px;width:148px;height:222px/,
@@ -4717,8 +4719,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'the compact Next chip sits clear of the seek bar');
   assert.match(ui, /\.epMenu\{position:absolute;right:10px;top:44px[\s\S]+rgba\(24,26,29,\.97\)[\s\S]+border-radius:10px[\s\S]+\.epMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\)[\s\S]+box-shadow:none\}/,
     'episode action popup should use the same compact neutral player menu styling');
-  assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#playerEpisodes,#playerAbout,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function playerSingleClick\(e\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,
-    'web player screen clicks should toggle play, while double-click fullscreen cancels the pending pause');
+  assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#playerEpisodes,#playerAbout,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function browserTapLeavesPlayback\(\) \{[\s\S]+androidApp[\s\S]+windowsDesktop[\s\S]+function playerSingleClick\(e\) \{[\s\S]+if \(browserTapLeavesPlayback\(\)\) return;[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,
+    'a browser tap on the picture shows the controls and does not play or pause; TV still can, and double-click still fullscreens');
   assert.match(ui, /\$\('player'\)\.addEventListener\('click', playerSingleClick\);[\s\S]+\$\('player'\)\.addEventListener\('dblclick', playerDoubleClick\);/,
     'web player should bind separate single-click and double-click surface handlers');
   assert.match(ui, /function hidePlayerOsdForBack\(\) \{[\s\S]+player\.classList\.contains\('open'\)[\s\S]+osd\.classList\.contains\('hide'\)[\s\S]+osd\.classList\.add\('hide'\)[\s\S]+S\.zone === 'seek'[\s\S]+return true;/,
@@ -4958,8 +4960,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'player subtitle labels should not show provider branding');
   assert.match(ui, /if \(prefSubtitleMode\(\) !== 'always'\) return '';/,
     'native subtitles should respect manual mode before considering saved online subtitle choices');
-  assert.match(ui, /function subtitleMediaNow\(p\) \{[\s\S]+p\._subFrozen[\s\S]+p\._subSlip[\s\S]+jump > 30[\s\S]+function activeSubtitleCues\(tt\) \{[\s\S]+subtitleMediaNow\(S\.playing\)[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
+  assert.match(ui, /function subtitleMediaNow\(p\) \{[\s\S]+p\._subFrozen[\s\S]+p\._subSlip[\s\S]+_subSlipGrace[\s\S]+jump > 30[\s\S]+function activeSubtitleCues\(tt\) \{[\s\S]+subtitleCueNow\(S\.playing\)[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
     'captions follow the picture clock, hold a skip, and drop a stall jump instead of the browser cue scheduler');
+  assert.match(ui, /p\._subSlipGrace && now < p\._subSlipGrace\) p\._subSlip = 0/,
+    'a small seek restart must not leave the words behind the voices');
+  assert.match(ui, /function subtitlePace\(p, shown, moving, now\) \{[\s\S]+if \(ahead > 0\.45\) return shown \+ ahead/,
+    'when the browser clock falls behind the voices after a seek, the words catch up');
   // Seen live 2026-09-28: Resume at 4:51, CC turned on 5s later → the resume-point line stuck
   // for the rest of the 20s landing window because |clock 5s − landing 0s| > 3. The landing
   // check must allow the picture to have run since the seek was armed.
@@ -4987,7 +4993,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android/Windows handoff carries the true keyframe start so their startOffset, progress, and captions agree with the picture');
   assert.match(ui, /function withRemuxStart\(p, seconds, go\) \{[\s\S]+if \(S\.playing === p && p\._remuxStartSeq === seq\) go\(s\);/,
     'a late keyframe answer for an older ask must not restart the picture behind the user');
-  assert.match(ui, /ctl\.abort\(\), 1500\)/, 'a slow keyframe probe never holds a seek for more than 1.5s');
+  assert.match(ui, /setTimeout\(\(\) => \{ if \(!settled\) \{ settled = true; resolve\(t\); \} \}, 1500\)/,
+    'a slow keyframe probe lets the skip start after 1.5s instead of hanging');
+  assert.match(ui, /p\.startOffset = start;\s*applySubtitleTrack\(\)/,
+    'a keyframe that arrives after the skip moves the captions onto the picture');
   assert.match(ui, /if \(kind === 'remux'\) remuxKeyframeStart\(p, at\); \/\/ learn the true start during the wait/,
     'native D-pad skips learn the true start during the existing 320ms debounce');
   const srvIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
@@ -8352,8 +8361,10 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
     'a terminal sync failure short-circuits BEFORE spawning alass and reports failed');
   assert.match(server, /vf\._subSyncFail\.set\(syncKey, \{ tries: prev\.tries \+ 1, timedOut: prev\.timedOut \|\| \/timed out\/i\.test\(msg\), at: Date\.now\(\), atSec \}\);/,
     'sync failures are recorded with try count + timeout flag (timeouts are immediately terminal)');
-  assert.match(server, /const syncKey = `\$\{cacheKey\}:synced:a\$\{audioIndex\}`;[\s\S]+sampledAt < 20 && atSec > sampledAt \+ 45/,
-    'a subtitle correction is per audio track, and an opening-logo sample must not answer a later minute');
+  assert.match(server, /const syncKey = `\$\{cacheKey\}:synced:a\$\{audioIndex\}`;[\s\S]+Math\.abs\(atSec - sampledAt\) > 45/,
+    'a subtitle correction is per audio track, and a sample from another minute must not answer this one');
+  assert.match(ui, /function resyncSubtitleAfterSkip\(p\) \{[\s\S]+autoSyncSubtitle\(p, p\.subTrack, p\._subSyncBase\)/,
+    'a skip of more than 20s asks subtitle sync for the minute now on screen');
   assert.match(server, /const syncHdr = looksSynced \? 'synced'\s*: \(_sf && \(_sf\.timedOut \|\| _sf\.tries >= 3\)\) \? 'failed'/,
     'the advertised sync status reports failed so clients stop queueing background syncs');
 

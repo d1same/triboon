@@ -4940,7 +4940,11 @@ public class MainActivity extends Activity {
     }
 
     private void toggleNativeChromeByTouch() {
-        if (!nativePlayerOpen() || nativeGuideMode || nativeSheetOpen() || nativeEpisodeStripOpen || nativeAboutOpen) return;
+        if (!nativePlayerOpen() || nativeGuideMode) return;
+        // A tap on the picture puts the info, subtitles, and episode sheets away.
+        if (nativeSheetOpen()) { hideNativeSheet(); return; }
+        if (nativeAboutOpen) { hideNativeTitleInfo(); return; }
+        if (nativeEpisodeStripOpen) { closeNativeEpisodeStrip(); return; }
         if (nativeChromeShowingForBack()) hideNativeChromeNow();
         else showNativeChrome(false);
     }

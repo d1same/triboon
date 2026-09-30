@@ -71,15 +71,18 @@ function ffprobeKeyframeAtOrAfter(streamUrl, targetSec, { timeoutMs = 8000 } = {
 // The keyframe AT-OR-BEFORE `targetSec`: where a copy-remux asked to start at `targetSec` REALLY
 // starts. `-noaccurate_seek -ss N -c copy` lands on the keyframe before N and make_zero stamps
 // that frame as 0:00, so a player that believes 0:00 == N shows every caption (and the clock)
-// up to one GOP early — measured 2.0–4.0s on a 5s-GOP clip, 3.4s on a real release. One demuxer
-// seek plus ONE packet (`%+#1`): the packet a seek lands on is the keyframe. Resolves null when
-// ffprobe is missing, times out, or reports nothing usable → the caller keeps today's behavior.
-function ffprobeKeyframeAtOrBefore(streamUrl, targetSec, { timeoutMs = 3000 } = {}) {
+// up to one GOP early — measured 2.0–4.0s on a 5s-GOP clip, 3.4s on a real release.
+// The previous few seconds of keyframes only: one packet at the ask is often a normal frame,
+// and trusting it left every caption early after a skip. Starting at 0:00 does not take this
+// path. Resolves null when ffprobe is missing, times out, or reports nothing usable.
+function ffprobeKeyframeAtOrBefore(streamUrl, targetSec, { timeoutMs = 8000 } = {}) {
   return new Promise((resolve) => {
     const fp = detectFfprobe();
     if (!fp || !(targetSec > 0)) return resolve(null);
-    const args = ['-v', 'error', '-select_streams', 'v:0', '-read_intervals', `${targetSec}%+#1`,
-      '-show_entries', 'packet=pts_time,dts_time,flags', '-of', 'csv=p=0', streamUrl];
+    const from = Math.max(0, targetSec - 10);
+    const args = ['-v', 'error', '-read_intervals', `${from}%${targetSec}`,
+      '-select_streams', 'v:0', '-skip_frame', 'nokey',
+      '-show_entries', 'frame=pts_time', '-of', 'csv=p=0', streamUrl];
     const p = spawn(fp.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let out = '', done = false;
     const finish = (v) => { if (done) return; done = true; clearTimeout(killer); resolve(v); };
@@ -87,15 +90,12 @@ function ffprobeKeyframeAtOrBefore(streamUrl, targetSec, { timeoutMs = 3000 } = 
     p.stdout.on('data', (d) => { out += d; });
     p.on('error', () => finish(null));
     p.on('close', () => {
+      let best = null;
       for (const line of out.split(/\r?\n/)) {
-        const [pts, dts, flags] = line.split(',');
-        const t = parseFloat(pts);
-        const ts = Number.isFinite(t) ? t : parseFloat(dts);
-        if (!Number.isFinite(ts) || !/K/.test(String(flags || ''))) continue;
-        // ≤ target with a hair of slack for pts rounding; never a keyframe AFTER the ask
-        return finish(ts <= targetSec + 0.01 ? Math.max(0, ts) : null);
+        const t = parseFloat(line);
+        if (Number.isFinite(t) && t <= targetSec + 0.01 && (best === null || t > best)) best = Math.max(0, t);
       }
-      finish(null);
+      finish(best);
     });
   });
 }

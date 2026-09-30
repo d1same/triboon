@@ -12,18 +12,9 @@ const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'),
 const trakt = fs.readFileSync(path.join(__dirname, '..', 'server', 'trakt.js'), 'utf8');
 const subText = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'SubtitleText.java'), 'utf8');
 
-function shiftCues(cues, off) {
-  const out = [];
-  for (const raw of cues) {
-    const c = { ...raw };
-    if (c._shifted) { out.push(c); continue; }
-    if (c.endTime - off <= 0.2) continue;
-    c.startTime = Math.max(0, c.startTime - off);
-    c.endTime = Math.max(0.05, c.endTime - off);
-    c._shifted = true;
-    out.push(c);
-  }
-  return out;
+function cueNow(videoTime, startOffset, remux) {
+  if (!remux) return videoTime;
+  return videoTime + Math.max(0, Number(startOffset) || 0);
 }
 
 function traktSeekSeconds({ catalogDur, videoDur, remux, pct }) {
@@ -64,20 +55,13 @@ test('playback scenarios: remux Pause Play uses leftover when the pipe is still 
   assert.match(android, /NATIVE_REMUX_INPLACE_RESUME_MS = 900L[\s\S]+nativePlayer\.play\(\);[\s\S]+nativeRemuxInPlaceResumeCheck/);
 });
 
-test('playback scenarios: captions shift only after a successful write', () => {
-  const cues = shiftCues([
-    { startTime: 600, endTime: 604, _shifted: false },
-    { startTime: 10, endTime: 12, _shifted: false },
-  ], 600);
-  assert.strictEqual(cues.length, 1, 'cues that ended before the seek are dropped');
-  assert.strictEqual(cues[0].startTime, 0);
-  assert.strictEqual(cues[0].endTime, 4);
-  assert.ok(cues[0]._shifted);
-  const again = shiftCues(cues, 600);
-  assert.strictEqual(again[0].startTime, 0, 'a second remount must not double-shift');
-  assert.match(ui, /c\.startTime = Math\.max\(0, c\.startTime - off\);[\s\S]+c\.endTime = Math\.max\(0\.05, c\.endTime - off\);[\s\S]+c\._shifted = true;/);
-  assert.match(ui, /tt\.mode = 'hidden';[\s\S]+c\.startTime = Math\.max\(0, c\.startTime - off\);[\s\S]+_subRebaseTries/,
-    'resume waits until caption cues exist, then moves them to the minute you continued from');
+test('playback scenarios: a skip keeps caption times and moves the clock', () => {
+  assert.strictEqual(cueNow(0, 600, true), 600, 'minute 10 on a restarted video is still minute 10 for the words');
+  assert.strictEqual(cueNow(4, 600, true), 604, 'the words move with the picture after the skip');
+  assert.strictEqual(cueNow(4, 600, false), 4, 'direct play is already on the episode clock');
+  assert.match(ui, /function subtitleCueNow\(p\) \{[\s\S]+return raw \+ Math\.max\(0, Number\(p\.startOffset\) \|\| 0\)/);
+  assert.doesNotMatch(ui, /c\.startTime = Math\.max\(0, c\.startTime - off\)/,
+    'rewriting caption times on a skip is what threw the words off');
 });
 
 test('playback scenarios: 4K captions keep five visual lines and cancel the old fetch', () => {
