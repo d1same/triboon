@@ -3,7 +3,7 @@
 // Each case is a catalog query (what Play sends) plus scene names that MUST / MUST NOT match.
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseWantedTitle, releaseMatches, catalogIdentityMatches, shortTitleQuery, collectArticleSiblings } = require('../server/pipeline');
+const { parseWantedTitle, releaseMatches, catalogIdentityMatches, shortTitleQuery, collectArticleSiblings, widenSearchQueries } = require('../server/pipeline');
 
 const CASES = [
   {
@@ -680,6 +680,54 @@ test('long-running TV: first-air year must not reject a current-season air year'
   const greys = parseWantedTitle('greys anatomy s21e01');
   greys.year = 2005;
   assert.ok(releaseMatches('Greys.Anatomy.S21E01.2024.1080p.WEB-DL-NTb', greys));
+});
+
+test('the British Office does not take American files, and the American page does not take British ones', () => {
+  const uk = parseWantedTitle('The Office S01E01');
+  uk.year = 2001;
+  uk.country = 'uk';
+  uk.otherYears = [2005];
+  uk.episodeTitle = 'Downsize';
+  assert.ok(releaseMatches('The.Office.UK.S01E01.1080p.WEB-DL-NTb', uk));
+  assert.ok(releaseMatches('The.Office.U.K.S01E01.Downsize.720p.HDTV', uk));
+  assert.ok(releaseMatches('The.Office.S01E01.Downsize.720p.HDTV-NTb', uk), 'a file that names the British episode still counts');
+  assert.ok(releaseMatches('The.Office.2001.S01E01.720p.HDTV-NTb', uk), 'this show\'s year still counts');
+  assert.ok(!releaseMatches('The.Office.US.S01E01.1080p.WEB-DL-NTb', uk));
+  assert.ok(!releaseMatches('The.Office.S01E01.1080p.WEB-DL-NTb', uk), 'an untagged Office file is the American one');
+  assert.ok(!releaseMatches('The.Office.AU.S01E01.1080p.WEB-DL-NTb', uk));
+
+  const us = parseWantedTitle('The Office S01E01');
+  us.year = 2005;
+  us.country = 'us';
+  us.otherYears = [2001];
+  assert.ok(releaseMatches('The.Office.S01E01.1080p.WEB-DL-NTb', us));
+  assert.ok(releaseMatches('The.Office.US.S01E01.Pilot.1080p.WEB-DL-NTb', us));
+  assert.ok(!releaseMatches('The.Office.UK.S01E01.1080p.WEB-DL-NTb', us));
+});
+
+test('a same-name show from another country does not take the American files', () => {
+  const india = parseWantedTitle('The Office S01E01');
+  india.year = 2019;
+  india.country = 'other';
+  india.otherYears = [2001, 2005, 2024];
+  assert.ok(!releaseMatches('The.Office.US.S01E01.1080p.WEB-DL-NTb', india));
+  assert.ok(!releaseMatches('The.Office.UK.S01E01.1080p.WEB-DL-NTb', india));
+  assert.ok(!releaseMatches('The.Office.S01E01.1080p.WEB-DL-NTb', india));
+  assert.ok(releaseMatches('The.Office.2019.S01E01.1080p.WEB-DL-NTb', india));
+});
+
+test('another country\'s remake follows the same rule', () => {
+  const au = parseWantedTitle('utopia s01e01');
+  au.year = 2014;
+  au.country = 'au';
+  au.otherYears = [2013, 2020];
+  assert.ok(releaseMatches('Utopia.AU.S01E01.1080p.WEB-DL-NTb', au));
+  assert.ok(!releaseMatches('Utopia.UK.S01E01.1080p.WEB-DL-NTb', au));
+  assert.ok(!releaseMatches('Utopia.US.S01E01.1080p.WEB-DL-NTb', au));
+  assert.ok(!releaseMatches('Utopia.S01E01.1080p.WEB-DL-NTb', au));
+
+  const queries = widenSearchQueries('Utopia S01E01', au, {});
+  assert.ok(queries.some((q) => /utopia au s01e01/i.test(q)), 'the other country is asked for by name');
 });
 
 test('catalog identity: tagged remake is rejected even when the filename has no year', () => {

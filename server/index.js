@@ -4393,21 +4393,42 @@ function playSearchParams(src = {}) {
 // drift tolerance and year-less names cannot pick the wrong film. Movies only; per-process memo
 // on top of the 24h proxy cache so Play pays nothing after the detail page warmed it.
 const CATALOG_FACT_REGIONS = new Set(['US', 'GB', 'CA', 'AU', 'IE', 'NZ']);
+// Scene country tag for a TMDB origin. GB is "UK" in release names (The.Office.UK).
+// Only the tags the verifier treats as a different show. A French film stays untagged.
+function sceneCountryFromTmdb(codes) {
+  const list = Array.isArray(codes) ? codes : (codes ? [codes] : []);
+  const found = [];
+  for (const raw of list) {
+    const c = String((raw && raw.iso_3166_1) || raw || '').toUpperCase();
+    if (/^[A-Z]{2}$/.test(c)) found.push(c);
+  }
+  // A co-production that includes the US (The Italian Job 2003) stays the US cut.
+  if (found.includes('US')) return 'us';
+  if (found.includes('GB') || found.includes('UK')) return 'uk';
+  if (found.includes('AU')) return 'au';
+  if (found.includes('NZ')) return 'nz';
+  if (found.includes('CA')) return 'ca';
+  if (found.length) return 'other';
+  return '';
+}
 const catalogFactsCache = new Map();
 const normFactTitle = (s) => pipelineFoldDiacritics(String(s || '')).toLowerCase().replace(/['’`]/g, '').replace(/&/g, ' and ')
   .replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter((w) => w && !['the', 'a', 'an'].includes(w)).join(' ');
 async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
-  const out = { year: parseCatalogYear(year) ? year : undefined, akaTitles: [], otherYears: [], articleSiblings: [], episodeTitle: '', otherEpisodeTitles: [], runtimeMin: 0 };
+  const out = { year: parseCatalogYear(year) ? year : undefined, akaTitles: [], otherYears: [], articleSiblings: [], episodeTitle: '', otherEpisodeTitles: [], runtimeMin: 0, originCountry: '' };
   const id = parseInt(tmdbId, 10);
   if (!id || !settings.get().tmdbKey) return out;
   const type = mediaType === 'tv' ? 'tv' : 'movie';
   const key = `${type}:${id}`;
   let facts = catalogFactsCache.get(key);
   if (!facts) {
-    facts = { year: null, akaTitles: [], otherYears: [], articleSiblings: [], runtimeMin: 0 };
+    facts = { year: null, akaTitles: [], otherYears: [], articleSiblings: [], runtimeMin: 0, originCountry: '' };
     try {
       const d = await tmdb.get(`/${type}/${id}${type === 'movie' ? '?append_to_response=alternative_titles' : ''}`);
       facts.year = parseCatalogYear(String((d && (d.release_date || d.first_air_date)) || '').slice(0, 4));
+      if (d) {
+        facts.originCountry = sceneCountryFromTmdb(type === 'tv' ? d.origin_country : d.production_countries);
+      }
       // Film runtime feeds the post-probe "is this even the same film" check (runtimeMismatch).
       if (type === 'movie' && d && Number.isFinite(Number(d.runtime)) && Number(d.runtime) > 0) facts.runtimeMin = Number(d.runtime);
       if (type === 'tv' && d && facts.year) {
@@ -4489,6 +4510,7 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
   if (!out.year && facts.year) out.year = facts.year;
   out.akaTitles = facts.akaTitles;
   out.otherYears = facts.otherYears;
+  out.originCountry = facts.originCountry || '';
   out.articleSiblings = facts.articleSiblings || [];
   out.runtimeMin = facts.runtimeMin || 0;
   // Episodes: only TMDB's PER-EPISODE runtime is trusted for the probe check (a show-level
@@ -4554,10 +4576,13 @@ function armRuntimeCheck(vf, policy, candidate, body) {
   vf._runtimeCheck = { runtimeMin, tmdbId, title: String((body && body.q) || '').replace(/\s+(19|20)\d{2}$/, ''), candidate: { nzbUrl: candidate.nzbUrl, name: candidate.name }, done: false };
   if (vf._tracks) noteRuntimeCheck(vf); // probe already landed (prepared mount reused)
 }
-function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, articleSiblings, episodeTitle, otherEpisodeTitles, runtimeMin, tmdbId, caps: rawCaps } = {}) {
+function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, originCountry, articleSiblings, episodeTitle, otherEpisodeTitles, runtimeMin, tmdbId, caps: rawCaps } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
   if (Array.isArray(akaTitles) && akaTitles.length) policy.akaTitles = akaTitles.slice(0, 6).map(String);
   if (Array.isArray(otherYears) && otherYears.length) policy.otherYears = otherYears.map(Number).filter((y) => Number.isInteger(y));
+  if (originCountry === 'us' || originCountry === 'uk' || originCountry === 'au' || originCountry === 'nz' || originCountry === 'ca' || originCountry === 'other') {
+    policy.originCountry = originCountry;
+  }
   if (Array.isArray(articleSiblings) && articleSiblings.length) {
     policy.articleSiblings = articleSiblings.map((a) => String(a || '').toLowerCase()).filter((a) => a === 'the' || a === 'a' || a === 'an').slice(0, 3);
   }

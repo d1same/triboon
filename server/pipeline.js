@@ -180,10 +180,12 @@ const STRUCTURAL_AFTER_TITLE = new RegExp('^(' + [
   'spanish', 'nordic', 'vostfr',
 ].join('|') + ')$');
 // Country/remake tags are a legal title boundary (The.Office.AU is not a longer title), but they
-// name a DIFFERENT show unless the query asked for that country. "The Office" (US, tt0386679)
-// must not play The.Office.AU. Untagged The.Office.S01E01 still matches. "The Office UK" still
-// matches The.Office.UK because the wanted words include uk.
-const COUNTRY_EDITION = new Set(['au', 'uk', 'nz', 'ca']);
+// name a DIFFERENT show unless this catalog title is that country. "The Office" (US, tt0386679)
+// must not play The.Office.UK. The British page (origin GB) must not play The.Office.US, and an
+// untagged The.Office.S01E01 is the American file when another same-name show exists. A file
+// that names this episode (Downsize) or this show's year still counts. "us" stays legal on a
+// query that never learned a country, so The.Office.US still matches "The Office".
+const COUNTRY_EDITION = new Set(['us', 'au', 'uk', 'nz', 'ca']);
 // Words that legitimately follow a film's year before the quality tags (edition / cut / part
 // labels). They end the "plain words after the year" count in releaseMatches.
 const MOVIE_EDITION_WORDS = new Set([
@@ -327,7 +329,21 @@ function widenSearchQueries(paramsQ, wanted, { wantUhd, aliases } = {}) {
     add(`${remuxBase} bluray`);
   }
   for (const q of aliasSearchQueries(paramsQ, aliases, wanted)) add(q);
+  add(countrySearchQuery(paramsQ, wanted));
   return out;
+}
+// The British Office's indexer query is "The Office", which fills the drawer with the
+// American show. Ask once for the country tag ("The Office UK S01E01") so those rows
+// come back. The US page does not need this: its files are the untagged ones.
+function countrySearchQuery(paramsQ, wanted) {
+  const country = sceneCountry(wanted && wanted.country);
+  if (!country || country === 'us' || country === 'other') return '';
+  const current = String(paramsQ || '').trim();
+  if (!current || new RegExp(`\\b${country}\\b`, 'i').test(current)) return '';
+  const label = country.toUpperCase();
+  const se = /\bS\d{2}E\d{2}\b/i.exec(current);
+  if (se) return `${current.slice(0, se.index)}${label} ${se[0]}${current.slice(se.index + se[0].length)}`.replace(/\s+/g, ' ').trim();
+  return `${current} ${label}`;
 }
 
 // Same extras as widenSearchQueries, plus a size-desc pass on the yearless/episode title.
@@ -471,6 +487,42 @@ function episodeTitlePhrase(title) {
   if (words.length === 1 && words[0].length >= 7) return words;
   return null;
 }
+function sceneCountry(tag) {
+  const t = String(tag || '').toLowerCase();
+  if (t === 'gb') return 'uk';
+  if (t === 'other') return 'other';
+  return COUNTRY_EDITION.has(t) ? t : '';
+}
+// The token after the title is a country edition (The.Office.UK / The.Office.US). It matches
+// this show when the catalog country is that edition, or when the query itself said "UK".
+// With no catalog country, "us" still matches: scene names tag the American remake and leave
+// the famous one bare.
+function countryTagMatches(tag, wanted, words) {
+  const scene = sceneCountry(tag);
+  if (!scene) return false;
+  const want = sceneCountry(wanted && wanted.country);
+  // India, Germany, and the rest have no scene tag. US/UK/AU on the name is the other show.
+  if (want === 'other') return false;
+  if (want) return scene === want;
+  if (scene === 'us') return true;
+  return (words || []).includes(scene);
+}
+// An untagged name (The.Office.S01E01, no US/UK) is the dominant show. On the other country's
+// page it is the wrong show, unless it names this episode or this show's year.
+function untaggedEditionOk(norm, wanted) {
+  const want = sceneCountry(wanted && wanted.country);
+  if (!want || want === 'us') return true;
+  if (wanted.s == null) return true;
+  const siblings = wanted.otherYears && wanted.otherYears.length;
+  if (!siblings) return true;
+  const mine = episodeTitlePhrase(wanted.episodeTitle);
+  if (mine && norm.includes(` ${mine.join(' ')} `)) return true;
+  if (wanted.year) {
+    const years = [...norm.matchAll(/\b(?:19|20)\d{2}\b/g)].map((m) => +m[0]);
+    if (years.includes(wanted.year)) return true;
+  }
+  return false;
+}
 function episodeTitleConflicts(norm, wanted) {
   const others = Array.isArray(wanted && wanted.otherEpisodeTitles) ? wanted.otherEpisodeTitles : [];
   if (!others.length) return false;
@@ -486,7 +538,8 @@ function releaseMatches(name, wanted) {
   // rows, tests, and direct callers with raw subjects get the same anchored check.
   // "U.S." spells as one token like the catalog's "US" (The.Office.U.S.S01E01, Shameless.U.S.),
   // and accents fold the same way the wanted title does (Shōgun → Shogun).
-  const norm = ' ' + foldDiacritics(stripSubjectWrapper(name)).toLowerCase().replace(/\bu\.s\b/g, 'us')
+  const norm = ' ' + foldDiacritics(stripSubjectWrapper(name)).toLowerCase()
+    .replace(/\bu\.s\b/g, 'us').replace(/\bu\.k\b/g, 'uk')
     .replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ') + ' ';
   const toks = norm.trim().split(' ');
   if (wanted.words.length) {
@@ -500,17 +553,21 @@ function releaseMatches(name, wanted) {
       }
     }
     let matched = false;
+    let sawCountry = false;
     const matchOpts = { allowLeadingArticle: wanted.s === null, blockedArticles: wanted.blockedArticles };
     for (const words of variants) {
       const ti = titleWordsMatchFromStart(toks, words, matchOpts);
       if (ti < 0) continue;
       const after = toks[ti];
-      if (after !== undefined && COUNTRY_EDITION.has(after) && !words.includes(after)) continue;
-      if (after !== undefined && !STRUCTURAL_AFTER_TITLE.test(after)) continue;
+      if (after !== undefined && (COUNTRY_EDITION.has(after) || after === 'gb')) {
+        if (!countryTagMatches(after, wanted, words)) continue;
+        sawCountry = true;
+      } else if (after !== undefined && !STRUCTURAL_AFTER_TITLE.test(after)) continue;
       matched = true;
       break;
     }
     if (!matched) return false;
+    if (!sawCountry && !untaggedEditionOk(norm, wanted)) return false;
   }
   if (wanted.s !== null) {
     const s = wanted.s, e = wanted.e;
@@ -2537,6 +2594,8 @@ class Pipeline {
     if (wanted && Array.isArray(policy.otherYears) && policy.otherYears.length) {
       wanted.otherYears = policy.otherYears.map(Number).filter((y) => Number.isInteger(y) && y !== wanted.year);
     }
+    // Catalog country (TMDB origin: GB → uk). The Office UK must not verify as The.Office.US.
+    if (wanted && sceneCountry(policy.originCountry)) wanted.country = sceneCountry(policy.originCountry);
     // Runner (2026) and The Runner (2026) share a year and differ by one article. When the
     // catalog lookup found that other work, the article is no longer optional.
     if (wanted && Array.isArray(policy.articleSiblings) && policy.articleSiblings.length) {
