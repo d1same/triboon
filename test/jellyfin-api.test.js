@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { httpJson, bootServer, setupAdmin } = require('./helpers');
-const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor, traktResumeSeconds, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard } = require('../server/jellyfin-api');
+const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, clientAddress, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor, traktResumeSeconds, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard } = require('../server/jellyfin-api');
 const { LibraryDb } = require('../server/library-db');
 
 let srv, admin;
@@ -163,6 +163,31 @@ test('jellyfin door stays shut until an admin opens it', async () => {
   assert.strictEqual(srv.mounts.size, 0);
 });
 
+test('jellyfin play link does not send a phone to itself or the docker bridge', () => {
+  const loop = clientAddress({ req: { headers: { host: '127.0.0.1:7777' } } });
+  let lan = '';
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const addr of list || []) {
+      if ((addr.family === 'IPv4' || addr.family === 4) && !addr.internal && /^(10\.|192\.168\.)/.test(addr.address)) lan = addr.address;
+    }
+  }
+  if (lan) {
+    assert.match(loop, /^http:\/\/(10\.|192\.168\.)\d+\.\d+\.\d+:7777$/);
+    assert.doesNotMatch(loop, /127\.0\.0\.1/);
+  } else {
+    assert.strictEqual(loop, 'http://127.0.0.1:7777');
+  }
+  assert.strictEqual(
+    clientAddress({ req: { headers: { host: '172.17.0.2:7777', 'x-forwarded-host': '10.2.4.171:7777' } } }),
+    'http://10.2.4.171:7777',
+    'a Zima bridge must keep the office IP the phone already opened'
+  );
+  assert.strictEqual(
+    clientAddress({ req: { headers: { host: '127.0.0.1:7777', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'media.example' } } }),
+    'https://media.example'
+  );
+});
+
 test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () => {
   const opened = await httpJson(srv.port, 'POST', '/api/settings', { jellyfinApps: true }, admin);
   assert.strictEqual(opened.status, 200);
@@ -174,7 +199,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(info.json.ServerName, 'Triboon');
   assert.strictEqual(info.json.Version, '10.11.11');
   assert.strictEqual(info.json.ProductName, 'Jellyfin Server');
-  assert.match(info.json.LocalAddress, /^http:\/\/127\.0\.0\.1:\d+$/);
+  assert.match(info.json.LocalAddress, /^http:\/\/(127\.0\.0\.1|(10|192\.168)\.\d+\.\d+\.\d+):\d+$/, 'a loopback door advertises a phone-reachable address when this machine has one');
   const behind = await httpSend(srv.port, 'GET', '/System/Info/Public', {
     headers: { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'media.example' },
   });

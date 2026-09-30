@@ -7,6 +7,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const https = require('https');
+const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 const { AsyncLocalStorage } = require('node:async_hooks');
@@ -89,13 +90,54 @@ function firstHeader(value) {
   return String(value || '').split(',')[0].trim();
 }
 
-// 10.1.20.120 is the house. 127.0.0.1 is the public site's proxy, which
+function hostName(host) {
+  return String(host || '').split(':')[0].replace(/^\[|\]$/g, '');
+}
+function hostPort(host) {
+  const s = String(host || '');
+  const i = s.lastIndexOf(':');
+  if (i < 0) return '';
+  const port = s.slice(i + 1);
+  return /^\d+$/.test(port) ? port : '';
+}
+// 10.1.20.120 is the house. 172.17 and 172.18 are the usual Docker bridge,
+// which a phone cannot open. 127.0.0.1 is the public site's proxy, which
 // still has to follow the https name in front of it.
+function isDockerBridge(host) {
+  return /^172\.(17|18)\.\d{1,3}\.\d{1,3}$/.test(hostName(host));
+}
+function isLoopback(host) {
+  const name = hostName(host).toLowerCase();
+  return name === '127.0.0.1' || name === 'localhost' || name === '::1';
+}
 function isLanHost(host) {
-  const name = String(host || '').split(':')[0];
+  const name = hostName(host);
+  if (!name || isDockerBridge(name) || isLoopback(name)) return false;
   if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(name)) return true;
   if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(name)) return true;
   return /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(name);
+}
+// A phone told to open 127.0.0.1 plays the movie on itself and gives up.
+// Use a real LAN address on this machine, with the same port. Look up the
+// address once; repeating it during shutdown crashes Node on Windows.
+let lanHostIp;
+function machineLanHost(port) {
+  if (lanHostIp === undefined) {
+    let preferred = '';
+    let other = '';
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const addr of list || []) {
+        const v4 = addr.family === 'IPv4' || addr.family === 4;
+        if (!v4 || addr.internal) continue;
+        if (!isLanHost(addr.address)) continue;
+        if (addr.address.startsWith('10.') || addr.address.startsWith('192.168.')) preferred = preferred || addr.address;
+        else other = other || addr.address;
+      }
+    }
+    lanHostIp = preferred || other || '';
+  }
+  if (!lanHostIp) return '';
+  return port ? `${lanHostIp}:${port}` : lanHostIp;
 }
 
 // The address the app should keep using. A phone that opened the house IP
@@ -110,7 +152,14 @@ function clientAddress(ctx) {
     const match = firstHeader(hdr.forwarded).match(/proto=(https?)/i);
     proto = match ? match[1].toLowerCase() : 'http';
   }
-  const host = firstHeader(hdr['x-forwarded-host']) || rawHost || 'localhost';
+  let host = firstHeader(hdr['x-forwarded-host']) || rawHost || 'localhost';
+  if (!firstHeader(hdr['x-forwarded-host']) && (isLoopback(host) || isDockerBridge(host))) {
+    const lan = machineLanHost(hostPort(rawHost) || hostPort(host));
+    if (lan) {
+      host = lan;
+      proto = 'http';
+    }
+  }
   return `${proto}://${host}`;
 }
 
