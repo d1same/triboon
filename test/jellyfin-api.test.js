@@ -249,12 +249,19 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(qcOn.status, 200);
   assert.strictEqual(qcOn.json.Enabled, true, 'the TV sign-in button needs a yes');
   const started = await httpSend(srv.port, 'POST', '/QuickConnect/Initiate', {
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      authorization: 'MediaBrowser Client="Jellyfin Android TV", Device="onn", DeviceId="tv1", Version="0.19.10"',
+    },
     body: '{}',
   });
   assert.strictEqual(started.status, 200);
   assert.match(started.json.Code, /^\d{6}$/);
   assert.ok(started.json.Secret);
+  assert.strictEqual(started.json.DeviceId, 'tv1', 'the TV app drops the code if DeviceId is missing');
+  assert.strictEqual(started.json.DeviceName, 'onn');
+  assert.strictEqual(started.json.AppName, 'Jellyfin Android TV');
+  assert.strictEqual(started.json.AppVersion, '0.19.10');
   const pending = await httpSend(srv.port, 'GET', `/QuickConnect/Connect?Secret=${started.json.Secret}`);
   assert.strictEqual(pending.status, 404, 'the TV keeps waiting until someone approves');
   const approved = await httpSend(srv.port, 'POST', '/QuickConnect/Authorize', {
@@ -633,7 +640,8 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
     body: '{}',
   });
   assert.strictEqual(playback.status, 200);
-  assert.match(playback.json.MediaSources[0].TranscodingUrl, /^http:\/\/10\.1\.20\.120:7777\/api\/hls\//, 'the movie stays on the house IP the phone already opened');
+  assert.match(playback.json.MediaSources[0].TranscodingUrl, /^\/api\/hls\//, 'each app adds the server it already signed into');
+  assert.doesNotMatch(playback.json.MediaSources[0].TranscodingUrl, /^https?:/i, 'a full address gets glued on a second time and play asks for a missing page');
   assert.match(playback.json.MediaSources[0].TranscodingUrl, /\/api\/hls\//, 'Jellyfin plays short pieces so the computer does not hold the whole movie');
   assert.match(playback.json.MediaSources[0].TranscodingUrl, /\/master\.m3u8\?/, 'the phone only plays a playlist');
   assert.match(playback.json.MediaSources[0].TranscodingUrl, new RegExp(`/${String(aardvark.Id).toLowerCase()}/master\\.m3u8`), 'the phone reads the movie id from the address or play says source error');
@@ -671,8 +679,22 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(tvPlay.json.MediaSources[0].Protocol, 'File', 'the guest-room TV still needs a file-shaped source');
   assert.strictEqual(tvPlay.json.MediaSources[0].IsRemote, false);
   assert.strictEqual(tvPlay.json.MediaSources[0].Id, aardvark.Id);
-  assert.match(tvPlay.json.MediaSources[0].TranscodingUrl, /^http:\/\/10\.1\.20\.120:7777\/api\/hls\//, 'the TV must get the house address, not a bare path');
+  assert.match(tvPlay.json.MediaSources[0].TranscodingUrl, /^\/api\/hls\//, 'the TV adds the server itself, so a full address becomes two addresses');
+  assert.doesNotMatch(tvPlay.json.MediaSources[0].TranscodingUrl, /^https?:/i);
   assert.match(tvPlay.json.MediaSources[0].TranscodingUrl, /master\.m3u8/);
+  const rokuPlay = await httpSend(srv.port, 'POST', `/Items/${aardvark.Id}/PlaybackInfo`, {
+    headers: {
+      authorization: authz,
+      'content-type': 'application/json',
+      host: '10.1.20.120:7777',
+      'x-emby-authorization': 'MediaBrowser Client="Jellyfin Roku", Device="Roku", DeviceId="roku1", Version="2.0"',
+    },
+    body: JSON.stringify({ MediaSourceId: aardvark.Id }),
+  });
+  assert.strictEqual(rokuPlay.status, 200);
+  assert.match(rokuPlay.json.MediaSources[0].TranscodingUrl, /^\/api\/hls\//, 'Roku glues the server on the front of whatever we send');
+  assert.doesNotMatch(rokuPlay.json.MediaSources[0].TranscodingUrl, /^https?:/i);
+  assert.strictEqual(rokuPlay.json.MediaSources[0].Protocol, 'File');
   const replay = await httpSend(srv.port, 'POST', `/Items/${aardvark.Id}/PlaybackInfo`, {
     headers: { authorization: authz, 'content-type': 'application/json' },
     body: JSON.stringify({ MediaSourceId: aardvark.Id }),
@@ -689,7 +711,8 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(replay.json.MediaSources[0].IsRemote, false);
   const sub = (playback.json.MediaSources[0].MediaStreams || []).find((row) => row.Type === 'Subtitle');
   assert.ok(sub && sub.DeliveryMethod === 'External', 'Jellyfin CC sees the subtitle file beside the movie');
-  assert.match(sub.DeliveryUrl, new RegExp(`^http://10\\.1\\.20\\.120:7777/videos/${aardvark.Id}/`), 'the phone player needs a caption address on the house IP or play dies');
+  assert.match(sub.DeliveryUrl, new RegExp(`^/videos/${aardvark.Id}/`), 'the app adds the server onto the caption path');
+  assert.doesNotMatch(sub.DeliveryUrl, /^https?:/i);
   assert.strictEqual(sub.IsTextSubtitleStream, true);
   assert.strictEqual(sub.SupportsExternalStream, true);
   assert.strictEqual(sub.IsDefault, false, 'the phone player needs IsDefault on every track or play dies');

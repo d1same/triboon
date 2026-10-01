@@ -74,6 +74,15 @@ function jellyfinToken(req) {
   return null;
 }
 
+// The TV app refuses the sign-in code unless these four names come back.
+// An empty name is fine. A missing name makes Quick Connect look dead.
+function authQuoted(ctx, name) {
+  const hdr = (ctx && ctx.req && ctx.req.headers) || {};
+  const blob = `${hdr.authorization || ''} ${hdr['x-emby-authorization'] || ''}`;
+  const match = blob.match(new RegExp('(?:^|[,\\s])' + name + '="([^"]*)"', 'i'));
+  return match ? match[1] : '';
+}
+
 function jellyfinCors() {
   return {
     'access-control-allow-origin': '*',
@@ -1712,8 +1721,8 @@ function playPath(payload, startSeconds, audioRel, itemId, durationSeconds) {
   return `${pathOnly}${join}start=${start}&audio=${audio}&audioSafe=1${durQ}`;
 }
 
-// The full address of the house the app already opened. A path with no host
-// makes the TV look on itself, so the movie never starts.
+// A browser following a redirect needs the full address. PlaybackInfo does not.
+// The apps add the server themselves.
 function servedPlayUrl(ctx, payload, startSeconds, audioRel, itemId, durationSeconds) {
   const rel = playPath(payload, startSeconds, audioRel, itemId, durationSeconds);
   if (!rel) return '';
@@ -1721,9 +1730,8 @@ function servedPlayUrl(ctx, payload, startSeconds, audioRel, itemId, durationSec
   return `${clientAddress(ctx)}${rel}`;
 }
 
-// Emby Windows and Jellyfin Desktop glue the server address onto the front of
-// whatever we send. An address that already has http:// becomes two addresses
-// stuck together, and the desktop says the movie failed to load.
+// Desktop still wants a web-shaped source. Android TV 0.19 drops that shape
+// and crashes the next time you press play.
 function desktopWebPlayer(ctx) {
   const hdr = (ctx && ctx.req && ctx.req.headers) || {};
   const blob = `${hdr['user-agent'] || ''} ${hdr.authorization || ''} ${hdr['x-emby-authorization'] || ''}`;
@@ -1733,11 +1741,11 @@ function desktopWebPlayer(ctx) {
   return /Chrome\/|Edg\/|Firefox\/|Safari\//i.test(blob);
 }
 
-function playUrlForClient(ctx, payload, startSeconds, audioRel, itemId, durationSeconds) {
-  const rel = playPath(payload, startSeconds, audioRel, itemId, durationSeconds);
-  if (!rel) return '';
-  if (desktopWebPlayer(ctx)) return rel;
-  return servedPlayUrl(ctx, payload, startSeconds, audioRel, itemId, durationSeconds);
+// Every app adds the server it already signed into. A full http address gets
+// glued on a second time, so Android, Fire TV, and Roku ask for a page that
+// is not there. The website, Samsung, and LG do the same glue.
+function playUrlForClient(_ctx, payload, startSeconds, audioRel, itemId, durationSeconds) {
+  return playPath(payload, startSeconds, audioRel, itemId, durationSeconds);
 }
 
 function playLink(ctx, payload, startSeconds) {
@@ -1791,6 +1799,10 @@ async function handleKind(kind, ctx) {
       Authenticated: false,
       Secret: created.secret,
       Code: created.code,
+      DeviceId: authQuoted(ctx, 'DeviceId'),
+      DeviceName: authQuoted(ctx, 'Device'),
+      AppName: authQuoted(ctx, 'Client'),
+      AppVersion: authQuoted(ctx, 'Version'),
       DateAdded: new Date().toISOString(),
     }, cors);
   }
@@ -2273,10 +2285,6 @@ async function handleKind(kind, ctx) {
     const desktop = desktopWebPlayer(ctx);
     if (!url) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
     stampSubtitleUrls(streams, ctx.m[1], playedBody.id);
-    const origin = clientAddress(ctx);
-    for (const row of streams) {
-      if (row && typeof row.DeliveryUrl === 'string' && row.DeliveryUrl.startsWith('/')) row.DeliveryUrl = origin + row.DeliveryUrl;
-    }
     const runtimeTicks = spec ? ticks(spec.runtime) : 0;
     const hls = url.includes('/api/hls/');
     const source = completeSource({
