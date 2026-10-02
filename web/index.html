@@ -6729,8 +6729,78 @@ async function loadWatchState(force) {
     S._watchRows = [];
     S.watchMap = {};
     throw e;
-  }).finally(() => { S._watchJob = null; });
+  }).finally(() => {     S._watchJob = null; });
   return S._watchJob;
+}
+function repairWatchArtUrl(u) {
+  const s = String(u || '');
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s) || s.startsWith('/api/')) return durableArtUrl(s);
+  if (s.startsWith('/')) return img(s, STILL_W) || img(s, POSTER_W) || '';
+  return durableArtUrl(s);
+}
+function watchRowNeedsArt(w) {
+  if (!w || w.hidden || w.watched) return false;
+  if (String(w.key || '').startsWith('local:')) return false;
+  const meta = w.meta || {};
+  if (!meta.tmdbId && !/^tmdb:/i.test(String(w.key || ''))) {
+    return !repairWatchArtUrl(meta.poster) && !repairWatchArtUrl(meta.backdrop);
+  }
+  const hasPoster = !!repairWatchArtUrl(meta.poster);
+  const hasBackdrop = !!repairWatchArtUrl(meta.backdrop);
+  return !hasPoster || !hasBackdrop;
+}
+async function backfillContinueWatchingArt(rows) {
+  const list = (rows || []).filter((w) => watchRowNeedsArt(w)).slice(0, 12);
+  if (!list.length || !S.serverInfo || !S.serverInfo.tmdb) return false;
+  let changed = false;
+  for (const w of list) {
+    try {
+      const meta = { ...(w.meta || {}) };
+      const ep = /^tmdb:tv:(\d+):s(\d+)e(\d+)$/i.exec(String(w.key || ''));
+      const isEp = meta.type === 'episode' || ep;
+      const tmdbId = meta.tmdbId || (ep && +ep[1]);
+      if (!tmdbId) continue;
+      if (isEp) {
+        const show = await api(`/api/tmdb/tv/${tmdbId}`);
+        const season = ep ? +ep[2] : 1;
+        const episode = ep ? +ep[3] : 1;
+        let still = '';
+        try {
+          const ed = await api(`/api/tmdb/tv/${tmdbId}/season/${season}/episode/${episode}`);
+          still = img(ed.still_path, STILL_W) || '';
+        } catch { /* season bundle may still have the still */ }
+        meta.type = 'episode';
+        meta.tmdbId = tmdbId;
+        meta.title = meta.title || `${show.name || show.title || 'Show'} — S${pad2(season)}E${pad2(episode)}`;
+        meta.poster = still || repairWatchArtUrl(meta.poster) || img(show.poster_path, POSTER_W) || '';
+        meta.backdrop = still || repairWatchArtUrl(meta.backdrop) || img(show.backdrop_path) || meta.poster || '';
+      } else {
+        const type = meta.type === 'tv' || /^tmdb:tv:/i.test(String(w.key || '')) ? 'tv' : 'movie';
+        const d = await api(`/api/tmdb/${type}/${tmdbId}`);
+        meta.type = type;
+        meta.title = meta.title || d.title || d.name || meta.title;
+        meta.poster = img(d.poster_path, POSTER_W) || repairWatchArtUrl(meta.poster) || img(d.backdrop_path, POSTER_W) || '';
+        meta.backdrop = img(d.backdrop_path) || repairWatchArtUrl(meta.backdrop) || meta.poster || '';
+      }
+      meta.overview = meta.overview || '';
+      if (!meta.poster && !meta.backdrop) continue;
+      await trackWatchPost(api('/api/watch', {
+        method: 'POST',
+        body: {
+          key: w.key,
+          profile: S.profile ? S.profile.id : undefined,
+          position: w.position || 0,
+          duration: w.duration || 0,
+          watched: !!w.watched,
+          meta,
+        },
+      }));
+      upsertWatchCache({ ...w, meta, updatedAt: Date.now() });
+      changed = true;
+    } catch { /* next row */ }
+  }
+  return changed;
 }
 function continueWatchingCleanTitle(s) {
   return String(s || '').toLowerCase()
@@ -6997,8 +7067,8 @@ function maybeRepaintHomeNextUp(items) {
 function buildCwItems(cw) {
   const items = cw.filter((w) => !w.watched && !watchLooksFinished(w) && (w.position > 30 || w.traktPct > 2) && !String(w.key).startsWith('live:') && !String(w.key).startsWith('audiobook:')).map((w) => {
     const art = freshLocalArtForKey(w.key);
-    const poster = art.poster || durableArtUrl(w.meta.poster) || durableArtUrl(w.meta.backdrop);
-    const backdrop = art.backdrop || durableArtUrl(w.meta.backdrop) || durableArtUrl(w.meta.poster);
+    const poster = art.poster || repairWatchArtUrl(w.meta.poster) || repairWatchArtUrl(w.meta.backdrop);
+    const backdrop = art.backdrop || repairWatchArtUrl(w.meta.backdrop) || repairWatchArtUrl(w.meta.poster);
     const loc = S.localMap && S.localMap[w.key];
     const item = {
     // Continue Watching shows the SHOW title only — the "— S02E01 · Episode Name" tail
@@ -7505,6 +7575,8 @@ function homeRowsSignature(rows) {
     (row.items || []).map((it) => [
       it.key || it.id || it.title || '',
       it.title || '',
+      it.poster || '',
+      it.backdrop || '',
       it.progress ? Math.round(it.progress * 1000) : 0,
       it.resume || 0,
       it.qualityRank || 0,
@@ -7581,6 +7653,12 @@ async function loadRows(opts = {}) {
   if (S.view !== 'home' && !opts.catalogOnly) return;
   perfMark(opts.catalogOnly ? 'home-catalog-render' : 'home-render');
   publishHomeRows(homeRowsFromWatch(cw, false), { preserveFocus: !!opts.preserveFocus, focusSnapshot: opts.focusSnapshot }); // First public paint waits for real rows; local/live enrichment stays off-path.
+  if (!opts.catalogOnly && opts.watchReady && cw.length) {
+    backfillContinueWatchingArt(cw).then((ok) => {
+      if (!ok || S.view !== 'home') return;
+      loadRows({ preserveFocus: true, focusSnapshot: homeFocusSnapshot(), watchReady: true, background: true });
+    }).catch(() => {});
+  }
   if (!opts.catalogOnly) {
     scheduleHomeCatalogRefresh();
     scheduleHomePersonalRefresh(cw);
@@ -8104,6 +8182,13 @@ function renderRowsInto(root, rowsData, opts = {}) {
       cards.appendChild(empty);
     }
     sec.appendChild(cards); root.appendChild(sec);
+    if (/continue watching/i.test(String(row.name || ''))) {
+      cards.querySelectorAll('[data-bg]').forEach((el) => {
+        if (!el.dataset.bg) return;
+        el.style.backgroundImage = el.dataset.bg;
+        delete el.dataset.bg;
+      });
+    }
   });
   sizeRowsWindow(root);
   if (opts.resetScroll !== false) root.scrollTop = 0; // fresh render starts on the FIRST pair of rows
@@ -9347,7 +9432,7 @@ async function playStart(it, pick, opts, playIntent) {
   // Local-first: if this exact title/episode exists in a scanned library, play the file on
   // disk instead of searching usenet, unless the chosen quality asks for another source class.
   const localNow = localPlaybackForItem(it);
-  if (localNow && (!it.tmdbId || isAttachedLibraryItem(it))) {
+  if (localNow && (!it.tmdbId || isAttachedLibraryItem(it) || playingFromLibraryFolder(it))) {
     return playLocal({ ...it, _local: localNow }, { directHandoff: !!opts.directHandoff });
   }
   const btns = [$('btnPlay'), $('dPlay')];
@@ -10587,10 +10672,12 @@ function localEpisodeItemOf(show, ep) {
   const code = `S${pad2(ep.s)}E${pad2(ep.e)}`;
   const name = localEpisodeDisplayName(ep);
   const title = `${show.title} — ${code}${name ? ` · ${name}` : ''}`;
+  const showIdx = show._showOpen != null ? show._showOpen : show._idx;
   const item = mapLocal(show._lib, ep, title);
   return { ...item, type: 'episode', q: `${show.title} ${code}`, season: ep.s, episode: ep.e,
     genre: code, backdrop: item.backdrop || show.backdrop, poster: item.poster || show.poster,
-    qualityRank: preferredQualityRankForItem(show) };
+    qualityRank: preferredQualityRankForItem(show),
+    _showIdx: ep.showIdx != null ? ep.showIdx : showIdx, _showOpen: showIdx };
 }
 function pickLocalShowPlayTarget(show, episodes) {
   const items = (episodes || []).slice().sort((a, b) => a.s - b.s || a.e - b.e).map((ep) => localEpisodeItemOf(show, ep));
@@ -10854,13 +10941,51 @@ function updateDetailPlayLabel({ label, target }) {
   prefetchSources(target, DETAIL_WARM_DELAY_MS);
   preparePlaybackSource(target, DETAIL_WARM_DELAY_MS);
 }
+function cacheLocalShowEpisodes(lib, showIdx, show, episodes) {
+  if (!lib || showIdx == null) return;
+  S._localShowEpsCache = S._localShowEpsCache || {};
+  S._localShowEpsCache[`${lib.id}:${showIdx}`] = { show: show || null, episodes: episodes || [] };
+}
+function localEpisodesFromFolderCache(show) {
+  if (!show || !show._lib || show._showOpen == null) return [];
+  const hit = S._localShowEpsCache && S._localShowEpsCache[`${show._lib.id}:${show._showOpen}`];
+  if (!hit || !hit.episodes.length) return [];
+  const lib = show._lib;
+  return hit.episodes.map((ep) => {
+    const localKey = `local:${lib.id}:${ep.idx}`;
+    const tmdbKey = ep.tmdbId ? `tmdb:tv:${ep.tmdbId}:s${ep.s}e${ep.e}` : '';
+    const loc = (S.localMap && (S.localMap[localKey] || (tmdbKey && S.localMap[tmdbKey]))) || null;
+    return loc ? { key: localKey, s: ep.s, e: ep.e, loc } : null;
+  }).filter(Boolean).sort((a, b) => a.s - b.s || a.e - b.e);
+}
+async function localShowEpisodeList(it) {
+  const lib = it && it._lib;
+  const showIdx = it && (it._showOpen != null ? it._showOpen : it._showIdx);
+  if (!lib || !lib.path || showIdx == null) return null;
+  const cacheKey = `${lib.id}:${showIdx}`;
+  const cached = S._localShowEpsCache && S._localShowEpsCache[cacheKey];
+  if (cached && cached.episodes && cached.episodes.length) {
+    return { lib, showIdx, show: cached.show, episodes: cached.episodes };
+  }
+  const r = await loadAllLocalShowEpisodes(lib, showIdx);
+  const episodes = (r.items || []).filter((x) => x.kind === 'episode').sort((a, b) => a.s - b.s || a.e - b.e);
+  cacheLocalShowEpisodes(lib, showIdx, r.show, episodes);
+  mergeLocalItems(lib, episodes);
+  return { lib, showIdx, show: r.show, episodes };
+}
 function localEpisodesForShow(show) {
-  if (!show || !show.tmdbId || !S.localMap) return [];
+  if (!show || !S.localMap) return [];
+  const folder = localEpisodesFromFolderCache(show);
+  if (folder.length) return folder;
+  if (!show.tmdbId) return [];
   const re = new RegExp(`^tmdb:tv:${show.tmdbId}:s(\\d+)e(\\d+)$`, 'i');
   return Object.keys(S.localMap).map((key) => {
     const m = re.exec(key);
     return m ? { key, s: +m[1], e: +m[2], loc: S.localMap[key] } : null;
   }).filter(Boolean).sort((a, b) => a.s - b.s || a.e - b.e);
+}
+function playingFromLibraryFolder(it) {
+  return !!(it && it._lib && it._lib.path && (it._showOpen != null || it._showIdx != null));
 }
 function localTitleHasPlayback(it) {
   if (!it) return false;
@@ -15539,11 +15664,82 @@ function updateNativeEpisodeChoices() {
     window.TriboonTV.updateEpisodeChoices(JSON.stringify({ episodes: nativeEpisodeChoices(), focusIndex: nativeEpisodeFocusIndex() }));
   } catch {}
 }
+function localShowTitleFromEpisode(it, ctx) {
+  return (ctx && ctx.show && ctx.show.title)
+    || String(it.title || '').replace(/\s*[—–-]\s*S\d{2}E\d{2}.*$/i, '').trim();
+}
+function localShowItemForEpisode(it, ctx) {
+  return {
+    title: localShowTitleFromEpisode(it, ctx),
+    _lib: ctx.lib, _showOpen: ctx.showIdx, _idx: ctx.showIdx,
+    poster: it.poster, backdrop: it.backdrop, tmdbId: it.tmdbId,
+  };
+}
+function watchRowForLocalEpisodeItem(item, ep) {
+  if (!S.watchMap || !item) return null;
+  const tmdbKey = ep.tmdbId || item.tmdbId
+    ? `tmdb:tv:${ep.tmdbId || item.tmdbId}:s${ep.s}e${ep.e}` : '';
+  return S.watchMap[item.key] || (tmdbKey && S.watchMap[tmdbKey]) || null;
+}
+async function prepLocalPlayerSeasonEpisodes(it) {
+  S.playerSeasonStrip = null;
+  closePlayerEpisodes();
+  updateNativeEpisodeChoices();
+  if (!it || it.type !== 'episode' || !playingFromLibraryFolder(it)) return false;
+  const token = (S._playerSeasonStripToken = (S._playerSeasonStripToken || 0) + 1);
+  try {
+    const ctx = await localShowEpisodeList(it);
+    if (!ctx || !ctx.episodes.length) return true;
+    if (token !== S._playerSeasonStripToken || !S.playing || !S.playing.item || S.playing.item.key !== it.key) return true;
+    const parts = episodeKeyParts(it);
+    const curS = it.season != null ? +it.season : (parts && parts.season);
+    const seasons = [...new Set(ctx.episodes.map((e) => +e.s))].sort((a, b) => a - b);
+    const startIdx = Number.isFinite(curS) ? Math.max(0, seasons.indexOf(curS)) : 0;
+    const seasonNums = seasons.slice(startIdx, startIdx + 3);
+    const showForItem = localShowItemForEpisode(it, ctx);
+    const inheritedQuality = preferredQualityRankForItem(it);
+    const items = [];
+    for (const sNum of seasonNums) {
+      for (const ep of ctx.episodes.filter((e) => +e.s === sNum)) {
+        const item = localEpisodeItemOf(showForItem, ep);
+        if (inheritedQuality) item.qualityRank = inheritedQuality;
+        const w = watchRowForLocalEpisodeItem(item, ep);
+        items.push({
+          item,
+          tag: `S${pad2(ep.s)}E${pad2(ep.e)}`,
+          name: localEpisodeDisplayName(ep),
+          still: item.backdrop || item.poster,
+          backdrop: item.backdrop || it.backdrop,
+          poster: item.poster || it.poster,
+          watched: isWatched(item) || !!(w && w.watched),
+          upcoming: false,
+        });
+      }
+    }
+    let idx = items.findIndex((ep) => ep.item.key === it.key);
+    if (idx < 0 && parts) {
+      idx = items.findIndex((ep) => +ep.item.season === +parts.season && +ep.item.episode === +parts.episode);
+    }
+    if (idx < 0 && it._idx != null) idx = items.findIndex((ep) => ep.item._idx === it._idx);
+    S.playerSeasonStrip = { currentKey: it.key, items, idx: idx < 0 ? 0 : idx };
+    renderPlayerEpisodes();
+    updateNativeEpisodeChoices();
+    return true;
+  } catch {
+    S.playerSeasonStrip = null;
+    updateNativeEpisodeChoices();
+    return true;
+  }
+}
 async function prepPlayerSeasonEpisodes(it) {
   S.playerSeasonStrip = null;
   closePlayerEpisodes();
   updateNativeEpisodeChoices();
   if (!it || it.type !== 'episode') return;
+  if (playingFromLibraryFolder(it)) {
+    await prepLocalPlayerSeasonEpisodes(it);
+    return;
+  }
   const token = (S._playerSeasonStripToken = (S._playerSeasonStripToken || 0) + 1);
   try {
     const ctx = await getPlayerEpisodeContext(it);
@@ -15841,6 +16037,33 @@ function activatePlayerEpisode() {
   closePlayerEpisodes();
   play(ep.item, null, { directHandoff: true });
 }
+async function prepLocalLibraryNextEpisode(it, token, current) {
+  if (!playingFromLibraryFolder(it)) return false;
+  try {
+    const ctx = await localShowEpisodeList(it);
+    if (!ctx || !ctx.episodes.length || !current()) return true;
+    const parts = episodeKeyParts(it);
+    const curS = it.season != null ? +it.season : (parts && parts.season);
+    const curE = it.episode != null ? +it.episode : (parts && parts.episode);
+    let idx = (Number.isFinite(curS) && Number.isFinite(curE))
+      ? ctx.episodes.findIndex((ep) => +ep.s === curS && +ep.e === curE) : -1;
+    if (idx < 0 && it._idx != null) idx = ctx.episodes.findIndex((ep) => ep.idx === it._idx);
+    if (idx < 0 || idx >= ctx.episodes.length - 1) return true;
+    const nextEp = ctx.episodes[idx + 1];
+    if (!current()) return true;
+    const item = localEpisodeItemOf(localShowItemForEpisode(it, ctx), nextEp);
+    const inheritedQuality = preferredQualityRankForItem(it);
+    if (inheritedQuality) item.qualityRank = inheritedQuality;
+    S.nextEp = {
+      item,
+      still: item.backdrop || item.poster || it.backdrop,
+      epName: localEpisodeDisplayName(nextEp),
+      tag: `S${pad2(nextEp.s)}E${pad2(nextEp.e)}`,
+    };
+    updateNextEpisodeButton();
+    return true;
+  } catch { return true; }
+}
 async function prepNextEpisode(it) {
   const token = (S._nextEpisodeToken = (S._nextEpisodeToken || 0) + 1);
   S.nextEp = null; S.upNextShown = false; S.upNextDismissed = false; S.nextEpPrepared = false;
@@ -15848,6 +16071,10 @@ async function prepNextEpisode(it) {
   if (!it || it.type !== 'episode' || !it.key) return;
   const current = () => token === S._nextEpisodeToken
     && !!(S.playing && S.playing.item && S.playing.item.key === it.key);
+  if (playingFromLibraryFolder(it)) {
+    const handled = await prepLocalLibraryNextEpisode(it, token, current);
+    if (handled) return;
+  }
   const parts = episodeKeyParts(it); if (!parts) return;
   const tmdbId = parts.tmdbId, s = parts.season, e = parts.episode;
   try {
@@ -20918,6 +21145,7 @@ function mapLocal(lib, x, titleOverride) {
     _local: x.streamUrl ? { streamUrl: x.streamUrl, playUrl: x.playUrl, name: titleOverride || x.title } : null,
     _episode: x.kind === 'episode',
     _showOpen: x.kind === 'show' ? x.idx : undefined,
+    _showIdx: x.kind === 'episode' && x.showIdx != null ? x.showIdx : undefined,
   };
   rememberLibrarySource(mapped);
   return mapped;
@@ -21012,6 +21240,7 @@ async function openLocalShowDetail(it) {
     if (reqId !== S.detailReq) return;
     const episodes = (r.items || []).filter((x) => x.kind === 'episode').sort((a, b) => a.s - b.s || a.e - b.e);
     S.localDetailEpisodes = episodes;
+    cacheLocalShowEpisodes(show._lib, show._showOpen, r.show, episodes);
     S.detailSeasons = localSeasonSummaries(episodes);
     mergeLocalItems(show._lib, episodes);
     if (!episodes.length) {

@@ -191,6 +191,8 @@ test('release contract: Android verification fails fast on device and app precon
     'verify:full forwards the emulator host-port route into the Android stress gate');
   assert.match(verify, /household IPTV first-byte \+ retune[\s\S]+verify-live\.js --base \$LiveBase --iptv/,
     'verify:full runs household IPTV first-byte retune against the live server');
+  assert.match(verify, /Local library next episode[\s\S]+test\/local-next-episode\.test\.js/,
+    'verify:full runs the local TV library next-episode smoke before the full Node suite');
   assert.match(stress, /api\('\/api\/watchlist'\)[\s\S]+api\('\/api\/watch' \+ profileQ\(\)\)[\s\S]+exact -VodKey was not found/,
     'stress resolves and requires the exact requested VOD fixture instead of silently testing an unrelated home card');
   assert.match(stress, /const candidate = document\.getElementById\('chMultiBtn'\);[\s\S]+candidate && candidate\.offsetParent !== null/,

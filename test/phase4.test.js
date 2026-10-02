@@ -511,7 +511,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local playback should be allowed only when it matches the requested source class');
   assert.match(ui, /const picked = pick && typeof pick === 'object'[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+localExact = !picked && localPlaybackForItem\(it\) \? \{ \.\.\.it, _local: localPlaybackForItem\(it\) \} : null;[\s\S]+if \(localExact && \(isAttachedLibraryItem\(it\) \|\| localPlaybackFitsQuality\(localExact, qRank\)\)\)[\s\S]+playLocal\(localExact/,
     'IR Movies\/TV always play the disk file; catalog Play still honors 1080p\/4K so a local 1080 cannot replace a selected 4K');
-  assert.match(ui, /if \(localNow && \(!it\.tmdbId \|\| isAttachedLibraryItem\(it\)\)\) \{[\s\S]+return playLocal\(\{ \.\.\.it, _local: localNow \}/,
+  assert.match(ui, /if \(localNow && \(!it\.tmdbId \|\| isAttachedLibraryItem\(it\) \|\| playingFromLibraryFolder\(it\)\)\) \{[\s\S]+return playLocal\(\{ \.\.\.it, _local: localNow \}/,
     'clicking a library card plays the ripped file even when a leftover Hollywood TMDB id is still on the row');
   assert.match(ui, /if \(it\._lib && it\._lib\.path\) \{[\s\S]+return it\._episode \? playLocal\(it\) : openLocalDetail\(it\);/,
     'attached-library cards open local details instead of the Hollywood TMDB page');
@@ -577,6 +577,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching canonical merges should prefer active/recent cards while preserving quality');
   assert.match(ui, /function buildCwItems\(cw\) \{[\s\S]+const seen = new Set\(items\.map\(\(it\) => continueWatchingIdentity\(it\) \|\| it\.key\)\)[\s\S]+return dedupeContinueWatchingItems\(items\)\.sort\(compareContinueWatchingItems\);/,
     'Continue Watching should dedupe next-up and in-progress cards by canonical identity');
+  assert.match(ui, /async function backfillContinueWatchingArt\(rows\) \{[\s\S]+api\('\/api\/watch',[\s\S]+meta,/,
+    'Continue Watching should backfill missing TMDB art into watch rows for every client');
+  assert.match(ui, /if \(!opts\.catalogOnly && opts\.watchReady && cw\.length\) \{[\s\S]+backfillContinueWatchingArt\(cw\)/,
+    'Home should repair Continue Watching thumbnails after watch rows load');
+  assert.match(ui, /\/continue watching\/i\.test\(String\(row\.name \|\| ''\)\)\) \{[\s\S]+el\.style\.backgroundImage = el\.dataset\.bg;/,
+    'Continue Watching row should paint thumbnails immediately instead of waiting on lazy scroll');
   assert.match(ui, /function nextEpisodeBumps\(cw, cwItems\) \{[\s\S]+continueWatchingIdentity\(it\) === `tv:\$\{id\}`/,
     'local next-episode bumps should not add a second card for a show already in Continue Watching');
   // Resume should feel local: settling focus on a resumable card warms the best source all the way
@@ -605,6 +611,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'episode targets created from details should inherit the current show quality preference');
   assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
     'player episode strip and Up Next should continue the same 4K/1080p class');
+  assert.match(ui, /function playingFromLibraryFolder\(it\)[\s\S]+async function prepLocalLibraryNextEpisode\(it, token, current\)[\s\S]+localEpisodeItemOf\(localShowItemForEpisode\(it, ctx\), nextEp\)[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+if \(playingFromLibraryFolder\(it\)\)/,
+    'IR/local library Up Next must pick the next file in the same show folder, not TMDB prepare/usenet');
+  assert.match(ui, /async function prepLocalPlayerSeasonEpisodes\(it\)[\s\S]+async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+if \(playingFromLibraryFolder\(it\)\) \{[\s\S]+await prepLocalPlayerSeasonEpisodes\(it\)/,
+    'player episode guide/rail for local libraries lists on-disk episodes in the same show folder');
   assert.match(ui, /async function saveWatch\(final, opts = \{\}\) \{[\s\S]+let pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5 && playedSeconds < 1\) return;[\s\S]+const nearEnd = isGenuineEpisodeEof\(p, pos, d\);[\s\S]+const watched = opts && opts\.watched != null \? !!opts\.watched : \(nearEnd \|\| !!\(p && p\._ended\)\);[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+watched, profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)/,
     'watch progress should save profile-scoped position immediately into the local cache and server (keepalive on final saves so close/pagehide flushes survive teardown), honoring a caller watched-override');
   assert.match(ui, /function flushPlaybackCheckpoints\(\) \{[\s\S]+if \(S\.playing\) saveWatch\(true\);[\s\S]+saveMultiViewVodProgress\(i, true\);[\s\S]+window\.__tvPlaybackBackgrounded = flushPlaybackCheckpoints;[\s\S]+window\.addEventListener\('pagehide', \(\) => \{[\s\S]+flushPlaybackCheckpoints\(\);[\s\S]+document\.addEventListener\('visibilitychange', \(\) => \{[\s\S]+document\.visibilityState === 'hidden'[\s\S]+flushPlaybackCheckpoints\(\);/,
@@ -2267,6 +2277,7 @@ test('next-episode metadata cannot overwrite a newer player when requests resolv
   const updates = [];
   const prepNextEpisode = new Function('S', 'updateNextEpisodeButton', 'episodeKeyParts',
     'getPlayerEpisodeContext', 'api', 'epItemOf', 'preferredQualityRankForItem', 'ensureLocalPlaybackForItem',
+    'playingFromLibraryFolder', 'prepLocalLibraryNextEpisode',
     // STILL_W is the DPI-aware episode-still size the helper now asks img() for.
     'img', 'pad2', 'STILL_W', `${ui.slice(start, end)}\nreturn prepNextEpisode;`)(
       S,
@@ -2277,6 +2288,8 @@ test('next-episode metadata cannot overwrite a newer player when requests resolv
       (show, _season, ep) => ({ key: `${show.id}:s1e${ep.episode_number}`, type: 'episode' }),
       () => null,
       () => Promise.resolve(null),
+      () => false,
+      async () => false,
       (value) => value || '',
       (n) => String(n).padStart(2, '0'),
       'w780');

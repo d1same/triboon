@@ -45,7 +45,9 @@ That command runs:
 - focused IPTV/P9 tests;
 - focused fast VOD startup/P14 tests;
 - focused subtitles/CC/P11 tests;
-- full `npm.cmd test`;
+- local TV library next-episode smoke (`test/local-next-episode.test.js` — scan,
+  folder order S01E01→S01E02, stream bytes);
+- full `npm.cmd test` (includes the same local next-episode suite);
 - isolated `/api/server` runtime smoke;
 - household live smokes against the running app (`TRIBOON_USER` +
   `TRIBOON_PASS` or `TRIBOON_TOKEN`): movie + episode play/seek/resume/CC,
@@ -125,6 +127,17 @@ fails to produce a playable stream. Budgets default to feels-local targets
 (ready≤3s, 1stByte≤1.5s) and flag `SLOW` rather than hard-failing on timing.
 
 ### Latest Evidence
+
+2026-10-02, unshipped — Jellyfin Continue Watching sees the Triboon app profile:
+
+- Example: you pause a movie in the Triboon Android app under your named
+  profile. Jellyfin on the same account used to look only in a bucket named
+  `default`, so the row was missing. It now reads every unrestricted
+  profile and keeps the newest minute. Kids-profile pauses stay off that row.
+- Gate: `node --test test/jellyfin-api.test.js` 23/23. Phone-profile Resume
+  and kids-exclusion covered. `verify:full` not run (watch-row merge only,
+  not shipped).
+- Live Unraid still on 3.3.7 until a tag.
 
 2026-10-02, v3.3.7 — Jellyfin plays the original 1080p file first; Roku no longer dies on missing lists:
 

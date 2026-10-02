@@ -801,6 +801,33 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   const traktCard = withTrakt.json.Items.find((row) => row.Name === 'Trakt Movie');
   assert.ok(traktCard, 'a Trakt percent on the website is on the Jellyfin row');
   assert.strictEqual(traktCard.UserData.PlayedPercentage, 40);
+  const account = await httpJson(srv.port, 'GET', '/api/me', null, admin);
+  const appProfile = ((account.json && account.json.profiles) || []).find((p) => (p.level ?? 4) >= 4);
+  assert.ok(appProfile && appProfile.id && appProfile.id !== 'default', 'the Triboon app profile is not named default');
+  const phoneWatch = await httpJson(srv.port, 'POST', '/api/watch', {
+    key: 'tmdb:movie:550550',
+    profile: appProfile.id,
+    position: 400,
+    duration: 2000,
+    meta: { title: 'Phone Movie', type: 'movie', tmdbId: 550550 },
+  }, admin);
+  assert.strictEqual(phoneWatch.status, 200);
+  const fromPhone = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items/Resume`, { headers: { authorization: authz } });
+  assert.ok(fromPhone.json.Items.some((row) => row.Name === 'Phone Movie'),
+    'a movie paused in the Triboon app shows on the Jellyfin Continue Watching row');
+  const kid = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'Kid', level: 0 }, admin);
+  assert.strictEqual(kid.status, 200);
+  assert.ok(kid.json && kid.json.id);
+  await httpJson(srv.port, 'POST', '/api/watch', {
+    key: 'tmdb:movie:660660',
+    profile: kid.json.id,
+    position: 400,
+    duration: 2000,
+    meta: { title: 'Kid Movie Hidden', type: 'movie', tmdbId: 660660 },
+  }, admin);
+  const afterKid = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items/Resume`, { headers: { authorization: authz } });
+  assert.ok(!afterKid.json.Items.some((row) => row.Name === 'Kid Movie Hidden'),
+    'a kids-profile pause stays off the Jellyfin row');
   const early = await httpJson(srv.port, 'POST', '/api/watch', {
     key: 'tmdb:tv:77:s1e1',
     position: 400,
@@ -823,7 +850,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(resumed.UserData.PlaybackPositionTicks, 120 * 10000000);
   const again = await httpSend(srv.port, 'GET', `/Items/${localId}`, { headers: { authorization: authz } });
   assert.strictEqual(again.json.UserData.PlaybackPositionTicks, 120 * 10000000, 'the details page offers Resume');
-  const triboonHome = await httpJson(srv.port, 'GET', '/api/watch', null, admin);
+  const triboonHome = await httpJson(srv.port, 'GET', `/api/watch?profile=${encodeURIComponent(appProfile.id)}`, null, admin);
   const mahourAtHome = triboonHome.json.find((row) => row.key === `local:${disk.json.id}:0`);
   assert.ok(mahourAtHome && mahourAtHome.position === 120, 'a pause in the Jellyfin app shows when you open Triboon');
   const browserWatch = await httpJson(srv.port, 'POST', '/api/watch', {

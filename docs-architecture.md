@@ -20,7 +20,7 @@ canonical reference.
 - Jellyfin apps: optional door in `server/jellyfin-api.js`, off until Settings
   → Jellyfin apps. Same Triboon accounts. Catalog and disk libraries. Playback
   is short HLS pieces capped at 1080p. Continue Watching and Play Next use the
-  same default-profile watch rows as the Triboon app, and a resume warms that
+  same account watch rows as the Triboon app (unrestricted profiles), and a resume warms that
   minute. While the picture is not ready the player shows a Loading card.
   The Triboon web, Android, and Windows clients do not use this door.
 - Data: atomic JSON store in `TRIBOON_DATA`, AES-256-GCM encrypted settings

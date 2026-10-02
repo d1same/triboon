@@ -34,8 +34,10 @@ flowchart LR
     `keepalive`; Multiview VOD slots follow the same contract.
   - `preferredQualityRankForItem()` owns the durable title/show preference;
     `qualityRankForItem()` applies only the current device's effective cap.
-  - `loadWatchState()`, `buildCwItems()`, `continueWatchingIdentity()`,
-    and `dedupeContinueWatchingItems()` build the Home row.
+  - `loadWatchState()`, `backfillContinueWatchingArt()`, `buildCwItems()`,
+    `continueWatchingIdentity()`, and `dedupeContinueWatchingItems()` build the
+    Home row. Missing TMDB art on saved watch rows is repaired from TMDB and
+    persisted so browser and Android show the same 16:9 thumbnails.
   - `cwOp()`, `homeFocusSnapshot()`, and `restoreHomeFocus()` keep row focus
     stable after remove/mark actions.
   - `epItemOf()`, `epTarget()`, `prepNextEpisode()`, and
@@ -136,7 +138,9 @@ flowchart LR
 
 ## Jellyfin Home
 
-Jellyfin reads the same default-profile watch rows as the Triboon app.
+Jellyfin reads the same account watch rows as the Triboon app (every
+unrestricted profile, newest minute wins). Kids-profile watches stay off
+that row.
 
 - Continue Watching matches the website row: a movie or episode paused past
   30 seconds, a Trakt percent with no minute yet, and the next episode after

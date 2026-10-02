@@ -5412,6 +5412,59 @@ function watchRowForKeyFromAll(all, uid, profile, key) {
   const fallback = all[`${uid}:default:${key}`];
   return active !== 'default' && fallback && fallback.fromTrakt ? fallback : null;
 }
+
+// Jellyfin has no profile picker. A Triboon account's first profile is a random
+// id, not "default", so the Android app's Continue Watching lives in that
+// bucket. Read every unrestricted profile and keep the newest row per title.
+function jellyfinWatchProfileIds(user) {
+  const ids = ['default'];
+  for (const p of (user && user.profiles) || []) {
+    const level = p.level ?? (p.kid ? 0 : 4);
+    if (level >= 4 && p.id && !ids.includes(p.id)) ids.push(p.id);
+  }
+  return ids;
+}
+function watchRowsForProfilesFromAll(all, uid, profileIds) {
+  const rows = new Map();
+  for (const profile of profileIds || []) {
+    const prefix = `${uid}:${profile}:`;
+    for (const [fullKey, value] of Object.entries(all || {})) {
+      if (!fullKey.startsWith(prefix) || !value) continue;
+      const key = fullKey.slice(prefix.length);
+      const prev = rows.get(key);
+      if (!prev || (value.updatedAt || 0) >= (prev.updatedAt || 0)) {
+        rows.set(key, { key, _profile: profile, ...value });
+      }
+    }
+  }
+  return [...rows.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+function watchRowForKeyFromProfiles(all, uid, profileIds, key) {
+  let best = null;
+  for (const profile of profileIds || []) {
+    const row = all && all[`${uid}:${profile}:${key}`];
+    if (row && (!best || (row.updatedAt || 0) >= (best.updatedAt || 0))) best = row;
+  }
+  return best;
+}
+function jellyfinWatchStoreProfile(user, key) {
+  const ids = jellyfinWatchProfileIds(user);
+  const all = store.read('watch', {});
+  let best = ids.includes('default') ? 'default' : (ids[0] || 'default');
+  let bestAt = -1;
+  for (const profile of ids) {
+    const row = all[`${user.id}:${profile}:${key}`];
+    if (row && (row.updatedAt || 0) >= bestAt) {
+      bestAt = row.updatedAt || 0;
+      best = profile;
+    }
+  }
+  if (bestAt < 0) {
+    const named = ids.find((id) => id !== 'default');
+    if (named) best = named;
+  }
+  return best;
+}
 function deleteWatchKeyForProfile(all, uid, profile, key) {
   const active = profile || 'default';
   delete all[`${uid}:${active}:${key}`];
@@ -11180,9 +11233,19 @@ function jellyfinLocalSearch(ctx, query, limit) {
   return searchLibraryRecords(query, libs.map((lib) => lib.id), limit);
 }
 
-function jellyfinNextCatalog(ctx) {
+async function jellyfinNextCatalog(ctx) {
   if (!ctx || !ctx.user) return [];
-  return nextWatchEpisodes(ctx.user.id, 'default');
+  const seen = new Set();
+  const out = [];
+  for (const profile of jellyfinWatchProfileIds(ctx.user)) {
+    for (const row of await nextWatchEpisodes(ctx.user.id, profile)) {
+      const id = String(row && row.tmdbId || '');
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(row);
+    }
+  }
+  return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
 const JELLYFIN_TEXT_SUB = new Set(['srt', 'vtt', 'ass', 'ssa']);
@@ -11418,14 +11481,14 @@ function jellyfinLocalPlay(ctx, libId, idx) {
 
 function jellyfinWatchGet(ctx, key) {
   if (!ctx || !ctx.user || !key) return null;
-  return watchRowForKeyFromAll(store.read('watch', {}), ctx.user.id, 'default', key);
+  return watchRowForKeyFromProfiles(store.read('watch', {}), ctx.user.id, jellyfinWatchProfileIds(ctx.user), key);
 }
 
 function jellyfinWatchSave(ctx, key, patch) {
   if (!ctx || !ctx.user || !key) return;
   const position = Math.max(0, Math.round(Number(patch.position) || 0));
   const duration = Math.max(0, Math.round(Number(patch.duration) || 0));
-  const storeKey = `${ctx.user.id}:default:${key}`;
+  const storeKey = `${ctx.user.id}:${jellyfinWatchStoreProfile(ctx.user, key)}:${key}`;
   store.update('watch', {}, (all) => {
     const prev = all[storeKey] || {};
     const keptDuration = duration || prev.duration || 0;
@@ -11446,7 +11509,7 @@ function jellyfinWatchSave(ctx, key, patch) {
 
 function jellyfinWatchRows(ctx) {
   if (!ctx || !ctx.user) return [];
-  return watchRowsForProfileFromAll(store.read('watch', {}), ctx.user.id, 'default')
+  return watchRowsForProfilesFromAll(store.read('watch', {}), ctx.user.id, jellyfinWatchProfileIds(ctx.user))
     .filter((row) => row && !row.hidden && !String(row.key).startsWith('live:') && !String(row.key).startsWith('audiobook:'));
 }
 
@@ -11476,7 +11539,7 @@ function jellyfinResumeIdentity(row) {
 
 function jellyfinWatchResume(ctx) {
   if (!ctx || !ctx.user) return [];
-  const rows = watchRowsForProfileFromAll(store.read('watch', {}), ctx.user.id, 'default')
+  const rows = watchRowsForProfilesFromAll(store.read('watch', {}), ctx.user.id, jellyfinWatchProfileIds(ctx.user))
     .filter((row) => row && !row.watched && !row.hidden
       && ((row.position || 0) > 30 || (row.traktPct || 0) > 2)
       && !/^tmdb:tv:\d+$/.test(String(row.key || ''))

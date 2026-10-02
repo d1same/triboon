@@ -185,6 +185,11 @@ Invoke-Gate "Subtitles / CC / P11 focused tests" {
   Assert-ExitCode "phase4 subtitle pattern"
 }
 
+Invoke-Gate "Local library next episode" {
+  & node --test --test-force-exit test/local-next-episode.test.js
+  Assert-ExitCode "test/local-next-episode.test.js"
+}
+
 Invoke-Gate "full Node suite" {
   & npm.cmd test
   Assert-ExitCode "npm.cmd test"
