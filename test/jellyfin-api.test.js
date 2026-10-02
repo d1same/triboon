@@ -911,7 +911,10 @@ function fakeDoor(extra = {}) {
         return null;
       },
     },
-    jellyfinStream: (id) => (live.has(id) ? { hlsUrl: `/api/hls/${id}?t=x`, remuxUrl: '' } : null),
+    jellyfinStream: (id) => (live.has(id) ? {
+      hlsUrl: `/api/hls/${id}?t=x`, remuxUrl: '', streamUrl: `/api/stream/${id}?t=x`, name: 'Movie.1080p.mkv', size: 2e9,
+    } : null),
+    jellyfinMarkDirect: (id, on) => { calls.direct = { id, on }; },
     jellyfinPrepare: async () => {
       calls.prepare += 1;
       calls.order.push('prepare');
@@ -925,7 +928,10 @@ function fakeDoor(extra = {}) {
       const id = `mount${fakeMounts}`;
       calls.mounts = [...(calls.mounts || []), id];
       live.add(id);
-      return { status: 200, body: { id, hlsUrl: `/api/hls/${id}?t=x`, sessionId: `s${calls.play}` } };
+      return { status: 200, body: {
+        id, hlsUrl: `/api/hls/${id}?t=x`, streamUrl: `/api/stream/${id}?t=x`,
+        name: 'Movie.1080p.mkv', size: 2e9, sessionId: `s${calls.play}`,
+      } };
     },
     jellyfinSubtitleStreams: extra.subs ? async (_ctx, _id, start) => [{ Index: start, Type: 'Subtitle', Codec: 'webvtt', Language: 'en', IsExternal: true, DeliveryMethod: 'External' }] : undefined,
     jellyfinTracks: extra.tracks,
@@ -1090,4 +1096,97 @@ test('jellyfin playback start saves the minute like a progress report', async ()
   const empty = await door.call('progress', 'POST', '/Sessions/Playing', { body: { ItemId: 'm551', PositionTicks: 0 } });
   assert.strictEqual(empty.status, 204);
   assert.strictEqual(door.calls.saved.length, 1, 'a start at 0:00 does not overwrite the saved minute');
+});
+
+const TV_PROFILE = {
+  MaxStreamingBitrate: 120000000,
+  DirectPlayProfiles: [{ Type: 'Video', Container: 'mkv,mp4', VideoCodec: 'h264,hevc', AudioCodec: 'aac,ac3,eac3' }],
+  CodecProfiles: [{
+    Type: 'Video', Codec: 'hevc',
+    Conditions: [{ Condition: 'EqualsAny', Property: 'VideoRangeType', Value: 'SDR|HDR10', IsRequired: false }],
+  }],
+};
+const H264_FILE = {
+  format: 'matroska,webm', bitRate: 9000000, duration: 2700,
+  video: [{ codec: 'h264', profile: 'High', height: 1080, width: 1920, bitDepth: 8, level: 41, rangeType: 'SDR' }],
+  audio: [{ codec: 'eac3', profile: '', lang: 'eng', channels: 6 }],
+};
+
+test('jellyfin app plays the original 1080p file when its own player can', async () => {
+  const door = fakeDoor({ tracks: async () => H264_FILE });
+  const res = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
+    body: { MediaSourceId: 'm550', DeviceProfile: TV_PROFILE, StartTimeTicks: 2400 * 10000000 },
+  });
+  const src = res.body.MediaSources[0];
+  assert.strictEqual(src.SupportsDirectPlay, true, 'no re-encode for a file the TV plays itself');
+  assert.strictEqual(src.Container, 'mkv');
+  assert.strictEqual(src.Bitrate, 9000000);
+  assert.strictEqual(src.Size, 2e9);
+  assert.strictEqual(src.Id, 'm550', 'Android TV still needs its own id back');
+  assert.strictEqual(src.IsRemote, false);
+  assert.ok(src.TranscodingUrl.includes('/api/hls/'), 'the encoded copy stays as the backup');
+  assert.deepStrictEqual(door.calls.direct, { id: door.calls.mounts[0], on: true }, 'captions skip the encoded clock');
+  assert.strictEqual(progressSeconds('u1', 'm550', 600), 600, 'the original file reports the real minute, so no resume shift');
+  const video = src.MediaStreams.find((row) => row.Type === 'Video');
+  assert.strictEqual(video.Width, 1920);
+  assert.strictEqual(video.BitDepth, 8);
+  assert.strictEqual(video.VideoRangeType, 'SDR');
+});
+
+test('jellyfin keeps the encoded copy when the app cannot play the file', async () => {
+  const cases = [
+    ['no profile sent', H264_FILE, {}],
+    ['audio the TV lacks', { ...H264_FILE, audio: [{ codec: 'dts', channels: 6 }] }, { DeviceProfile: TV_PROFILE }],
+    ['over the app bitrate', H264_FILE, { DeviceProfile: { ...TV_PROFILE, MaxStreamingBitrate: 4000000 } }],
+    ['Dolby Vision on a TV without it', {
+      ...H264_FILE, video: [{ codec: 'hevc', height: 1080, bitDepth: 10, rangeType: 'DOVI' }],
+    }, { DeviceProfile: TV_PROFILE }],
+    ['the app asked for the encoded copy', H264_FILE, { DeviceProfile: TV_PROFILE, EnableDirectPlay: false }],
+    ['container the TV lacks', { ...H264_FILE, format: 'avi' }, { DeviceProfile: TV_PROFILE }],
+  ];
+  for (const [why, file, body] of cases) {
+    const door = fakeDoor({ tracks: async () => file });
+    const res = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { MediaSourceId: 'm550', ...body } });
+    const src = res.body.MediaSources[0];
+    assert.strictEqual(src.SupportsDirectPlay, false, why);
+    assert.strictEqual(src.Container, 'mp4', why);
+    assert.ok(src.TranscodingUrl.includes('/api/hls/'), why);
+  }
+  const hdr = fakeDoor({ tracks: async () => ({ ...H264_FILE, video: [{ codec: 'hevc', height: 1080, bitDepth: 10, rangeType: 'HDR10' }] }) });
+  const ok = await hdr.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { DeviceProfile: TV_PROFILE } });
+  assert.strictEqual(ok.body.MediaSources[0].SupportsDirectPlay, true, 'HDR10 is on the TV list');
+});
+
+test('jellyfin static stream hands the app the ranged original file', async () => {
+  const door = fakeDoor({ tracks: async () => H264_FILE });
+  await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { MediaSourceId: 'm550', DeviceProfile: TV_PROFILE } });
+  const res = await door.call('video', 'GET', '/Videos/m550/stream.mkv?Static=true&MediaSourceId=m550', { headers: { host: 'tv.local:7777' } });
+  assert.strictEqual(res.status, 302);
+  assert.match(res.headers.location, new RegExp(`/api/stream/${door.calls.mounts[0]}\\?t=x$`));
+  assert.strictEqual(door.calls.play, 1, 'the file the TV asks for is the mount PlaybackInfo already opened');
+  const cold = fakeDoor();
+  const fresh = await cold.call('video', 'GET', '/Videos/m550/stream?static=true&mediaSourceId=m550');
+  assert.strictEqual(fresh.status, 302);
+  assert.match(fresh.headers.location, /\/api\/stream\/mount\d+\?t=x$/);
+  assert.strictEqual(cold.calls.play, 1);
+  const encoded = await cold.call('video', 'GET', '/Videos/m550/stream?mediaSourceId=m550');
+  assert.match(encoded.headers.location, /\/api\/hls\//, 'without static the app still gets the encoded copy');
+});
+
+test('jellyfin answers the lists Roku reads right before play', async () => {
+  const door = fakeDoor();
+  const trailers = await door.call('emptyList', 'GET', '/Items/m550/LocalTrailers');
+  assert.strictEqual(trailers.status, 200);
+  assert.deepStrictEqual(trailers.body, []);
+  const userTrailers = await door.call('emptyList', 'GET', '/Users/u1u1/Items/m550/LocalTrailers');
+  assert.deepStrictEqual(userTrailers.body, []);
+  const images = await door.call('emptyList', 'GET', '/Items/m550/Images');
+  assert.deepStrictEqual(images.body, []);
+  const parts = await door.call('emptyItemPage', 'GET', '/Videos/m550/AdditionalParts');
+  assert.strictEqual(parts.status, 200);
+  assert.strictEqual(parts.body.TotalRecordCount, 0);
+  assert.deepStrictEqual(parts.body.Items, []);
+  const enc = await door.call('encodingConfig', 'GET', '/System/Configuration/Encoding');
+  assert.strictEqual(enc.status, 200);
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.kind === 'shelf' && r.re.test('/items/')), 'Roku favorites ask /Items/ with a slash');
 });

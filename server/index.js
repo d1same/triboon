@@ -22,6 +22,7 @@ const {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
   attachJellyfinSocket, closeJellyfinSockets,
   streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist, playlistClockShift, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard,
+  directGrantUser,
 } = require('./jellyfin-api');
 const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch, articleFlipQuery, collectArticleSiblings } = require('./pipeline');
 const {
@@ -11160,7 +11161,18 @@ function jellyfinStream(mountId, uid) {
   const vf = mounts.get(String(mountId || ''));
   if (!vf || !uid) return null;
   const payload = mountPayload(vf, uid);
-  return { remuxUrl: payload.remuxUrl || '', hlsUrl: payload.hlsUrl || '' };
+  return {
+    remuxUrl: payload.remuxUrl || '',
+    hlsUrl: payload.hlsUrl || '',
+    streamUrl: vf.streamable ? payload.streamUrl : '',
+    name: vf.name || '',
+    size: vf.size || 0,
+  };
+}
+
+function jellyfinMarkDirect(mountId, on) {
+  const vf = mounts.get(String(mountId || ''));
+  if (vf) vf._jellyfinDirect = !!on;
 }
 
 function jellyfinLocalSearch(ctx, query, limit) {
@@ -11293,6 +11305,8 @@ async function jellyfinClockShift(vf) {
     const lists = vf._hls ? [...vf._hls.values()].filter((sess) => sess && sess.hold) : [];
     const newest = lists.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
     if (newest && Number.isFinite(newest.clockShift)) return newest.clockShift;
+    // The app plays the original file, so its clock is already the movie's clock.
+    if (!newest && vf._jellyfinDirect) return 0;
     const waited = Date.now() - began;
     if ((!newest && waited >= JELLYFIN_CLOCK_LIST_WAIT_MS) || waited >= JELLYFIN_CLOCK_SETTLE_WAIT_MS) return 0;
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -11606,6 +11620,7 @@ const mediaAppDeps = {
   localSubtitles: jellyfinLocalSubtitles,
   localSubtitleBody: jellyfinLocalSubtitleBody,
   subtitleOnPlayerClock: jellyfinSubtitleOnPlayerClock,
+  jellyfinMarkDirect,
   localFacets: jellyfinLocalFacets,
   localSearch: jellyfinLocalSearch,
   jellyfinWatchGet, jellyfinWatchSave, jellyfinWatchResume, jellyfinWatchRows,
@@ -11627,6 +11642,10 @@ function jellyfinQueryHint(url) {
     const value = q.get(key) || q.get(key.charAt(0).toLowerCase() + key.slice(1));
     if (value) bits.push(`${key}=${String(value).slice(0, 48)}`);
   }
+  // Names only: a token or session value never reaches the log.
+  const shown = new Set(keys.map((k) => k.toLowerCase()));
+  const others = [...new Set([...q.keys()].map((k) => k.slice(0, 32)))].filter((k) => !shown.has(k.toLowerCase()));
+  if (others.length) bits.push(`also=${others.slice(0, 12).join(',')}`);
   return bits.length ? ` ${bits.join(' ')}` : '';
 }
 
@@ -11748,6 +11767,12 @@ const server = http.createServer(async (req, res) => {
         const reject = (code, body) => { req.on('error', () => {}); req.resume(); return send(res, code, body, cors); };
         const token = jellyfinToken(req);
         const claims = auth.verifyToken(token, 'session');
+        const grantUid = !claims && route.kind === 'video' ? directGrantUser(clientIp(ctx), url, ctx.m[1]) : null;
+        if (grantUid) {
+          ctx.user = auth.getUser(grantUid);
+          if (!ctx.user) return reject(401, { error: 'unknown user' });
+          return await route.h(ctx);
+        }
         if (!claims) return reject(401, { error: 'authentication required' });
         ctx.claims = claims;
         ctx.user = auth.getUser(claims.uid);

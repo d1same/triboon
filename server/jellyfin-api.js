@@ -1040,6 +1040,190 @@ function completeStream(row) {
   };
 }
 
+function videoRangeType(track) {
+  if (!track) return 'SDR';
+  if (track.rangeType) return track.rangeType;
+  return track.hdr ? 'HDR10' : 'SDR';
+}
+
+function videoRange(track) {
+  return videoRangeType(track) === 'SDR' ? 'SDR' : 'HDR';
+}
+
+// ---------- direct play ----------
+// Each Jellyfin app sends the formats its own player handles. When the file
+// fits, the app plays the original bytes with seeking and its own buffer, and
+// no ffmpeg runs here. Anything unsure stays on the encoded HLS copy.
+const CONTAINER_NAMES = {
+  mkv: ['mkv', 'matroska', 'webm'],
+  mp4: ['mp4', 'm4v', 'mov'],
+  ts: ['ts', 'mpegts', 'm2ts'],
+  avi: ['avi'],
+};
+const CODEC_NAMES = {
+  hevc: ['hevc', 'h265'],
+  h264: ['h264', 'avc'],
+  dts: ['dts', 'dca'],
+  mpeg2video: ['mpeg2video', 'mpeg2'],
+};
+
+function sourceContainer(probe, fileName) {
+  const fmt = String((probe && probe.format) || '').toLowerCase();
+  if (fmt.includes('matroska') || fmt.includes('webm')) return 'mkv';
+  if (fmt.includes('mp4') || fmt.includes('mov')) return 'mp4';
+  if (fmt.includes('mpegts')) return 'ts';
+  if (fmt.includes('avi')) return 'avi';
+  const ext = /\.([a-z0-9]{2,4})$/i.exec(String(fileName || ''));
+  const e = ext ? ext[1].toLowerCase() : '';
+  for (const [name, aliases] of Object.entries(CONTAINER_NAMES)) if (aliases.includes(e)) return name;
+  return '';
+}
+
+function listMatches(list, value, aliases) {
+  const items = String(list || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean);
+  if (!items.length) return true;
+  if (!value) return false;
+  const v = String(value).toLowerCase();
+  const names = (aliases && aliases[v]) || [v];
+  return names.some((n) => items.includes(n));
+}
+
+function queryField(ctx, body, name) {
+  const lower = name.toLowerCase();
+  for (const [key, value] of Object.entries(body && typeof body === 'object' ? body : {})) {
+    if (key.toLowerCase() === lower) return value;
+  }
+  const q = ctx && ctx.url && ctx.url.searchParams;
+  if (q) for (const [key, value] of q) if (key.toLowerCase() === lower) return value;
+  return undefined;
+}
+
+// Values the app may test. Anything left out here (RefFrames, framerate...)
+// is not known before play, so it never blocks the original file.
+function profileFacts(video, audio, container) {
+  return {
+    Width: video && video.width,
+    Height: video && video.height,
+    VideoBitDepth: video && video.bitDepth,
+    VideoProfile: video && video.profile ? String(video.profile).toLowerCase() : null,
+    VideoLevel: video && video.level,
+    VideoRangeType: video ? videoRangeType(video) : null,
+    AudioChannels: audio && audio.channels,
+    AudioProfile: audio && audio.profile ? String(audio.profile).toLowerCase() : null,
+    Container: container,
+  };
+}
+
+const KNOWN_FACTS = new Set(['Width', 'Height', 'VideoBitDepth', 'VideoProfile', 'VideoLevel',
+  'VideoRangeType', 'AudioChannels', 'AudioProfile']);
+
+function conditionHolds(cond, facts) {
+  const prop = String((cond && cond.Property) || '');
+  if (!KNOWN_FACTS.has(prop)) return true;
+  const have = facts[prop];
+  if (have == null || have === '') return cond.IsRequired !== true;
+  const want = String(cond.Value == null ? '' : cond.Value);
+  const num = Number(have);
+  const wantNum = Number(want);
+  const same = (a) => (Number.isFinite(num) && a !== '' && Number.isFinite(Number(a)))
+    ? Number(a) === num
+    : String(a).toLowerCase() === String(have).toLowerCase();
+  switch (String(cond.Condition || '')) {
+    case 'Equals': return same(want);
+    case 'NotEquals': return !same(want);
+    case 'EqualsAny': return want.split('|').some((a) => same(a.trim()));
+    case 'LessThanEqual': return Number.isFinite(wantNum) && Number.isFinite(num) ? num <= wantNum : true;
+    case 'GreaterThanEqual': return Number.isFinite(wantNum) && Number.isFinite(num) ? num >= wantNum : true;
+    default: return true;
+  }
+}
+
+function codecProfilesAllow(profiles, kind, codec, container, facts) {
+  for (const p of Array.isArray(profiles) ? profiles : []) {
+    if (!p || String(p.Type || '') !== kind) continue;
+    if (p.Codec && !listMatches(p.Codec, codec, CODEC_NAMES)) continue;
+    if (p.Container && !listMatches(p.Container, container, CONTAINER_NAMES)) continue;
+    const applies = (Array.isArray(p.ApplyConditions) ? p.ApplyConditions : []).every((c) => conditionHolds(c, facts));
+    if (!applies) continue;
+    if (!(Array.isArray(p.Conditions) ? p.Conditions : []).every((c) => conditionHolds(c, facts))) return false;
+  }
+  return true;
+}
+
+// Android TV asks for the original file with no token and no session id;
+// real Jellyfin leaves that address open. Here it opens only for the device
+// address this server just told to play that movie's original file. Every
+// seek opens the address again, so each use keeps it open a while longer.
+const directGrants = new Map();
+const DIRECT_GRANT_MS = 6 * 3600 * 1000;
+
+function grantKey(ip, itemId) {
+  return `${String(ip || '')}|${internalItemId(String(itemId || '')).toLowerCase()}`;
+}
+
+function issueDirectGrant(ip, uid, itemId) {
+  if (!ip || !uid) return;
+  const now = Date.now();
+  for (const [key, g] of directGrants) if (g.until <= now) directGrants.delete(key);
+  while (directGrants.size >= 1000) directGrants.delete(directGrants.keys().next().value);
+  const key = grantKey(ip, itemId);
+  directGrants.delete(key);
+  directGrants.set(key, { uid, until: now + DIRECT_GRANT_MS });
+}
+
+function directGrantUser(ip, url, itemId) {
+  if (!ip) return null;
+  if (!/^true$/i.test(String(queryField({ url }, null, 'static') || ''))) return null;
+  const g = directGrants.get(grantKey(ip, itemId));
+  if (!g || g.until <= Date.now()) return null;
+  g.until = Date.now() + DIRECT_GRANT_MS;
+  return g.uid;
+}
+
+function jellyfinAppLabel(ctx) {
+  const hdr = (ctx && ctx.req && ctx.req.headers) || {};
+  const blob = `${hdr.authorization || ''} ${hdr['x-emby-authorization'] || ''}`;
+  const client = (blob.match(/Client="([^"]{1,40})"/i) || [])[1] || '';
+  const version = (blob.match(/Version="([^"]{1,24})"/i) || [])[1] || '';
+  return [client, version].filter(Boolean).join(' ') || String(hdr['user-agent'] || 'unknown app').slice(0, 60);
+}
+
+// ok only when the app said it can play this exact file. `why` goes to the log.
+function directPlayCheck(ctx, body, probe, file) {
+  const no = (why) => ({ ok: false, why });
+  if (!file || !file.streamUrl) return no('no ranged file');
+  if (!probe) return no('tracks not read yet');
+  const off = (v) => v === false || String(v).toLowerCase() === 'false';
+  if (off(queryField(ctx, body, 'EnableDirectPlay'))) return no('app asked for the encoded copy');
+  const profile = queryField(ctx, body, 'DeviceProfile');
+  if (!profile || typeof profile !== 'object') return no('app sent no player list');
+  const container = sourceContainer(probe, file.name);
+  if (!container) return no('unknown container');
+  const video = (probe.video || [])[0];
+  if (!video) return no('no video track');
+  const audio = (probe.audio || [])[Math.max(0, Number(file.audioRel) || 0)] || (probe.audio || [])[0];
+  const what = `${container} ${video.codec || '?'}${audio ? `/${audio.codec || '?'}` : ''}`;
+  const max = Number(queryField(ctx, body, 'MaxStreamingBitrate')) || Number(profile.MaxStreamingBitrate) || 0;
+  const bitRate = sourceBitRate(probe, file.size) || 0;
+  if (max > 0 && bitRate > max) return no(`${what} at ${Math.round(bitRate / 1e6)} Mbps is over the app limit ${Math.round(max / 1e6)} Mbps`);
+  const fits = (Array.isArray(profile.DirectPlayProfiles) ? profile.DirectPlayProfiles : []).some((p) =>
+    p && String(p.Type || 'Video') === 'Video'
+      && listMatches(p.Container, container, CONTAINER_NAMES)
+      && listMatches(p.VideoCodec, video.codec, CODEC_NAMES)
+      && (!audio || listMatches(p.AudioCodec, audio.codec, CODEC_NAMES)));
+  if (!fits) return no(`${what} is not on the app list`);
+  const facts = profileFacts(video, audio, container);
+  if (!codecProfilesAllow(profile.CodecProfiles, 'Video', video.codec, container, facts)) return no(`${what} video limits (${facts.VideoRangeType}, ${facts.VideoBitDepth || '?'}-bit)`);
+  if (audio && !codecProfilesAllow(profile.CodecProfiles, 'VideoAudio', audio.codec, container, facts)) return no(`${what} audio limits`);
+  return { ok: true, why: what };
+}
+
+function sourceBitRate(probe, size) {
+  if (probe && Number(probe.bitRate) > 0) return Number(probe.bitRate);
+  if (probe && probe.duration > 0 && size > 0) return Math.round((size * 8) / probe.duration);
+  return null;
+}
+
 function mediaStreamsFromProbe(probe) {
   if (!probe) return null;
   const streams = [];
@@ -1053,6 +1237,12 @@ function mediaStreamsFromProbe(probe) {
       Type: 'Video',
       Codec: track.codec || 'h264',
       Height: track.height || null,
+      Width: track.width || null,
+      BitDepth: track.bitDepth || null,
+      Level: track.level || null,
+      Profile: track.profile || null,
+      VideoRange: videoRange(track),
+      VideoRangeType: videoRangeType(track),
       IsDefault: streams.length === 0,
       DisplayTitle: track.height ? `${track.height}p` : 'Video',
     }));
@@ -1066,6 +1256,7 @@ function mediaStreamsFromProbe(probe) {
       Index: index++,
       Type: 'Audio',
       Codec: track.codec || 'aac',
+      Profile: track.profile || null,
       Language: lang,
       Channels: track.channels || 2,
       IsDefault: audioIndex === 0,
@@ -1764,7 +1955,7 @@ function rememberMount(uid, itemId, mountId) {
 function liveStream(mountId, uid) {
   if (!mountId || typeof deps.jellyfinStream !== 'function') return null;
   const found = deps.jellyfinStream(mountId, uid);
-  return found && (found.hlsUrl || found.remuxUrl) ? found : null;
+  return found && (found.hlsUrl || found.remuxUrl || found.streamUrl) ? found : null;
 }
 
 function reusableMount(uid, itemId, sentId) {
@@ -1797,7 +1988,12 @@ async function mountProbe(mountId, uid) {
   const video = got && Array.isArray(got.video) ? got.video : [];
   const audio = got && Array.isArray(got.audio) ? got.audio : [];
   if (!video.length && !audio.length) return null;
-  const probe = { video, audio };
+  const probe = {
+    video, audio,
+    duration: Number(got.duration) || null,
+    format: String(got.format || ''),
+    bitRate: Number(got.bitRate) || null,
+  };
   mountProbes.set(mountId, probe);
   while (mountProbes.size > 200) mountProbes.delete(mountProbes.keys().next().value);
   return probe;
@@ -2086,6 +2282,20 @@ async function handleKind(kind, ctx) {
     }, cors);
   }
   if (kind === 'sessions' || kind === 'plugins') return send(ctx.res, 200, [], cors);
+  // Roku asks for trailers, extra parts, and the image list right before play.
+  // A 404 there leaves it reading a missing list, and the app closes.
+  if (kind === 'emptyList') return send(ctx.res, 200, [], cors);
+  if (kind === 'emptyItemPage') return send(ctx.res, 200, emptyPage(), cors);
+  if (kind === 'encodingConfig') {
+    return send(ctx.res, 200, {
+      EnableHardwareEncoding: false,
+      HardwareAccelerationType: 'none',
+      EnableTonemapping: false,
+      AllowHevcEncoding: false,
+      AllowAv1Encoding: false,
+      EnableSubtitleExtraction: true,
+    }, cors);
+  }
   if (kind === 'resume') {
     const q = ctx.url && ctx.url.searchParams;
     const userId = (ctx.m && ctx.m[1]) || (q && (q.get('userId') || q.get('UserId'))) || '';
@@ -2370,6 +2580,37 @@ async function handleKind(kind, ctx) {
     }
     return sendPoster(ctx, cors, file, wide || imageKind === 'thumb');
   }
+  if (kind === 'video' && /^true$/i.test(String(queryField(ctx, null, 'static') || ''))) {
+    // Direct play: the app wants the original bytes. Hand it our ranged file
+    // address, which seeks and reads ahead like our own Android player.
+    const uid = ctx.user && ctx.user.id;
+    const sentId = String(queryField(ctx, null, 'MediaSourceId') || ctx.m[1]);
+    const reused = reusableMount(uid, ctx.m[1], sentId);
+    let rel = reused && reused.stream.streamUrl;
+    if (!rel) {
+      const parsed = parseItemId(ctx.m[1]);
+      let played = null;
+      if (parsed && parsed.type === 'local' && typeof deps.jellyfinLocalPlay === 'function') {
+        played = await deps.jellyfinLocalPlay(ctx, parsed.libId, parsed.idx);
+      } else {
+        const spec = await playSpec(parsed);
+        if (!spec || typeof deps.jellyfinPlay !== 'function') return send(ctx.res, 404, { error: 'not found' }, cors);
+        spec.resumeFrac = resumeFracFor(resumeStartSeconds(ctx, ctx.m[1], null, spec.runtime), spec.runtime);
+        played = await deps.jellyfinPlay(ctx, spec);
+      }
+      if (played && played.sent) return;
+      if (!played || played.status !== 200) {
+        return send(ctx.res, (played && played.status) || 502, (played && played.body) || { error: 'play failed' }, cors);
+      }
+      rel = played.body && played.body.streamUrl;
+      if (rel) rememberMount(uid, ctx.m[1], played.body.id);
+    }
+    if (!rel) return send(ctx.res, 409, { error: 'not streamable' }, cors);
+    debug.log('jellyfin', `original file opened${ctx.req.headers.range ? ` at ${String(ctx.req.headers.range).slice(0, 40)}` : ''} — ${jellyfinAppLabel(ctx)}`);
+    const location = /^https?:\/\//i.test(rel) ? rel : `${clientAddress(ctx)}${rel}`;
+    ctx.res.writeHead(302, { ...cors, location, 'cache-control': 'no-store' });
+    return ctx.res.end();
+  }
   if (kind === 'video') {
     const q = ctx.url && ctx.url.searchParams;
     const mountId = q && (q.get('mediaSourceId') || q.get('MediaSourceId'));
@@ -2451,7 +2692,10 @@ async function handleKind(kind, ctx) {
     let playedBody = null;
     if (reused) {
       const { id, stream } = reused;
-      playedBody = { id, remuxUrl: stream.remuxUrl, hlsUrl: stream.hlsUrl, sessionId: body.PlaySessionId || id };
+      playedBody = {
+        id, remuxUrl: stream.remuxUrl, hlsUrl: stream.hlsUrl, streamUrl: stream.streamUrl,
+        name: stream.name, size: stream.size, sessionId: body.PlaySessionId || id,
+      };
       if (parsed && parsed.type === 'local' && typeof deps.localOne === 'function') {
         const row = deps.localOne(ctx, parsed.libId, parsed.idx);
         spec = { runtime: row && row.runtime };
@@ -2497,12 +2741,21 @@ async function handleKind(kind, ctx) {
       if (more && more.length) streams = streams.concat(more.map(completeStream));
     }
     const resumeAt = resumeStartSeconds(ctx, ctx.m[1], body, spec && spec.runtime);
-    rememberResumeOrigin(uid, ctx.m[1], resumeAt);
     const durationSeconds = spec && spec.runtime ? Math.round(Number(spec.runtime) * 60) : 0;
     const audioIndex = chosenAudioIndex(streams, body.AudioStreamIndex ?? body.audioStreamIndex);
-    const url = playUrlForClient(ctx, playedBody, resumeAt, audioRelFromStreams(streams, audioIndex), ctx.m[1], durationSeconds);
+    const audioRel = audioRelFromStreams(streams, audioIndex);
     const desktop = desktopWebPlayer(ctx);
-    if (!url) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
+    const check = desktop ? { ok: false, why: 'desktop web player' } : directPlayCheck(ctx, body, probe, {
+      streamUrl: playedBody.streamUrl, name: playedBody.name, size: playedBody.size, audioRel,
+    });
+    const direct = check.ok;
+    debug.log('jellyfin', `play ${direct ? 'original file' : 'encoded copy'} — ${check.why} — ${jellyfinAppLabel(ctx)}`);
+    // The original file runs on the movie's own clock, so its progress is
+    // never shifted by the resume point the way the encoded copy is.
+    rememberResumeOrigin(uid, ctx.m[1], direct ? 0 : resumeAt);
+    if (typeof deps.jellyfinMarkDirect === 'function') deps.jellyfinMarkDirect(playedBody.id, direct);
+    const url = playUrlForClient(ctx, playedBody, resumeAt, audioRel, ctx.m[1], durationSeconds);
+    if (!url && !direct) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
     stampSubtitleUrls(streams, ctx.m[1], playedBody.id);
     const runtimeTicks = spec ? ticks(spec.runtime) : 0;
     const hls = url.includes('/api/hls/');
@@ -2512,23 +2765,31 @@ async function handleKind(kind, ctx) {
       // The id has to be the one the TV sent, or that second press crashes too.
       Id: String(body.MediaSourceId || body.mediaSourceId || playedBody.id),
       Protocol: desktop ? 'Http' : 'File',
-      Container: 'mp4',
+      Container: direct ? sourceContainer(probe, playedBody.name) : 'mp4',
       Name: (playedBody.candidate && playedBody.candidate.name) || (spec && spec.q) || '',
-      SupportsDirectPlay: false,
+      SupportsDirectPlay: direct,
       SupportsDirectStream: false,
-      SupportsTranscoding: true,
+      SupportsTranscoding: !!url,
       IsRemote: desktop,
-      TranscodingUrl: url,
-      TranscodingSubProtocol: hls ? 'hls' : 'http',
-      TranscodingContainer: 'mp4',
       MediaStreams: streams,
     });
+    if (direct) {
+      if (playedBody.size) source.Size = playedBody.size;
+      const rate = sourceBitRate(probe, playedBody.size);
+      if (rate) source.Bitrate = rate;
+    }
+    if (url) {
+      source.TranscodingUrl = url;
+      source.TranscodingSubProtocol = hls ? 'hls' : 'http';
+      source.TranscodingContainer = 'mp4';
+    }
     if (audioIndex != null) source.DefaultAudioStreamIndex = audioIndex;
     const pq = ctx.url && ctx.url.searchParams;
     const askedSub = body.SubtitleStreamIndex ?? body.subtitleStreamIndex
       ?? (pq && (pq.get('SubtitleStreamIndex') ?? pq.get('subtitleStreamIndex')));
     source.DefaultSubtitleStreamIndex = chosenSubtitleIndex(streams, askedSub);
     if (runtimeTicks) source.RunTimeTicks = runtimeTicks;
+    if (direct) issueDirectGrant(typeof clientIp === 'function' ? clientIp(ctx) : '', uid, ctx.m[1]);
     return send(ctx.res, 200, { PlaySessionId: playedBody.sessionId, MediaSources: [source] }, cors);
   }
   if (kind === 'segments') {
@@ -2824,6 +3085,7 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/system\/info$/, auth: 'user', kind: 'info', h: serveJellyfin },
   { m: 'GET', re: /^\/system\/endpoint$/, auth: 'user', kind: 'endpoint', h: serveJellyfin },
   { m: 'GET', re: /^\/system\/configuration$/, auth: 'user', kind: 'systemConfig', h: serveJellyfin },
+  { m: 'GET', re: /^\/system\/configuration\/encoding$/, auth: 'user', kind: 'encodingConfig', h: serveJellyfin },
   { m: 'GET', re: /^\/startup\/configuration$/, auth: 'public', kind: 'startup', h: serveJellyfin },
   { m: 'GET', re: /^\/branding\/configuration$/, auth: 'public', kind: 'branding', h: serveJellyfin },
   { m: 'GET', re: /^\/quickconnect\/enabled$/, auth: 'public', kind: 'quickConnect', h: serveJellyfin },
@@ -2853,6 +3115,10 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/items\/latest$/, auth: 'user', kind: 'latest', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/images\/(primary|backdrop|thumb|logo)(?:\/\d+)?$/, auth: 'public', kind: 'image', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/thememedia$/, auth: 'user', kind: 'theme', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/images$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/localtrailers$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/localtrailers$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
+  { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/additionalparts$/, auth: 'user', kind: 'emptyItemPage', h: serveJellyfin },
   { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/([a-z0-9-]{1,64})\/subtitles\/(\d+)\/stream(?:\.([a-z0-9-]{1,64}))?$/, auth: 'user', kind: 'subtitle', h: serveJellyfin },
   { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/stream(?:\.[a-z0-9]+)?$/, auth: 'user', kind: 'video', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/similar$/, auth: 'user', kind: 'similar', h: serveJellyfin },
@@ -2862,7 +3128,7 @@ const JELLYFIN_ROUTES = [
   { m: 'DELETE', re: /^\/videos\/activeencodings$/, auth: 'user', kind: 'ack', h: serveJellyfin },
   { m: 'POST', re: /^\/items\/([a-z0-9-]{1,64})\/playbackinfo$/, auth: 'user', kind: 'playback', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'item', h: serveJellyfin },
-  { m: 'GET', re: /^\/items$/, auth: 'user', kind: 'shelf', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/?$/, auth: 'user', kind: 'shelf', h: serveJellyfin },
   { m: 'GET', re: /^\/search\/hints$/, auth: 'user', kind: 'search', h: serveJellyfin },
   { m: 'GET', re: /^\/library\/mediafolders$/, auth: 'user', kind: 'views', h: serveJellyfin },
   { m: 'GET', re: /^\/shows\/([a-z0-9-]{1,64})\/seasons$/, auth: 'user', kind: 'seasons', h: serveJellyfin },
@@ -3013,4 +3279,5 @@ module.exports = {
   mediaStreamsFromProbe, streamsWithSubtitles, tmdbSort, genreIdsFromNames,
   resumeClockPlaylist, fullTimelinePlaylist, playlistClockShift, rememberResumeOrigin, progressSeconds, resumeFracFor, traktResumeSeconds,
   loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard,
+  directGrantUser,
 };

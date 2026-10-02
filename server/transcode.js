@@ -190,6 +190,23 @@ function decidePlayback(name, caps = {}) {
 //           subs: [{ rel, codec, lang, title, text }] } — `rel` is the per-type index that
 // ffmpeg's -map 0:a:N / 0:s:N selectors use; `text` marks extractable (non-bitmap) subs.
 const TEXT_SUB_CODECS = new Set(['subrip', 'srt', 'ass', 'ssa', 'mov_text', 'webvtt', 'text']);
+function videoBitDepth(s) {
+  const raw = parseInt(s.bits_per_raw_sample, 10);
+  if (raw > 0) return raw;
+  const m = /(\d+)(?:le|be)$/.exec(String(s.pix_fmt || ''));
+  if (m) return parseInt(m[1], 10);
+  return s.pix_fmt ? 8 : null;
+}
+// Jellyfin's names. A TV that cannot show Dolby Vision lists only the others.
+function videoRangeType(s) {
+  const dovi = (s.side_data_list || []).some((d) => /dovi|dolby vision/i.test(String(d.side_data_type || '')));
+  const pq = s.color_transfer === 'smpte2084';
+  const hlg = s.color_transfer === 'arib-std-b67';
+  if (dovi) return pq ? 'DOVIWithHDR10' : (hlg ? 'DOVIWithHLG' : 'DOVI');
+  if (pq) return 'HDR10';
+  if (hlg) return 'HLG';
+  return 'SDR';
+}
 function probeTracks(url) {
   return new Promise((resolve, reject) => {
     const fp = detectFfprobe();
@@ -208,7 +225,13 @@ function probeTracks(url) {
         const j = JSON.parse(out || '{}');
         const streams = j.streams || [];
         const rel = { video: 0, audio: 0, subtitle: 0 };
-        const result = { duration: parseFloat((j.format || {}).duration) || null, video: [], audio: [], subs: [] };
+        const fmt = j.format || {};
+        const result = {
+          duration: parseFloat(fmt.duration) || null,
+          format: String(fmt.format_name || ''),
+          bitRate: parseInt(fmt.bit_rate, 10) || null,
+          video: [], audio: [], subs: [],
+        };
         for (const s of streams) {
           const t = s.codec_type;
           if (!(t in rel) && t !== 'subtitle') continue;
@@ -220,6 +243,10 @@ function probeTracks(url) {
             title: (s.tags && (s.tags.title || s.tags.TITLE)) || '',
           };
           if (t === 'video') result.video.push({ ...base, height: s.height || null,
+            width: s.width || null,
+            bitDepth: videoBitDepth(s),
+            level: Number(s.level) > 0 ? Number(s.level) : null,
+            rangeType: videoRangeType(s),
             hdr: ['smpte2084', 'arib-std-b67'].includes(s.color_transfer) });
           else if (t === 'audio') result.audio.push({ ...base, channels: s.channels || 2 });
           else if (t === 'subtitle') result.subs.push({ ...base, text: TEXT_SUB_CODECS.has(s.codec_name) });

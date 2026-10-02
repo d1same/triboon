@@ -126,6 +126,25 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-02, v3.3.7 — Jellyfin plays the original 1080p file first; Roku no longer dies on missing lists:
+
+- Example: you press Play on Mario in the Jellyfin TV app. Before, every
+  play was a 720p CPU re-encode. Now the app gets the original file when
+  its own player can handle it (`Play method: Direct` on Android TV 0.19.10,
+  no ffmpeg). Roku used to close on 404s for trailers, extra parts, the
+  image list, `/Items/` favorites, and encoding config. Those now answer
+  empty lists.
+- Emulator (`emulator-5554`, repo server on 7778, Shield untouched): Mario
+  resume opened the ranged original file (`bytes=122274660-`), picture on
+  screen, 0 ffmpeg processes.
+- Gate: `npm.cmd test` 844/844, fail 0. `verify:full` PASS on 7778:
+  Mario ready 2988ms, 1stByte 12ms, seek 286ms, resume 34ms, cc=200; FROM
+  ready 2484ms, 1stByte 10ms, seek 128ms, resume 9ms, cc=200; overlapping
+  Play 7ms / 17ms; IPTV web+native retune PASS; Android ExoPlayer stress
+  PASS, hostVersion 3.3.7. Windows GPU/HDR: not run.
+- Version contract: `package.json` 3.3.7; Android `versionName` 3.3.7 /
+  `versionCode` 410; Windows client package/Tauri/Cargo(.lock) 3.3.7.
+
 2026-10-02, v3.3.6 — Jellyfin Android TV: no wait behind the warm-up, no crash on the second play:
 
 - Example: you play Mario in the Jellyfin TV app, back out, and play FROM.
