@@ -437,7 +437,7 @@ function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudi
 // to a temp dir and the /api/hls route serves the playlist + segments over HTTP Range. hls_flags
 // delete_segments keeps the on-disk footprint bounded (a rolling window) even for a long movie; the
 // route re-spawns from a seek offset when the player seeks past the retained window.
-function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, outDir, playlistName = 'index.m3u8', segmentTime = 4, holdSegments = false, startNumber = 0, initName = 'init.mp4' } = {}) {
+function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, outDir, playlistName = 'index.m3u8', segmentTime = 4, holdSegments = false, startNumber = 0, initName = 'init.mp4', tsOffset = 0 } = {}) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
   if (!outDir) throw new Error('spawnHls requires an output directory');
@@ -463,6 +463,11 @@ function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio 
     ...(transcodeAudio
       ? ['-c:a', 'aac', '-b:a', safeStereo ? '192k' : '384k', '-ac', safeStereo ? '2' : '6']
       : ['-c:a', 'copy']),
+    // A restart mid-list must stamp piece N at N*segmentTime like the first run did.
+    // Without it piece 30 says 0s instead of 60s and the player's clock jumps back.
+    // frag_discont puts the time in each piece; the offset alone only lands in the
+    // new init, which the player never loads (it keeps the first init.mp4).
+    ...(tsOffset > 0 ? ['-output_ts_offset', String(tsOffset), '-hls_segment_options', 'movflags=+frag_discont'] : []),
     '-f', 'hls',
     '-hls_time', String(segmentTime),
     '-hls_list_size', holdSegments ? '0' : '10',

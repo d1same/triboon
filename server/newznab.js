@@ -218,7 +218,9 @@ function normTitle(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '');
 }
 
-// Dedupe: same normalized title AND size within 2% window → keep the first (indexer order).
+// Dedupe: same normalized title AND size within 2% window → one row (indexer order).
+// The twin's download link rides along as a spare, so a dead link on the first
+// indexer falls back to the second instead of losing the release.
 function dedupe(results) {
   const out = [];
   const buckets = new Map();
@@ -231,6 +233,11 @@ function dedupe(results) {
       out.push(r);
       bucket.push(r);
       buckets.set(key, bucket);
+    } else if (r.nzbUrl && r.nzbUrl !== dup.nzbUrl) {
+      dup.mirrors = dup.mirrors || [];
+      if (dup.mirrors.length < 3 && !dup.mirrors.some((m) => m.url === r.nzbUrl)) {
+        dup.mirrors.push({ url: r.nzbUrl, indexer: r.indexer });
+      }
     }
   }
   return out;

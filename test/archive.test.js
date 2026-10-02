@@ -870,6 +870,58 @@ test('failover: a timeout mixed into the failures does NOT kill the piece (only 
   }
 });
 
+test('RAR health: a provider that will not answer is not a missing article, so a good release is not blacklisted', async () => {
+  const vols = writeRar4Store([{ name: 'Good.2024.mkv', data: seededPayload(200000, 0x6006) }], { volSize: 70 * 1024, naming: 'old' });
+  const { articles, nzb } = makeArchiveNzb(vols, 30000);
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+  try {
+    const vf = await mountNzb(pool, nzb);
+    assert.strictEqual(vf.container, 'rar');
+    let asked = 0;
+    pool.stat = async (msgId, lane, opts = {}) => {
+      asked++;
+      assert.strictEqual(opts.throwIfUnreachable, true, 'triage asks the pool to say "nobody answered" out loud');
+      throw Object.assign(new Error('no provider'), { code: 'NO_PROVIDER' });
+    };
+    const h = await vf.triage();
+    assert.ok(asked > 0);
+    assert.notStrictEqual(h.verdict, 'blocked', 'usenet busy for a minute must not hide this copy for 6 hours');
+    assert.strictEqual(h.unreachable, true, 'the pipeline skips saving a verdict when nobody answered');
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('RAR health: a piece broken on every provider flips the release to blocked so the player moves on', async () => {
+  const vols = writeRar4Store([{ name: 'Rotten.2024.mkv', data: seededPayload(200000, 0xbad5) }], { volSize: 70 * 1024, naming: 'old' });
+  const { articles, nzb } = makeArchiveNzb(vols, 30000);
+  const bad = new Map(articles);
+  bad.set('f2s2@triboon.test', corruptYenc(articles.get('f2s2@triboon.test')));
+  const mockA = createMockNntp({ articles: bad });
+  const mockB = createMockNntp({ articles: bad });
+  const portA = await mockA.listen();
+  const portB = await mockB.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: portA, tls: false },
+    { host: '127.0.0.1', port: portB, tls: false },
+  ], 4);
+  try {
+    const vf = await mountNzb(pool, nzb);
+    assert.strictEqual(vf.container, 'rar');
+    await assert.rejects(() => readAll(vf, 0, vf.size));
+    assert.strictEqual(vf.deadPieceCount(), 1, 'the RAR remembers the dead piece from its volume');
+    assert.strictEqual(vf.health.verdict, 'blocked', 'the health poll sees blocked right away and advances');
+    assert.strictEqual((await vf.triage()).verdict, 'blocked', 'a later triage keeps it blocked');
+  } finally {
+    pool.close();
+    await mockA.close();
+    await mockB.close();
+  }
+});
+
 test('failover: single-provider pool still fails cleanly on a truly missing article', async () => {
   const data = seededPayload(60000, 0xdead);
   const { articles, nzb } = makeArchiveNzb([{ name: 'Dead.mkv', data }], 30000, { junk: false });

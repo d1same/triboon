@@ -4072,8 +4072,9 @@ public class MainActivity extends Activity {
         play.setTextSize(13);
         play.setTypeface(Typeface.DEFAULT_BOLD);
         play.setGravity(android.view.Gravity.CENTER);
-        play.setPadding(dp(16), 0, dp(16), 0);
-        play.setIncludeFontPadding(false);
+        play.setPadding(dp(16), dp(8), dp(16), dp(8));
+        play.setMinHeight(dp(36));
+        play.setIncludeFontPadding(true);
         play.setBackground(nativeUpNextPlayBg(false));
         play.setFocusable(true);
         play.setFocusableInTouchMode(false);
@@ -4089,8 +4090,10 @@ public class MainActivity extends Activity {
         nativeUpNextKicker = new TextView(this);
         nativeUpNextTitle = new TextView(this);
         nativeUpNextSub = new TextView(this);
+        // A 4K/HDR title can switch the TV's display mode, and density is a handled config
+        // change, so fixed pixel heights stay old while sp text grows. Wrap, never clip.
         LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, dp(36));
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         playLp.rightMargin = dp(8);
         row.addView(play, playLp);
 
@@ -4110,8 +4113,12 @@ public class MainActivity extends Activity {
             v.setBackground(nativeUpNextDismissBg(hasFocus));
         });
         dismiss.setOnKeyListener((v, code, e) -> handleNativeUpNextKey(e));
+        dismiss.setMinWidth(dp(36));
+        dismiss.setMinHeight(dp(36));
+        dismiss.setPadding(dp(8), dp(8), dp(8), dp(8));
         nativeUpNextDismiss = dismiss;
-        row.addView(dismiss, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        row.addView(dismiss, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         return row;
     }

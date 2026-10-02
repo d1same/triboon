@@ -595,6 +595,37 @@ test('pipeline: a named ISO verdict does not poison other copies of the title', 
   store.close();
 });
 
+test('dedupe: the same release from a second indexer stays as a spare download link', () => {
+  const rows = dedupe([
+    { name: 'Dune.2021.1080p.WEB-DL-FLUX', sizeBytes: 5e9, nzbUrl: 'https://a.test/1.nzb', indexer: 'A' },
+    { name: 'Dune.2021.1080p.WEB-DL-FLUX', sizeBytes: 5.01e9, nzbUrl: 'https://b.test/9.nzb', indexer: 'B' },
+  ]);
+  assert.strictEqual(rows.length, 1, 'still one row in the list');
+  assert.deepStrictEqual(rows[0].mirrors, [{ url: 'https://b.test/9.nzb', indexer: 'B' }],
+    'indexer B is kept as the backup link');
+});
+
+test('pipeline: a dead NZB link falls back to the twin from another indexer', async () => {
+  const xml = '<?xml version="1.0"?><nzb><file subject="a"><segments><segment bytes="1" number="1">x@y</segment></segments></file></nzb>';
+  const srv = http.createServer((req, res) => {
+    if (req.url === '/dead.nzb') { res.writeHead(404); return res.end('gone'); }
+    res.writeHead(200, { 'content-type': 'application/x-nzb' });
+    res.end(xml);
+  });
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(), indexers: () => [] });
+    const got = await pipeline._startNzbFetch({
+      name: 'Dune.2021.1080p.WEB-DL-FLUX', indexer: 'A', nzbUrl: `${base}/dead.nzb`,
+      mirrors: [{ url: `${base}/good.nzb`, indexer: 'B' }],
+    });
+    assert.match(got, /<file\b/, 'the backup link served the release');
+  } finally {
+    srv.close();
+  }
+});
+
 test('pipeline: named disc/ISO sources fail before an NZB grab', async () => {
   const pipeline = new Pipeline({
     pool: () => null,
@@ -3558,6 +3589,47 @@ test('pipeline: an ordinary exact-episode release still caches its blocked verdi
     'single-episode failures remain release-wide cache entries so later source walks skip them quickly');
 });
 
+test('pipeline: a short upload is remembered for that NZB only, so a full re-post with the same name still plays', () => {
+  const keys = [];
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: (key) => keys.push(key) },
+    mounts: new Map(),
+  });
+  const candidate = { name: 'Heat.1995.1080p.BluRay.x264-GRP', nzbUrl: 'https://indexer.test/short.nzb' };
+  pipeline._recordVerdict(candidate, 'unstreamable', { streamClass: 'stub', sizeGb: 0.2 });
+  assert.ok(!keys.some((k) => String(k).startsWith('t:')), 'no title-wide verdict for a stub');
+  keys.length = 0;
+  pipeline._recordVerdict(candidate, 'unstreamable', { streamClass: 'compressed' });
+  assert.ok(keys.some((k) => String(k).startsWith('t:')), 'compressed still skips every copy of that release name');
+});
+
+test('pipeline: a provider outage during mount is not saved as a broken release', async () => {
+  for (const make of [
+    () => Object.assign(new Error('no usenet provider reachable'), { code: 'NO_PROVIDER' }),
+    () => Object.assign(new Error('connect ECONNREFUSED 10.0.0.9:563'), { code: 'ECONNREFUSED' }),
+    () => new Error('481 Authentication failed'),
+  ]) {
+    const verdicts = [];
+    const pool = {
+      stat: async () => true,
+      body: async () => { throw make(); },
+    };
+    const pipeline = new Pipeline({
+      pool: () => pool,
+      verdicts: { get: () => null, set: (...args) => verdicts.push(args) },
+      mounts: new Map(),
+    });
+    const xml = '<?xml version="1.0"?><nzb><file subject="a &quot;Movie.2026.mkv&quot; yEnc (1/1)"><segments><segment bytes="900" number="1">movie@x</segment></segments></file></nzb>';
+    const candidate = { name: 'Movie.2026', nzbUrl: 'https://indexer.test/outage.nzb' };
+    pipeline.nzbCache.set(candidate.nzbUrl, xml);
+    const result = await pipeline._tryCandidate(candidate);
+    assert.match(String(result.fail), /^mount:|provider unreachable/);
+    assert.deepStrictEqual(verdicts.map(([, v]) => v), [],
+      `"${make().message}" must not hide this release for 6 hours`);
+  }
+});
+
 test('pipeline: mount deadline aborts underlying BODY before returning the timeout', async () => {
   const verdicts = [];
   let bodyStartedResolve;
@@ -4014,6 +4086,41 @@ test('pipeline: a 4K episode under 4GB still gets 4K sockets and bitrate, not 10
     'read-ahead does not reserve startup slots');
 });
 
+test('vfs: the player takes the read-ahead copy when it lands before the fast-lane re-fetch', async () => {
+  const part = 24 * 1024;
+  const data = seededPayload(part * 2, 0x5eed);
+  const piece = (n) => encodePart(data, {
+    name: 'Ahead.mkv', partNum: n + 1, totalParts: 2,
+    begin: n * part, end: (n + 1) * part, totalSize: data.length,
+  });
+  let fastAborted = false;
+  const pool = {
+    stat: async () => true,
+    body: (msgId, priority, opts = {}) => {
+      if (msgId === 'p1@x') return Promise.resolve(piece(0));
+      if (priority === 'readAhead') return new Promise((resolve) => setTimeout(() => resolve(piece(1)), 30));
+      return new Promise((_resolve, reject) => {
+        opts.signal.addEventListener('abort', () => {
+          fastAborted = true;
+          reject(Object.assign(new Error('aborted'), { code: 'ABORT_ERR' }));
+        }, { once: true });
+      });
+    },
+  };
+  const vf = new NzbFileStream(pool, {
+    subject: '"Ahead.mkv" yEnc (1/2)',
+    segments: [{ msgId: 'p1@x', bytes: part }, { msgId: 'p2@x', bytes: part }],
+  }, { readAhead: 0 });
+  await vf.mount();
+  vf._fetchSegment(1, 'readAhead').catch(() => {});
+  const got = await Promise.race([
+    vf._fetchSegment(1, 'playback'),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('player waited on the stuck re-fetch')), 2000)),
+  ]);
+  assert.ok(Buffer.from(got).equals(data.subarray(part)), 'the player gets the second piece');
+  assert.strictEqual(fastAborted, true, 'the spare fast-lane fetch is let go');
+});
+
 test('vfs: unreachable providers do not mark a release blocked', async () => {
   const fileEntry = {
     subject: 'Show.S01E01.mkv (1/6)',
@@ -4310,6 +4417,56 @@ test('pipeline: 4K play does not join a 1080 leftover parked under the 4K key', 
     'a correctly parked 1080 must stay off the 4K join key');
   const hdReady = pipeline._findTitlePreparedReady(params, { preferResolutionRank: 3, maxResolutionRank: 3 });
   assert.ok(hdReady && hdReady.vf === hd, '1080 Play can still join that parked file');
+});
+
+test('pipeline: a paused movie past its grace stops its warm jobs', () => {
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+  });
+  const now = Date.now();
+  const controller = new AbortController();
+  const vf = {
+    id: 'paused', size: 3e9, streamable: true, tags: [],
+    _playbackTouched: now - 10 * 60 * 1000, _activeStreamReads: 0,
+    _playbackWarmupJobs: new Map([['resume', { controller, timer: null }]]),
+  };
+  mounts.set(vf.id, vf);
+  pipeline.rebalancePlaybackWindows(now);
+  assert.strictEqual(vf._preparedOnly, true);
+  assert.strictEqual(controller.signal.aborted, true, 'the resume warm stops pulling articles');
+  assert.strictEqual(vf._playbackWarmupJobs.size, 0);
+});
+
+test('pipeline: Details warmup that lands while Play is searching is joined, not raced again', async () => {
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+  });
+  const warm = { id: 'warm-1', size: 3e9, streamable: true, tags: [] };
+  const cand = { name: 'Heat.1995.1080p.BluRay.x264-GRP', pickKey: 'heat', nzbUrl: 'http://x/heat.nzb' };
+  const params = { q: 'Heat', imdbid: 'tt0113277' };
+  const policy = { maxResolutionRank: 3, preferResolutionRank: 3 };
+  pipeline._fitsPipe = () => true;
+  let searches = 0;
+  pipeline.search = async () => {
+    searches++;
+    if (searches === 1) {
+      mounts.set(warm.id, warm);
+      pipeline._rememberTitlePrepared(params, policy, warm, cand);
+    }
+    return { candidates: [cand], errors: [] };
+  };
+  pipeline._advance = async () => { throw new Error('Play opened a second mount next to the warm one'); };
+  pipeline._commitMount = (session, candidate, vf) => ({ session, vf, candidate, attempts: [] });
+  pipeline._attachStandby = () => {};
+  const r = await pipeline.play(params, policy);
+  assert.strictEqual(r.vf, warm, 'Play uses the copy Details already opened');
+  assert.strictEqual(pipeline.metrics.titlePrepareJoins, 1);
 });
 
 test('pipeline: 4K stop then 1080 play drops the other-quality prepared mount', () => {

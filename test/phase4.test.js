@@ -665,7 +665,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'trailer playback mints a same-origin stream token, not a YouTube embed');
   assert.match(ui, /function advanceTrailerSource\([\s\S]+S\.trailerQueueIdx/,
     'an unplayable trailer (age-gate, dead key) advances to the next TMDB candidate');
-  assert.match(ui, /function preparePlaybackSource\(it, delay = 900\) \{[\s\S]+startLocalPlaybackLookup\(it\);[\s\S]+if \(delay <= 0\) markPlaybackPrepared\(it, qRank\);/,
+  assert.match(ui, /function preparePlaybackSource\(it, delay = 900\) \{[\s\S]+startLocalPlaybackLookup\(it\);[\s\S]+if \(r && r\.prepared\) markPlaybackPrepared\(it, qRank\);/,
     'details and trailer prepare mark the exact Play target so Play joins that warmup');
   assert.match(ui, /function playFromTrailer\(\) \{[\s\S]+trailerPlayTarget\(S\.trailerItem\)[\s\S]+play\(it\);[\s\S]+closeTrailer\(\{ keepFocus: true \}\)/,
     'trailer Play uses the details target and never returns focus to the details page');
@@ -2192,12 +2192,13 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
     'vodPlaybackStarted', 'recoverSamePlaybackSource', 'currentTime', 'canUseNativeVideoPlayer', 'toast',
     'api', '$', 'updatePlayerMeta', 'playbackStartKind', 'prepareNativeStartKindForAudio',
     'tryNativePlaybackLadder', 'startNativePlayerHousekeeping', 'closePlayer', 'revealWebPlayerShell',
-    'startWebPlayerHousekeeping', 'startSource', 'markPlaybackSourceSwap', `${advanceSource}\nreturn autoAdvance;`)(
+    'startWebPlayerHousekeeping', 'startSource', 'markPlaybackSourceSwap', 'carrySubtitleAcrossSourceSwap',
+    `${advanceSource}\nreturn autoAdvance;`)(
       state, () => events.push('panel'), () => false, () => events.push('recover'), () => 42,
       () => false, () => {}, apiFn, () => ({ textContent: '' }), () => events.push('meta'),
       () => 'direct', prepareFn, () => (events.push('ladder'), false), () => events.push('native-housekeeping'),
       () => events.push('close'), () => events.push('reveal'), () => events.push('web-housekeeping'),
-      () => events.push('start'), () => {});
+      () => events.push('start'), () => {}, () => null);
   const advanceReply = {
     streamUrl: '/new', remuxUrl: '/new-remux', transcodeUrl: '/new-transcode', id: 'new-mount',
     tracksUrl: '/tracks', subtitleBase: '/sub', streamToken: 'stream-token', name: 'new release',
@@ -2705,7 +2706,7 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'showing Next Episode keeps the chip above chrome so taps reach it');
   assert.match(android, /private GradientDrawable nativeUpNextPlayBg\(boolean focused\) \{[\s\S]+0xFFFFFFFF[\s\S]+nativePillBg/,
     'the native Next chip is a solid white pill, not the brand gradient');
-  assert.match(android, /new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, dp\(36\)\)[\s\S]+new LinearLayout\.LayoutParams\(dp\(36\), dp\(36\)\)/,
+  assert.match(android, /play\.setMinHeight\(dp\(36\)\);[\s\S]+dismiss\.setMinWidth\(dp\(36\)\);\s+dismiss\.setMinHeight\(dp\(36\)\);/,
     'native Next and dismiss share the same 36dp height');
   assert.match(android, /private void updateNativeUpNextPosition\(\) \{[\s\S]+nativeChrome\.getVisibility\(\) == View\.VISIBLE;[\s\S]+dp\(chromeUp \? 168 : 48\);/,
     'the native Up Next sits clear of the seek bar with chrome up and docks lower with chrome hidden');
@@ -4659,7 +4660,7 @@ test('Android native player: direct source and native chrome stay out of the web
     cast: [{ id: 4, name: 'Season regular', order: 0 }, { id: 1, name: 'Zoe', order: 7 }],
   }).map((c) => c.name), ['Zoe', 'Season regular', 'Episode billed', 'Guest'],
     'show billed stars stay first even when this season lists them after number 7');
-  assert.match(ui, /playerAboutCastList\(d, epCredits, seasonCredits\)\.slice\(0, ABOUT_CAST_MAX\)\.map\(\(c\) => \(\{\n        name: c\.name,/,
+  assert.match(ui, /playerAboutCastList\(d, epCredits, seasonCredits\)\.slice\(0, ABOUT_CAST_MAX\)\.map\(\(c\) => \(\{\r?\n        name: c\.name,/,
     'About cast map must return an object literal — a stray ({) would kill the whole UI script and freeze the splash');
   assert.match(android, /Math\.min\(10, cast\.length\(\)\)/,
     'native About should show up to ten billed faces');
@@ -5188,7 +5189,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // The perf-profile comment must stay WELL-FORMED: in v2.8.7/v2.8.8 it closed a paragraph early,
   // the remainder became raw text ending in a stray star-slash, and CSS error-recovery consumed the
   // entire no-blur rule as one invalid selector — the whole TV profile was silently void.
-  assert.match(ui, /that made the Shield feel "not snappy"\. \*\/\nbody\.tv \.railBtn\.active,/,
+  assert.match(ui, /that made the Shield feel "not snappy"\. \*\/\r?\nbody\.tv \.railBtn\.active,/,
     'the TV perf-profile comment closes immediately before its first rule (a stray close voids the whole profile)');
   // The ambient colour SNAPS on TV. Interpolating a registered custom property that feeds a
   // gradient repaints the whole screen every frame for 2.2s after EVERY focus move — measured on
@@ -6431,9 +6432,9 @@ test('Android native player: direct source and native chrome stay out of the web
   // Device pre-cache: prepared direct-play mounts are offered to the Android shell so press-play
   // buffers its opening seconds from disk. Both prepare paths (detail/CW focus + near-end Up Next)
   // hand the offer over; the bridge call is guarded; the shell re-validates origin AND path.
-  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(it, null, qRank\) \}\)\.then\(maybeNativePrefetch\)/,
+  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(it, null, qRank\), signal: ctrl\.signal \}\)\.then\(\(r\) => \{[\s\S]{0,500}maybeNativePrefetch\(r\);/,
     'detail/CW focus prepare hands its prefetch offer to the native shell');
-  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(item, null, qRank\) \}\)\.then\(maybeNativePrefetch\)/,
+  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(item, null, qRank\) \}\)\.then\(\(r\) => \{[\s\S]{0,120}return maybeNativePrefetch\(r\);/,
     'the near-end Up Next prepare hands its prefetch offer to the native shell');
   assert.match(ui, /function maybeNativePrefetch\(r\) \{[\s\S]{0,500}TriboonTV\.prefetchStream\(JSON\.stringify\(/,
     'the prefetch bridge call is shell-guarded and JSON-typed');
@@ -6754,7 +6755,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'a quality hop that still reports 0:00 must keep the shared title clock, not write a second resume point');
   assert.match(ui, /pinnedResume = true;[\s\S]{0,400}if \(pinnedResume\) body\.pinnedResume = true;/,
     'a replayed pin is FLAGGED as a pinned resume so the server may skip a rotted pin and keep the parallel race (a manual Sources pick stays unflagged)');
-  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(it, null, qRank\) \}/,
+  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(it, null, qRank\)(?:, signal: ctrl\.signal)? \}/,
     'Home/Details prepare uses the same body as Play, so Continue Watching warms the pinned last source');
   assert.match(ui, /if \(pinnedResume && picked\) \{[\s\S]+body\.preferResolutionRank = pinRank;[\s\S]+body\.maxResolutionRank = Math\.max\(qRank, pinRank\)/,
     'Continue Watching prefers the pinned file\'s own resolution so a 4K profile does not remount a different 4K');
@@ -8957,4 +8958,541 @@ test('Jellyfin apps: the re-encoded HLS list really starts at the asked second, 
     'EXT-X-START opens at the asked second');
   assert.doesNotMatch(server, /jellyfinPlaylist[^\n]*ffprobeKeyframeAtOrBefore|keyframeBefore[^\n]*jellyfinPlaylist/,
     'the Jellyfin list is never moved to the keyframe before the ask — that shift is a copy-path fact');
+});
+
+test('Start Over on a show restarts only the current episode, never S1E1', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf("$('dStartOver').addEventListener('click'");
+  const end = ui.indexOf('/* ============ person page', start);
+  assert.ok(start >= 0 && end > start, 'Start Over handler should be extractable');
+  const handler = ui.slice(start, end);
+  assert.match(handler, /play\(startOverItem\(detailPlayTarget \|\| it\)\);/,
+    'Start Over plays the current/resume episode from 0:00');
+  assert.doesNotMatch(handler, /epTarget\(|season_number|detailSeasons/,
+    'Start Over must not jump a show back to its first season/episode');
+});
+
+test('finished watch rows never resume or show in Continue Watching', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const finStart = ui.indexOf('function watchLooksFinished(w)');
+  const finEnd = ui.indexOf('function applyPendingDetailNext()', finStart);
+  const resStart = ui.indexOf('function resumePositionForItem(it)');
+  const resEnd = ui.indexOf('function startOverItem(it)', resStart);
+  assert.ok(finStart >= 0 && finEnd > finStart && resStart >= 0 && resEnd > resStart);
+  const S = { watchMap: {
+    'tmdb:movie:1': { position: 5700, duration: 6000 },
+    'tmdb:movie:2': { position: 1200, duration: 6000 },
+    'tmdb:movie:3': { position: 900, duration: 0, watched: true },
+  } };
+  const resumePositionForItem = new Function('S', `${ui.slice(finStart, finEnd)}\n${ui.slice(resStart, resEnd)}\nreturn resumePositionForItem;`)(S);
+  assert.strictEqual(resumePositionForItem({ key: 'tmdb:movie:1', resume: 5700 }), 0,
+    'a 95% row is finished: Play starts at 0:00, not in the credits');
+  assert.strictEqual(resumePositionForItem({ key: 'tmdb:movie:2' }), 1200, 'a real mid-movie row still resumes');
+  assert.strictEqual(resumePositionForItem({ key: 'tmdb:movie:3', resume: 900 }), 0, 'a watched row never resumes');
+  assert.match(ui, /function buildCwItems\(cw\) \{\s*const items = cw\.filter\(\(w\) => !w\.watched && !watchLooksFinished\(w\) &&/,
+    'Continue Watching uses the same finished rule as detail next-up');
+});
+
+test('a superseded or backed-out Play releases the mount /api/play already made', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /const r = await api\('\/api\/play', \{ method: 'POST', body \}\);[\s\S]{0,300}if \(S\._playTicket !== playTicket \|\| S\.view !== 'player'\) releasePlaybackSession\(r && r\.sessionId, \{ keepPrepared: true \}\);\s*if \(S\._playTicket !== playTicket\) return;/,
+    'catalog Play releases its new session when the ticket check bails');
+  const localStart = ui.indexOf('async function playLocal(it, opts = {})');
+  const local = ui.slice(localStart, ui.indexOf('/* ============ watchlist view', localStart));
+  assert.match(local, /if \(S\._playTicket !== playTicket \|\| S\.view !== 'player'\) releasePlaybackSession\(mount && mount\.sessionId, \{ keepPrepared: true \}\);\s*if \(S\._playTicket !== playTicket\) return;/,
+    'library Play releases its new session when the ticket check bails');
+});
+
+test('fast double Play on the same title starts one playback', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const lockStart = ui.indexOf('const PLAY_LOCK_MAX_MS = 90000;');
+  const lockEnd = ui.indexOf('function beginPlaybackTransition(it, opts = {})', lockStart);
+  const playStartIdx = ui.indexOf('async function play(it, pick, opts = {})');
+  const playEnd = ui.indexOf('async function playStart(it, pick, opts, playIntent)', playStartIdx);
+  assert.ok(lockStart >= 0 && lockEnd > lockStart && playStartIdx >= 0 && playEnd > playStartIdx, 'play lock should be extractable');
+  const S = {};
+  const calls = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const play = new Function('S', 'queryFor', 'playStart',
+    `${ui.slice(lockStart, lockEnd)}\n${ui.slice(playStartIdx, playEnd)}\nreturn play;`)(
+      S, (it) => it.q || '', async (it, pick, opts, intent) => { calls.push([it.key, intent]); await gate; });
+  const movie = { key: 'tmdb:movie:5', q: 'Movie 2020' };
+  const first = play(movie);
+  play({ ...movie });
+  play(movie);
+  assert.strictEqual(calls.length, 1, 'repeat OK presses while the first start is in flight are ignored');
+  play({ key: 'tmdb:movie:6', q: 'Other 2021' });
+  assert.strictEqual(calls.length, 2, 'a different title is a new Play and supersedes the first');
+  assert.ok(calls[1][1] > calls[0][1], 'the newer Play owns a newer intent before any await');
+  release();
+  await first;
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(S._playLock, null, 'the lock is released when the start finishes');
+  play(movie);
+  assert.strictEqual(calls.length, 3, 'after the start finishes the same title can play again');
+  assert.match(ui, /async function playStart\(it, pick, opts, playIntent\) \{[\s\S]+it = await ensurePlayQuery\(it\);\s*if \(S\._playIntent !== playIntent\) return;/,
+    'a stale title lookup cannot open a player after a newer Play or Back');
+  assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]{0,600}S\._playIntent = \(S\._playIntent \|\| 0\) \+ 1;[\s\S]{0,200}S\._playLock = null;/,
+    'closing the player (cancel) releases the play lock');
+  assert.match(ui, /async function resumeContinueWatching\(it\) \{[\s\S]+return play\(it\);/,
+    'Continue Watching cards go through the same locked play()');
+});
+
+test('detail warm-ups: warm only on prepared:true, cancel on close, one id upgrade, settled episode focus', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function playbackWarmKey(it, qRank)');
+  const end = ui.indexOf('// Hand a prepared direct-play mount', start);
+  assert.ok(start >= 0 && end > start, 'prepare helpers should be extractable');
+  const timers = [];
+  const fakeSet = (fn, delay) => { const t = { fn, delay }; timers.push(t); return t; };
+  const fakeClear = (t) => { const i = timers.indexOf(t); if (i >= 0) timers.splice(i, 1); };
+  const runTimers = () => { while (timers.length) timers.shift().fn(); };
+  const flush = () => new Promise((r) => setImmediate(r));
+  const S = { view: 'detail' };
+  const calls = [];
+  const h = new Function('S', 'resolvePlaybackResume', 'episodeKeyParts', 'queryFor', 'qualityRankForItem',
+    'localTitleHasPlayback', 'localPlaybackFitsQuality', 'ensureLocalPlaybackForItem', 'api', 'playbackRequestBody',
+    'maybeNativePrefetch', 'sourceIdentityFor', 'setTimeout', 'clearTimeout',
+    'let prepareTimer = null; let prefetchTimer = null; let prepareInflight = null; let detailEpisodeFocusWarm = false; const DETAIL_EPISODE_FOCUS_WARM_MS = 1500;\n'
+    + `${ui.slice(start, end)}\nreturn { preparePlaybackSource, playbackIsWarmed, cancelDetailWarmups, episodeFocus: (v) => { detailEpisodeFocusWarm = v; } };`)(
+      S, (it) => it, (it) => (it.season ? { season: it.season, episode: it.episode } : null), (it) => it.title || '', () => 3,
+      () => false, () => true, () => Promise.resolve(null),
+      (url, opts) => new Promise((resolve, reject) => {
+        const c = { url, opts, resolve, reject };
+        calls.push(c);
+        if (opts.signal) opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+      }),
+      (it) => ({ q: it.title, year: it.year }), () => {},
+      (it) => ({ imdbid: it.imdbId, tvdbid: it.tvdbId, season: it.season, ep: it.episode }),
+      fakeSet, fakeClear);
+
+  const movie = { key: 'tmdb:movie:1', tmdbId: 1, title: 'Movie', imdbId: 'tt1', year: '2020' };
+  h.preparePlaybackSource(movie, 0);
+  assert.ok(!h.playbackIsWarmed(movie, 3), 'delay 0 no longer marks warm before the server answers');
+  runTimers();
+  assert.strictEqual(calls.length, 1);
+  assert.ok(calls[0].opts.signal, 'prepare is abortable');
+  h.preparePlaybackSource(movie, 0);
+  runTimers();
+  assert.strictEqual(calls.length, 1, 'an in-flight prepare for the same target is not repeated');
+  calls[0].resolve({ prepared: true });
+  await flush();
+  assert.ok(h.playbackIsWarmed(movie, 3), 'prepared:true marks the target warm');
+
+  const miss = { key: 'tmdb:movie:2', tmdbId: 2, title: 'Miss', imdbId: 'tt2', year: '2019' };
+  h.preparePlaybackSource(miss, 0); runTimers();
+  calls[1].resolve({ prepared: false });
+  await flush();
+  assert.ok(!h.playbackIsWarmed(miss, 3), 'a miss stays cold');
+  h.preparePlaybackSource(miss, 0); runTimers();
+  assert.strictEqual(calls.length, 3, 'the next focus retries a missed prepare');
+  calls[2].reject(new Error('HTTP 500'));
+  await flush();
+  assert.ok(!h.playbackIsWarmed(miss, 3), 'a failed prepare stays cold');
+
+  const closing = { key: 'tmdb:movie:3', tmdbId: 3, title: 'Close', imdbId: 'tt3', year: '2018' };
+  h.preparePlaybackSource(closing, 0); runTimers();
+  const inflight = calls[3];
+  h.preparePlaybackSource({ key: 'tmdb:movie:4', tmdbId: 4, title: 'Pending', imdbId: 'tt4', year: '2017' }, 900);
+  assert.strictEqual(timers.length, 1, 'a pending warm-up timer exists before close');
+  h.cancelDetailWarmups();
+  assert.strictEqual(timers.length, 0, 'closing details clears the pending prepare timer');
+  assert.ok(inflight.opts.signal.aborted, 'closing details aborts the in-flight /api/prepare');
+  inflight.resolve({ prepared: true });
+  await flush();
+  assert.ok(!h.playbackIsWarmed(closing, 3), 'a late prepare result after close is ignored');
+
+  const restored = { key: 'tmdb:movie:7', tmdbId: 7, title: 'Restored', imdbId: 'tt7' };
+  h.preparePlaybackSource(restored, 0); runTimers();
+  calls[calls.length - 1].resolve({ prepared: true });
+  await flush();
+  const before = calls.length;
+  restored.year = '2026';
+  h.preparePlaybackSource(restored, 0); runTimers();
+  assert.strictEqual(calls.length, before + 1, 'year + ids arriving re-fires one stronger prepare');
+  calls[calls.length - 1].resolve({ prepared: true });
+  await flush();
+  h.preparePlaybackSource(restored, 0); runTimers();
+  assert.strictEqual(calls.length, before + 1, 'the stronger prepare is sent only once');
+
+  const show = { tmdbId: 9, title: 'Show', imdbId: 'tt9', year: '2015' };
+  const ep = (n) => ({ ...show, key: `tmdb:tv:9:s1e${n}`, type: 'episode', season: 1, episode: n });
+  const sent = calls.length;
+  h.episodeFocus(true);
+  h.preparePlaybackSource(ep(2), 350);
+  h.preparePlaybackSource(ep(3), 350);
+  h.preparePlaybackSource(ep(4), 350);
+  h.episodeFocus(false);
+  assert.strictEqual(timers.length, 1, 'each episode focus cancels the previous pending prepare');
+  assert.ok(timers[0].delay >= 1500, 'episode focus waits for a long settle before warming');
+  runTimers();
+  assert.strictEqual(calls.length, sent + 1, 'only the settled Play target is prepared');
+  assert.match(calls[calls.length - 1].opts.body.q, /Show/);
+
+  assert.match(ui, /function closeDetail\(\) \{[\s\S]{0,600}cancelDetailWarmups\(\);/,
+    'closeDetail cancels prefetch/prepare warm-ups');
+  assert.match(ui, /function switchView\(v, push = true, opts = \{\}\) \{[\s\S]{0,600}if \(prevView !== v\) cancelDetailWarmups\(\);/,
+    'view changes cancel detail warm-ups');
+  assert.match(ui, /function retargetDetailFromEpisodeCard\(card\) \{[\s\S]+detailEpisodeFocusWarm = true;[\s\S]+updateDetailPlayLabel\(\{ label: resume \? 'Resume' : 'Play', target \}\);[\s\S]+detailEpisodeFocusWarm = false;/,
+    'episode focus warm-ups use the long settle');
+  assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]{0,500}if \(detailEpisodeFocusWarm\) delay = Math\.max\(delay, DETAIL_EPISODE_FOCUS_WARM_MS\);/,
+    'episode focus search warm-up settles too');
+});
+
+test('resume warm sends absolute resume seconds even when duration is unknown', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /if \(resumeSec > 0 && !userPicked\) \{[\s\S]{0,400}body\.resumeSeconds = Math\.round\(resumeSec\);\s*if \(dur > 0\) body\.resumeFrac = /,
+    'prepare/play carry resumeSeconds alongside resumeFrac');
+});
+
+test('closing the player back to Home keeps the restored Continue Watching focus', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /if \(S\.view === 'home'\) paintHomeWatchNow\(\{ focusSnapshot: ret\.homeFocus \}\);[\s\S]{0,400}setTimeout\(\(\) => \{[\s\S]{0,200}if \(S\.view === 'home' && ret\.homeFocus && document\.querySelector\('#home \.focus'\)\) return;\s*focusContent\(\);/,
+    'a restored Home card focus is not overridden by focusContent() jumping to the hero');
+});
+
+test('Playback interrupted offers a focused Try again at the saved minute', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /id="vlcRetry"[^>]*>Try again<\/button>[\s\S]{0,300}id="vlcCopy"[\s\S]{0,300}id="vlcClose"/,
+    'the panel keeps VLC copy + Close and adds Try again');
+  const panelStart = ui.indexOf('function showPlaybackInterrupted(');
+  const panelEnd = ui.indexOf('function playbackServerGone(', panelStart);
+  const panel = ui.slice(panelStart, panelEnd);
+  assert.match(panel, /\$\('vlcRetry'\)\.style\.display = canRetry \? '' : 'none';[\s\S]+b\.focus\(/,
+    'Try again is visible and focused for VOD');
+  assert.match(ui, /function resetVlcPanel\(\) \{[\s\S]{0,500}\$\('vlcRetry'\)\.style\.display = 'none';/,
+    'the plain VLC panel hides Try again');
+  assert.match(ui, /\$\('vlcRetry'\)\.addEventListener\('click', retryInterruptedPlayback\);/);
+  assert.match(ui, /const btns = \[\$\('vlcRetry'\), \$\('vlcCopy'\), \$\('vlcClose'\)\]/,
+    'D-pad can reach Try again');
+  const retryStart = panel.indexOf('function retryInterruptedPlayback()');
+  assert.ok(retryStart >= 0, 'retry helper should be extractable');
+  const plays = [];
+  const panelEl = { classList: { remove: () => {} } };
+  const S = { _interruptedRetry: { item: { key: 'tmdb:movie:8', title: 'X', resume: 10 }, at: 1834.6 } };
+  const retry = new Function('S', '$', 'play', 'closePlayer', `${panel.slice(retryStart)}\nreturn retryInterruptedPlayback;`)(
+    S, () => panelEl, (it) => plays.push(it), () => plays.push('close'));
+  retry();
+  assert.strictEqual(plays.length, 1);
+  assert.strictEqual(plays[0].key, 'tmdb:movie:8');
+  assert.strictEqual(plays[0].resume, 1834, 'Try again resumes at the minute it stopped');
+  assert.strictEqual(S._interruptedRetry, null);
+});
+
+test('every Play start has a startup watchdog cleared by first frame, close, and errors', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('const PLAY_START_WATCHDOG_MS = 60000;');
+  const end = ui.indexOf('const PLAY_LOCK_MAX_MS', start);
+  assert.ok(start >= 0 && end > start, 'start watchdog should be extractable');
+  const timers = [];
+  const make = (S, events) => new Function('S', 'vodPlaybackStarted', 'closePlayer', 'toast', 'setTimeout', 'clearTimeout',
+    `${ui.slice(start, end)}\nreturn { armPlayStartWatchdog, clearPlayStartWatchdog };`)(
+      S, (p) => !!(p && p.started), () => events.push('close'), (m) => events.push(m),
+      (fn, delay) => { const t = { fn, delay }; timers.push(t); return t; },
+      (t) => { const i = timers.indexOf(t); if (i >= 0) timers.splice(i, 1); });
+  {
+    const events = [];
+    const S = { _playTicket: 3, view: 'player', playing: null };
+    const w = make(S, events);
+    w.armPlayStartWatchdog({ key: 'm', type: 'movie' }, 3);
+    assert.strictEqual(timers.length, 1);
+    assert.strictEqual(timers[0].delay, 60000);
+    timers.shift().fn();
+    assert.deepStrictEqual(events, ['close', 'Could not start. Try Play again.'],
+      'no first frame in 60s closes the loader and tells the viewer to try again');
+  }
+  {
+    const events = [];
+    const S = { _playTicket: 3, view: 'player', playing: { started: true } };
+    make(S, events).armPlayStartWatchdog({ key: 'm', type: 'movie' }, 3);
+    timers.shift().fn();
+    assert.deepStrictEqual(events, [], 'a started playback is left alone');
+  }
+  {
+    const events = [];
+    const S = { _playTicket: 4, view: 'player', playing: null };
+    make(S, events).armPlayStartWatchdog({ key: 'm', type: 'movie' }, 3);
+    timers.shift().fn();
+    assert.deepStrictEqual(events, [], 'a superseded ticket never closes the newer player');
+  }
+  {
+    const events = [];
+    const S = { _playTicket: 1, view: 'player' };
+    const w = make(S, events);
+    w.armPlayStartWatchdog({ key: 'm', type: 'movie' }, 1);
+    w.clearPlayStartWatchdog();
+    assert.strictEqual(timers.length, 0, 'clear removes the pending timer');
+    w.armPlayStartWatchdog({ key: 'live', type: 'live' }, 1);
+    assert.strictEqual(timers.length, 0, 'Live TV keeps its own tune/retry flow');
+  }
+  assert.match(ui, /armPlayHandoffWatchdog\(playTicket\);\s*armPlayStartWatchdog\(it, playTicket\);/,
+    'catalog Play arms the start watchdog for every start, not only direct handoff');
+  assert.match(ui, /async function playLocal\(it, opts = \{\}\) \{[\s\S]{0,800}armPlayStartWatchdog\(it, playTicket\);/,
+    'library Play arms the start watchdog');
+  assert.match(ui, /function markVodPlaybackStarted\(p\) \{[\s\S]{0,200}clearPlayStartWatchdog\(\);/,
+    'first frame clears the watchdog');
+  assert.match(ui, /window\.__tvNativeVideoReady = [\s\S]{0,300}p\.nativeReady = true;\s*clearPlayStartWatchdog\(\);/,
+    'native READY clears the watchdog');
+  assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]{0,700}clearPlayStartWatchdog\(\);/,
+    'close and error paths (which close the player) clear the watchdog');
+});
+test('audiobook track stream survives a long pause and lets go when the listener leaves', () => {
+  const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const start = serverSrc.indexOf('audioTrack: async (ctx) => {');
+  const block = serverSrc.slice(start, serverSrc.indexOf('audiobookChapters: async', start));
+  assert.ok(start > 0);
+  assert.match(block, /ctx\.req\.setTimeout\(0\);[\s\S]+ctx\.res\.setTimeout\(0\);[\s\S]+socket\.setTimeout\(0\)/,
+    'a paused audiobook must not be cut by the 30s idle timeout');
+  assert.match(block, /ac\.signal\.addEventListener\('abort', done/,
+    'a listener that leaves mid-send must not leave the mount marked as playing forever');
+});
+
+test('Jellyfin apps: a long drag restarts the encoder with pieces stamped on the same clock, and older pieces stay findable', { skip: !HAS_FFMPEG }, async () => {
+  // The player keeps the first init.mp4 and the first list. A restarted encode at piece 10
+  // must say 20s inside the piece, or the clock jumps back to 0 after the drag.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-hlsjump-'));
+  const clip = path.join(dir, 'gop10.mkv');
+  const gen = spawnSync(detectFfmpeg().path, ['-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+    '-t', '30', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '240', '-keyint_min', '240', '-sc_threshold', '0',
+    '-c:a', 'aac', '-shortest', clip], { timeout: 60000 });
+  assert.strictEqual(gen.status, 0, `fixture encode failed: ${gen.stderr}`);
+  const { spawnHls } = require('../server/transcode');
+  const run = async (out, opts) => {
+    fs.mkdirSync(out, { recursive: true });
+    const ff = spawnHls(clip, { outDir: out, segmentTime: 2, holdSegments: true, transcodeAudio: true, safeStereo: true, ...opts });
+    await new Promise((ok) => { ff.on('close', ok); ff.on('error', ok); });
+  };
+  const videoTfdt = (file) => {
+    const b = fs.readFileSync(file);
+    const i = b.indexOf('tfdt');
+    return b[i + 4] === 1 ? Number(b.readBigUInt64BE(i + 8)) : b.readUInt32BE(i + 8);
+  };
+  try {
+    const first = path.join(dir, 'first');
+    await run(first, {});
+    const jump = path.join(dir, 'jump');
+    await run(jump, { startSeconds: 20, startNumber: 10, initName: 'seekinit.mp4', playlistName: 'seek10.m3u8', tsOffset: 20 });
+    assert.ok(fs.existsSync(path.join(jump, 'seek10.m3u8')), 'the restart writes its own list, so index.m3u8 keeps naming the older pieces');
+    assert.ok(!fs.existsSync(path.join(jump, 'index.m3u8')));
+    assert.strictEqual(videoTfdt(path.join(jump, 'seg00010.m4s')), videoTfdt(path.join(first, 'seg00010.m4s')),
+      'piece 10 after the drag starts at the same time as piece 10 from the first run');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(serverSrc, /playlistName: `seek\$\{index\}\.m3u8`,\s+tsOffset: index \* step,/);
+  assert.match(serverSrc, /for \(const list of \['index\.m3u8', \.\.\.\(sess\.playlists \|\| \[\]\)\]\)/,
+    'a piece made before the drag is still found');
+});
+
+test('subtitles: TV keeps the synced captions after a skip or reconnect', () => {
+  const vm = require('node:vm');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function nativeSubtitlePayload(');
+  const end = ui.indexOf('async function nativeStartupSubtitleRelAfterPreflight(', start);
+  const onStart = ui.indexOf('function nativeSubtitleOnPlayer(');
+  const onEnd = ui.indexOf('function tryNativePlaybackLadder(', onStart);
+  assert.ok(start >= 0 && end > start);
+  const shifts = { 'os:en:abc': 0 };
+  const sandbox = {
+    URL,
+    location: { origin: 'http://tv' },
+    subtitleUrlForRel: (_p, rel) => `/api/subs/m1?rel=${rel}&shift=1.5`,
+    subtitleLangForRel: () => 'en',
+    nativeSubtitleLabel: () => 'English',
+    loadSubShift: (rel) => shifts[rel] || 0,
+  };
+  vm.runInNewContext(ui.slice(start, end) + ui.slice(onStart, onEnd), sandbox);
+  const forPlayer = (q, rel, mode) => sandbox.nativeSubtitleOnPlayer(q, sandbox.nativeSubtitlePayload(q, rel, mode));
+  const p = {
+    mountId: 'm1', audioTrack: 0,
+    _nativeSyncedUrl: { rel: 'os:en:abc', audio: 0, mountId: 'm1', url: 'http://tv/api/subs/m1?rel=os:en:abc&sync=1&at=600&audio=0' },
+  };
+  const rebuilt = forPlayer(p, 'os:en:abc', 'startup');
+  assert.match(rebuilt.url, /sync=1/, 'the rebuilt player gets the synced captions');
+  assert.strictEqual(rebuilt.shift, 0);
+  shifts['os:en:abc'] = 0.5;
+  assert.strictEqual(forPlayer(p, 'os:en:abc').shift, 0.5, 'a nudge made after the sync still counts');
+  assert.doesNotMatch(sandbox.nativeSubtitlePayload(p, 'os:en:abc', 'manual').url, /sync=1/,
+    'the sync step itself still asks for the raw captions');
+  assert.doesNotMatch(forPlayer({ ...p, audioTrack: 1 }, 'os:en:abc').url, /sync=1/,
+    'another audio track has other timing');
+  assert.doesNotMatch(forPlayer({ ...p, mountId: 'm2' }, 'os:en:abc').url, /sync=1/,
+    'a different release has other timing');
+  assert.doesNotMatch(forPlayer(p, 'os:fr:x').url, /sync=1/);
+  assert.match(ui, /p\._nativeSyncedUrl = \{ rel, audio, mountId: p\.mountId, url: [^}]+\};\s+\/\/[^\n]*\n\s+p\._subShift = 0; saveSubShift\(rel, 0\);/,
+    'native sync drops the old hand nudge, like the browser');
+});
+
+test('subtitles: a mid-movie source switch keeps captions on in the same language', () => {
+  const vm = require('node:vm');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function carrySubtitleAcrossSourceSwap(');
+  const end = ui.indexOf('function onlineFallbackRelForBuiltIn(', start);
+  assert.ok(start >= 0 && end > start);
+  let online = true;
+  const sandbox = {
+    canAutoSubtitle: () => online,
+    subtitleLangForRel: (rel) => (rel === 'em:3' ? 'fr' : rel.startsWith('os:') ? rel.split(':')[1] : ''),
+    preferredAutoSubtitleLang: () => 'en',
+    osTrackRel: (lang) => `os:${lang}`,
+  };
+  vm.runInNewContext(ui.slice(start, end), sandbox);
+  const carry = sandbox.carrySubtitleAcrossSourceSwap;
+  assert.strictEqual(carry({}, 'em:3'), 'os:fr', 'a built-in French track carries over as online French');
+  assert.strictEqual(carry({}, 'os:de:xyz'), 'os:de', 'the new release picks its own best German file');
+  assert.strictEqual(carry({}, null), null, 'captions that were off stay off');
+  assert.strictEqual(carry({ _subtitleDisabledThisSession: true }, 'os:en'), null);
+  online = false;
+  assert.strictEqual(carry({}, 'em:3'), null, 'no online captions: never reuse the old file track number');
+  const adv = ui.slice(ui.indexOf("const r = await api('/api/advance/'"), ui.indexOf("toast('Native player could not start the next release')"));
+  assert.ok(adv.indexOf('carrySubtitleAcrossSourceSwap(p, p.subTrack)') < adv.indexOf('p.tracks = null'),
+    'the language is read before the old tracks are cleared');
+  assert.match(adv, /if \(nativePreferred && carriedSubTrack\) p\.subTrack = carriedSubTrack;/);
+  assert.match(ui, /startSource\(startKind, at, quiet \? \{ quietSeek: true \} : \{\}\);\s+if \(carriedSubTrack\) setSubtitle\(carriedSubTrack, \{ startup: true \}\);/);
+});
+
+test('jellyfin subtitles: the Loading card and resume pads move the captions with the picture', () => {
+  const jf = require('../server/jellyfin-api.js');
+  const segs = '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI="init.mp4"\n'
+    + '#EXTINF:2.000,\nseg00000.m4s\n#EXTINF:2.000,\nseg00001.m4s\n#EXTINF:1.500,\nseg00002.m4s\n#EXTINF:2.000,\nseg00003.m4s\n'
+    + '#EXTINF:2.000,\nseg00004.m4s\n#EXTINF:2.000,\nseg00005.m4s\n#EXTINF:2.000,\nseg00006.m4s\n';
+  const carded = jf.pictureAfterLoadingCard(3, segs);
+  assert.strictEqual(jf.playlistClockShift(carded, 0), 6, '3 card pieces: the movie starts at 6s, so captions go 6s later');
+  const resumed = jf.resumeClockPlaylist(segs, 125);
+  const shift = jf.playlistClockShift(resumed, 125);
+  assert.ok(shift < 0 && shift > -14, `resume pads stop short of the saved minute (${shift}s)`);
+  let pads = 0;
+  for (const row of resumed.matchAll(/^#EXTINF:([0-9.]+),\r?\npad\.m4s$/gm)) pads += Number(row[1]);
+  assert.strictEqual(Math.round((pads - 125) * 1000) / 1000, shift, 'shift = where the picture starts on the clock minus its movie time');
+  assert.strictEqual(jf.playlistClockShift(segs, 0), 0, 'a plain list needs no shift');
+  assert.strictEqual(jf.playlistClockShift(jf.loadingHoldPlaylist(4), 0), null, 'card only: not settled yet');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /sess\.timeline = raw;\s+sess\.clockShift = playlistClockShift\(raw, sessionStart\) \|\| 0;/);
+  const api = fs.readFileSync(path.join(__dirname, '..', 'server', 'jellyfin-api.js'), 'utf8');
+  assert.match(api, /deps\.subtitleOnPlayerClock\(ctx\.m\[2\], body\)/, 'online, release, and local captions all get the shift');
+});
+
+test('subtitles: a slow keyframe answer moves TV captions without saving it as the viewer nudge', () => {
+  const vm = require('node:vm');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function nativeSubtitlePayload(');
+  const end = ui.indexOf('async function nativeStartupSubtitleRelAfterPreflight(', start);
+  const onStart = ui.indexOf('function nativeSubtitleOnPlayer(');
+  const onEnd = ui.indexOf('function tryNativePlaybackLadder(', onStart);
+  const sandbox = {
+    URL, location: { origin: 'http://tv' },
+    subtitleUrlForRel: (_p, rel) => `/api/subs/m1?rel=${rel}`,
+    subtitleLangForRel: () => 'en', nativeSubtitleLabel: () => 'English',
+    loadSubShift: () => 0.5,
+  };
+  vm.runInNewContext(ui.slice(start, end) + ui.slice(onStart, onEnd), sandbox);
+  const forPlayer = (q, rel, mode) => sandbox.nativeSubtitleOnPlayer(q, sandbox.nativeSubtitlePayload(q, rel, mode));
+  const p = { mountId: 'm1', audioTrack: 0, _nativeStartSkew: 2.4 };
+  assert.strictEqual(forPlayer(p, 'os:en').shift, 2.9, 'picture began 2.4s early: words move 2.4s plus the nudge');
+  assert.strictEqual(forPlayer(p, '').shift, 0);
+  assert.match(ui, /if \(p\.usingNative\) \{[\s\S]{0,260}p\._nativeStartSkew = Math\.round\(\(t - start\) \* 1000\) \/ 1000;[\s\S]{0,160}pushNativeActiveSubtitle\(p, p\.subTrack, \{ sync: false \}\);/);
+  assert.match(ui, /p\._nativeStartSkew = 0;\s+const subPayload = nativeSubtitlePayload\(p, sub\.rel \|\| '', 'startup'\);\s+nativeSubtitleOnPlayer\(p, subPayload\);/,
+    'each new handoff starts with no skew and still gets the synced link');
+  assert.match(ui, /const n = Math\.abs\(total\) < 0\.05 \? 0 : \+\(total - \(Number\(p\._nativeStartSkew\) \|\| 0\)\)\.toFixed\(1\);/,
+    'the saved nudge leaves the skew out');
+  const rs = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'src-tauri', 'src', 'player.rs'), 'utf8');
+  assert.match(rs, /if subtitle\.size\.is_empty\(\) \{\s+subtitle\.size = active\.subtitle\.size\.clone\(\);/, 'Windows keeps the caption size');
+  assert.match(rs, /if !active\.file_loaded \{[\s\S]{0,400}active\.subtitle_attached = subtitle\.url\.is_empty\(\);/, 'Windows keeps an early pick');
+});
+
+test('next-episode prepare tries once more when the first warm-up misses', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const helpersStart = ui.indexOf('function catalogRuntimeSeconds(item)');
+  const helpersEnd = ui.indexOf('function knownPlaybackSeconds(p, dur)', helpersStart);
+  const start = ui.indexOf('const NEXT_EP_PREP_LEAD_SECONDS = 120;');
+  const end = ui.indexOf('const UP_NEXT_COUNTDOWN_SECONDS = 10;', start);
+  const calls = [];
+  const timers = [];
+  const item = { key: 'tmdb:tv:77:s2e6', qualityRank: 4 };
+  const S = { nextEp: { item }, nextEpPrepared: false };
+  let answer = () => Promise.reject(new Error('indexer timeout'));
+  const fn = new Function('S', 'localTitleHasPlayback', 'qualityRankForItem', 'api', 'playbackRequestBody', 'maybeNativePrefetch', 'markPlaybackPrepared', 'setTimeout',
+    `${ui.slice(helpersStart, helpersEnd)}\n${ui.slice(start, end)}\nreturn maybePrepareNextEpisode;`)(
+      S, () => false, () => 4,
+      (url) => { calls.push(url); return answer(); },
+      (it, pick, rank) => ({ key: it.key, pick, rank }),
+      () => {}, () => {},
+      (cb, ms) => { timers.push({ cb, ms }); });
+  const settle = () => new Promise((r) => setImmediate(r));
+  fn(80, 200); await settle();
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(timers.length, 1, 'a failed warm-up schedules one retry');
+  assert.strictEqual(timers[0].ms, 20000);
+  fn(85, 200);
+  assert.strictEqual(calls.length, 1, 'no retry before the wait is over');
+  timers[0].cb();
+  answer = () => Promise.resolve({ prepared: false });
+  fn(100, 200); await settle();
+  assert.strictEqual(calls.length, 2, 'the second try fires on the next tick');
+  assert.strictEqual(timers.length, 1, 'only one retry per episode, so a dead title does not loop');
+  S.nextEp = { item: { key: 'other' } };
+  S.nextEpPrepared = true;
+  timers[0].cb();
+  assert.strictEqual(S.nextEpPrepared, true, 'a stale retry does not touch a different next episode');
+});
+
+test('android Next Episode chip sizes to its text so a display-mode switch cannot clip it', () => {
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const manifest = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+  const card = android.slice(android.indexOf('private View buildNativeUpNextCard()'), android.indexOf('private GradientDrawable nativeUpNextPlayBg('));
+  assert.match(manifest, /configChanges="[^"]*density/, 'density changes keep the activity, so sizes must not be fixed pixels');
+  assert.match(card, /play\.setMinHeight\(dp\(36\)\);/);
+  assert.match(card, /LinearLayout\.LayoutParams playLp = new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, LinearLayout\.LayoutParams\.WRAP_CONTENT\);/);
+  assert.match(card, /row\.addView\(dismiss, new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, LinearLayout\.LayoutParams\.WRAP_CONTENT\)\);/);
+  assert.doesNotMatch(card, /LayoutParams\([^)]*dp\(36\)\)/, 'no fixed-pixel chip height');
+});
+
+test('next-episode prepare tries once more when the first warm-up misses', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const helpersStart = ui.indexOf('function catalogRuntimeSeconds(item)');
+  const helpersEnd = ui.indexOf('function knownPlaybackSeconds(p, dur)', helpersStart);
+  const start = ui.indexOf('const NEXT_EP_PREP_LEAD_SECONDS = 120;');
+  const end = ui.indexOf('const UP_NEXT_COUNTDOWN_SECONDS = 10;', start);
+  const calls = [];
+  const timers = [];
+  const item = { key: 'tmdb:tv:77:s2e6', qualityRank: 4 };
+  const S = { nextEp: { item }, nextEpPrepared: false };
+  let answer = () => Promise.reject(new Error('indexer timeout'));
+  const fn = new Function('S', 'localTitleHasPlayback', 'qualityRankForItem', 'api', 'playbackRequestBody', 'maybeNativePrefetch', 'markPlaybackPrepared', 'setTimeout',
+    `${ui.slice(helpersStart, helpersEnd)}\n${ui.slice(start, end)}\nreturn maybePrepareNextEpisode;`)(
+      S, () => false, () => 4,
+      (url) => { calls.push(url); return answer(); },
+      (it, pick, rank) => ({ key: it.key, pick, rank }),
+      () => {}, () => {},
+      (cb, ms) => { timers.push({ cb, ms }); });
+  const settle = () => new Promise((r) => setImmediate(r));
+  fn(80, 200); await settle();
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(timers.length, 1, 'a failed warm-up schedules one retry');
+  assert.strictEqual(timers[0].ms, 20000);
+  fn(85, 200);
+  assert.strictEqual(calls.length, 1, 'no retry before the wait is over');
+  timers[0].cb();
+  answer = () => Promise.resolve({ prepared: false });
+  fn(100, 200); await settle();
+  assert.strictEqual(calls.length, 2, 'the second try fires on the next tick');
+  assert.strictEqual(timers.length, 1, 'only one retry per episode, so a dead title does not loop');
+  S.nextEp = { item: { key: 'other' } };
+  S.nextEpPrepared = true;
+  timers[0].cb();
+  assert.strictEqual(S.nextEpPrepared, true, 'a stale retry does not touch a different next episode');
+});
+
+test('android Next Episode chip sizes to its text so a display-mode switch cannot clip it', () => {
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const manifest = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+  const card = android.slice(android.indexOf('private View buildNativeUpNextCard()'), android.indexOf('private GradientDrawable nativeUpNextPlayBg('));
+  assert.match(manifest, /configChanges="[^"]*density/, 'density changes keep the activity, so sizes must not be fixed pixels');
+  assert.match(card, /play\.setMinHeight\(dp\(36\)\);/);
+  assert.match(card, /LinearLayout\.LayoutParams playLp = new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, LinearLayout\.LayoutParams\.WRAP_CONTENT\);/);
+  assert.match(card, /row\.addView\(dismiss, new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, LinearLayout\.LayoutParams\.WRAP_CONTENT\)\);/);
+  assert.doesNotMatch(card, /LayoutParams\([^)]*dp\(36\)\)/, 'no fixed-pixel chip height');
 });

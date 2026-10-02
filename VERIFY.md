@@ -126,6 +126,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-02, v3.3.5 — Play joins the warm-up, captions stay in sync, Next Episode never clips:
+
+- Example: you skip ahead on the TV and the synced captions stay synced. A
+  source swap at 40:00 keeps English captions on. Jellyfin captions match
+  the picture after the Loading card and after resume. A 4K title that
+  switches the TV's display mode no longer cuts the Next Episode chip in
+  half, and a missed next-episode warm-up tries once more. Start Over resets
+  only that episode; double-tapping Play starts once; bad copies and
+  indexer outages no longer poison verdicts; Jellyfin seeks land on the
+  right timestamps.
+- Gate: `npm.cmd test` 839/839, fail 0. `verify:full` PASS against the repo
+  server on test port 7778 with `emulator-5554` (Shield untouched): Mario
+  ready 3527ms SLOW, 1stByte 255ms, seek 172ms, resume 23ms, cc=200; FROM
+  ready 2165ms, 1stByte 47ms, seek 197ms, resume 12ms, cc=200; overlapping
+  Play 8ms / 22ms; IPTV first-byte + retune PASS (8863 channels, 2 video
+  picks); Android lint + unit + debug build PASS; Android ExoPlayer stress
+  PASS (`ok: true`, hostVersion 3.3.5). Windows client `cargo check
+  --features player` PASS; Windows GPU/HDR: not run.
+- Version contract: `package.json` 3.3.5; Android `versionName` 3.3.5 /
+  `versionCode` 408; Windows client package/Tauri/Cargo(.lock) 3.3.5.
+
 2026-09-30, v3.3.4 — Jellyfin follows the website, and a fast caption file is stretched:
 
 - Example: you open a movie in Jellyfin and Continue Watching shows the same

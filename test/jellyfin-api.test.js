@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { httpJson, bootServer, setupAdmin } = require('./helpers');
-const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, clientAddress, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor, traktResumeSeconds, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard } = require('../server/jellyfin-api');
+const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinCors, jellyfinToken, clientAddress, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor, traktResumeSeconds, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard } = require('../server/jellyfin-api');
 const { LibraryDb } = require('../server/library-db');
 
 let srv, admin;
@@ -61,8 +61,16 @@ test('jellyfin resume clock reaches the saved minute before the picture', () => 
   const raw = '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:2.000,\nseg00000.m4s\n';
   assert.strictEqual(resumeClockPlaylist(raw, 0), raw);
   const out = resumeClockPlaylist(raw, 5);
-  const durs = [...out.matchAll(/#EXTINF:([0-9.]+),/g)].map((row) => Number(row[1]));
-  assert.ok(Math.abs(durs[0] + durs[1] + durs[2] - 5) < 0.02, 'quiet pieces add up to the saved minute');
+  let clock = 0;
+  let pictureAt = -1;
+  const lines = out.split(/\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const row = lines[i].match(/^#EXTINF:([0-9.]+),/);
+    if (!row) continue;
+    if (String(lines[i + 1] || '').startsWith('seg')) { pictureAt = clock; break; }
+    clock += Number(row[1]);
+  }
+  assert.ok(pictureAt >= 0 && pictureAt < 5 && pictureAt + 2 > 5, 'the saved minute sits inside the picture, not on the cut');
   assert.match(out, /#EXT-X-DISCONTINUITY/);
   assert.match(out, /seg00000\.m4s/);
   assert.doesNotMatch(out, /EXT-X-GAP|EXT-X-SKIP/);
@@ -70,6 +78,52 @@ test('jellyfin resume clock reaches the saved minute before the picture', () => 
   const earlyDurs = [...early.matchAll(/#EXTINF:([0-9.]+),/g)].map((row) => Number(row[1]));
   assert.ok(Math.abs(earlyDurs.reduce((sum, n) => sum + n, 0) - 4) < 0.02, 'the clock is ready before the first picture piece');
   assert.doesNotMatch(early, /EXT-X-GAP|EXT-X-SKIP|DISCONTINUITY/);
+  const long = ['#EXTM3U', '#EXT-X-MAP:URI="init.mp4"'];
+  for (let i = 0; i < 5; i++) long.push('#EXTINF:2.000,', `seg${String(i).padStart(5, '0')}.m4s`);
+  const held = resumeClockPlaylist(long.join('\n'), 4004);
+  let heldClock = 0;
+  let heldPicture = -1;
+  const heldLines = held.split(/\n/);
+  for (let i = 0; i < heldLines.length; i++) {
+    const row = heldLines[i].match(/^#EXTINF:([0-9.]+),/);
+    if (!row) continue;
+    if (String(heldLines[i + 1] || '').startsWith('seg')) { heldPicture = heldClock; break; }
+    heldClock += Number(row[1]);
+  }
+  assert.ok(heldPicture > 0 && heldPicture <= 4002 && 4004 - heldPicture >= 0.5, 'a one-hour resume starts after the loading card');
+  assert.ok(Math.abs((4004 - heldPicture) % 2) < 0.02 || Math.abs(((4004 - heldPicture) % 2) - 2) < 0.02, 'pad pieces stay a whole 2 seconds');
+  const uneven = [
+    '#EXTM3U', '#EXT-X-MAP:URI="init.mp4"',
+    '#EXTINF:1.335,', 'seg00000.m4s',
+    '#EXTINF:2.669,', 'seg00001.m4s',
+    '#EXTINF:2.002,', 'seg00002.m4s',
+  ].join('\n');
+  const unevenOut = resumeClockPlaylist(uneven, 4004);
+  let unevenClock = 0;
+  let unevenPicture = -1;
+  const unevenLines = unevenOut.split(/\n/);
+  const unevenDurs = [];
+  for (let i = 0; i < unevenLines.length; i++) {
+    const row = unevenLines[i].match(/^#EXTINF:([0-9.]+),/);
+    if (!row) continue;
+    const dur = Number(row[1]);
+    if (String(unevenLines[i + 1] || '').startsWith('seg')) {
+      if (unevenPicture < 0) unevenPicture = unevenClock;
+      unevenDurs.push(dur);
+    }
+    unevenClock += dur;
+  }
+  const into = 4004 - unevenPicture;
+  let at = 0;
+  let gap = -1;
+  for (const dur of unevenDurs) {
+    if (into >= at && into <= at + dur) {
+      gap = Math.min(into - at, at + dur - into);
+      break;
+    }
+    at += dur;
+  }
+  assert.ok(gap >= 0.35, 'the saved minute sits in the middle of a piece, not on a cut');
   rememberResumeOrigin('user-1', 'm550', 2400);
   assert.strictEqual(progressSeconds('user-1', 'm550', 10), 2410, 'a clock that still starts at zero keeps the saved minute');
   assert.strictEqual(progressSeconds('user-1', 'm550', 2410), 2410, 'a clock that already includes the saved minute is not added twice');
@@ -307,7 +361,7 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(caps.status, 204, 'Android TV posts session capabilities without /Full');
   const segments = await httpSend(srv.port, 'GET', `/MediaSegments/${me.json.Id}`, { headers: { authorization: authz } });
   assert.strictEqual(segments.status, 200, 'a missing skip-intro list closes the phone');
-  assert.deepStrictEqual(segments.json.Items, []);
+  assert.deepStrictEqual(segments.json, { Items: [], TotalRecordCount: 0, StartIndex: 0 });
   const stopEncode = await httpSend(srv.port, 'DELETE', '/Videos/ActiveEncodings', { headers: { authorization: authz } });
   assert.strictEqual(stopEncode.status, 204, 'stopping a previous play must not be a missing page');
 
@@ -682,6 +736,11 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.match(tvPlay.json.MediaSources[0].TranscodingUrl, /^\/api\/hls\//, 'the TV adds the server itself, so a full address becomes two addresses');
   assert.doesNotMatch(tvPlay.json.MediaSources[0].TranscodingUrl, /^https?:/i);
   assert.match(tvPlay.json.MediaSources[0].TranscodingUrl, /master\.m3u8/);
+  const tvSource = tvPlay.json.MediaSources[0];
+  const tvAudio = (tvSource.MediaStreams || []).filter((row) => row.Type === 'Audio');
+  assert.ok(tvAudio.length, 'the TV needs an audio row to pick');
+  assert.ok(tvAudio.some((row) => row.Index === tvSource.DefaultAudioStreamIndex),
+    'without the chosen audio the TV reads -1, switches to track 1, restarts, and loops forever');
   const rokuPlay = await httpSend(srv.port, 'POST', `/Items/${aardvark.Id}/PlaybackInfo`, {
     headers: {
       authorization: authz,
@@ -830,4 +889,180 @@ test('jellyfin door closes with the server', async () => {
   // The live line finishes closing a moment later. Quitting in that moment
   // crashes the Windows check, so this wait stays.
   await new Promise((resolve) => setTimeout(resolve, 50));
+});
+
+// Drives the door with stand-in helpers, so a usenet play needs no provider.
+let fakeMounts = 0;
+function fakeDoor(extra = {}) {
+  const calls = { play: 0, prepare: 0, saved: [], order: [] };
+  const live = new Set(extra.live || []);
+  const shows = extra.shows || {};
+  bindJellyfin({
+    settings: { get: () => ({ jellyfinApps: true }) },
+    auth: {},
+    send: (res, status, body, headers) => { res.status = status; res.body = body; res.headers = headers; },
+    readJson: async (req) => req.body || {},
+    throttled: () => false,
+    clientIp: () => '127.0.0.1',
+    tmdb: {
+      get: async (p) => {
+        if (p === '/movie/550') return { title: 'Fight Club', release_date: '1999-10-15', runtime: 139 };
+        if (shows[p]) return shows[p];
+        return null;
+      },
+    },
+    jellyfinStream: (id) => (live.has(id) ? { hlsUrl: `/api/hls/${id}?t=x`, remuxUrl: '' } : null),
+    jellyfinPrepare: async () => {
+      calls.prepare += 1;
+      calls.order.push('prepare');
+      if (extra.prepareMs) await new Promise((r) => setTimeout(r, extra.prepareMs));
+      calls.order.push('prepared');
+    },
+    jellyfinPlay: async () => {
+      calls.play += 1;
+      calls.order.push('play');
+      fakeMounts += 1;
+      const id = `mount${fakeMounts}`;
+      calls.mounts = [...(calls.mounts || []), id];
+      live.add(id);
+      return { status: 200, body: { id, hlsUrl: `/api/hls/${id}?t=x`, sessionId: `s${calls.play}` } };
+    },
+    jellyfinSubtitleStreams: extra.subs ? async (_ctx, _id, start) => [{ Index: start, Type: 'Subtitle', Codec: 'webvtt', Language: 'en', IsExternal: true, DeliveryMethod: 'External' }] : undefined,
+    jellyfinTracks: extra.tracks,
+    jellyfinWatchGet: () => ({}),
+    jellyfinWatchSave: (_ctx, key, patch) => calls.saved.push({ key, ...patch }),
+  });
+  const call = async (kind, method, p, { body, headers } = {}) => {
+    const url = new URL(`http://x${p}`);
+    const route = JELLYFIN_ROUTES.find((r) => r.kind === kind && r.m === method && r.re.test(url.pathname.toLowerCase()));
+    assert.ok(route, `route for ${method} ${p}`);
+    const res = {
+      writeHead(status, h) { res.status = status; res.headers = h; },
+      end() {},
+    };
+    const ctx = {
+      req: { headers: headers || {}, body },
+      res,
+      url,
+      m: route.re.exec(url.pathname.toLowerCase()),
+      kind,
+      user: { id: 'u1', role: 'user' },
+    };
+    await route.h(ctx);
+    return res;
+  };
+  return { calls, live, call };
+}
+
+test('jellyfin CORS lets a browser app unheart and reflects asked headers', () => {
+  const plain = jellyfinCors();
+  assert.match(plain['access-control-allow-methods'], /\bDELETE\b/, 'unfavorite is a DELETE');
+  for (const name of ['X-Emby-Client', 'X-Emby-Device-Name', 'X-Emby-Device-Id', 'X-Emby-Client-Version', 'X-MediaBrowser-Token', 'X-Emby-Authorization']) {
+    assert.ok(plain['access-control-allow-headers'].includes(name), `${name} is allowed`);
+  }
+  const asked = jellyfinCors({ headers: { 'access-control-request-headers': 'x-emby-authorization, x-custom-thing' } });
+  assert.strictEqual(asked['access-control-allow-headers'], 'x-emby-authorization, x-custom-thing');
+  const junk = jellyfinCors({ headers: { 'access-control-request-headers': 'bad\r\nheader: x' } });
+  assert.strictEqual(junk['access-control-allow-headers'], plain['access-control-allow-headers'], 'a broken ask falls back to the list');
+});
+
+test('jellyfin sign-in token works with or without quotes', () => {
+  const quoted = jellyfinToken({ headers: { authorization: 'MediaBrowser Client="Roku", Token="abc123"' }, url: '/' });
+  assert.strictEqual(quoted, 'abc123');
+  const bare = jellyfinToken({ headers: { authorization: 'MediaBrowser Client="Roku", Token=abc123, Device="x"' }, url: '/' });
+  assert.strictEqual(bare, 'abc123');
+  const last = jellyfinToken({ headers: { 'x-emby-authorization': 'MediaBrowser Token=zz9' }, url: '/' });
+  assert.strictEqual(last, 'zz9');
+});
+
+test('jellyfin second PlaybackInfo with the movie id reuses the live mount', async () => {
+  const door = fakeDoor();
+  const first = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { MediaSourceId: 'm550' } });
+  assert.strictEqual(first.status, 200);
+  assert.strictEqual(door.calls.play, 1);
+  assert.strictEqual(first.body.MediaSources[0].Id, 'm550', 'the TV crashes unless the id it sent comes back');
+  const again = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { MediaSourceId: 'm550', AudioStreamIndex: 1 } });
+  assert.strictEqual(again.status, 200);
+  assert.strictEqual(door.calls.play, 1, 'an audio switch must not start a second usenet search');
+  assert.strictEqual(again.body.MediaSources[0].Id, 'm550');
+  const [firstMount] = door.calls.mounts;
+  assert.ok(again.body.MediaSources[0].TranscodingUrl.includes(`/api/hls/${firstMount}/`));
+  door.live.delete(firstMount);
+  const gone = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { MediaSourceId: 'm550' } });
+  assert.strictEqual(gone.status, 200);
+  assert.strictEqual(door.calls.play, 2, 'a mount that is gone plays again');
+  assert.ok(gone.body.MediaSources[0].TranscodingUrl.includes(`/api/hls/${door.calls.mounts[1]}/`));
+  assert.strictEqual(gone.body.MediaSources[0].Id, 'm550');
+});
+
+test('jellyfin PlaybackInfo joins the details warm-up before play', async () => {
+  const door = fakeDoor({ prepareMs: 30 });
+  const res = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: {} });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(door.calls.prepare, 1, 'a TV that skipped the details page still starts the warm-up');
+  assert.deepStrictEqual(door.calls.order, ['prepare', 'prepared', 'play'], 'play picks up the ready warm-up');
+});
+
+test('jellyfin PlaybackInfo says which caption is on, or -1', async () => {
+  const door = fakeDoor({ subs: true });
+  const off = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: {} });
+  assert.strictEqual(off.body.MediaSources[0].DefaultSubtitleStreamIndex, -1, 'no caption asked is -1, never missing');
+  const sub = off.body.MediaSources[0].MediaStreams.find((row) => row.Type === 'Subtitle');
+  assert.ok(sub);
+  const on = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { MediaSourceId: 'm550', SubtitleStreamIndex: sub.Index } });
+  assert.strictEqual(on.body.MediaSources[0].DefaultSubtitleStreamIndex, sub.Index);
+  const missing = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { MediaSourceId: 'm550', SubtitleStreamIndex: 99 } });
+  assert.strictEqual(missing.body.MediaSources[0].DefaultSubtitleStreamIndex, -1, 'a caption that is not there is off');
+});
+
+test('jellyfin audio switch mid-movie keeps the minute from PositionTicks', async () => {
+  const door = fakeDoor();
+  const body = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { MediaSourceId: 'm550', positionticks: 900 * 10000000 } });
+  assert.match(body.body.MediaSources[0].TranscodingUrl, /start=900/);
+  const query = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo?PositionTicks=1200000000', { body: { MediaSourceId: 'm550' } });
+  assert.match(query.body.MediaSources[0].TranscodingUrl, /start=120/);
+  const both = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { MediaSourceId: 'm550', StartTimeTicks: 300 * 10000000, PositionTicks: 900 * 10000000 } });
+  assert.match(both.body.MediaSources[0].TranscodingUrl, /start=300/, 'StartTimeTicks still wins when sent');
+});
+
+test('jellyfin usenet PlaybackInfo lists the real audio tracks once probed', async () => {
+  const tracks = { video: [{ codec: 'hevc', height: 1080 }], audio: [{ codec: 'eac3', lang: 'eng', channels: 6 }, { codec: 'aac', lang: 'fre', title: 'French', channels: 2 }] };
+  const door = fakeDoor({ tracks: async () => tracks });
+  const res = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: { MediaSourceId: 'm550', AudioStreamIndex: 2 } });
+  const audio = res.body.MediaSources[0].MediaStreams.filter((row) => row.Type === 'Audio');
+  assert.deepStrictEqual(audio.map((row) => row.Index), [1, 2]);
+  assert.strictEqual(audio[1].DisplayTitle, 'French');
+  assert.strictEqual(res.body.MediaSources[0].DefaultAudioStreamIndex, 2);
+  assert.match(res.body.MediaSources[0].TranscodingUrl, /audio=1&/, 'the second audio row is the second track in the file');
+  const slow = fakeDoor({ tracks: () => new Promise(() => {}) });
+  const t0 = Date.now();
+  const placeholder = await slow.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: {} });
+  assert.ok(Date.now() - t0 < 3000, 'a slow probe does not hold up play');
+  assert.strictEqual(placeholder.body.MediaSources[0].MediaStreams.filter((row) => row.Type === 'Audio').length, 1);
+});
+
+test('jellyfin all-episodes list is not cut at 12 seasons', async () => {
+  const shows = { '/tv/77': { name: 'Long Show', seasons: Array.from({ length: 15 }, (_, i) => ({ season_number: i + 1 })) } };
+  for (let s = 1; s <= 15; s++) shows[`/tv/77/season/${s}`] = { episodes: [{ episode_number: 1 }, { episode_number: 2 }, { episode_number: 3 }] };
+  const door = fakeDoor({ shows });
+  const all = await door.call('episodes', 'GET', '/Shows/t77/Episodes');
+  assert.strictEqual(all.status, 200);
+  assert.strictEqual(all.body.TotalRecordCount, 45);
+  assert.strictEqual(all.body.Items.length, 45, 'season 13 to 15 are there too');
+  const page = await door.call('episodes', 'GET', '/Shows/t77/Episodes?StartIndex=40&Limit=3');
+  assert.strictEqual(page.body.Items.length, 3);
+  assert.strictEqual(page.body.StartIndex, 40);
+});
+
+test('jellyfin playback start saves the minute like a progress report', async () => {
+  const route = JELLYFIN_ROUTES.find((r) => r.m === 'POST' && r.re.test('/sessions/playing'));
+  assert.strictEqual(route.kind, 'progress');
+  const door = fakeDoor();
+  const res = await door.call('progress', 'POST', '/Sessions/Playing', { body: { ItemId: 'm551', PositionTicks: 300 * 10000000 } });
+  assert.strictEqual(res.status, 204);
+  assert.strictEqual(door.calls.saved.length, 1);
+  assert.strictEqual(door.calls.saved[0].position, 300);
+  const empty = await door.call('progress', 'POST', '/Sessions/Playing', { body: { ItemId: 'm551', PositionTicks: 0 } });
+  assert.strictEqual(empty.status, 204);
+  assert.strictEqual(door.calls.saved.length, 1, 'a start at 0:00 does not overwrite the saved minute');
 });

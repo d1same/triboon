@@ -1484,8 +1484,9 @@ function cachedStreamClass(v) {
 function skipTitleVerdict(verdict, detail = {}) {
   if (verdict !== 'unstreamable') return false;
   const cls = detail.streamClass || '';
-  // These describe THIS file (extents / disc / 7z), not every copy of the title.
-  if (cls === 'unmappable' || cls === 'iso' || cls === 'bdmv' || cls === '7z' || cls === 'full-disc') return true;
+  // These describe THIS file (extents / disc / 7z / a short upload), not every copy of the title.
+  // A re-post under the same name is often the complete one.
+  if (cls === 'unmappable' || cls === 'iso' || cls === 'bdmv' || cls === '7z' || cls === 'full-disc' || cls === 'stub') return true;
   return (detail.tags || []).includes('unmappable');
 }
 
@@ -1514,9 +1515,17 @@ function firstProbeMsgId(nzbXml, mountOpts = {}, candidateName = '') {
   return firstProbeTarget(nzbXml, mountOpts, candidateName).msgId;
 }
 
+// null = nothing to remember. A provider that is down, refusing logins, or out of
+// lines says nothing about this post; caching it hid good releases for 6 hours.
 function mountVerdictForError(e) {
   const msg = String((e && e.message) || e || '');
-  return /\b430\b|no such article|missing article/i.test(msg) ? 'missing' : 'mount-failed';
+  const code = String((e && e.code) || '');
+  if (/\b430\b|no such article|missing article/i.test(msg)) return 'missing';
+  if (code === 'NO_PROVIDER' || /^E(CONN|HOST|NET|PIPE|AI_|TIMEDOUT)/.test(code)
+      || /unreachable|no usenet provider|ECONN|ETIMEDOUT|socket hang up|(^|[\s:])(480|481|482|502)\s|too many connections|authenticat/i.test(msg)) {
+    return null;
+  }
+  return 'mount-failed';
 }
 
 async function probeFirstArticle(pool, msgId) {
@@ -2003,14 +2012,28 @@ class Pipeline {
     }
     if (opts.prefetch) this.metrics.nzbPrefetches++;
     else this.metrics.nzbFetches++;
-    pending = fetchUrl(candidate.nzbUrl, { timeoutMs: NZB_FETCH_IDLE_MS, deadlineMs: NZB_FETCH_DEADLINE_MS, maxBytes: 100 * 1024 * 1024 })
+    const fetchOne = (url) => fetchUrl(url, { timeoutMs: NZB_FETCH_IDLE_MS, deadlineMs: NZB_FETCH_DEADLINE_MS, maxBytes: 100 * 1024 * 1024 })
       .then((r) => {
         const xml = r.body.toString('utf8');
         if (r.status !== 200 || !/<file\b/i.test(xml)) throw new Error(`nzb fetch HTTP ${r.status}`);
-        this._rememberNzb(candidate.nzbUrl, xml);
         return xml;
-      })
-      .finally(() => this.nzbInflight.delete(candidate.nzbUrl));
+      });
+    // The same release listed by a second indexer is a spare download link. A dead
+    // link on the first indexer must not cost the whole release.
+    const sources = [{ url: candidate.nzbUrl, indexer: candidate.indexer }, ...(candidate.mirrors || [])];
+    pending = (async () => {
+      let lastErr = null;
+      for (const src of sources) {
+        if (src !== sources[0] && this.usage && !this.usage.canGrab(src.indexer)) continue;
+        try {
+          const xml = await fetchOne(src.url);
+          if (src !== sources[0] && this.usage) this.usage.onGrab(src.indexer);
+          this._rememberNzb(candidate.nzbUrl, xml);
+          return xml;
+        } catch (e) { lastErr = e; }
+      }
+      throw lastErr || new Error('nzb fetch failed');
+    })().finally(() => this.nzbInflight.delete(candidate.nzbUrl));
     this.nzbInflight.set(candidate.nzbUrl, pending);
     return pending;
   }
@@ -2423,6 +2446,9 @@ class Pipeline {
       if (vf && vf.streamable && !vf._preparedOnly && (Number(vf._activeStreamReads) || 0) <= 0
           && touched > 0 && now - touched >= ACTIVE_PLAYBACK_GRACE_MS) {
         vf._preparedOnly = true;
+        // Nobody is watching this one now. Its head/tail/resume warm must not keep
+        // pulling articles while another viewer needs the lines.
+        this.cancelPlaybackWarmups(vf);
       }
     }
     const active = [...this.mounts.values()]
@@ -3092,7 +3118,8 @@ class Pipeline {
         if (!probeEpisodeScoped) this._recordVerdict(candidate, 'probe-timeout', { stage: 'mount' });
         return { fail: `mount: ${e.message} (slow articles — demoted for later)` };
       }
-      if (!probeEpisodeScoped) this._recordVerdict(candidate, mountVerdictForError(e));
+      const mountVerdict = mountVerdictForError(e);
+      if (mountVerdict && !probeEpisodeScoped) this._recordVerdict(candidate, mountVerdict);
       return { fail: `mount: ${e.message}` };
     }
 
@@ -3216,49 +3243,14 @@ class Pipeline {
     if (params.imdbid || params.tvdbid) {
       this.prepareFailUntil.delete(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }));
     }
-    let ready = this._findTitlePreparedReady(params, policy);
-    // A Sources pick or a saved resume pin must not join a Details/CW warmup of a
-    // different file. That is how a color-broken auto source came back from Home.
-    if (ready && (params.pickKey || params.pick)) {
-      const sameKey = params.pickKey && ready.candidate && ready.candidate.pickKey === params.pickKey;
-      const sameName = !params.pickKey && params.pick && ready.candidate && ready.candidate.name === params.pick;
-      if (!sameKey && !sameName) ready = null;
-    }
-    // A warmed file that is fatter than the pipe would start, then pause. Skip it
-    // so Play opens a lighter copy instead of cutting over mid-movie.
-    const userChose = (params.pickKey || params.pick) && !params.pinnedResume;
-    if (ready && !userChose && !this._fitsPipe(ready.candidate, policy)) ready = null;
-    // A warmed Dolby Vision file paints the picture green on a screen that cannot
-    // decode it. Skip that warmup so Play opens the normal copy. A pin and a
-    // Sources tap keep the file they already chose.
-    if (ready && !userChose && !params.pinnedResume && policy.dolbyVision === false
-        && this._isDolbyVisionRelease(ready.candidate)) ready = null;
-    if (ready) {
-      this.metrics.titlePrepareJoins++;
-      console.log('[play] joined prepared ' + (ready.candidate && ready.candidate.name || ''));
-      debug.log('play', `joined prepared pick=${(ready.candidate && ready.candidate.pickKey) || '-'} mount=${ready.vf && ready.vf.id || '-'}`);
-      const session = new PlaySession(params, [ready.candidate]);
-      session.policy = policy;
-      session.cursor = 1;
-      this.sessions.set(session.id, session);
-      const committed = this._commitMount(session, ready.candidate, ready.vf, [], mountOpts);
-      // Ranked backups can wait. First frame must not sit behind an indexer fan-out.
-      this.search(params, policy, { allowStale: true }).then(({ candidates }) => {
-        if (session.released) return;
-        let extra = this._playableCandidates(candidates, params);
-        if (!extra.some((c) => c.pickKey === ready.candidate.pickKey)) {
-          extra = [ready.candidate, ...extra];
-        }
-        if (!extra.length) return;
-        session.candidates = extra;
-        const readyIdx = extra.findIndex((c) => c.pickKey === ready.candidate.pickKey);
-        session.cursor = readyIdx >= 0 ? readyIdx + 1 : 1;
-        this._attachStandby(session, params, policy, mountOpts);
-      }).catch(() => {});
-      return committed;
-    }
+    const ready = this._preparedForPlay(params, policy);
+    if (ready) return this._joinPrepared(params, policy, mountOpts, ready);
     const searchT0 = Date.now();
     let { candidates, errors: searchErrors } = await this.search(params, policy);
+    // Details warmup often lands while Play is still searching. Use it instead of
+    // racing fresh mounts against the copy that is already open.
+    const readyAfterSearch = this._preparedForPlay(params, policy);
+    if (readyAfterSearch) return this._joinPrepared(params, policy, mountOpts, readyAfterSearch);
     if (!(candidates && candidates.length)) {
       const stale = await this.search(params, policy, { allowStale: true });
       if (stale.candidates && stale.candidates.length) candidates = stale.candidates;
@@ -3340,6 +3332,52 @@ class Pipeline {
       }
       throw e;
     }
+  }
+
+  _preparedForPlay(params, policy = {}) {
+    let ready = this._findTitlePreparedReady(params, policy);
+    // A Sources pick or a saved resume pin must not join a Details/CW warmup of a
+    // different file. That is how a color-broken auto source came back from Home.
+    if (ready && (params.pickKey || params.pick)) {
+      const sameKey = params.pickKey && ready.candidate && ready.candidate.pickKey === params.pickKey;
+      const sameName = !params.pickKey && params.pick && ready.candidate && ready.candidate.name === params.pick;
+      if (!sameKey && !sameName) ready = null;
+    }
+    // A warmed file that is fatter than the pipe would start, then pause. Skip it
+    // so Play opens a lighter copy instead of cutting over mid-movie.
+    const userChose = (params.pickKey || params.pick) && !params.pinnedResume;
+    if (ready && !userChose && !this._fitsPipe(ready.candidate, policy)) ready = null;
+    // A warmed Dolby Vision file paints the picture green on a screen that cannot
+    // decode it. Skip that warmup so Play opens the normal copy. A pin and a
+    // Sources tap keep the file they already chose.
+    if (ready && !userChose && !params.pinnedResume && policy.dolbyVision === false
+        && this._isDolbyVisionRelease(ready.candidate)) ready = null;
+    return ready;
+  }
+
+  _joinPrepared(params, policy, mountOpts, ready) {
+    this.metrics.titlePrepareJoins++;
+    console.log('[play] joined prepared ' + (ready.candidate && ready.candidate.name || ''));
+    debug.log('play', `joined prepared pick=${(ready.candidate && ready.candidate.pickKey) || '-'} mount=${ready.vf && ready.vf.id || '-'}`);
+    const session = new PlaySession(params, [ready.candidate]);
+    session.policy = policy;
+    session.cursor = 1;
+    this.sessions.set(session.id, session);
+    const committed = this._commitMount(session, ready.candidate, ready.vf, [], mountOpts);
+    // Ranked backups can wait. First frame must not sit behind an indexer fan-out.
+    this.search(params, policy, { allowStale: true }).then(({ candidates }) => {
+      if (session.released) return;
+      let extra = this._playableCandidates(candidates, params);
+      if (!extra.some((c) => c.pickKey === ready.candidate.pickKey)) {
+        extra = [ready.candidate, ...extra];
+      }
+      if (!extra.length) return;
+      session.candidates = extra;
+      const readyIdx = extra.findIndex((c) => c.pickKey === ready.candidate.pickKey);
+      session.cursor = readyIdx >= 0 ? readyIdx + 1 : 1;
+      this._attachStandby(session, params, policy, mountOpts);
+    }).catch(() => {});
+    return committed;
   }
 
   // Press-play for an audiobook: rank via searchAudiobook, then walk candidates with the same

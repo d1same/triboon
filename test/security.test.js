@@ -1473,6 +1473,8 @@ ${origin}/sports.ts
     });
     assert.strictEqual(gzLean.status, 200);
     assert.strictEqual(gzLean.headers['content-encoding'], 'gzip', 'large JSON API responses should gzip when clients accept it');
+    assert.strictEqual(gzLean.headers['transfer-encoding'], undefined, 'a sized reply is one block, so a cut chunk cannot stop the movie');
+    assert.strictEqual(Number(gzLean.headers['content-length']), gzLean.body.length, 'the named size matches the bytes on the wire');
     assert.strictEqual(JSON.parse(zlib.gunzipSync(gzLean.body).toString('utf8')).channels.length, 2);
     const selected = lean.json.channels[0];
     const play = await httpJson(srv.port, 'GET', `/api/iptv/play/${selected.idx}?cid=${encodeURIComponent(selected.id)}`, null, admin);
@@ -3656,6 +3658,36 @@ test('back to details parks a watched mount so it is not an active 4K viewer', (
   assert.strictEqual(mountHasActivePlayback(vf, now), false, 'parked 4K must not keep a 4K connection window');
   srv.mounts.delete('park-4k');
   srv.pipeline.titlePreparedReady.delete('park-key');
+});
+
+test('a double-tapped Play shares one start; another user or another title does not', async () => {
+  let runs = 0;
+  let finish;
+  const run = () => { runs++; return new Promise((resolve) => { finish = resolve; }); };
+  const params = { q: 'Heat', pickKey: undefined, resumeFrac: 0.4 };
+  const policy = { maxResolutionRank: 3 };
+  const a = srv.sharedUserPlay('user-a', params, policy, run);
+  const b = srv.sharedUserPlay('user-a', { ...params }, { ...policy }, run);
+  await Promise.resolve();
+  assert.strictEqual(runs, 1, 'the second tap joins the first Play');
+  finish({ session: { id: 's1' } });
+  assert.strictEqual((await a).session, (await b).session, 'both answers name the same session');
+  const other = srv.sharedUserPlay('user-b', params, policy, async () => { runs++; return {}; });
+  const otherTitle = srv.sharedUserPlay('user-a', { ...params, q: 'Ronin' }, policy, async () => { runs++; return {}; });
+  await Promise.all([other, otherTitle]);
+  assert.strictEqual(runs, 3);
+  const later = srv.sharedUserPlay('user-a', params, policy, async () => { runs++; return {}; });
+  await later;
+  assert.strictEqual(runs, 4, 'a Play after the first one finished starts fresh');
+});
+
+test('resume seconds warm the resume spot even when the client has no length yet', () => {
+  assert.strictEqual(srv.resumeFracFromBody({ resumeFrac: 0.25, resumeSeconds: 9999, runtimeMin: 100 }), 0.25,
+    'a client-known position wins');
+  assert.strictEqual(srv.resumeFracFromBody({ resumeSeconds: 3000, runtimeMin: 100 }), 0.5,
+    '50 minutes into a 100 minute film');
+  assert.strictEqual(srv.resumeFracFromBody({ resumeSeconds: 3000 }), 0, 'no runtime, no guess');
+  assert.strictEqual(srv.resumeFracFromBody({}), 0, 'Start Over warms the start');
 });
 
 test('new play releases idle leftover sessions for the same user', () => {

@@ -63,8 +63,8 @@ function jellyfinToken(req) {
   const direct = req.headers['x-emby-token'];
   if (direct) return String(direct).trim();
   const h = String(req.headers.authorization || req.headers['x-emby-authorization'] || '');
-  const quoted = h.match(/(?:^|[,\s])Token="([^"]+)"/i);
-  if (quoted) return quoted[1];
+  const tok = h.match(/(?:^|[,\s])Token=(?:"([^"]+)"|([^,\s"]+))/i);
+  if (tok) return tok[1] || tok[2];
   if (/^Bearer\s+/i.test(h)) return h.replace(/^Bearer\s+/i, '').trim();
   try {
     const key = new URL(req.url || '/', 'http://x').searchParams.get('api_key')
@@ -83,12 +83,21 @@ function authQuoted(ctx, name) {
   return match ? match[1] : '';
 }
 
-function jellyfinCors() {
-  return {
+const CORS_HEADERS = 'Authorization, Content-Type, X-Emby-Token, X-Emby-Authorization, X-Emby-Client, '
+  + 'X-Emby-Device-Name, X-Emby-Device-Id, X-Emby-Client-Version, X-MediaBrowser-Token';
+
+// The web player on Samsung and LG unhearts a movie with DELETE. A preflight
+// without DELETE in the list makes the heart button do nothing.
+function jellyfinCors(req) {
+  const asked = String((req && req.headers && req.headers['access-control-request-headers']) || '').trim();
+  const reflect = asked && asked.length <= 1024 && /^[A-Za-z0-9!#$%&'*+.^_`|~-]+(\s*,\s*[A-Za-z0-9!#$%&'*+.^_`|~-]+)*$/.test(asked);
+  const out = {
     'access-control-allow-origin': '*',
-    'access-control-allow-methods': 'GET, POST, HEAD, OPTIONS',
-    'access-control-allow-headers': 'Authorization, Content-Type, X-Emby-Token, X-Emby-Authorization',
+    'access-control-allow-methods': 'GET, POST, DELETE, HEAD, OPTIONS',
+    'access-control-allow-headers': reflect ? asked : CORS_HEADERS,
   };
+  if (reflect) out.vary = 'Access-Control-Request-Headers';
+  return out;
 }
 
 function emptyPage() {
@@ -404,40 +413,114 @@ function parseItemId(id) {
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 
+// The loading card is always a 2 second piece. A shorter label still sends
+// that whole 2 second file, and the phone then jumps onto the wrong cut.
+const RESUME_PAD_SECONDS = 2;
+
+// How far into the real picture the saved minute should sit. The phone
+// restarts the same second when the jump lands on a cut, including the last
+// few milliseconds of a piece. Sit in the middle of a piece the phone
+// already has. Pad pieces stay whole 2 second steps, so this distance is
+// the saved minute minus a multiple of 2.
+function resumeOffsetSeconds(start, durations) {
+  const durs = (durations || []).filter((n) => n > 0.05);
+  if (!(start >= 1) || !durs.length) return 0;
+  let covered = 0;
+  for (const dur of durs) {
+    covered += dur;
+    if (covered >= 12) break;
+  }
+  let best = 0;
+  let bestGap = 0;
+  const first = start % RESUME_PAD_SECONDS;
+  const last = Math.min(start - 0.5, Math.max(covered, RESUME_PAD_SECONDS));
+  for (let offset = first; offset <= last + 0.001; offset += RESUME_PAD_SECONDS) {
+    if (offset < 0.5) continue;
+    let at = 0;
+    for (const dur of durs) {
+      const end = at + dur;
+      const gap = Math.min(offset - at, end - offset);
+      if (offset + 0.001 >= at + 0.35 && offset <= end - 0.35 && gap > bestGap) {
+        bestGap = gap;
+        best = offset;
+        break;
+      }
+      at = end;
+      if (at > offset + 0.001) break;
+    }
+  }
+  if (best >= 0.5) return Math.round(best * 1000) / 1000;
+  // Even pieces put every 2 second step on a cut. Use the next piece's
+  // start. That is still after the loading card, and it is a clean picture.
+  const stepped = first >= 0.5 ? first : first + RESUME_PAD_SECONDS;
+  if (stepped >= 0.5 && stepped < start) return Math.round(stepped * 1000) / 1000;
+  return 0;
+}
+
 // The phone seeks to the saved minute. ffmpeg already starts the picture there, but the
 // playlist clock would still say 0, so the phone waits until that many seconds exist.
-// Quiet pieces fill the clock up to the saved minute. The real picture is the next piece.
+// Quiet pieces fill the clock in whole 2 second steps. The jump then sits in
+// the middle of a real piece, not on a cut.
 function resumeClockPlaylist(raw, startSeconds) {
   const start = Number(startSeconds) || 0;
   if (!(start >= 1)) return String(raw || '');
   const text = String(raw || '');
-  const inf = text.search(/^#EXTINF:/m);
+  const lines = text.split(/\n/);
+  const durs = [];
+  let inf = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^#EXTINF:/.test(lines[i])) continue;
+    if (inf < 0) inf = text.search(/^#EXTINF:/m);
+    if (/^seg\d+\.m4s/.test(String(lines[i + 1] || ''))) {
+      const row = lines[i].match(/^#EXTINF:([0-9.]+),/);
+      durs.push(row ? Number(row[1]) || 0 : 0);
+    }
+  }
+  const padFor = Math.max(0, Math.round((start - resumeOffsetSeconds(start, durs)) * 1000) / 1000);
+  const pushPads = (into) => {
+    let left = padFor;
+    while (left > 0.01) {
+      const dur = Math.min(RESUME_PAD_SECONDS, left);
+      into.push(`#EXTINF:${dur.toFixed(3)},`, 'pad.m4s');
+      left = Math.round((left - dur) * 1000) / 1000;
+    }
+  };
   // No picture pieces yet. Still answer at once so the phone does not time out
   // while the movie is opening at the saved minute. The next list adds the picture.
-  if (inf < 0) {
-    const base = text.includes('#EXTM3U')
+  // A loading card is not the picture, so it does not count as a real piece.
+  if (inf < 0 || durs.length === 0) {
+    const base = inf < 0 && text.includes('#EXTM3U')
       ? text.replace(/\s*$/, '\n')
       : '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-INDEPENDENT-SEGMENTS\n';
     const pads = ['#EXT-X-MAP:URI="padinit.mp4"'];
-    let left = start;
-    while (left > 0.01) {
-      const dur = Math.min(2, left);
-      pads.push(`#EXTINF:${dur.toFixed(3)},`, 'pad.m4s');
-      left = Math.round((left - dur) * 1000) / 1000;
-    }
+    pushPads(pads);
     return `${base}${pads.join('\n')}\n`;
   }
+  if (!(padFor > 0.01)) return text;
   const head = text.slice(0, inf);
   const map = (head.match(/#EXT-X-MAP:[^\n]*\n/) || [''])[0];
   const pads = ['#EXT-X-MAP:URI="padinit.mp4"'];
-  let left = start;
-  while (left > 0.01) {
-    const dur = Math.min(2, left);
-    pads.push(`#EXTINF:${dur.toFixed(3)},`, 'pad.m4s');
-    left = Math.round((left - dur) * 1000) / 1000;
-  }
+  pushPads(pads);
   pads.push('#EXT-X-DISCONTINUITY');
   return `${head.replace(/#EXT-X-MAP:[^\n]*\n/, '')}${pads.join('\n')}\n${map}${text.slice(inf)}`;
+}
+
+// The Loading card and the resume pads move the phone's clock away from the
+// movie's clock. Captions are timed to the movie, so they need the same move.
+// Card: 6s of card, movie 0:00 plays at clock 6s, captions go 6s later.
+// Resume: pads stop short of the saved minute, captions go that much earlier.
+function playlistClockShift(raw, movieStartSeconds = 0) {
+  let clock = 0;
+  const lines = String(raw || '').split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const row = lines[i].match(/^#EXTINF:([0-9.]+),/);
+    if (!row) continue;
+    if (/^seg\d+\.m4s/.test(String(lines[i + 1] || ''))) {
+      return Math.round((clock - (Number(movieStartSeconds) || 0)) * 1000) / 1000;
+    }
+    clock += Number(row[1]) || 0;
+  }
+  return null;
 }
 
 // The phone draws the bar from the playlist. A list that only contains the
@@ -1044,6 +1127,16 @@ async function attachLocalMedia(ctx, item, parsed) {
   return item;
 }
 
+// Android TV reads the playing audio from DefaultAudioStreamIndex. Left out,
+// it sees -1, asks for track 1, restarts the movie, and sees -1 again forever.
+function chosenAudioIndex(streams, wanted) {
+  const audio = (streams || []).filter((row) => row.Type === 'Audio');
+  if (!audio.length) return null;
+  const n = Number(wanted);
+  const asked = Number.isFinite(n) ? audio.find((row) => row.Index === n) : null;
+  return (asked || audio.find((row) => row.IsDefault) || audio[0]).Index;
+}
+
 function audioRelFromStreams(streams, wanted) {
   const n = Number(wanted);
   if (!Number.isFinite(n)) return 0;
@@ -1101,6 +1194,17 @@ function pageOf(items, ctx) {
   if (items && items.paged) return { Items: items.items, TotalRecordCount: items.total, StartIndex: start };
   const list = items || [];
   return { Items: list.slice(start, start + limit), TotalRecordCount: list.length, StartIndex: start };
+}
+
+// A show's episode list. Apps ask without a Limit and expect every
+// episode, so a long show must not stop after the first 40.
+function fullPageOf(items, ctx) {
+  const q = ctx.url && ctx.url.searchParams;
+  const list = items || [];
+  const start = Math.max(0, queryInt(q, ['StartIndex', 'startIndex'], 0));
+  const limit = queryInt(q, ['Limit', 'limit'], 0);
+  const rows = limit > 0 ? list.slice(start, start + limit) : list.slice(start);
+  return { Items: rows, TotalRecordCount: list.length, StartIndex: start };
 }
 
 function libraryFolder(id) {
@@ -1619,6 +1723,88 @@ function warmJellyfinPlay(ctx, itemId, parsed) {
   }).catch(() => {});
 }
 
+// Android TV and Roku send the movie id as MediaSourceId, never our mount id.
+// Remember the mount each person last played for each movie, so a second
+// PlaybackInfo (audio switch, seek, replay) reuses it instead of a new search.
+const lastMount = new Map();
+const LAST_MOUNT_CAP = 500;
+
+function lastMountKey(uid, itemId) {
+  return `${uid}:${internalItemId(itemId).toLowerCase()}`;
+}
+
+function rememberMount(uid, itemId, mountId) {
+  if (!uid || !itemId || !mountId) return;
+  const key = lastMountKey(uid, itemId);
+  lastMount.delete(key);
+  lastMount.set(key, String(mountId));
+  while (lastMount.size > LAST_MOUNT_CAP) lastMount.delete(lastMount.keys().next().value);
+}
+
+function liveStream(mountId, uid) {
+  if (!mountId || typeof deps.jellyfinStream !== 'function') return null;
+  const found = deps.jellyfinStream(mountId, uid);
+  return found && (found.hlsUrl || found.remuxUrl) ? found : null;
+}
+
+function reusableMount(uid, itemId, sentId) {
+  const direct = liveStream(sentId, uid);
+  if (direct) return { id: sentId, stream: direct };
+  if (!sentId || internalItemId(sentId).toLowerCase() !== internalItemId(itemId).toLowerCase()) return null;
+  const key = lastMountKey(uid, itemId);
+  const remembered = lastMount.get(key);
+  const stream = liveStream(remembered, uid);
+  if (stream) return { id: remembered, stream };
+  if (remembered) lastMount.delete(key);
+  return null;
+}
+
+// Same warm-up the details page starts. A TV that skips the details page
+// still joins it, and play then picks up the ready mount. Capped under the
+// 30s idle socket limit; play itself raises that limit once it starts.
+const WARM_JOIN_MS = 20000;
+
+async function joinWarmup(ctx, spec) {
+  if (typeof deps.jellyfinPrepare !== 'function') return;
+  let timer;
+  const warm = Promise.resolve().then(() => deps.jellyfinPrepare(ctx, { ...spec })).catch(() => {});
+  await Promise.race([warm, new Promise((resolve) => { timer = setTimeout(resolve, WARM_JOIN_MS); })]);
+  clearTimeout(timer);
+}
+
+// Real audio rows for a usenet mount, once its tracks are known. Embedded
+// captions are left out: those are served through the subtitle map instead.
+const mountProbes = new Map();
+const PROBE_WAIT_MS = 1500;
+
+async function mountProbe(mountId, uid) {
+  if (!mountId) return null;
+  if (mountProbes.has(mountId)) return mountProbes.get(mountId);
+  if (typeof deps.jellyfinTracks !== 'function') return null;
+  let timer;
+  const got = await Promise.race([
+    Promise.resolve().then(() => deps.jellyfinTracks(mountId, uid)).catch(() => null),
+    new Promise((resolve) => { timer = setTimeout(() => resolve(null), PROBE_WAIT_MS); }),
+  ]);
+  clearTimeout(timer);
+  const video = got && Array.isArray(got.video) ? got.video : [];
+  const audio = got && Array.isArray(got.audio) ? got.audio : [];
+  if (!video.length && !audio.length) return null;
+  const probe = { video, audio };
+  mountProbes.set(mountId, probe);
+  while (mountProbes.size > 200) mountProbes.delete(mountProbes.keys().next().value);
+  return probe;
+}
+
+// The TV reads the caption it is showing from DefaultSubtitleStreamIndex.
+// Undefined looks like a caption is on when it is off.
+function chosenSubtitleIndex(streams, wanted) {
+  if (wanted == null || wanted === '') return -1;
+  const n = Number(wanted);
+  if (!Number.isFinite(n) || n < 0) return -1;
+  return (streams || []).some((row) => row.Type === 'Subtitle' && row.Index === n) ? n : -1;
+}
+
 async function playSpec(parsed) {
   if (!parsed) return null;
   if (parsed.type === 'movie') {
@@ -1652,10 +1838,23 @@ async function playSpec(parsed) {
   };
 }
 
+// An audio or caption switch mid-movie sends PositionTicks instead of
+// StartTimeTicks. Without it the movie restarts at 0:00.
+function ticksField(body, q, name) {
+  const lower = name.toLowerCase();
+  const pairs = [
+    ...(body && typeof body === 'object' ? Object.entries(body) : []),
+    ...(q ? [...q] : []),
+  ];
+  for (const [key, value] of pairs) {
+    if (key.toLowerCase() === lower && Number(value) > 0) return Number(value);
+  }
+  return 0;
+}
+
 function streamStart(ctx, body) {
   const q = ctx && ctx.url && ctx.url.searchParams;
-  const ticks = Number((body && (body.StartTimeTicks || body.startTimeTicks))
-    || (q && (q.get('StartTimeTicks') || q.get('startTimeTicks'))) || 0);
+  const ticks = ticksField(body, q, 'StartTimeTicks') || ticksField(body, q, 'PositionTicks');
   if (ticks > 0) return Math.min(10 * 86400, Math.round(ticks / 10000000));
   const start = Number(q && q.get('start'));
   return start > 0 ? Math.min(10 * 86400, Math.round(start)) : 0;
@@ -1755,7 +1954,7 @@ function playLink(ctx, payload, startSeconds) {
 async function handleKind(kind, ctx) {
   if (doorStore.getStore() !== ctx) return doorStore.run(ctx, () => handleKind(kind, ctx));
   const { auth, send, readJson, throttled, clientIp, clearLoginThrottle } = deps;
-  const cors = jellyfinCors();
+  const cors = jellyfinCors(ctx && ctx.req);
   const brand = ctx && ctx.brand;
   if (ctx && ctx.door === 'emby') {
     if (!embyDoorOpen()) return send(ctx.res, 404, { error: 'not found' });
@@ -2063,11 +2262,11 @@ async function handleKind(kind, ctx) {
     if (!parsed || parsed.type !== 'series') return send(ctx.res, 404, { error: 'not found' }, cors);
     if (!n) {
       const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
-      const nums = ((show && show.seasons) || []).map((row) => Number(row.season_number)).filter((row) => row > 0).slice(0, 12);
+      const nums = ((show && show.seasons) || []).map((row) => Number(row.season_number)).filter((row) => row > 0);
       const groups = await Promise.all(nums.map((row) => episodesFor(parsed.tmdbId, row)));
-      return send(ctx.res, 200, pageOf(groups.flat(), ctx), cors);
+      return send(ctx.res, 200, fullPageOf(groups.flat(), ctx), cors);
     }
-    return send(ctx.res, 200, pageOf(await episodesFor(parsed.tmdbId, n), ctx), cors);
+    return send(ctx.res, 200, fullPageOf(await episodesFor(parsed.tmdbId, n), ctx), cors);
   }
   if (kind === 'similar') {
     const parsed = parseItemId(ctx.m[1]);
@@ -2199,14 +2398,18 @@ async function handleKind(kind, ctx) {
   if (kind === 'subtitle') {
     const parsed = parseItemId(ctx.m[1]);
     const index = parseInt(ctx.m[3], 10);
-    const body = parsed && parsed.type === 'local' && typeof deps.localSubtitleBody === 'function'
+    let body = parsed && parsed.type === 'local' && typeof deps.localSubtitleBody === 'function'
       ? await deps.localSubtitleBody(ctx, parsed.libId, parsed.idx, index)
       : (typeof deps.jellyfinSubtitleBody === 'function' ? await deps.jellyfinSubtitleBody(ctx, ctx.m[2], index) : null);
+    if (body && typeof deps.subtitleOnPlayerClock === 'function') body = await deps.subtitleOnPlayerClock(ctx.m[2], body);
     if (!body) return send(ctx.res, 404, { error: 'not found' }, cors);
     ctx.res.writeHead(200, {
       ...cors,
       'content-type': 'text/vtt; charset=utf-8',
-      'cache-control': 'private, max-age=3600',
+      'content-length': String(Buffer.byteLength(String(body || ''))),
+      // Same address for a fresh start and a resume of the same mount, but the
+      // clock shift differs. A cached copy would put the words seconds off.
+      'cache-control': 'no-store',
     });
     return ctx.res.end(body);
   }
@@ -2234,13 +2437,14 @@ async function handleKind(kind, ctx) {
       return send(ctx.res, (e && e.status) || 400, { error: 'bad json' }, cors);
     }
     const parsed = parseItemId(ctx.m[1]);
-    const mountId = String(body.MediaSourceId || body.mediaSourceId || '');
+    const sentId = String(body.MediaSourceId || body.mediaSourceId || '');
     const uid = ctx.user && ctx.user.id;
-    const reused = mountId && typeof deps.jellyfinStream === 'function' ? deps.jellyfinStream(mountId, uid) : '';
+    const reused = reusableMount(uid, ctx.m[1], sentId);
     let spec = null;
     let playedBody = null;
-    if (reused && (reused.hlsUrl || reused.remuxUrl)) {
-      playedBody = { id: mountId, remuxUrl: reused.remuxUrl, hlsUrl: reused.hlsUrl, sessionId: body.PlaySessionId || mountId };
+    if (reused) {
+      const { id, stream } = reused;
+      playedBody = { id, remuxUrl: stream.remuxUrl, hlsUrl: stream.hlsUrl, sessionId: body.PlaySessionId || id };
       if (parsed && parsed.type === 'local' && typeof deps.localOne === 'function') {
         const row = deps.localOne(ctx, parsed.libId, parsed.idx);
         spec = { runtime: row && row.runtime };
@@ -2258,6 +2462,7 @@ async function handleKind(kind, ctx) {
       if (!spec) return send(ctx.res, 404, { error: 'not found' }, cors);
       if (typeof deps.jellyfinPlay !== 'function') return send(ctx.res, 404, { error: 'not found' }, cors);
       spec.resumeFrac = resumeFracFor(resumeStartSeconds(ctx, ctx.m[1], body, spec.runtime), spec.runtime);
+      await joinWarmup(ctx, spec);
       const played = await deps.jellyfinPlay(ctx, spec);
       if (played && played.sent) return;
       if (!played || played.status !== 200) {
@@ -2265,11 +2470,15 @@ async function handleKind(kind, ctx) {
       }
       playedBody = played.body;
     }
+    rememberMount(uid, ctx.m[1], playedBody && playedBody.id);
     let probe = null;
     if (parsed && parsed.type === 'local' && typeof deps.localMediaInfo === 'function') {
       const info = await deps.localMediaInfo(ctx, parsed.libId, parsed.idx);
       if (info && info.seconds && spec && !spec.runtime) spec.runtime = info.seconds / 60;
       probe = info && info.probe;
+    } else if (playedBody && playedBody.id) {
+      if (typeof deps.jellyfinSubtitleWarm === 'function') deps.jellyfinSubtitleWarm(ctx, playedBody.id, spec);
+      probe = await mountProbe(playedBody.id, uid);
     }
     const sidecars = parsed && parsed.type === 'local' && typeof deps.localSubtitles === 'function'
       ? deps.localSubtitles(ctx, parsed.libId, parsed.idx) : [];
@@ -2281,7 +2490,8 @@ async function handleKind(kind, ctx) {
     const resumeAt = resumeStartSeconds(ctx, ctx.m[1], body, spec && spec.runtime);
     rememberResumeOrigin(uid, ctx.m[1], resumeAt);
     const durationSeconds = spec && spec.runtime ? Math.round(Number(spec.runtime) * 60) : 0;
-    const url = playUrlForClient(ctx, playedBody, resumeAt, audioRelFromStreams(streams, body.AudioStreamIndex || body.audioStreamIndex), ctx.m[1], durationSeconds);
+    const audioIndex = chosenAudioIndex(streams, body.AudioStreamIndex ?? body.audioStreamIndex);
+    const url = playUrlForClient(ctx, playedBody, resumeAt, audioRelFromStreams(streams, audioIndex), ctx.m[1], durationSeconds);
     const desktop = desktopWebPlayer(ctx);
     if (!url) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
     stampSubtitleUrls(streams, ctx.m[1], playedBody.id);
@@ -2304,11 +2514,18 @@ async function handleKind(kind, ctx) {
       TranscodingContainer: 'mp4',
       MediaStreams: streams,
     });
+    if (audioIndex != null) source.DefaultAudioStreamIndex = audioIndex;
+    const pq = ctx.url && ctx.url.searchParams;
+    const askedSub = body.SubtitleStreamIndex ?? body.subtitleStreamIndex
+      ?? (pq && (pq.get('SubtitleStreamIndex') ?? pq.get('subtitleStreamIndex')));
+    source.DefaultSubtitleStreamIndex = chosenSubtitleIndex(streams, askedSub);
     if (runtimeTicks) source.RunTimeTicks = runtimeTicks;
     return send(ctx.res, 200, { PlaySessionId: playedBody.sessionId, MediaSources: [source] }, cors);
   }
   if (kind === 'segments') {
-    return send(ctx.res, 200, { Items: [] }, cors);
+    // The phone requires the page counts. A list with only Items makes it
+    // throw, and the movie page closes.
+    return send(ctx.res, 200, emptyPage(), cors);
   }
   if (kind === 'intros') return send(ctx.res, 200, emptyPage(), cors);
   if (kind === 'socket') return send(ctx.res, 426, { error: 'websocket required' }, cors);
@@ -2649,7 +2866,7 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/sessions$/, auth: 'user', kind: 'sessions', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/playing\/progress$/, auth: 'user', kind: 'progress', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/playing\/stopped$/, auth: 'user', kind: 'progress', h: serveJellyfin },
-  { m: 'POST', re: /^\/sessions\/playing$/, auth: 'user', kind: 'ack', h: serveJellyfin },
+  { m: 'POST', re: /^\/sessions\/playing$/, auth: 'user', kind: 'progress', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/capabilities\/full$/, auth: 'user', kind: 'capabilities', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/capabilities$/, auth: 'user', kind: 'capabilities', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/logout$/, auth: 'user', kind: 'logout', h: serveJellyfin },
@@ -2785,6 +3002,6 @@ module.exports = {
   setEmbyDoorCheck, setEmbySocketCheck,
   attachJellyfinSocket, closeJellyfinSockets,
   mediaStreamsFromProbe, streamsWithSubtitles, tmdbSort, genreIdsFromNames,
-  resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor, traktResumeSeconds,
+  resumeClockPlaylist, fullTimelinePlaylist, playlistClockShift, rememberResumeOrigin, progressSeconds, resumeFracFor, traktResumeSeconds,
   loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard,
 };

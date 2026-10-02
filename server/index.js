@@ -21,7 +21,7 @@ const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
   attachJellyfinSocket, closeJellyfinSockets,
-  streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard,
+  streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist, playlistClockShift, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard,
 } = require('./jellyfin-api');
 const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch, articleFlipQuery, collectArticleSiblings } = require('./pipeline');
 const {
@@ -3801,6 +3801,15 @@ function send(res, code, body, headers = {}) {
     finalHeaders['content-encoding'] = 'gzip';
     finalHeaders.vary = finalHeaders.vary ? `${finalHeaders.vary}, Accept-Encoding` : 'Accept-Encoding';
   }
+  // Name the exact size. A chunked reply can be cut after one carriage return,
+  // and the phone then quits the movie while it is still reading the list.
+  const namedLength = Object.keys(finalHeaders).some((k) => {
+    const name = k.toLowerCase();
+    return name === 'content-length' || name === 'transfer-encoding';
+  });
+  if ((typeof out === 'string' || Buffer.isBuffer(out)) && !namedLength) {
+    finalHeaders['content-length'] = String(Buffer.isBuffer(out) ? out.length : Buffer.byteLength(out));
+  }
   res.writeHead(code, finalHeaders);
   res.end(out);
 }
@@ -4069,7 +4078,12 @@ function repositionHls(sess, index) {
         holdSegments: true,
         startNumber: index,
         initName: 'seekinit.mp4',
+        playlistName: `seek${index}.m3u8`,
+        tsOffset: index * step,
       });
+      // index.m3u8 still lists the pieces made before the jump. Keep it; a drag
+      // back to them must not wait 20s on a list that no longer names them.
+      sess.playlists = [...(sess.playlists || []), `seek${index}.m3u8`].slice(-8);
     } catch (e) {
       console.error('[hls seek]', e.message);
       return resolve();
@@ -4103,11 +4117,7 @@ async function ensureHlsSegment(sess, index, req) {
     // The file grows while it is written. Handing that half-written piece to
     // the desktop player is the "loading failed" dialog. The playlist line is
     // added only after the piece is closed.
-    let listed = false;
-    try {
-      const text = await fs.promises.readFile(path.join(sess.dir, 'index.m3u8'), 'utf8');
-      listed = text.includes(name);
-    } catch {}
+    const listed = await hlsSegmentListed(sess, name);
     if (listed) {
       try {
         const stat = await fs.promises.stat(full);
@@ -4117,11 +4127,20 @@ async function ensureHlsSegment(sess, index, req) {
     await new Promise((r) => setTimeout(r, 200));
   }
   try {
-    const text = await fs.promises.readFile(path.join(sess.dir, 'index.m3u8'), 'utf8');
-    if (!text.includes(name)) return null;
+    if (!(await hlsSegmentListed(sess, name))) return null;
     const stat = await fs.promises.stat(full);
     return stat.size > 0 ? stat : null;
   } catch { return null; }
+}
+
+async function hlsSegmentListed(sess, name) {
+  for (const list of ['index.m3u8', ...(sess.playlists || [])]) {
+    try {
+      const text = await fs.promises.readFile(path.join(sess.dir, list), 'utf8');
+      if (text.includes(name)) return true;
+    } catch {}
+  }
+  return false;
 }
 
 function closeHlsSession(sess) {
@@ -4290,6 +4309,30 @@ function releaseUserPlaySessions(uid, keepId = null) {
   }
   return released;
 }
+// The client knows the resume second but often not the length yet (a Continue
+// Watching card before the file is probed). The catalog runtime fills that gap,
+// so the warmup still lands on the resume spot instead of only the start.
+function resumeFracFromBody(body = {}) {
+  const frac = Number(body.resumeFrac);
+  if (frac > 0) return Math.max(0, Math.min(1, frac));
+  const sec = Number(body.resumeSeconds);
+  const runtimeSec = (Number(body.runtimeMin) || 0) * 60;
+  if (sec > 0 && runtimeSec > 0) return Math.max(0, Math.min(1, sec / runtimeSec));
+  return 0;
+}
+// A double-tapped Play sends the same request twice. Both answers must point at one
+// session and one mount, or the first stream gets released under the player.
+const userPlayInflight = new Map();
+function sharedUserPlay(uid, params, policy, run) {
+  const key = JSON.stringify([uid, params, policy]);
+  const existing = userPlayInflight.get(key);
+  if (existing) return existing;
+  const p = Promise.resolve().then(run).finally(() => {
+    if (userPlayInflight.get(key) === p) userPlayInflight.delete(key);
+  });
+  userPlayInflight.set(key, p);
+  return p;
+}
 function trimUserMounts(uid, keepId = null, limit = USER_MOUNT_CAP) {
   if (!uid) return [];
   const now = Date.now();
@@ -4304,6 +4347,7 @@ function trimUserMounts(uid, keepId = null, limit = USER_MOUNT_CAP) {
   while (existing >= limit) {
     const vf = removable.shift();
     if (!vf) break;
+    forgetPreparedMount(vf);
     releaseMountResources(vf);
     mounts.delete(vf.id);
     evicted.push(vf.id);
@@ -6072,16 +6116,16 @@ const H = {
     // Explicit resolution pick (4K toggle): boost matching releases — but only within the cap,
     // so a capped user can't smuggle UHD past their ceiling via the preference.
     try {
-      const { session, vf, candidate, attempts, relaxedResolution, searchMs } = await pipeline.play(
-        {
-          ...playSearchParams(body),
-          pick: body.pick, pickKey: body.pickKey,
-          pinnedResume: !!body.pinnedResume,
-          sourceSort: /^(largest|smallest|best)$/i.test(String(body.sourceSort || ''))
-            ? String(body.sourceSort).toLowerCase() : undefined,
-          resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)),
-        },
-        policy
+      const playParams = {
+        ...playSearchParams(body),
+        pick: body.pick, pickKey: body.pickKey,
+        pinnedResume: !!body.pinnedResume,
+        sourceSort: /^(largest|smallest|best)$/i.test(String(body.sourceSort || ''))
+          ? String(body.sourceSort).toLowerCase() : undefined,
+        resumeFrac: resumeFracFromBody(body),
+      };
+      const { session, vf, candidate, attempts, relaxedResolution, searchMs } = await sharedUserPlay(
+        ctx.user.id, playParams, policy, () => pipeline.play(playParams, policy)
       );
       if (!(await maturityAllowed)) { discardDeniedMount(session, vf); return maturityBlockedResponse(ctx); }
       session.uid = ctx.user.id;
@@ -6221,7 +6265,7 @@ const H = {
           ...playSearchParams(body),
           pick: body.pick, pickKey: body.pickKey,
           pinnedResume: !!body.pinnedResume,
-          resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)),
+          resumeFrac: resumeFracFromBody(body),
         },
         policy
       );
@@ -9584,6 +9628,7 @@ Object.assign(H, {
       }
       const sess = vf._hls.get(key);
       if (!sess) return send(ctx.res, 404, { error: 'no active HLS session' });
+      sess.lastAccess = Date.now();
       let full = path.join(sess.dir, fileReq);
       if ((fileReq === 'pad.m4s' || fileReq === 'padinit.mp4') && !fs.existsSync(full)) {
         full = path.join(require('os').tmpdir(), 'triboon-hls-pad', fileReq);
@@ -9646,12 +9691,16 @@ Object.assign(H, {
         if (codeNum) noteFfmpegDeath('hls', vf, codeNum, err, { startSeconds: sessionStart, audio: transcodeAudio ? 'stereo-aac' : 'copy' });
       });
       vf._hls.set(key, sess);
-      // Cap concurrent HLS windows per mount; kill + clean the oldest beyond the cap.
+      // Cap concurrent HLS windows per mount. Drop the one nobody has pulled from the
+      // longest; the oldest by birth may be the one still playing.
       if (vf._hls.size > 4) {
-        const oldest = [...vf._hls.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt)[0];
-        if (oldest && oldest[0] !== key) { closeHlsSession(oldest[1]); vf._hls.delete(oldest[0]); }
+        const idle = [...vf._hls.entries()]
+          .filter(([k]) => k !== key)
+          .sort((a, b) => (a[1].lastAccess || a[1].createdAt) - (b[1].lastAccess || b[1].createdAt))[0];
+        if (idle) { closeHlsSession(idle[1]); vf._hls.delete(idle[0]); }
       }
     }
+    sess.lastAccess = Date.now();
     if (knownDur > (sess.duration || 0)) sess.duration = knownDur;
     const playlistPath = path.join(sess.dir, 'index.m3u8');
     let raw;
@@ -9681,9 +9730,10 @@ Object.assign(H, {
         const realPieces = raw ? (raw.match(/seg\d+\.m4s/g) || []).length : 0;
         if (pieces >= minPieces || (raw && /#EXT-X-ENDLIST/.test(raw))) break;
         // No picture yet. Answer with the Loading card instead of holding the
-        // phone on a frozen poster until the movie opens. A resume does this too,
-        // so the saved minute is not a blank spinner.
-        if (jellyfinPlaylist && realPieces === 0 && (sess.loadHold || i >= 8)) break;
+        // phone on a frozen poster until the movie opens. A resume waits for
+        // one real piece: a card that ends at the saved minute makes the phone
+        // jump off the end and quit.
+        if (jellyfinPlaylist && !resume && realPieces === 0 && (sess.loadHold || i >= 8)) break;
         // The desktop gives up if this list takes about ten seconds. Answer
         // with the card, or with the pieces already made.
         if (jellyfinPlaylist && sessionStart < 1 && i >= 8 && realPieces < minPieces) break;
@@ -9709,10 +9759,11 @@ Object.assign(H, {
       raw = '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-INDEPENDENT-SEGMENTS\n';
     }
     // Resume: the picture already starts at the saved minute. Fill the clock
-    // up to that minute so the phone's jump lands on the picture instead of waiting.
-    // The Jellyfin list re-encodes its picture, so the pieces really begin at the saved
-    // second (measured 12.42s for a 12.5s ask) and the pad clock ends there. Do not move
-    // the pads to the keyframe before it — that is a copy-path fact, not this path's.
+    // so that minute sits in the middle of a real piece. Landing on a cut,
+    // even a few milliseconds before one, makes the phone restart that same
+    // second. The Jellyfin
+    // list re-encodes from the saved second (measured 12.42s for a 12.5s ask).
+    // Do not move the encode to the keyframe before it.
     if (jellyfinPlaylist && sessionStart >= 1 && realPieces === 0 && await ensureResumePad()) {
       sess.loadHold = Math.min(40, (sess.loadHold || 0) + 2);
       raw = loadingHoldPlaylist(sess.loadHold);
@@ -9737,7 +9788,10 @@ Object.assign(H, {
         : `#EXT-X-START:TIME-OFFSET=${startAt},PRECISE=YES`;
       raw = raw.replace(/(#EXTM3U\r?\n)/, `$1${tag}\n`);
     }
-    if (jellyfinPlaylist && /#EXT-X-ENDLIST/.test(raw) && /seg\d+\.m4s/.test(raw)) sess.timeline = raw;
+    if (jellyfinPlaylist && /#EXT-X-ENDLIST/.test(raw) && /seg\d+\.m4s/.test(raw)) {
+      sess.timeline = raw;
+      sess.clockShift = playlistClockShift(raw, sessionStart) || 0;
+    }
     }
     // Rewrite bare segment/init filenames to tokened, same-scope route URLs the receiver can pull.
     const token = ctx.url.searchParams.get('t') || auth.streamToken(ctx.claims.uid, vf.id);
@@ -9764,19 +9818,8 @@ Object.assign(H, {
     vf._touched = Date.now();
     const releaseSubs = publicReleaseSubs(vf);
     if (!detectFfprobe()) return send(ctx.res, 200, { available: false, audio: [], subs: [], releaseSubs, duration: null });
-    if (vf._tracks) return send(ctx.res, 200, vf._tracks);
-    const remembered = recallProbe(probeCacheKey(vf.name, vf.size));
-    if (remembered) {
-      vf._tracks = { available: true, ...remembered, releaseSubs };
-      return send(ctx.res, 200, vf._tracks);
-    }
     try {
-      const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}&priority=background`;
-      const t = await probeTracks(selfUrl);
-      rememberProbe(probeCacheKey(vf.name, vf.size), t);
-      vf._tracks = { available: true, ...t, releaseSubs };
-      noteRuntimeCheck(vf);
-      send(ctx.res, 200, vf._tracks);
+      send(ctx.res, 200, await probeMountTracks(vf, ctx.user.id));
       // The TV player is Wyzie-only for subtitles. Embedded subtitle extraction can require
       // scanning the whole media stream, so probing tracks must not quietly kick that off.
     } catch (e) { send(ctx.res, 200, { available: false, audio: [], subs: [], releaseSubs, duration: null, error: e.message }); }
@@ -9810,14 +9853,25 @@ Object.assign(H, {
     headers['content-length'] = String(end - start);
     ctx.res.writeHead(code, headers);
     if (ctx.req.method === 'HEAD') return ctx.res.end();
+    // A paused audiobook stops reading for minutes. Same idle-timeout disable as /api/stream.
+    try {
+      ctx.req.setTimeout(0);
+      ctx.res.setTimeout(0);
+      if (ctx.req.socket) ctx.req.socket.setTimeout(0);
+    } catch {}
     beginMountPlayerRead(vf);
     const ac = new AbortController();
     ctx.req.once('close', () => { if (!ctx.req.complete) ac.abort(); });
     ctx.res.once('close', () => { if (!ctx.res.writableEnded) ac.abort(); });
+    const drained = () => new Promise((r) => {
+      const done = () => { ctx.res.off('drain', done); ac.signal.removeEventListener('abort', done); r(); };
+      ctx.res.once('drain', done);
+      ac.signal.addEventListener('abort', done, { once: true });
+    });
     try {
       for await (const chunk of s.read(start, end, { priority: start === 0 ? 'startup' : 'playback', signal: ac.signal })) {
         if (ac.signal.aborted || ctx.res.destroyed) break;
-        if (!ctx.res.write(chunk)) await new Promise((r) => ctx.res.once('drain', r));
+        if (!ctx.res.write(chunk)) await drained();
       }
     } catch {} finally { endMountPlayerRead(vf); }
     if (!ctx.res.writableEnded) ctx.res.end();
@@ -11120,6 +11174,64 @@ function jellyfinNextCatalog(ctx) {
 }
 
 const JELLYFIN_TEXT_SUB = new Set(['srt', 'vtt', 'ass', 'ssa']);
+const JELLYFIN_SUB_WAIT_MS = 1500;
+
+function kickJellyfinOnlineSub(vf, spec) {
+  if (vf._jellyfinOnlineSub !== undefined && vf._jellyfinOnlineSub !== null) return;
+  vf._jellyfinOnlineSubAt = Date.now();
+  vf._jellyfinOnlineSub = Promise.race([
+    fetchOnlineSub({
+      key: effectiveOpenSubsKey(),
+      tmdbId: spec.tmdbId,
+      query: spec.q || vf._subQuery || vf._q || '',
+      lang: 'en',
+      season: spec.season,
+      episode: spec.ep,
+      attempts: 1,
+      retryDelayMs: 200,
+    }).then((vtt) => (vtt && String(vtt).includes('WEBVTT') ? vtt : '')).catch(() => ''),
+    new Promise((resolve) => setTimeout(() => resolve(''), 2500)),
+  ]).then((vtt) => {
+    vf._jellyfinOnlineSub = vtt || '';
+    return vf._jellyfinOnlineSub;
+  });
+}
+
+function jellyfinSubtitleWarm(ctx, mountId, spec) {
+  const vf = mounts.get(String(mountId || ''));
+  if (!vf || !ctx || !ctx.user || !spec || !spec.tmdbId || !effectiveOpenSubsKey()) return;
+  if (vf._ownerUid && vf._ownerUid !== ctx.user.id && ctx.user.role !== 'admin') return;
+  const hasText = (vf.releaseSubs || []).some((sub) => sub && JELLYFIN_TEXT_SUB.has(String(sub.ext || '').toLowerCase()));
+  if (!hasText) kickJellyfinOnlineSub(vf, spec);
+}
+
+// One shared track probe per mount: the web CC/audio menus and the Jellyfin
+// track list ask at the same moment on a fresh Play.
+function probeMountTracks(vf, uid) {
+  if (vf._tracks) return Promise.resolve(vf._tracks);
+  const remembered = recallProbe(probeCacheKey(vf.name, vf.size));
+  if (remembered) {
+    vf._tracks = { available: true, ...remembered, releaseSubs: publicReleaseSubs(vf) };
+    return Promise.resolve(vf._tracks);
+  }
+  if (!vf._tracksProbe) {
+    const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
+    vf._tracksProbe = probeTracks(selfUrl).then((t) => {
+      rememberProbe(probeCacheKey(vf.name, vf.size), t);
+      vf._tracks = { available: true, ...t, releaseSubs: publicReleaseSubs(vf) };
+      noteRuntimeCheck(vf);
+      return vf._tracks;
+    }).finally(() => { vf._tracksProbe = null; });
+  }
+  return vf._tracksProbe;
+}
+
+function jellyfinTracks(mountId, uid) {
+  const vf = mounts.get(String(mountId || ''));
+  if (!vf || !uid || !vf.streamable || !detectFfprobe()) return null;
+  if (vf._ownerUid && vf._ownerUid !== uid) return null;
+  return probeMountTracks(vf, uid).catch(() => null);
+}
 
 async function jellyfinSubtitleStreams(ctx, mountId, startIndex, spec) {
   const vf = mounts.get(String(mountId || ''));
@@ -11144,27 +11256,13 @@ async function jellyfinSubtitleStreams(ctx, mountId, startIndex, spec) {
     index += 1;
   }
   if (!streams.length && spec && spec.tmdbId && effectiveOpenSubsKey()) {
-    if (!vf._jellyfinOnlineSub) {
-      vf._jellyfinOnlineSub = Promise.race([
-        fetchOnlineSub({
-          key: effectiveOpenSubsKey(),
-          tmdbId: spec.tmdbId,
-          query: spec.q || vf._subQuery || vf._q || '',
-          lang: 'en',
-          season: spec.season,
-          episode: spec.ep,
-          attempts: 1,
-          retryDelayMs: 200,
-        }).then((vtt) => (vtt && String(vtt).includes('WEBVTT') ? vtt : '')).catch(() => ''),
-        new Promise((resolve) => setTimeout(() => resolve(''), 2500)),
-      ]).then((vtt) => {
-        vf._jellyfinOnlineSub = vtt || '';
-        return vf._jellyfinOnlineSub;
-      });
-    }
+    kickJellyfinOnlineSub(vf, spec);
+    // The lookup started with PlaybackInfo, alongside the track probe. Give it the
+    // rest of that window; the apps never ask for the caption list again later.
+    const waited = Date.now() - (vf._jellyfinOnlineSubAt || Date.now());
     const vtt = await Promise.race([
       vf._jellyfinOnlineSub,
-      new Promise((resolve) => setTimeout(() => resolve(null), 200)),
+      new Promise((resolve) => setTimeout(() => resolve(null), Math.max(200, JELLYFIN_SUB_WAIT_MS - waited))),
     ]);
     if (vtt === '') {
       vf._jellyfinSubMap = map;
@@ -11184,6 +11282,30 @@ async function jellyfinSubtitleStreams(ctx, mountId, startIndex, spec) {
   }
   vf._jellyfinSubMap = map;
   return streams;
+}
+
+// The phone asks for captions while the Loading card may still be growing.
+// Wait for the newest Jellyfin list to settle, then use its clock shift.
+// A player that never opens a Jellyfin list (direct file) has no shift.
+async function jellyfinClockShift(vf) {
+  const began = Date.now();
+  for (;;) {
+    const lists = vf._hls ? [...vf._hls.values()].filter((sess) => sess && sess.hold) : [];
+    const newest = lists.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+    if (newest && Number.isFinite(newest.clockShift)) return newest.clockShift;
+    const waited = Date.now() - began;
+    if ((!newest && waited >= JELLYFIN_CLOCK_LIST_WAIT_MS) || waited >= JELLYFIN_CLOCK_SETTLE_WAIT_MS) return 0;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+const JELLYFIN_CLOCK_LIST_WAIT_MS = 3000;
+const JELLYFIN_CLOCK_SETTLE_WAIT_MS = 15000;
+
+async function jellyfinSubtitleOnPlayerClock(mountId, vtt) {
+  const vf = mounts.get(String(mountId || ''));
+  if (!vf || !vtt) return vtt;
+  const shift = await jellyfinClockShift(vf);
+  return Math.abs(shift) >= 0.01 ? shiftVtt(vtt, shift) : vtt;
 }
 
 async function jellyfinSubtitleBody(ctx, mountId, streamIndex) {
@@ -11475,7 +11597,7 @@ function jellyfinLocalFacets(ctx, libId) {
 const mediaAppDeps = {
   auth, settings, send, readJson, throttled, clientIp, tmdb,
   jellyfinPlay, jellyfinPrepare, jellyfinStream, jellyfinLocalPlay, jellyfinNextCatalog, jellyfinCoverFile: jellyfinCoverCustom,
-  jellyfinSubtitleStreams, jellyfinSubtitleBody,
+  jellyfinSubtitleStreams, jellyfinSubtitleBody, jellyfinSubtitleWarm, jellyfinTracks,
   localLibraries: jellyfinLocalLibraries,
   localPage: jellyfinLocalPage,
   localOne: jellyfinLocalOne,
@@ -11483,6 +11605,7 @@ const mediaAppDeps = {
   localMediaInfo: jellyfinLocalMedia,
   localSubtitles: jellyfinLocalSubtitles,
   localSubtitleBody: jellyfinLocalSubtitleBody,
+  subtitleOnPlayerClock: jellyfinSubtitleOnPlayerClock,
   localFacets: jellyfinLocalFacets,
   localSearch: jellyfinLocalSearch,
   jellyfinWatchGet, jellyfinWatchSave, jellyfinWatchResume, jellyfinWatchRows,
@@ -11611,7 +11734,7 @@ const server = http.createServer(async (req, res) => {
         req.resume();
         return send(res, 404, { error: 'not found' });
       }
-      const cors = jellyfinCors();
+      const cors = jellyfinCors(req);
       for (const [k, v] of Object.entries(cors)) { try { res.setHeader(k, v); } catch {} }
       if (req.method === 'OPTIONS') return send(res, 204, '', cors);
       const method = req.method === 'HEAD' ? 'GET' : req.method;
@@ -11896,7 +12019,7 @@ async function shutdown() {
 }
 
 module.exports = {
-  server, mounts, pipeline, getPool, shutdown, sweep, releasePlaySession, releaseUserPlaySessions,
+  server, mounts, pipeline, getPool, shutdown, sweep, releasePlaySession, releaseUserPlaySessions, sharedUserPlay, resumeFracFromBody,
   ROUTES: ROUTES.concat(JELLYFIN_ROUTES), auth, settings, store,
   warmIptvCaches, msUntilNextIptvWarm, rewriteIptvHlsPlaylist,
   normalizeIp, isPrivateIp, clientIpForGeo, geoLocate, geoCacheKey, viewerGeolocationEnabled,

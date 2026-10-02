@@ -5550,6 +5550,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <h1 id="vlcTitle">Open in a video player</h1>
     <div class="sub">This browser can't decode the file. Paste the stream URL into VLC (Media → Open Network Stream) — seeking works.</div>
     <div id="vlcUrl"></div>
+    <button class="btn primary focusable" id="vlcRetry" style="justify-content:center;width:100%;display:none">Try again</button>
     <button class="btn primary focusable" id="vlcCopy" style="justify-content:center;width:100%">Copy stream URL</button>
     <div class="alt"><button class="focusable" id="vlcClose">Close player</button></div>
   </div></div>
@@ -6994,7 +6995,7 @@ function maybeRepaintHomeNextUp(items) {
 // Build the Continue Watching cards from a /api/watch payload (next-episode bumps only when
 // the local map is already known — they must never force a boot-time library fetch).
 function buildCwItems(cw) {
-  const items = cw.filter((w) => !w.watched && (w.position > 30 || w.traktPct > 2) && !String(w.key).startsWith('live:') && !String(w.key).startsWith('audiobook:')).map((w) => {
+  const items = cw.filter((w) => !w.watched && !watchLooksFinished(w) && (w.position > 30 || w.traktPct > 2) && !String(w.key).startsWith('live:') && !String(w.key).startsWith('audiobook:')).map((w) => {
     const art = freshLocalArtForKey(w.key);
     const poster = art.poster || durableArtUrl(w.meta.poster) || durableArtUrl(w.meta.backdrop);
     const backdrop = art.backdrop || durableArtUrl(w.meta.backdrop) || durableArtUrl(w.meta.poster);
@@ -8339,12 +8340,17 @@ let prefetchTimer = null;
 // measured 3.4s late. Warm-ups therefore wait a beat, and never fire without a title (a bare
 // `q=` is a guaranteed 400 that still burns a slot).
 const DETAIL_WARM_DELAY_MS = 350;
+// D-pad over the episode list retargets Play on every focus. Those warm-ups wait for focus to
+// SETTLE (one timer, each focus cancels the last) instead of firing search + prepare per episode.
+const DETAIL_EPISODE_FOCUS_WARM_MS = 1500;
+let detailEpisodeFocusWarm = false;
 function prefetchSources(it, delay = 700) {
   if (!it || it.type === 'live') return;
   if (it.type === 'tv' && !episodeKeyParts(it)) return;
   if (!queryFor(it)) return;
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
+  if (detailEpisodeFocusWarm) delay = Math.max(delay, DETAIL_EPISODE_FOCUS_WARM_MS);
   // The Stremio trick: search/triage warms server-side while the user reads the title,
   // so pressing Play skips the indexer fan-out entirely (~1s perceived start).
   clearTimeout(prefetchTimer);
@@ -8353,6 +8359,7 @@ function prefetchSources(it, delay = 700) {
   }, delay);
 }
 let prepareTimer = null;
+let prepareInflight = null;
 function traktResumeFractionForItem(it) {
   if (!it || it.type === 'live' || it._startOver) return 0;
   const pct = +it._traktPct || 0;
@@ -8428,6 +8435,8 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   if (resumeSec > 0 && !userPicked) {
     const w = S.watchMap && it.key && S.watchMap[it.key];
     const dur = +(w && w.duration) || +it.duration || 0;
+    // Absolute seconds ride along even when the duration (and so resumeFrac) is unknown.
+    body.resumeSeconds = Math.round(resumeSec);
     if (dur > 0) body.resumeFrac = Math.max(0, Math.min(0.98, resumeSec / dur));
   }
   // Trakt-imported progress carries only a PERCENT (no absolute position/duration), so the block
@@ -8490,13 +8499,63 @@ function preparePlaybackSource(it, delay = 900) {
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
   startLocalPlaybackLookup(it);
-  if (playbackIsWarmed(it, qRank)) return;
-  if (delay <= 0) markPlaybackPrepared(it, qRank);
+  // An earlier prepare for this exact target that went out without year + imdb/tvdb gets ONE
+  // stronger re-fire once those ids land; otherwise a warm or in-flight target is left alone.
+  const key = playbackWarmKey(it, qRank);
+  const strong = prepareIdentityIsStrong(it);
+  const sent = S._prepareSent && S._prepareSent[prepareTargetKey(it, qRank)];
+  const upgrade = !!(sent && !sent.strong && strong);
+  if (detailEpisodeFocusWarm) delay = Math.max(delay, DETAIL_EPISODE_FOCUS_WARM_MS);
   clearTimeout(prepareTimer);
+  prepareTimer = null;
+  if (!upgrade && playbackIsWarmed(it, qRank)) return;
+  if (!upgrade && prepareInflight && prepareInflight.key === key) return;
   prepareTimer = setTimeout(() => {
-    markPlaybackPrepared(it, qRank);
-    api('/api/prepare', { method: 'POST', body: playbackRequestBody(it, null, qRank) }).then(maybeNativePrefetch).catch(() => {});
+    prepareTimer = null;
+    if (S.view === 'player') return;
+    if (prepareInflight) prepareInflight.ctrl.abort();
+    const ctrl = new AbortController();
+    const job = prepareInflight = { key, ctrl };
+    S._prepareSent = S._prepareSent || {};
+    S._prepareSent[prepareTargetKey(it, qRank)] = { strong, at: Date.now() };
+    api('/api/prepare', { method: 'POST', body: playbackRequestBody(it, null, qRank), signal: ctrl.signal }).then((r) => {
+      if (ctrl.signal.aborted || prepareInflight !== job) return;
+      prepareInflight = null;
+      // Warm only on a real prepared mount; a miss leaves the target cold so the next focus retries.
+      if (r && r.prepared) markPlaybackPrepared(it, qRank);
+      else clearPlaybackPrepared(it, qRank);
+      maybeNativePrefetch(r);
+    }).catch(() => {
+      if (prepareInflight === job) prepareInflight = null;
+      if (!ctrl.signal.aborted) clearPlaybackPrepared(it, qRank);
+    });
   }, delay);
+}
+function prepareIdentityIsStrong(it) {
+  const ids = sourceIdentityFor(it);
+  const year = parseInt(it && it.year, 10);
+  return !!((ids.imdbid || ids.tvdbid) && year >= 1900 && year <= 2100);
+}
+function prepareTargetKey(it, qRank) {
+  if (!it) return '';
+  const ids = sourceIdentityFor(it);
+  const ep = (ids.season != null && ids.ep != null) ? `s${ids.season}e${ids.ep}` : '';
+  return `${it.tmdbId || it.key || queryFor(it) || ''}|${ep}|${qRank == null ? '' : qRank}`;
+}
+function clearPlaybackPrepared(it, qRank) {
+  if (!it) return;
+  it._preparedAt = 0;
+  const key = playbackWarmKey(it, qRank);
+  if (key && S._preparedWarm) delete S._preparedWarm[key];
+  const tkey = prepareTargetKey(it, qRank);
+  if (tkey && S._prepareSent) delete S._prepareSent[tkey];
+}
+// Detail close / view change: pending warm-ups and the in-flight prepare belong to the page
+// that is going away; abort them so a late result cannot mark the wrong target warm.
+function cancelDetailWarmups() {
+  clearTimeout(prefetchTimer); prefetchTimer = null;
+  clearTimeout(prepareTimer); prepareTimer = null;
+  if (prepareInflight) { prepareInflight.ctrl.abort(); prepareInflight = null; }
 }
 // Hand a prepared direct-play mount to the Android shell for byte pre-caching, so press-play
 // buffers its opening seconds from device storage. No-op outside the app shell or when the
@@ -9171,7 +9230,7 @@ function resolvePlaybackResume(it) {
 function resumePositionForItem(it) {
   if (!it || it.type === 'live') return 0;
   const w = S.watchMap && it.key && S.watchMap[it.key];
-  if (w && w.watched) return 0;
+  if (w && watchLooksFinished(w)) return 0;
   return Math.max(+it.resume || 0, +(w && w.position) || 0);
 }
 function startOverItem(it) {
@@ -9194,6 +9253,42 @@ function armPlayHandoffWatchdog(playTicket) {
     toast('Next episode took too long — try Play again');
   }, PLAY_NEXT_HANDOFF_MS);
 }
+// Every Play start gets a hang timer: no first frame (web) / native READY within this window means
+// the loader would sit forever. Cleared by markVodPlaybackStarted, native READY, and closePlayer.
+const PLAY_START_WATCHDOG_MS = 60000;
+function clearPlayStartWatchdog() {
+  if (S._playStartTimer) {
+    clearTimeout(S._playStartTimer);
+    S._playStartTimer = null;
+  }
+}
+function armPlayStartWatchdog(it, playTicket) {
+  clearPlayStartWatchdog();
+  if (!it || it.type === 'live') return;
+  S._playStartTimer = setTimeout(() => {
+    S._playStartTimer = null;
+    if (S._playTicket !== playTicket || S.view !== 'player') return;
+    if (vodPlaybackStarted(S.playing) || (S.playing && S.playing.nativeReady)) return;
+    closePlayer();
+    toast('Could not start. Try Play again.');
+  }, PLAY_START_WATCHDOG_MS);
+}
+// Same-title Play/OK presses while one start is still in flight are ignored (smash Play on
+// details or a Continue Watching card used to start two mounts). The lock is released when that
+// start finishes, errors, or the player is closed; the age cap keeps a lost promise from wedging it.
+const PLAY_LOCK_MAX_MS = 90000;
+function playLockKey(it, pick) {
+  if (!it) return '';
+  const p = pick && typeof pick === 'object' ? (pick.pickKey || pick.name || '') : (pick || '');
+  return `${it.key || queryFor(it) || it.title || ''}|${p}`;
+}
+function playLockHeld(key) {
+  const lock = S._playLock;
+  return !!(lock && key && lock.key === key && (Date.now() - lock.at) < PLAY_LOCK_MAX_MS);
+}
+function releasePlayLock(lock) {
+  if (!lock || S._playLock === lock) S._playLock = null;
+}
 function beginPlaybackTransition(it, opts = {}) {
   const nativeFirst = nativeVideoRequired(it);
   const playTicket = S._playTicket = (S._playTicket || 0) + 1;
@@ -9211,12 +9306,26 @@ function beginPlaybackTransition(it, opts = {}) {
 }
 async function play(it, pick, opts = {}) {
   if (!it) return;
+  const lockKey = playLockKey(it, pick);
+  if (playLockHeld(lockKey)) return;
+  // Lock + intent are taken synchronously, before the first await: a second press for the same
+  // title is dropped, and a press for another title supersedes this one before it can open.
+  const playLock = S._playLock = { key: lockKey, at: Date.now() };
+  const playIntent = S._playIntent = (S._playIntent || 0) + 1;
+  try {
+    return await playStart(it, pick, opts, playIntent);
+  } finally {
+    releasePlayLock(playLock);
+  }
+}
+async function playStart(it, pick, opts, playIntent) {
   it = resolvePlaybackResume(it);
   if (it.type === 'tv' && !episodeKeyParts(it)) {
     const early = earlyNextUpTarget(it);
     if (early) it = resolvePlaybackResume(early);
   }
   it = await ensurePlayQuery(it);
+  if (S._playIntent !== playIntent) return;
   if (!queryFor(it)) {
     toast(it.tmdbId ? 'Still loading title details — try Play again' : 'Can’t play this — missing title');
     return;
@@ -9256,6 +9365,7 @@ async function play(it, pick, opts = {}) {
   if (stopP) await stopP;
   if (S._playTicket !== playTicket || S.view !== 'player') return;
   if (opts.directHandoff) armPlayHandoffWatchdog(playTicket);
+  armPlayStartWatchdog(it, playTicket);
   let localExact = null;
   try {
     if (!picked && !it._local) {
@@ -9281,6 +9391,9 @@ async function play(it, pick, opts = {}) {
     body.why = opts.why || 'viewer';
     if (preferredRank !== null) it.qualityRank = preferredRank;
     const r = await api('/api/play', { method: 'POST', body });
+    // Back or a newer Play landed while /api/play ran: the server already holds a mount for this
+    // session, so release it (parked for reuse) instead of leaking it.
+    if (S._playTicket !== playTicket || S.view !== 'player') releasePlaybackSession(r && r.sessionId, { keepPrepared: true });
     if (S._playTicket !== playTicket) return;
     if (S.view !== 'player') return; // user backed out of the loading screen
     // If the chosen/auto-pick release is dead, the pipeline already swapped to the next
@@ -10638,7 +10751,12 @@ function retargetDetailFromEpisodeCard(card) {
     syncDetailSourcesTitle(target);
     return;
   }
-  updateDetailPlayLabel({ label: resume ? 'Resume' : 'Play', target });
+  detailEpisodeFocusWarm = true;
+  try {
+    updateDetailPlayLabel({ label: resume ? 'Resume' : 'Play', target });
+  } finally {
+    detailEpisodeFocusWarm = false;
+  }
   syncDetailSourcesTitle(target);
 }
 function earlyNextUpTarget(show) {
@@ -10848,6 +10966,9 @@ function closeDetail() {
   // hidden detail DOM or close the next surface based on the title that is no longer open.
   S.detailReq = (S.detailReq || 0) + 1;
   S.seasonReq = (S.seasonReq || 0) + 1;
+  cancelDetailWarmups();
+  // A Play still resolving its title (before the loader opened) must not open over the next page.
+  if (S.view !== 'player') S._playIntent = (S._playIntent || 0) + 1;
   $('detail').classList.remove('open'); document.body.classList.remove('detailOpen');
   S.detailItem = null;
   S.qualityPref = null; // visible toggle state only; per-title choices stay saved for Continue Watching.
@@ -10913,12 +11034,8 @@ $('dPlayed').addEventListener('click', async () => {
 });
 $('dStartOver').addEventListener('click', () => {
   const it = S.detailItem; if (!it) return;
-  if (it.type === 'tv' && S.detailSeasons) {
-    const s0 = S.detailSeasons[0].season_number;
-    play(startOverItem(epTarget({ ...it }, s0, 1, 0)));
-  } else {
-    play(startOverItem(detailPlayTarget || it));
-  }
+  // Shows restart only the current/resume episode (detailPlayTarget), never S1E1.
+  play(startOverItem(detailPlayTarget || it));
 });
 
 /* ============ person page (clickable cast → their other works) ============ */
@@ -13537,9 +13654,9 @@ function nativeVideoSubtitleRel(p) {
   }
   return { blocked: false, rel: concreteSubtitleRel(startupSubtitleRelFor(p)) };
 }
-function pushNativeActiveSubtitle(p, rel) {
+function pushNativeActiveSubtitle(p, rel, opts = {}) {
   if (!p || !p.usingNative || !rel || !(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) return;
-  const payload = nativeSubtitlePayload(p, rel, 'manual');
+  const payload = nativeSubtitleOnPlayer(p, nativeSubtitlePayload(p, rel, 'manual'));
   if (!payload.url) return;
   try {
     window.TriboonTV.updateActiveSubtitle(JSON.stringify({
@@ -13550,7 +13667,7 @@ function pushNativeActiveSubtitle(p, rel) {
       subtitleShift: payload.shift,
     }));
   } catch {}
-  autoSyncNative(p, rel);
+  if (opts.sync !== false) autoSyncNative(p, rel);
 }
 function nativeSubtitlePayload(p, rel, mode = 'startup') {
   const chosen = rel || '';
@@ -13588,7 +13705,7 @@ async function applyNativeStartupSubtitleAfterTrackProbe(p) {
       subtitleUrl: payload.url,
       subtitleLang: payload.lang,
       subtitleLabel: payload.label,
-      subtitleShift: payload.shift,
+      subtitleShift: payload.shift + (Number(p._nativeStartSkew) || 0),
       subtitleStartup: true, // native side: fail silently + retry — never toast at play start
     }));
     p.subTrack = rel;
@@ -14096,7 +14213,9 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
   } else if (kind === 'remux') {
     nativeUrl = remuxPlaybackUrl(p, seekStart, { native: true }); // native ExoPlayer → 5.1, not the stereo audioSafe path
   }
+  p._nativeStartSkew = 0;
   const subPayload = nativeSubtitlePayload(p, sub.rel || '', 'startup');
+  nativeSubtitleOnPlayer(p, subPayload);
   p.usingNative = true;
   if (opts.quietSeek) p._nativeResuming = true;
   p.usingRemux = kind === 'remux';
@@ -14163,6 +14282,19 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
     p.usingNative = false;
     return false;
   }
+}
+// What the native player loads. A skip, reconnect, or quality change rebuilds
+// it, so hand it the synced link again or the words fall back to the old timing.
+// A slow keyframe answer leaves this playback's picture starting early; add it.
+function nativeSubtitleOnPlayer(p, payload) {
+  const synced = payload.rel && p && p._nativeSyncedUrl;
+  if (synced && synced.rel === payload.rel && synced.mountId === p.mountId
+      && synced.audio === Math.max(0, parseInt(p.audioTrack, 10) || 0)) {
+    payload.url = synced.url;
+  }
+  const skew = Number(p && p._nativeStartSkew) || 0;
+  if (payload.rel && skew) payload.shift = Math.round(((payload.shift || 0) + skew) * 1000) / 1000;
+  return payload;
 }
 function tryNativePlaybackLadder(atSeconds, preferredKind, opts = {}) {
   const p = S.playing;
@@ -14338,6 +14470,7 @@ window.__tvNativeVideoReady = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
   p.nativeReady = true;
+  clearPlayStartWatchdog();
 };
 window.__tvNativeVideoPlaying = (pos, dur, token, why) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
@@ -14436,6 +14569,13 @@ function remuxKeyframeStart(p, seconds) {
       if (!settled) { settled = true; resolve(start); return; }
       if (!(start + 0.05 < t) || S.playing !== p) return;
       if (Math.abs((p.startOffset || 0) - t) > 0.25) return;
+      if (p.usingNative) {
+        // The TV took its start second at handoff and cannot be told again.
+        // Its picture began this much earlier, so move the words the same amount.
+        p._nativeStartSkew = Math.round((t - start) * 1000) / 1000;
+        if (typeof p.subTrack === 'string' && p.subTrack) pushNativeActiveSubtitle(p, p.subTrack, { sync: false });
+        return;
+      }
       p.startOffset = start;
       applySubtitleTrack();
     });
@@ -14694,7 +14834,10 @@ window.__tvNativeSubtitleVersions = async (lang, pos, dur, token) => {
 window.__tvNativeSubtitleShift = (shift, token) => {
   const p = S.playing;
   if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token) || !p.subTrack) return;
-  const n = +(+shift || 0).toFixed(1);
+  // The TV reports its whole shift. Part of it may be this playback's start
+  // skew, which is not the viewer's nudge and must not be saved for next time.
+  const total = +shift || 0;
+  const n = Math.abs(total) < 0.05 ? 0 : +(total - (Number(p._nativeStartSkew) || 0)).toFixed(1);
   p._subShift = n;
   saveSubShift(p.subTrack, n);
 };
@@ -14705,6 +14848,7 @@ function liveMseHasReadyFrame(p = S.playing) {
 }
 function markVodPlaybackStarted(p) {
   if (!p || !p.item || p.item.type === 'live') return;
+  if (S.playing === p) clearPlayStartWatchdog();
   p.started = true;
   if (!p.startedAt) p.startedAt = appMs();
 }
@@ -14833,7 +14977,26 @@ function showPlaybackInterrupted(reason = '') {
   $('vlcUrl').textContent = url ? location.origin + url : '';
   $('vlcUrl').style.display = url ? '' : 'none';
   $('vlcCopy').style.display = url ? '' : 'none';
+  const canRetry = !!(p.item && p.item.type !== 'live');
+  S._interruptedRetry = canRetry ? { item: p.item, at: currentTime() } : null;
+  $('vlcRetry').style.display = canRetry ? '' : 'none';
   $('vlcPanel').classList.add('show');
+  if (canRetry) {
+    const b = $('vlcRetry');
+    const run = () => { try { b.focus({ preventScroll: true }); } catch {} applyFocus(b, false); };
+    requestAnimationFrame(run); setTimeout(run, 60);
+  } else {
+    focusVlcPanel();
+  }
+}
+// "Try again" re-plays the same title at the saved minute through the normal resume Play path.
+function retryInterruptedPlayback() {
+  const r = S._interruptedRetry;
+  S._interruptedRetry = null;
+  if (!r || !r.item) return closePlayer();
+  const at = Math.max(0, Math.floor(Number(r.at) || 0));
+  $('vlcPanel').classList.remove('show');
+  play({ ...r.item, _startOver: false, resume: at > 0 ? at : (+r.item.resume || 0) });
 }
 function playbackServerGone(reason) {
   const msg = String(reason || '');
@@ -15108,6 +15271,7 @@ async function autoAdvance(opts = {}) {
       body: at > 0 && advDur > 0 ? { resumeFrac: Math.max(0, Math.min(0.98, at / advDur)) } : {},
     });
     if (S.playing !== p || S.view !== 'player') return;
+    const carriedSubTrack = carrySubtitleAcrossSourceSwap(p, p.subTrack);
     p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl; p.hlsUrl = r.hlsUrl;
     p.encoder = r.encoder; p.fileName = r.name; p.sourceAttributes = r.candidate && r.candidate.attributes;
     p.size = r.size || (r.candidate && r.candidate.sizeBytes) || 0; p.bufferGoalSec = r.bufferGoalSec || 0;
@@ -15131,8 +15295,10 @@ async function autoAdvance(opts = {}) {
       if (S.playing !== p || S.view !== 'player') return;
     }
     const quiet = !!opts.allowMidstreamAdvance;
+    if (nativePreferred && carriedSubTrack) p.subTrack = carriedSubTrack;
     if (nativePreferred && tryNativePlaybackLadder(at, startKind, quiet ? { quietSeek: true } : {})) {
       startNativePlayerHousekeeping(p.item);
+      if (typeof p.subTrack === 'string' && p.subTrack.startsWith('os:')) autoSyncNative(p, p.subTrack);
       return;
     }
     if (nativePreferred) {
@@ -15143,6 +15309,7 @@ async function autoAdvance(opts = {}) {
     revealWebPlayerShell(p.item);
     startWebPlayerHousekeeping(r, p.item);
     startSource(startKind, at, quiet ? { quietSeek: true } : {});
+    if (carriedSubTrack) setSubtitle(carriedSubTrack, { startup: true });
   } catch (e) {
     if (S.playing !== p || S.view !== 'player') return;
     if (opts.allowMidstreamAdvance && e && e.status === 404 && !p._reMounting) {
@@ -15176,6 +15343,7 @@ function resetVlcPanel() {
   if (msg) msg.textContent = "This browser can't decode the file. Paste the stream URL into VLC (Media → Open Network Stream) — seeking works.";
   $('vlcUrl').style.display = '';
   $('vlcCopy').style.display = '';
+  $('vlcRetry').style.display = 'none';
 }
 // Land D-pad focus on the panel's primary action the moment it opens (Close first — the safe action,
 // and the only visible button on TV where Copy is hidden) so a remote isn't stuck on a dead chrome.
@@ -15727,6 +15895,7 @@ async function prepNextEpisode(it) {
 // Lead time before the episode end to mount the next episode so Play / autoplay feels local.
 // Two minutes is long enough to find a healthy file without holding connections for the whole show.
 const NEXT_EP_PREP_LEAD_SECONDS = 120;
+const NEXT_EP_PREP_RETRY_MS = 20000;
 function maybePrepareNextEpisode(t, d) {
   const p = S.playing;
   const fileD = playingFileSeconds(p, d);
@@ -15739,7 +15908,16 @@ function maybePrepareNextEpisode(t, d) {
   item._preparedAt = Date.now();
   if (typeof markPlaybackPrepared === 'function') markPlaybackPrepared(item, qRank);
   if (localTitleHasPlayback(item)) return; // library file is already on the server — no usenet mount to warm
-  api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).then(maybeNativePrefetch).catch(() => {});
+  const ne = S.nextEp;
+  const retryLater = () => {
+    if (ne._prepRetried) return;
+    ne._prepRetried = true;
+    setTimeout(() => { if (S.nextEp === ne) S.nextEpPrepared = false; }, NEXT_EP_PREP_RETRY_MS);
+  };
+  api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).then((r) => {
+    if (!r || r.prepared === false) retryLater();
+    return maybeNativePrefetch(r);
+  }).catch(retryLater);
 }
 const UP_NEXT_COUNTDOWN_SECONDS = 10;
 // One rule for every show: the file you are watching owns the chip. Last 2.8% of
@@ -15873,6 +16051,7 @@ $('vlcCopy').addEventListener('click', () => {
   navigator.clipboard.writeText($('vlcUrl').textContent).then(() => toast('Stream URL copied — paste into VLC'));
 });
 $('vlcClose').addEventListener('click', closePlayer);
+$('vlcRetry').addEventListener('click', retryInterruptedPlayback);
 $('playerBackBtn').addEventListener('click', closePlayer);
 function flushPlaybackCheckpoints() {
   if (S.playing) saveWatch(true);
@@ -16365,8 +16544,11 @@ async function closePlayer(opts = {}) {
   // Invalidate any IN-FLIGHT play attempt (search/mount/probe still running): its continuation
   // checks this ticket and must not resurrect playback after the user backed out of the loader.
   S._playTicket = (S._playTicket || 0) + 1;
+  S._playIntent = (S._playIntent || 0) + 1;
   S._nativeLoadingTicket = 0;
+  S._playLock = null;
   clearPlayHandoffWatchdog();
+  clearPlayStartWatchdog();
   cancelLiveTune('main');
   cancelLiveTune('split:0');
   cancelLiveTune('split:1');
@@ -16490,7 +16672,11 @@ async function closePlayer(opts = {}) {
     S.gridIdx = ret.gridIdx || 0;
     if (S.view === 'home') paintHomeWatchNow({ focusSnapshot: ret.homeFocus });
     // For Live TV the scaffold's restore owns focus; calling focusContent too would fight it.
-    if (!(ret.view === 'livetv' && ret.live)) setTimeout(() => focusContent(), 80);
+    if (!(ret.view === 'livetv' && ret.live)) setTimeout(() => {
+      // Home with a restored Continue Watching/row focus keeps it; focusContent() would jump to the hero.
+      if (S.view === 'home' && ret.homeFocus && document.querySelector('#home .focus')) return;
+      focusContent();
+    }, 80);
   }
 }
 function startHealthPoll(id) {
@@ -17340,6 +17526,15 @@ function canAutoSubtitle(p) {
   return !!(p && p.item && p.item.type !== 'live'
     && S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item));
 }
+// A dead release swaps to another one mid-movie. Captions that were on stay on,
+// in the same language. em:/rs: numbers belong to the old file, so the online
+// copy of that language carries over; ranking picks the best variant for the new file.
+function carrySubtitleAcrossSourceSwap(p, prev) {
+  if (!p || p._subtitleDisabledThisSession || !(typeof prev === 'string' && prev)) return null;
+  if (!canAutoSubtitle(p)) return null;
+  const lang = subtitleLangForRel(prev) || preferredAutoSubtitleLang();
+  return lang ? osTrackRel(lang) : null;
+}
 function onlineFallbackRelForBuiltIn(rel) {
   const sub = embeddedSubForRel(rel);
   const lang = sub && sub.lang ? osLang(sub.lang) : osLang(preferredAutoSubtitleLang());
@@ -18074,9 +18269,12 @@ async function runPendingNativeSync() {
     p._pendingNativeSyncRel = null; // corrected — apply once and stop retrying
     if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
     if ((parseInt(p.audioTrack, 10) || 0) !== audio) { p._pendingNativeSyncRel = rel; return; }
+    p._nativeSyncedUrl = { rel, audio, mountId: p.mountId, url: new URL(syncUrl, location.origin).href };
+    // The synced cues already contain the fix. A leftover hand nudge would be added on top.
+    p._subShift = 0; saveSubShift(rel, 0);
     window.TriboonTV.updateActiveSubtitle(JSON.stringify({
       subtitleRel: rel, subtitleUrl: syncUrl,
-      subtitleLang: payload.lang, subtitleLabel: payload.label, subtitleShift: 0,
+      subtitleLang: payload.lang, subtitleLabel: payload.label, subtitleShift: Number(p._nativeStartSkew) || 0,
     }));
     toast(subtitleSyncToast(r.headers.get('x-triboon-subsync-shift')));
     notePlaybackIssue('subs', `subtitle synced at ${at}s: ${subtitleSyncToast(r.headers.get('x-triboon-subsync-shift'))}`, 0);
@@ -21094,6 +21292,7 @@ async function playLocal(it, opts = {}) {
     playTicket = transition.playTicket;
     if (transition.stopP) await transition.stopP;
     if (S._playTicket !== playTicket || S.view !== 'player') return;
+    armPlayStartWatchdog(it, playTicket);
   }
   try {
     const ids = sourceIdentityFor(it);
@@ -21109,6 +21308,7 @@ async function playLocal(it, opts = {}) {
           id: null, sessionId: null, remuxUrl: null, transcodeUrl: null, tracksUrl: null,
           playback: { method: 'direct' },
         };
+    if (S._playTicket !== playTicket || S.view !== 'player') releasePlaybackSession(mount && mount.sessionId, { keepPrepared: true });
     if (S._playTicket !== playTicket) return;
     if (S.view !== 'player') return;
     await openPlayer(it, { ...mount, name: mount.name || it._local.name, container: mount.container || 'local', method: mount.method || null }, { nativeFirst, playTicket });
@@ -28592,6 +28792,7 @@ function switchView(v, push = true, opts = {}) {
   if (v === 'audiobooks' && S.user && S.user.audiobooksAllowed === false) return switchView('home');
   if (v === 'kids' && !kidsUiAvailable()) return switchView('home', push, opts);
   const prevView = S.view;
+  if (prevView !== v) cancelDetailWarmups();
   hideScreensaver();
   resetScreensaverIdle();
   if (prevView === 'multiview' && v !== 'multiview' && S.multiView) closeMultiView({ silent: true });
@@ -30468,7 +30669,7 @@ document.addEventListener('keydown', (e) => {
     // On TV the Copy-URL button is hidden (no clipboard/VLC), leaving Close as the action.
     if ($('vlcPanel').classList.contains('show')) {
       if (k === 'Escape' || k === 'Backspace') return $('vlcClose').click();
-      const btns = [$('vlcCopy'), $('vlcClose')].filter((b) => b && b.offsetParent !== null && !b.disabled);
+      const btns = [$('vlcRetry'), $('vlcCopy'), $('vlcClose')].filter((b) => b && b.offsetParent !== null && !b.disabled);
       if (!btns.length) return;
       let i = btns.findIndex((b) => b.classList.contains('focus')); if (i === -1) i = 0;
       if (k === 'ArrowLeft' || k === 'ArrowUp') return applyFocus(btns[Math.max(0, i - 1)]);

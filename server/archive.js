@@ -392,10 +392,35 @@ class ArchiveVirtualFile {
       const e = this.extents[idx];
       const from = e.offset + (offset - e.innerStart);
       const take = Math.min(e.innerStart + e.length, end) - offset;
-      yield* this.vols[e.vol].read(from, from + take, opts);
+      try {
+        yield* this.vols[e.vol].read(from, from + take, opts);
+      } catch (err) {
+        this._flagDeadPieces();
+        throw err;
+      }
       offset += take;
       idx++;
     }
+  }
+
+  // The player polls THIS object's health. A volume that lost a piece on every
+  // provider only marks itself, so the same release kept remounting and dying at
+  // the same minute instead of moving to the next copy.
+  deadPieceCount() {
+    let n = 0;
+    for (const v of this.vols) if (v && typeof v.deadPieceCount === 'function') n += v.deadPieceCount();
+    return n;
+  }
+  deadPieceReason() {
+    for (const v of this.vols) {
+      if (v && typeof v.deadPieceCount === 'function' && v.deadPieceCount() > 0) return v.deadPieceReason();
+    }
+    return '';
+  }
+  _flagDeadPieces() {
+    const dead = this.deadPieceCount();
+    if (!dead) return;
+    this.health = { ...this.health, verdict: 'blocked', dead, reason: this.deadPieceReason() };
   }
 
   async readAt(start, len, opts = {}) {
@@ -412,16 +437,33 @@ class ArchiveVirtualFile {
     while (idxs.size < Math.min(sampleCount, all.length)) {
       idxs.add(Math.floor(Math.random() * all.length));
     }
+    // A provider that is down, full, or refusing logins says nothing about the
+    // article. Counting that as "missing" blacklisted good releases for hours.
     const results = await Promise.all(
-      [...idxs].map((i) => this.vols[0].pool.stat(all[i].msgId, 'health').catch(() => false))
+      [...idxs].map((i) => this.vols[0].pool.stat(all[i].msgId, 'health', { throwIfUnreachable: true })
+        .then((ok) => ({ ok: !!ok, unreachable: false }))
+        .catch((e) => ({ ok: false, unreachable: !!(e && e.code === 'NO_PROVIDER') })))
     );
-    const missing = results.filter((ok) => !ok).length;
+    if (results.length && results.every((r) => r.unreachable)) {
+      this.health = {
+        verdict: (this.health && this.health.verdict) || 'unverified',
+        missing: 0,
+        sampled: 0,
+        unreachable: true,
+        checkedAt: new Date().toISOString(),
+      };
+      return this.health;
+    }
+    const reached = results.filter((r) => !r.unreachable);
+    const missing = reached.filter((r) => !r.ok).length;
+    const dead = this.deadPieceCount();
     this.health = {
-      verdict: missing === 0 ? 'verified' : missing >= results.length / 2 ? 'blocked' : 'degraded',
+      verdict: dead > 0 ? 'blocked' : missing === 0 ? 'verified' : ((reached.length >= 2 || reached.length === results.length) && missing >= reached.length / 2) ? 'blocked' : 'degraded',
       missing,
-      sampled: results.length,
+      sampled: reached.length,
       checkedAt: new Date().toISOString(),
     };
+    if (dead > 0) { this.health.dead = dead; this.health.reason = this.deadPieceReason(); }
     return this.health;
   }
 

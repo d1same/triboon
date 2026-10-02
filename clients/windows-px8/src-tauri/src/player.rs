@@ -3355,8 +3355,19 @@ fn handle_update(
     let Some(active) = session else { return };
     match update {
         UpdateAction::SubtitleChoices(choices) => active.ui.subtitle_choices = choices,
-        UpdateAction::ActiveSubtitle(subtitle) => {
-            if apply_subtitle(mpv, &subtitle, active.subtitle_stream_offset()).is_ok() {
+        UpdateAction::ActiveSubtitle(mut subtitle) => {
+            // Page updates carry no size. Keep the viewer's size instead of falling back to default.
+            if subtitle.size.is_empty() {
+                subtitle.size = active.subtitle.size.clone();
+            }
+            if !active.file_loaded {
+                // mpv cannot add a subtitle before the file opens. Keep it; the
+                // file-loaded tick attaches it instead of dropping the auto pick.
+                active.ui.subtitle_rel = subtitle.rel.clone();
+                active.ui.subtitle_label = subtitle.label.clone();
+                active.subtitle_attached = subtitle.url.is_empty();
+                active.subtitle = subtitle;
+            } else if apply_subtitle(mpv, &subtitle, active.subtitle_stream_offset()).is_ok() {
                 active.ui.subtitle_rel = subtitle.rel.clone();
                 active.ui.subtitle_label = subtitle.label.clone();
                 active.subtitle = subtitle;

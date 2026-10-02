@@ -494,12 +494,29 @@ class NzbFileStream {
     };
     let rec = this.inflight.get(i);
     if (rec && priorityRank(priority) < priorityRank(rec.priority) && priorityRank(priority) <= priorityRank('playback')) {
-      return this.pool.body(this.segments[i].msgId, priority, bodyOpts(signal))
-        .then((raw) => decodeAndCache(raw, 0))
-        .catch((e) => {
-          if (signalAborted(signal) || e.code === 'ABORT_ERR') throw e;
-          return rec.promise;
+      // The read-ahead copy may already be on the wire. Take whichever copy lands
+      // first instead of waiting on the fast-lane re-fetch while the bytes sit ready.
+      const boost = new AbortController();
+      const unlink = addAbortListener(signal, () => boost.abort());
+      const fast = this.pool.body(this.segments[i].msgId, priority, bodyOpts(boost.signal))
+        .then((raw) => decodeAndCache(raw, 0));
+      const ahead = (rec.skipDecoded || 0) === 0 ? rec.promise : null;
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const win = (data) => {
+          if (settled) return;
+          settled = true;
+          unlink();
+          if (!boost.signal.aborted) boost.abort();
+          resolve(data);
+        };
+        fast.then(win, (e) => {
+          if (settled) return;
+          if (signalAborted(signal) || (e && e.code === 'ABORT_ERR')) { settled = true; unlink(); reject(e); return; }
+          rec.promise.then(win, (e2) => { if (!settled) { settled = true; unlink(); reject(e2); } });
         });
+        if (ahead) ahead.then(win, () => {});
+      });
     }
     if (rec && (rec.skipDecoded || 0) > skipDecoded) rec = null;
     if (!rec) {
@@ -756,7 +773,7 @@ class NzbFileStream {
     const missing = reached.filter((r) => !r.ok).length;
     const dead = this.deadPieceCount();
     this.health = {
-      verdict: dead > 0 ? 'blocked' : missing === 0 ? 'verified' : missing >= reached.length / 2 ? 'blocked' : 'degraded',
+      verdict: dead > 0 ? 'blocked' : missing === 0 ? 'verified' : ((reached.length >= 2 || reached.length === results.length) && missing >= reached.length / 2) ? 'blocked' : 'degraded',
       missing,
       sampled: reached.length,
       checkedAt: new Date().toISOString(),
