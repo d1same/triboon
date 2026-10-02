@@ -995,12 +995,14 @@ test('jellyfin second PlaybackInfo with the movie id reuses the live mount', asy
   assert.strictEqual(gone.body.MediaSources[0].Id, 'm550');
 });
 
-test('jellyfin PlaybackInfo joins the details warm-up before play', async () => {
-  const door = fakeDoor({ prepareMs: 30 });
+test('jellyfin PlaybackInfo never waits behind a slow details warm-up', async () => {
+  const door = fakeDoor({ prepareMs: 5000 });
+  const started = Date.now();
   const res = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', { body: {} });
   assert.strictEqual(res.status, 200);
-  assert.strictEqual(door.calls.prepare, 1, 'a TV that skipped the details page still starts the warm-up');
-  assert.deepStrictEqual(door.calls.order, ['prepare', 'prepared', 'play'], 'play picks up the ready warm-up');
+  assert.ok(Date.now() - started < 2000, 'play answers without waiting on the one-at-a-time warm-up');
+  assert.strictEqual(door.calls.play, 1);
+  assert.strictEqual(door.calls.prepare, 0, 'play joins a running warm-up itself; it does not start a second walk');
 });
 
 test('jellyfin PlaybackInfo says which caption is on, or -1', async () => {
@@ -1052,6 +1054,29 @@ test('jellyfin all-episodes list is not cut at 12 seasons', async () => {
   const page = await door.call('episodes', 'GET', '/Shows/t77/Episodes?StartIndex=40&Limit=3');
   assert.strictEqual(page.body.Items.length, 3);
   assert.strictEqual(page.body.StartIndex, 40);
+});
+
+test('jellyfin movies and episodes carry a local source so a second play cannot crash Android TV', async () => {
+  const shows = {
+    '/tv/77': { name: 'Show', seasons: [{ season_number: 1 }] },
+    '/tv/77/season/1': { episodes: [{ episode_number: 1 }, { episode_number: 2 }] },
+    '/movie/550?append_to_response=credits,release_dates': { id: 550, title: 'Fight Club', release_date: '1999-10-15', runtime: 139 },
+    '/tv/77?append_to_response=credits,content_ratings': { id: 77, name: 'Show', seasons: [{ season_number: 1 }] },
+  };
+  const door = fakeDoor({ shows });
+  const eps = await door.call('episodes', 'GET', '/Shows/t77/Episodes');
+  const movie = await door.call('item', 'GET', '/Items/m550');
+  assert.strictEqual(movie.status, 200, JSON.stringify(movie.body));
+  for (const item of [...eps.body.Items, movie.body]) {
+    const src = item.MediaSources && item.MediaSources[0];
+    assert.ok(src, `${item.Name || item.Id} has a source for the remembered audio language`);
+    assert.strictEqual(src.Id, item.Id, 'PlaybackInfo echoes this id back');
+    assert.strictEqual(src.Protocol, 'File');
+    assert.strictEqual(src.IsRemote, false, 'Android TV drops remote sources');
+    assert.ok(Array.isArray(src.MediaStreams) && src.MediaStreams.some((row) => row.Type === 'Audio'));
+  }
+  const show = await door.call('item', 'GET', '/Items/t77');
+  assert.strictEqual(show.body.MediaSources, undefined, 'a show is not playable');
 });
 
 test('jellyfin playback start saves the minute like a progress report', async () => {

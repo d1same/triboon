@@ -2729,6 +2729,9 @@ test('iptv: stale Xtream guide refresh failures do not crash the process', async
     const login = await httpJson(second.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' });
     const stale = await httpJson(second.port, 'GET', '/api/iptv/guide?chs=0', null, login.json.token);
     assert.strictEqual(stale.json.channels[0].programmes[0].title, 'Stale But Usable');
+    for (let waited = 0; waited < 3000 && !(epgHits >= 2 && logs.some((line) => /serving stale cache/.test(line))); waited += 20) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     await new Promise((resolve) => setTimeout(resolve, 80));
     assert.deepStrictEqual(unhandled, [], 'stale background refresh failure should be swallowed, not crash Node');
     assert.ok(epgHits >= 2, 'stale cache should still try to refresh in the background');

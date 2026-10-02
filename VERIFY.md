@@ -126,6 +126,38 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-02, v3.3.6 — Jellyfin Android TV: no wait behind the warm-up, no crash on the second play:
+
+- Example: you play Mario in the Jellyfin TV app, back out, and play FROM.
+  Before, the app died (`NullPointerException` on
+  `MediaSourceInfo.getMediaStreams()` because our movie/episode items had no
+  `MediaSources` and the app carried "forced audio: und" into the second
+  play). Now every movie and episode carries a local placeholder source and
+  the second play starts. Separately, `PlaybackInfo` no longer waits up to
+  20s on the one-at-a-time details warm-up; a cold title waited 15.5s there
+  before Play mounted it itself in 1.5s.
+- Emulator (`emulator-5554`, repo server on 7778, Shield untouched): Mario
+  played, back to Home, FROM S1E1 played with "forced audio: und", app pid
+  unchanged, picture on screen. Cold FROM `PlaybackInfo` answered in ~4.3s
+  (server play 2680ms).
+- Gate: `npm.cmd test` 840/840, fail 0. `verify:full` PASS on 7778: Mario
+  ready 3131ms SLOW, 1stByte 30ms, seek 199ms, resume 54ms, cc=200; FROM
+  ready 2464ms, 1stByte 46ms, seek 129ms, resume 28ms, cc=200; overlapping
+  Play 8ms / 17ms; IPTV web+native retune PASS; Android ExoPlayer stress
+  PASS. Windows client unchanged; Windows GPU/HDR: not run.
+- Release gate at 3.3.6: `verify:full` PASS on 7778 with `emulator-5554`
+  (Mario ready 120ms, 1stByte 4ms, seek 114ms, resume 23ms; FROM ready
+  217ms, 1stByte 2ms, seek 89ms, resume 7ms; IPTV, overlapping Play, Android
+  ExoPlayer stress PASS, hostVersion 3.3.6). One earlier run failed only
+  `iptv: stale Xtream guide refresh failures do not crash the process`: it
+  gave the background refresh a fixed 80ms on a loaded machine. The test now
+  waits up to 3s for that refresh with the same assertions; 51/51 alone.
+- Version contract: `package.json` 3.3.6; Android `versionName` 3.3.6 /
+  `versionCode` 409; Windows client package/Tauri/Cargo(.lock) 3.3.6.
+- Open: on the emulator, OkHttp often reports "unexpected end of stream"
+  (a lone `\r` then close) on small replies; raw host captures of the same
+  routes are byte-exact with `Connection: close`. Not confirmed on a real TV.
+
 2026-10-02, v3.3.5 — Play joins the warm-up, captions stay in sync, Next Episode never clips:
 
 - Example: you skip ahead on the TV and the synced captions stay synced. A

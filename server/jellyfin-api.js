@@ -385,7 +385,27 @@ function stampItem(item) {
     if (typeof item[key] === 'string' && item[key]) item[key] = publicItemId(item[key]);
   }
   if (Array.isArray(item.People)) item.People.forEach(stampItem);
+  // Android TV 0.19 carries the last audio language into the next play and
+  // reads it from the item's first source before PlaybackInfo. No source
+  // there is a NullPointerException: play one title, back out, play another,
+  // and the app dies. PlaybackInfo swaps in the real source.
+  if ((item.Type === 'Movie' || item.Type === 'Episode') && item.Id
+    && !(Array.isArray(item.MediaSources) && item.MediaSources.length)) {
+    item.MediaSources = [placeholderSource(item.Id, item.RunTimeTicks)];
+  }
   return item;
+}
+
+function placeholderSource(id, runTimeTicks) {
+  return completeSource({
+    Id: id,
+    IsRemote: false,
+    RunTimeTicks: runTimeTicks || null,
+    MediaStreams: [
+      completeStream({ Index: 0, Type: 'Video', IsDefault: true, DisplayTitle: 'Video' }),
+      completeStream({ Index: 1, Type: 'Audio', IsDefault: true, DisplayTitle: 'Audio' }),
+    ],
+  });
 }
 
 // Item ids are short and stable. A movie is m550, a show is t1396, a season is
@@ -1759,19 +1779,6 @@ function reusableMount(uid, itemId, sentId) {
   return null;
 }
 
-// Same warm-up the details page starts. A TV that skips the details page
-// still joins it, and play then picks up the ready mount. Capped under the
-// 30s idle socket limit; play itself raises that limit once it starts.
-const WARM_JOIN_MS = 20000;
-
-async function joinWarmup(ctx, spec) {
-  if (typeof deps.jellyfinPrepare !== 'function') return;
-  let timer;
-  const warm = Promise.resolve().then(() => deps.jellyfinPrepare(ctx, { ...spec })).catch(() => {});
-  await Promise.race([warm, new Promise((resolve) => { timer = setTimeout(resolve, WARM_JOIN_MS); })]);
-  clearTimeout(timer);
-}
-
 // Real audio rows for a usenet mount, once its tracks are known. Embedded
 // captions are left out: those are served through the subtitle map instead.
 const mountProbes = new Map();
@@ -2462,7 +2469,9 @@ async function handleKind(kind, ctx) {
       if (!spec) return send(ctx.res, 404, { error: 'not found' }, cors);
       if (typeof deps.jellyfinPlay !== 'function') return send(ctx.res, 404, { error: 'not found' }, cors);
       spec.resumeFrac = resumeFracFor(resumeStartSeconds(ctx, ctx.m[1], body, spec.runtime), spec.runtime);
-      await joinWarmup(ctx, spec);
+      // No waiting on the details warm-up here: play joins a ready or
+      // in-flight warm-up itself and races the rest, while the warm-up walks
+      // one source at a time in the background lane.
       const played = await deps.jellyfinPlay(ctx, spec);
       if (played && played.sent) return;
       if (!played || played.status !== 200) {
