@@ -615,6 +615,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'IR/local library Up Next must pick the next file in the same show folder, not TMDB prepare/usenet');
   assert.match(ui, /async function prepLocalPlayerSeasonEpisodes\(it\)[\s\S]+async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+if \(playingFromLibraryFolder\(it\)\) \{[\s\S]+await prepLocalPlayerSeasonEpisodes\(it\)/,
     'player episode guide/rail for local libraries lists on-disk episodes in the same show folder');
+  assert.match(ui, /function attachLibraryEpisodeFromShow\(show, item\)[\s\S]+function enrichLibraryEpisodeContext\(it\)[\s\S]+return attachLibraryEpisodeFromShow\(show, out\)/,
+    'TMDB detail episodes from a library show carry show-folder ids for local next episode');
   assert.match(ui, /async function saveWatch\(final, opts = \{\}\) \{[\s\S]+let pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5 && playedSeconds < 1\) return;[\s\S]+const nearEnd = isGenuineEpisodeEof\(p, pos, d\);[\s\S]+const watched = opts && opts\.watched != null \? !!opts\.watched : \(nearEnd \|\| !!\(p && p\._ended\)\);[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+watched, profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)/,
     'watch progress should save profile-scoped position immediately into the local cache and server (keepalive on final saves so close/pagehide flushes survive teardown), honoring a caller watched-override');
   assert.match(ui, /function flushPlaybackCheckpoints\(\) \{[\s\S]+if \(S\.playing\) saveWatch\(true\);[\s\S]+saveMultiViewVodProgress\(i, true\);[\s\S]+window\.__tvPlaybackBackgrounded = flushPlaybackCheckpoints;[\s\S]+window\.addEventListener\('pagehide', \(\) => \{[\s\S]+flushPlaybackCheckpoints\(\);[\s\S]+document\.addEventListener\('visibilitychange', \(\) => \{[\s\S]+document\.visibilityState === 'hidden'[\s\S]+flushPlaybackCheckpoints\(\);/,
@@ -1442,7 +1444,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'added-library cards should carry the full local player prep URL');
   assert.match(ui, /async function playLocal\(it, opts = \{\}\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+const body = \{ caps: clientCaps\(\), q: queryFor\(it\) \};[\s\S]+if \(ids\.season != null\) body\.season = ids\.season;[\s\S]+if \(ids\.ep != null\) body\.ep = ids\.ep;[\s\S]+await api\(it\._local\.playUrl, \{ method: 'POST', body \}\)[\s\S]+openPlayer\(it, \{ \.\.\.mount/,
     'added-library playback should use the same prepared player mount shape as Movies and TV while preserving subtitle episode context');
-  assert.match(ui, /async function playLocal\(it, opts = \{\}\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+if \(!opts\.replacementStarted\) \{[\s\S]+beginPlaybackTransition\(it, opts\);[\s\S]+openPlayer\(it, \{ \.\.\.mount/,
+  assert.match(ui, /async function playLocal\(it, opts = \{\}\) \{[\s\S]+it = enrichLibraryEpisodeContext\(resolvePlaybackResume\(it\)\);[\s\S]+if \(!opts\.replacementStarted\) \{[\s\S]+beginPlaybackTransition\(it, opts\);[\s\S]+openPlayer\(it, \{ \.\.\.mount/,
     'local library playback should resolve resume and leave details for the loading player before mount prep waits');
   assert.match(ui, /function mergeLocalItemsInto\(map, lib, items\) \{[\s\S]+playUrl: x\.playUrl[\s\S]+`tmdb:tv:\$\{x\.tmdbId\}:s\$\{x\.s\}e\$\{x\.e\}`[\s\S]+map\[key\] = rec;[\s\S]+function mergeLocalItems\(lib, items\) \{[\s\S]+S\.localMap = map/,
     'local library scans should hydrate episode keys into the local-first playback map');
@@ -1531,7 +1533,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the All-seasons tab opens the local season grid for local-only shows');
   assert.match(ui, /if \(it\._localShow && S\.localDetailEpisodes\) \{[\s\S]+markLocalEpisodeGroupWatched\(it, S\.localDetailEpisodes, nowWatched/,
     'the local-only show watched button should mark the show episode keys, not a container key');
-  assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+runtime: Number\(ep\.runtime\) \|\| 0,[\s\S]+const loc = S\.localMap && S\.localMap\[item\.key\];[\s\S]+return loc \? \{ \.\.\.item, _local: loc \} : item;/,
+  assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+runtime: Number\(ep\.runtime\) \|\| 0,[\s\S]+if \(loc\) out = \{ \.\.\.out, _local: loc \};[\s\S]+return attachLibraryEpisodeFromShow\(show, out\);/,
     'season episode cards should carry local playback when the episode exists in an added library');
   assert.match(ui, /\.seasonCard \.seasonYear\{[\s\S]+font:800 12px "JetBrains Mono"[\s\S]+border-radius:20px/,
     'TV detail season cards should show a readable season-year badge on the poster');
@@ -1561,7 +1563,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the web ⋯ buttons are hidden on TV (long-press OK is the TV path)');
   assert.match(ui, /if \(S\.view === 'detail'\) \{ if \(ret && ret\.isConnected\) applyFocus\(ret, false\); return; \}/,
     'closing the action menu on the detail page hands focus back to the cover it opened from');
-  assert.match(ui, /function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+const loc = S\.localMap && S\.localMap\[item\.key\];[\s\S]+return loc \? \{ \.\.\.item, _local: loc \} : item;/,
+  assert.match(ui, /function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+if \(loc\) out = \{ \.\.\.out, _local: loc \};[\s\S]+return attachLibraryEpisodeFromShow\(show, out\);/,
     'the main TV detail Play/Resume target should carry local playback for owned episodes');
   assert.match(ui, /function pickNextUp\(show, seasons\) \{[\s\S]+const localEpisodes = localEpisodesForShow\(show\);[\s\S]+if \(localEpisodes\.length\) \{[\s\S]+const nextLocal = localEpisodes\.find\(\(ep\) => !\(wm\[ep\.key\] && wm\[ep\.key\]\.watched\)\)[\s\S]+target: epTarget\(show, nextLocal\.s, nextLocal\.e, 0\)/,
     'matched local TV show Play should start from the next owned episode rather than a missing online source');
@@ -2277,7 +2279,7 @@ test('next-episode metadata cannot overwrite a newer player when requests resolv
   const updates = [];
   const prepNextEpisode = new Function('S', 'updateNextEpisodeButton', 'episodeKeyParts',
     'getPlayerEpisodeContext', 'api', 'epItemOf', 'preferredQualityRankForItem', 'ensureLocalPlaybackForItem',
-    'playingFromLibraryFolder', 'prepLocalLibraryNextEpisode',
+    'playingFromLibraryFolder', 'prepLocalLibraryNextEpisode', 'enrichLibraryEpisodeContext',
     // STILL_W is the DPI-aware episode-still size the helper now asks img() for.
     'img', 'pad2', 'STILL_W', `${ui.slice(start, end)}\nreturn prepNextEpisode;`)(
       S,
@@ -2290,6 +2292,7 @@ test('next-episode metadata cannot overwrite a newer player when requests resolv
       () => Promise.resolve(null),
       () => false,
       async () => false,
+      (it) => it,
       (value) => value || '',
       (n) => String(n).padStart(2, '0'),
       'w780');

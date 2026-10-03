@@ -7814,6 +7814,40 @@ function bindLibrarySource(it) {
   if (!it._local && hit._local) it._local = hit._local;
   return it;
 }
+function libraryShowIdx(show) {
+  if (!show) return null;
+  if (show._showOpen != null) return show._showOpen;
+  if (show._showIdx != null) return show._showIdx;
+  if (show._kind === 'show' && show._idx != null) return show._idx;
+  if (show._lib && show._lib.path && show._idx != null) return show._idx;
+  return null;
+}
+function attachLibraryEpisodeFromShow(show, item) {
+  if (!item || item.type !== 'episode' || !show) return item;
+  bindLibrarySource(show);
+  if (!show._lib || !show._lib.path) return item;
+  const showIdx = libraryShowIdx(show);
+  if (showIdx == null) return item;
+  return { ...item, _lib: show._lib, _showOpen: showIdx, _showIdx: showIdx };
+}
+function enrichLibraryEpisodeContext(it) {
+  if (!it || it.type !== 'episode') return it;
+  if (it._lib && it._lib.path && libraryShowIdx(it) != null) return it;
+  if (S.detailItem) {
+    const fromDetail = attachLibraryEpisodeFromShow(S.detailItem, it);
+    if (fromDetail._lib && libraryShowIdx(fromDetail) != null) return fromDetail;
+  }
+  const parts = episodeKeyParts(it);
+  const tmdbId = (parts && parts.tmdbId) || it.tmdbId;
+  if (tmdbId && S.libByTmdb) {
+    const hit = S.libByTmdb[`tv:${tmdbId}`];
+    if (hit && hit._lib && hit._lib.path) {
+      const showIdx = libraryShowIdx(hit);
+      if (showIdx != null) return { ...it, _lib: hit._lib, _showOpen: showIdx, _showIdx: showIdx };
+    }
+  }
+  return it;
+}
 // Web/touch affordance: a ⋯ button that opens the shared action menu. TV hides it (CSS) and uses
 // long-press OK instead, so this only ever adds a mouse/touch entry point to an existing menu.
 function attachCardMenuButton(card, host, it, onFocus) {
@@ -9405,6 +9439,7 @@ async function play(it, pick, opts = {}) {
 }
 async function playStart(it, pick, opts, playIntent) {
   it = resolvePlaybackResume(it);
+  it = enrichLibraryEpisodeContext(it);
   if (it.type === 'tv' && !episodeKeyParts(it)) {
     const early = earlyNextUpTarget(it);
     if (early) it = resolvePlaybackResume(early);
@@ -9797,8 +9832,10 @@ function epItemOf(show, season, ep) {
              !S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].watched)
       ? S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].position : 0,
   };
+  let out = item;
   const loc = S.localMap && S.localMap[item.key];
-  return loc ? { ...item, _local: loc } : item;
+  if (loc) out = { ...out, _local: loc };
+  return attachLibraryEpisodeFromShow(show, out);
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -9819,8 +9856,10 @@ function epTarget(show, sNum, eNum, resume) {
     year: show.year, genre: `S${pad2(sNum)}E${pad2(eNum)}`, rating: show.rating, overview: show.overview,
     backdrop: show.backdrop, poster: show.poster, qualityRank: preferredQualityRankForItem(show), resume: resume || 0,
   };
+  let out = item;
   const loc = S.localMap && S.localMap[item.key];
-  return loc ? { ...item, _local: loc } : item;
+  if (loc) out = { ...out, _local: loc };
+  return attachLibraryEpisodeFromShow(show, out);
 }
 function wlMeta(it) {
   return { title: it.title, year: it.year, genre: it.genre, rating: it.rating, type: it.type,
@@ -10087,6 +10126,10 @@ function loadDetailRelated(it, d, reqId) {
 async function openDetail(it, push = true, opts = {}) {
   if (!it) return;
   bindLibrarySource(it);
+  if (it.type === 'tv' && it._lib && it._lib.path) {
+    const showIdx = libraryShowIdx(it);
+    if (showIdx != null) { it._showOpen = showIdx; it._showIdx = showIdx; }
+  }
   if (!it.tmdbId || !['movie', 'tv'].includes(it.type)) return play(it); // non-TMDB cards play directly
   if (!push && S.view === 'detail' && $('detail').classList.contains('open') && sameDetailIdentity(S.detailItem, it)) {
     return; // Back from Person/Related already restored this title — do not rebuild at Play/top
@@ -10947,8 +10990,10 @@ function cacheLocalShowEpisodes(lib, showIdx, show, episodes) {
   S._localShowEpsCache[`${lib.id}:${showIdx}`] = { show: show || null, episodes: episodes || [] };
 }
 function localEpisodesFromFolderCache(show) {
-  if (!show || !show._lib || show._showOpen == null) return [];
-  const hit = S._localShowEpsCache && S._localShowEpsCache[`${show._lib.id}:${show._showOpen}`];
+  if (!show || !show._lib) return [];
+  const showIdx = libraryShowIdx(show);
+  if (showIdx == null) return [];
+  const hit = S._localShowEpsCache && S._localShowEpsCache[`${show._lib.id}:${showIdx}`];
   if (!hit || !hit.episodes.length) return [];
   const lib = show._lib;
   return hit.episodes.map((ep) => {
@@ -10985,7 +11030,8 @@ function localEpisodesForShow(show) {
   }).filter(Boolean).sort((a, b) => a.s - b.s || a.e - b.e);
 }
 function playingFromLibraryFolder(it) {
-  return !!(it && it._lib && it._lib.path && (it._showOpen != null || it._showIdx != null));
+  const ctx = enrichLibraryEpisodeContext(it);
+  return !!(ctx && ctx._lib && ctx._lib.path && libraryShowIdx(ctx) != null);
 }
 function localTitleHasPlayback(it) {
   if (!it) return false;
@@ -15685,6 +15731,7 @@ async function prepLocalPlayerSeasonEpisodes(it) {
   S.playerSeasonStrip = null;
   closePlayerEpisodes();
   updateNativeEpisodeChoices();
+  it = enrichLibraryEpisodeContext(it);
   if (!it || it.type !== 'episode' || !playingFromLibraryFolder(it)) return false;
   const token = (S._playerSeasonStripToken = (S._playerSeasonStripToken || 0) + 1);
   try {
@@ -16069,6 +16116,8 @@ async function prepNextEpisode(it) {
   S.nextEp = null; S.upNextShown = false; S.upNextDismissed = false; S.nextEpPrepared = false;
   updateNextEpisodeButton();
   if (!it || it.type !== 'episode' || !it.key) return;
+  it = enrichLibraryEpisodeContext(it);
+  if (S.playing && S.playing.item && S.playing.item.key === it.key) S.playing.item = it;
   const current = () => token === S._nextEpisodeToken
     && !!(S.playing && S.playing.item && S.playing.item.key === it.key);
   if (playingFromLibraryFolder(it)) {
@@ -21512,7 +21561,7 @@ $('matchCancel').addEventListener('click', () => closeMatchModal());
 // behavior as the main Movies/TV player.
 async function playLocal(it, opts = {}) {
   if (!it || !it._local || !it._local.streamUrl) return;
-  it = resolvePlaybackResume(it);
+  it = enrichLibraryEpisodeContext(resolvePlaybackResume(it));
   let nativeFirst = !!opts.nativeFirst;
   let playTicket = Number(opts.playTicket || 0);
   if (!opts.replacementStarted) {
