@@ -128,6 +128,21 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-03, v3.3.8 — Player Back, local next episode, and Jellyfin watched/favorite plus Loading card:
+
+- Example: you pause a local episode, hit Back, and land on that title’s page.
+  In the Jellyfin app, marking it watched stays open, and Play starts on a
+  Loading card instead of a black picture.
+- Clicking Continue on Home can still open the wrong local show when the
+  file is glued to the wrong match. That is not in this release.
+- Gate: `npm.cmd test` 845/845, fail 0, on the 3.3.8 tree (2026-10-03).
+  `verify:full` household VOD/IPTV/overlapping Play and Android ExoPlayer
+  stress were not run (no test login in this session). Windows GPU/HDR: not run.
+- Version contract: `package.json` 3.3.8; Android `versionName` 3.3.8 /
+  `versionCode` 411; Windows client package/Tauri/Cargo(.lock) 3.3.8.
+- This PC’s Windows service already reports 3.3.8. Live Unraid picks it up
+  from `ghcr.io/d1same/triboon:latest` after this tag’s image is published.
+
 2026-10-02, unshipped — Jellyfin Continue Watching sees the Triboon app profile:
 
 - Example: you pause a movie in the Triboon Android app under your named
