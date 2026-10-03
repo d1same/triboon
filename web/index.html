@@ -7075,7 +7075,8 @@ function buildCwItems(cw) {
     // overflowed every card and hero (resume position already encodes where you are).
     key: w.key, title: String(w.meta.title || w.key).replace(/\s*—\s*S\d+E\d+.*$/i, ''), year: w.meta.year || '', genre: w.meta.genre || '',
     rating: w.meta.rating || '—', overview: w.meta.overview || '',
-    tmdbId: w.meta.tmdbId, type: w.meta.type, q: w.meta.q, qualityRank: normalizeQualityRank(w.meta.qualityRank),
+    tmdbId: w.meta.tmdbId, type: w.meta.type || (w.meta._kind === 'movie' ? 'movie' : w.meta.type),
+    _kind: w.meta._kind, q: w.meta.q, qualityRank: normalizeQualityRank(w.meta.qualityRank),
     poster: poster || procBackdrop(280, 320, 5),
     backdrop: backdrop || procBackdrop(280, 320, 5),
     progress: w.duration ? w.position / w.duration : (w.traktPct || 0) / 100,
@@ -7707,7 +7708,7 @@ function removeContinueWatchingItem(it, snap) {
 }
 function showTitleFromEpisodeItem(it) {
   return String((it && it.title) || 'Show')
-    .replace(/\s*(?:(?:-|\u2013|\u2014)\s*)?S\d{1,2}E\d{1,3}.*$/i, '')
+    .replace(/\s*(?:[·•]\s*|(?:-|\u2013|\u2014)\s*)?S\d{1,2}E\d{1,3}.*$/i, '')
     .trim() || 'Show';
 }
 function detailTargetForItem(it) {
@@ -9863,6 +9864,7 @@ function epTarget(show, sNum, eNum, resume) {
 }
 function wlMeta(it) {
   return { title: it.title, year: it.year, genre: it.genre, rating: it.rating, type: it.type,
+    _kind: it._kind || it.kind || undefined,
     tmdbId: it.tmdbId, imdbId: it.imdbId, tvdbId: it.tvdbId,
     poster: durableArtUrl(it.poster), backdrop: durableArtUrl(it.backdrop), overview: it.overview, q: it.q, cert: it.cert,
     originalLanguage: it.originalLanguage, qualityRank: preferredQualityRankForItem(it) };
@@ -11378,6 +11380,14 @@ function focusRenderedDetailEpisode(parts, scroll = true) {
   retargetDetailFromEpisodeCard(card);
   scrollDetailRowIntoView(card);
   return true;
+}
+function closingEpisodeFocus(item) {
+  if (!item) return null;
+  const parts = episodeKeyParts(item);
+  const season = item.season != null ? +item.season : (parts && parts.season);
+  const episode = item.episode != null ? +item.episode : (parts && parts.episode);
+  if (!Number.isFinite(season) || !Number.isFinite(episode) || episode <= 0) return null;
+  return { season, episode };
 }
 async function focusDetailPlayEpisode(show, opts = {}) {
   const parts = detailPlayEpisodeParts();
@@ -16111,7 +16121,14 @@ async function prepLocalLibraryNextEpisode(it, token, current) {
     return true;
   } catch { return true; }
 }
-async function prepNextEpisode(it) {
+function prepNextEpisode(it) {
+  const job = prepNextEpisodeJob(it);
+  S._nextPrepPromise = job;
+  const clear = () => { if (S._nextPrepPromise === job) S._nextPrepPromise = null; };
+  job.then(clear, clear);
+  return job;
+}
+async function prepNextEpisodeJob(it) {
   const token = (S._nextEpisodeToken = (S._nextEpisodeToken || 0) + 1);
   S.nextEp = null; S.upNextShown = false; S.upNextDismissed = false; S.nextEpPrepared = false;
   updateNextEpisodeButton();
@@ -16299,15 +16316,39 @@ function finishEpisodeToNext() {
   armUpNextCountdown();
   return true;
 }
+async function ensureNextEpisode(it) {
+  if (S.nextEp) return true;
+  if (S._nextPrepPromise) {
+    try { await S._nextPrepPromise; } catch {}
+    if (S.nextEp) return true;
+  }
+  try { await prepNextEpisode(it); } catch {}
+  return !!S.nextEp;
+}
 function playNextEpisode() {
+  // A countdown tick and a remote Next can land in the same moment. The second one must
+  // not tear down the handoff the first one just started.
+  if (S._nextBusy) return;
   const ne = S.nextEp;
   if (!ne) {
-    toast('Next episode is still loading');
-    // Android already muted/stopped the remux and covered with Preparing.
-    // Leaving that screen up is the "stuck forever, force-close the app" bug.
-    closePlayer();
+    const it = S.playing && S.playing.item;
+    // Next is visible on Android before the next file is known. Wait for that lookup
+    // and play it. Closing here was the "Loading next episode" crash.
+    if (it && it.type === 'episode' && typeof ensureNextEpisode === 'function') {
+      S._nextBusy = true;
+      return ensureNextEpisode(it).then((found) => {
+        S._nextBusy = false;
+        if (found && S.nextEp) return playNextEpisode();
+        toast('No next episode');
+        const p = S.playing;
+        if (p && p.usingNative && p.item && p.item.key === it.key) play(p.item, null, { directHandoff: true, why: 'next' });
+      }).catch(() => { S._nextBusy = false; });
+    }
+    toast('No next episode');
     return;
   }
+  S._nextBusy = true;
+  setTimeout(() => { S._nextBusy = false; }, 1500);
   // Consume the exact handoff synchronously. A final interval tick, manual click, and media-ended
   // callback can already be queued together; only the first may start/mount this episode.
   S.nextEp = null;
@@ -16801,18 +16842,63 @@ async function saveWatch(final, opts = {}) {
   return job;
 }
 function playbackFinishedDetailTarget(item) {
-  if (!item || !item.tmdbId) return null;
-  if (item.type === 'movie') return { ...item, key: item.key || `tmdb:movie:${item.tmdbId}`, type: 'movie' };
-  if (item.type === 'tv') return { ...item, key: item.key || `tmdb:tv:${item.tmdbId}`, type: 'tv' };
-  if (item.type === 'episode') {
-    const title = String(item.title || '').replace(/\s+-\s+S\d+E\d+.*$/i, '').replace(/\s+S\d+E\d+.*$/i, '').trim() || 'Show';
+  if (!item) return null;
+  const key = String(item.key || '');
+  const epKey = /^tmdb:tv:(\d+):s\d+e\d+$/i.exec(key);
+  let type = item.type;
+  let tmdbId = item.tmdbId;
+  if (!type && epKey) type = 'episode';
+  if (epKey && !tmdbId) tmdbId = +epKey[1];
+  // A scanned library episode is saved as local:<lib>:<idx> with the show's tmdb id and no type.
+  // Back from Continue Watching used to miss that and land on Home.
+  // A custom movie in the same library has no episode number. Do not send it to a show page.
+  if (!type && (item._kind === 'movie' || item.kind === 'movie')) type = 'movie';
+  if (!type && tmdbId && /^local:/i.test(key) && item._kind !== 'movie' && item.kind !== 'movie') type = 'episode';
+  if (!tmdbId) return null;
+  if (type === 'movie') return { ...item, key: item.key || `tmdb:movie:${tmdbId}`, type: 'movie', tmdbId };
+  if (type === 'tv') return { ...item, key: item.key || `tmdb:tv:${tmdbId}`, type: 'tv', tmdbId };
+  if (type === 'episode') {
+    const title = showTitleFromEpisodeItem({ ...item, tmdbId });
     return {
       ...item,
-      key: `tmdb:tv:${item.tmdbId}`,
+      key: `tmdb:tv:${tmdbId}`,
       type: 'tv',
+      tmdbId,
       title,
       resume: 0,
     };
+  }
+  return null;
+}
+// Unmatched library files have no tmdb id, so the show/movie page has to come from the scan row.
+async function localContinueDetailTarget(item) {
+  const key = String(item && item.key || '');
+  const m = /^local:([^:]+):(\d+)$/i.exec(key);
+  if (!m || playbackFinishedDetailTarget(item)) return null;
+  let row = null;
+  try {
+    const r = await api(`/api/libraries/local-lookup?${new URLSearchParams({ key })}`);
+    row = r && r.items && r.items[key];
+  } catch { return null; }
+  if (!row) return null;
+  const lib = (S.libraries || []).find((l) => l.id === m[1]) || { id: m[1], path: m[1], name: 'Library' };
+  if (row.kind === 'episode' && row.tmdbId) {
+    return playbackFinishedDetailTarget({ ...item, tmdbId: row.tmdbId, type: 'episode', key });
+  }
+  if (row.kind === 'episode' && row.showIdx != null) {
+    return {
+      localShow: {
+        title: showTitleFromEpisodeItem({ title: row.title || item.title }),
+        _lib: lib, _showOpen: row.showIdx, _idx: row.showIdx, _kind: 'show',
+        poster: item.poster, backdrop: item.backdrop, overview: item.overview || row.overview || '',
+        year: item.year || row.year || '', rating: item.rating || '—',
+      },
+    };
+  }
+  if (row.kind === 'movie' && row.tmdbId) return playbackFinishedDetailTarget({ ...item, ...row, tmdbId: row.tmdbId, type: 'movie', key });
+  if (row.kind === 'movie' || row.kind === 'show') {
+    const mapped = mapLocal(lib, row);
+    return row.kind === 'show' ? { localShow: mapped } : { localMovie: mapped };
   }
   return null;
 }
@@ -16885,12 +16971,20 @@ async function closePlayer(opts = {}) {
     try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
     if (S.detailItem) syncDetailButtons(S.detailItem);
     applyPendingDetailNext();
-    if (S.detailItem && S.detailItem.type === 'tv' && S.detailSeason != null) openSeasonEpisodes(S.detailItem, S.detailSeason);
+    const playedEp = closingEpisodeFocus(closingItem);
+    if (S.detailItem && S.detailItem._localShow && playedEp) {
+      openLocalShowSeasonEpisodes(S.detailItem, playedEp.season, { focusEpisode: playedEp.episode });
+    } else if (S.detailItem && S.detailItem.type === 'tv' && S.detailSeason != null) {
+      openSeasonEpisodes(S.detailItem, S.detailSeason);
+    }
     // The player owns S.zone while open, so testing for a fictional "detail" zone stranded the
-    // focus ring on the now-hidden player. Always return to a visible primary detail action.
+    // focus ring on the now-hidden player. A local episode returns to THAT card. Play is the
+    // fallback when the episode row is not on screen.
     S.zone = '';
     requestAnimationFrame(() => {
-      if (S.view === 'detail' && $('detail').classList.contains('open')) applyFocus($('dPlay'));
+      if (!(S.view === 'detail' && $('detail').classList.contains('open'))) return;
+      if (S.detailItem && S.detailItem._localShow && playedEp && focusRenderedDetailEpisode(playedEp)) return;
+      applyFocus($('dPlay'));
     });
   } else if (finishedTarget) {
     S.playerReturn = null;
@@ -16930,6 +17024,26 @@ async function closePlayer(opts = {}) {
           if (S.detailItem.type === 'tv' && S.detailSeason != null) openSeasonEpisodes(S.detailItem, S.detailSeason);
         }
       })();
+      return;
+    }
+    // Same Back contract for a library file that has no TMDB page: the show or movie details,
+    // not Home. Hide Home first so the lookup does not flash the homepage.
+    const wantLocalDetail = (!ret.view || ret.view === 'home') && /^local:/i.test(String(closingItem && closingItem.key || ''));
+    if (wantLocalDetail) $('home').classList.remove('show');
+    const localDetail = wantLocalDetail ? await localContinueDetailTarget(closingItem) : null;
+    if (localDetail) {
+      S.playerReturn = null;
+      if (ret.homeFocus) {
+        S.detailReturn = {
+          view: 'home', homeFocus: ret.homeFocus, zone: ret.homeFocus.zone || 'rows',
+          rowIdx: ret.homeFocus.rowIdx || 0, colIdx: { ...(ret.homeFocus.colIdx || {}) },
+          heroIdx: ret.homeFocus.heroIdx || 0, rowScrollTop: ret.homeFocus.scrollTop || 0,
+        };
+      }
+      $('home').classList.remove('show');
+      if (localDetail.localShow) openLocalShowDetail(localDetail.localShow);
+      else if (localDetail.localMovie) openLocalDetail(localDetail.localMovie);
+      else openDetail(localDetail);
       return;
     }
     S.playerReturn = null;

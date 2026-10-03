@@ -609,9 +609,9 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'buildCwItems must filter the cached server next-up list through the local dismissal set so a removed next-up card does not reappear');
   assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+qualityRank: preferredQualityRankForItem\(show\)[\s\S]+function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+qualityRank: preferredQualityRankForItem\(show\)/,
     'episode targets created from details should inherit the current show quality preference');
-  assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
+  assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisodeJob\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
     'player episode strip and Up Next should continue the same 4K/1080p class');
-  assert.match(ui, /function playingFromLibraryFolder\(it\)[\s\S]+async function prepLocalLibraryNextEpisode\(it, token, current\)[\s\S]+localEpisodeItemOf\(localShowItemForEpisode\(it, ctx\), nextEp\)[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+if \(playingFromLibraryFolder\(it\)\)/,
+  assert.match(ui, /function playingFromLibraryFolder\(it\)[\s\S]+async function prepLocalLibraryNextEpisode\(it, token, current\)[\s\S]+localEpisodeItemOf\(localShowItemForEpisode\(it, ctx\), nextEp\)[\s\S]+async function prepNextEpisodeJob\(it\) \{[\s\S]+if \(playingFromLibraryFolder\(it\)\)/,
     'IR/local library Up Next must pick the next file in the same show folder, not TMDB prepare/usenet');
   assert.match(ui, /async function prepLocalPlayerSeasonEpisodes\(it\)[\s\S]+async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+if \(playingFromLibraryFolder\(it\)\) \{[\s\S]+await prepLocalPlayerSeasonEpisodes\(it\)/,
     'player episode guide/rail for local libraries lists on-disk episodes in the same show folder');
@@ -625,8 +625,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'returning from player to details should flush the final watch position (forcing watched when playback ENDED or _ended, even if the duration probe never landed) and refresh Play to the next episode');
   assert.match(ui, /function syncDetailButtons\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \} : \{ label: 'Play', target: it \}\);/,
     'detail button sync should recompute movie Resume/Play from the latest watch map');
-  assert.match(ui, /function playbackFinishedDetailTarget\(item\) \{[\s\S]+item\.type === 'movie'[\s\S]+item\.type === 'episode'[\s\S]+key: `tmdb:tv:\$\{item\.tmdbId\}`[\s\S]+type: 'tv'/,
+  assert.match(ui, /function playbackFinishedDetailTarget\(item\) \{[\s\S]+type === 'movie'[\s\S]+type === 'episode'[\s\S]+key: `tmdb:tv:\$\{tmdbId\}`[\s\S]+type: 'tv'/,
     'finished playback should resolve movies to movie details and final episodes to the show details page');
+  assert.match(ui, /function playbackFinishedDetailTarget\(item\) \{[\s\S]+item\._kind === 'movie' \|\| item\.kind === 'movie'\)\) type = 'movie'[\s\S]+\/\^local:\/i\.test\(key\) && item\._kind !== 'movie' && item\.kind !== 'movie'\) type = 'episode'/,
+    'Continue Watching back from a library episode with a show id opens the show page, and a custom movie stays a movie');
+  assert.match(ui, /const localDetail = wantLocalDetail \? await localContinueDetailTarget\(closingItem\) : null;[\s\S]+openLocalShowDetail\(localDetail\.localShow\)[\s\S]+openLocalDetail\(localDetail\.localMovie\)/,
+    'Continue Watching back from an unmatched library show or custom movie opens that title page instead of Home');
   // Trailers must be ACTUAL trailers: exact TMDB type Trailer/Teaser only, the NAME screened for
   // interview/featurette/BTS words (TMDB mislabels), official + real-Trailer preferred, and BOTH
   // pick sites (detail page + trailers row) share the one picker. Null beats playing an interview.
@@ -685,8 +689,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'closing a trailer during Play must not steal focus back to details');
   assert.match(ui, /function playNextEpisode\(\) \{[\s\S]+play\(ne\.item, null, \{ directHandoff: true, why: 'next' \}\)/,
     'Play Next keeps the player surface and joins the last-two-minute prepare');
-  assert.match(ui, /function playNextEpisode\(\) \{[\s\S]+if \(!ne\) \{[\s\S]+toast\('Next episode is still loading'\)[\s\S]+closePlayer\(\)/,
-    'Play Next with no next episode must leave Preparing instead of sitting there with credits audio');
+  assert.match(ui, /function playNextEpisode\(\) \{[\s\S]+if \(!ne\) \{[\s\S]+ensureNextEpisode\(it\)[\s\S]+toast\('No next episode'\)/,
+    'Play Next before the next file is known waits for it instead of closing the player');
   assert.match(ui, /const PLAY_NEXT_HANDOFF_MS = 50000;[\s\S]+function armPlayHandoffWatchdog\(playTicket\) \{[\s\S]+closePlayer\(\)[\s\S]+Next episode took too long/,
     'Play Next must give up on Preparing after 50s so the TV is not stuck until force-close');
   assert.match(ui, /if \(opts\.directHandoff\) armPlayHandoffWatchdog\(playTicket\);[\s\S]+finally \{[\s\S]+clearPlayHandoffWatchdog\(\)/,
@@ -2024,10 +2028,9 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   playNext();
   assert.deepStrictEqual(nextEvents.filter((event) => Array.isArray(event)), [
     ['play', 'tmdb:tv:9:s1e2', { directHandoff: true, why: 'next' }],
-    ['toast', 'Next episode is still loading'],
   ], 'queued EOF/countdown/manual triggers must consume one next episode and mount it only once');
-  assert.ok(nextEvents.includes('close'),
-    'a second Play Next with no next episode must leave Preparing instead of hanging');
+  assert.ok(!nextEvents.includes('close'),
+    'a second Play Next must not close the episode that just started');
 
   const openPlayerStart = ui.indexOf('async function openPlayer(');
   const webEndedStart = ui.indexOf('  v.onended = () => {', openPlayerStart);
@@ -2263,7 +2266,7 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
 
 test('next-episode metadata cannot overwrite a newer player when requests resolve out of order', async () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  const start = ui.indexOf('async function prepNextEpisode(it)');
+  const start = ui.indexOf('async function prepNextEpisodeJob(it)');
   const end = ui.indexOf('// Lead time before the episode end', start);
   assert.ok(start >= 0 && end > start, 'next-episode metadata helper should be extractable');
 
@@ -2281,7 +2284,7 @@ test('next-episode metadata cannot overwrite a newer player when requests resolv
     'getPlayerEpisodeContext', 'api', 'epItemOf', 'preferredQualityRankForItem', 'ensureLocalPlaybackForItem',
     'playingFromLibraryFolder', 'prepLocalLibraryNextEpisode', 'enrichLibraryEpisodeContext',
     // STILL_W is the DPI-aware episode-still size the helper now asks img() for.
-    'img', 'pad2', 'STILL_W', `${ui.slice(start, end)}\nreturn prepNextEpisode;`)(
+    'img', 'pad2', 'STILL_W', `${ui.slice(start, end)}\nreturn prepNextEpisodeJob;`)(
       S,
       () => updates.push(S.nextEp && S.nextEp.item && S.nextEp.item.key),
       (it) => ({ tmdbId: it.key, season: 1, episode: 1 }),
