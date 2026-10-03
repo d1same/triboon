@@ -116,6 +116,18 @@ function libraryNfoPrefersLocal(nfo, matchOverride) {
   return !!(nfo && !nfo.tmdbId);
 }
 
+/** Per-library scan: default auto; `local` skips TMDB search (folder/NFO only). */
+function libraryAutoTmdbMatch(lib) {
+  return !!(lib && lib.tmdbMatch !== 'local');
+}
+
+/** True when a scan row should not auto-bind or reuse TMDB (library-wide local mode). */
+function libraryScanUsesLocalMetaOnly(lib, matchOverride, nfoLocal) {
+  if (matchOverride === 'none' || nfoLocal) return true;
+  if (!libraryAutoTmdbMatch(lib)) return typeof matchOverride !== 'number';
+  return false;
+}
+
 function libraryItemMatchesTmdb(item) {
   if (!item || !item.tmdbId) return false;
   if (typeof item.matchOverride === 'number') return true;
@@ -265,6 +277,8 @@ module.exports = {
   libraryTitleMatches,
   pickLibraryTmdbHit,
   libraryNfoPrefersLocal,
+  libraryAutoTmdbMatch,
+  libraryScanUsesLocalMetaOnly,
   libraryItemMatchesTmdb,
   unboundLibraryItem,
   findLibraryArt,

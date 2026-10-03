@@ -4224,6 +4224,11 @@ body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
     </select>
     <label>Local path <span style="text-transform:none;color:var(--muted)">(optional)</span></label>
     <input id="libPath" placeholder="/media/movies — for a future local library">
+    <label id="libTmdbLabel" style="display:none">Metadata <span style="text-transform:none;color:var(--muted)">(local folders)</span></label>
+    <select id="libTmdbMatch" style="display:none">
+      <option value="auto">Auto-match TMDB (posters &amp; info)</option>
+      <option value="local">Folder &amp; NFO only — no TMDB search</option>
+    </select>
     <div id="libEditActions" class="libEditActions" style="display:none">
       <div class="hint" id="libEditActionsHint"></div>
       <div class="libEditActionBtns">
@@ -6813,12 +6818,17 @@ function continueWatchingCleanTitle(s) {
 function continueWatchingIdentity(it) {
   if (!it) return '';
   const key = String(it.key || '');
-  let m = /^tmdb:tv:(\d+):s\d+e\d+$/i.exec(key);
+  // Custom library rows must never merge by TMDB id alone — two folders can share a wrong match.
+  let m = /^local:([^:]+):(\d+)$/i.exec(key);
+  if (m) return `local:${m[1]}:${m[2]}`;
+  if (it._lib && it._lib.id != null && it._idx != null) return `local:${it._lib.id}:${it._idx}`;
+  m = /^tmdb:tv:(\d+):s\d+e\d+$/i.exec(key);
   if (m) return `tv:${m[1]}`;
   m = /^tmdb:tv:(\d+)$/i.exec(key);
   if (m) return `tv:${m[1]}`;
   m = /^tmdb:movie:(\d+)$/i.exec(key);
   if (m) return `movie:${m[1]}`;
+  if (/^local:/i.test(key)) return key ? `key:${key}` : '';
   if (it.tmdbId && (it.type === 'tv' || it.type === 'episode' || it._episode)) return `tv:${it.tmdbId}`;
   if (it.tmdbId && it.type === 'movie') return `movie:${it.tmdbId}`;
   const raw = String(it.title || it.q || (it._local && it._local.name) || key || '');
@@ -7069,8 +7079,7 @@ function buildCwItems(cw) {
     const art = freshLocalArtForKey(w.key);
     const poster = art.poster || repairWatchArtUrl(w.meta.poster) || repairWatchArtUrl(w.meta.backdrop);
     const backdrop = art.backdrop || repairWatchArtUrl(w.meta.backdrop) || repairWatchArtUrl(w.meta.poster);
-    const loc = S.localMap && S.localMap[w.key];
-    const item = {
+    let item = {
     // Continue Watching shows the SHOW title only — the "— S02E01 · Episode Name" tail
     // overflowed every card and hero (resume position already encodes where you are).
     key: w.key, title: String(w.meta.title || w.key).replace(/\s*—\s*S\d+E\d+.*$/i, ''), year: w.meta.year || '', genre: w.meta.genre || '',
@@ -7082,6 +7091,8 @@ function buildCwItems(cw) {
     progress: w.duration ? w.position / w.duration : (w.traktPct || 0) / 100,
     resume: w.position, _traktPct: w.traktPct || 0, _cw: true, _cwSortAt: w.updatedAt || 0,
     };
+    item = attachLocalWatchContext(item, w.key);
+    const loc = localPlaybackForItem(item);
     if (loc && loc.streamUrl) {
       item._local = { streamUrl: loc.streamUrl, playUrl: loc.playUrl, name: loc.name };
     }
@@ -7815,6 +7826,30 @@ function bindLibrarySource(it) {
   if (!it._local && hit._local) it._local = hit._local;
   return it;
 }
+function localLibraryRowFromKey(key) {
+  const m = /^local:([^:]+):(\d+)$/i.exec(String(key || ''));
+  if (!m) return null;
+  const libId = m[1], idx = +m[2];
+  const lib = (S.libraries || []).find((l) => l.id === libId);
+  if (!lib) return null;
+  const cached = S.libCache && S.libCache[libId];
+  const row = cached && cached.data && (cached.data.items || []).find((x) => x.idx === idx);
+  return { lib, row: row || null };
+}
+function attachLocalWatchContext(item, key) {
+  const hit = localLibraryRowFromKey(key || (item && item.key));
+  if (!hit || !hit.row) return item;
+  const row = hit.row;
+  const out = { ...item, _lib: hit.lib, _idx: row.idx, _kind: row.kind || item._kind };
+  if (row.kind === 'episode') {
+    out.type = out.type || 'episode';
+    out.season = out.season != null ? out.season : row.s;
+    out.episode = out.episode != null ? out.episode : row.e;
+    out.tmdbId = out.tmdbId || row.tmdbId;
+    if (row.showIdx != null) { out._showOpen = row.showIdx; out._showIdx = row.showIdx; }
+  }
+  return out;
+}
 function libraryShowIdx(show) {
   if (!show) return null;
   if (show._showOpen != null) return show._showOpen;
@@ -7834,6 +7869,8 @@ function attachLibraryEpisodeFromShow(show, item) {
 function enrichLibraryEpisodeContext(it) {
   if (!it || it.type !== 'episode') return it;
   if (it._lib && it._lib.path && libraryShowIdx(it) != null) return it;
+  const fromKey = attachLocalWatchContext(it, it.key);
+  if (fromKey._lib && fromKey._lib.path && libraryShowIdx(fromKey) != null) return fromKey;
   if (S.detailItem) {
     const fromDetail = attachLibraryEpisodeFromShow(S.detailItem, it);
     if (fromDetail._lib && libraryShowIdx(fromDetail) != null) return fromDetail;
@@ -9303,12 +9340,35 @@ function isPersonalLibraryWatchItem(it) {
   if (it.tmdbId) return false;
   return !!(it._local || (typeof isLocalLibraryTitle === 'function' && isLocalLibraryTitle(it)));
 }
+function localScopedTmdbMapKey(libId, tmdbKey) {
+  if (!libId || !tmdbKey) return '';
+  return `local:${libId}:${tmdbKey}`;
+}
 function localPlaybackForItem(it) {
   if (!it) return null;
-  return it._local || (S.localMap && it.key && S.localMap[it.key]) || null;
+  if (it._local && it._local.streamUrl) return it._local;
+  const key = String(it.key || '');
+  if (S.localMap && key && S.localMap[key]) return S.localMap[key];
+  const libId = it._lib && it._lib.id;
+  const parts = episodeKeyParts(it);
+  if (libId && parts) {
+    const scoped = localScopedTmdbMapKey(libId, `tmdb:tv:${parts.tmdbId}:s${parts.season}e${parts.episode}`);
+    if (S.localMap && S.localMap[scoped]) return S.localMap[scoped];
+  }
+  if (libId && it.type === 'movie' && it.tmdbId) {
+    const scoped = localScopedTmdbMapKey(libId, `tmdb:movie:${it.tmdbId}`);
+    if (S.localMap && S.localMap[scoped]) return S.localMap[scoped];
+  }
+  if (parts) {
+    const g = `tmdb:tv:${parts.tmdbId}:s${parts.season}e${parts.episode}`;
+    if (S.localMap && S.localMap[g]) return S.localMap[g];
+  }
+  if (it.type === 'movie' && it.tmdbId && S.localMap) return S.localMap[`tmdb:movie:${it.tmdbId}`] || null;
+  return null;
 }
 async function resumeContinueWatching(it) {
   if (!it) return;
+  it = enrichLibraryEpisodeContext(it);
   const loc = localPlaybackForItem(it);
   if (loc && loc.streamUrl) return playLocal({ ...it, _local: loc });
   // Do not await local-lookup here. play() already covers Home with the branded
@@ -10799,14 +10859,16 @@ function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
 }
 async function setLocalEpisodeWatched(item, watched, seasonNumber) {
   S.watchMap = S.watchMap || {};
-  if (watched) S.watchMap[item.key] = { watched: true, position: 0, duration: 0 };
+  const meta = wlMeta(item);
+  const row = { key: item.key, watched: !!watched, position: 0, duration: 0, meta, updatedAt: Date.now() };
+  if (watched) S.watchMap[item.key] = row;
   else delete S.watchMap[item.key];
   try {
     await trackWatchPost(api('/api/watch', { method: 'POST', body: {
       key: item.key, watched, unwatch: !watched || undefined, position: 0, duration: 0,
-      profile: S.profile ? S.profile.id : undefined, meta: wlMeta(item),
+      profile: S.profile ? S.profile.id : undefined, meta,
     } }));
-    invalidateWatchCache();
+    upsertWatchCache(row);
   } catch {}
   openLocalShowSeasonEpisodes(S.detailItem, seasonNumber);
   pickLocalShowPlayTarget(S.detailItem, S.localDetailEpisodes || []);
@@ -10825,7 +10887,12 @@ async function markLocalEpisodeGroupWatched(show, episodes, watched, msg) {
   });
   try {
     await api('/api/watch/bulk', { method: 'POST', body: { items, watched, profile: S.profile ? S.profile.id : undefined } });
-    invalidateWatchCache();
+    for (const ep of (episodes || [])) {
+      const item = localEpisodeItemOf(show, ep);
+      const meta = wlMeta(item);
+      if (watched) upsertWatchCache({ key: item.key, watched: true, position: 0, duration: 0, meta, updatedAt: Date.now() });
+      else removeWatchCacheKey(item.key);
+    }
   } catch {}
   $('dPlayed').classList.toggle('on', localEpisodeGroupWatched(S.localDetailEpisodes || []));
   if (S.detailSeason != null) openLocalShowSeasonEpisodes(show, S.detailSeason);
@@ -11001,7 +11068,8 @@ function localEpisodesFromFolderCache(show) {
   return hit.episodes.map((ep) => {
     const localKey = `local:${lib.id}:${ep.idx}`;
     const tmdbKey = ep.tmdbId ? `tmdb:tv:${ep.tmdbId}:s${ep.s}e${ep.e}` : '';
-    const loc = (S.localMap && (S.localMap[localKey] || (tmdbKey && S.localMap[tmdbKey]))) || null;
+    const scoped = tmdbKey ? localScopedTmdbMapKey(lib.id, tmdbKey) : '';
+    const loc = (S.localMap && (S.localMap[localKey] || (scoped && S.localMap[scoped]))) || null;
     return loc ? { key: localKey, s: ep.s, e: ep.e, loc } : null;
   }).filter(Boolean).sort((a, b) => a.s - b.s || a.e - b.e);
 }
@@ -16109,6 +16177,7 @@ async function prepLocalLibraryNextEpisode(it, token, current) {
     const nextEp = ctx.episodes[idx + 1];
     if (!current()) return true;
     const item = localEpisodeItemOf(localShowItemForEpisode(it, ctx), nextEp);
+    if (item.key === it.key || (it._idx != null && item._idx === it._idx)) return true;
     const inheritedQuality = preferredQualityRankForItem(it);
     if (inheritedQuality) item.qualityRank = inheritedQuality;
     S.nextEp = {
@@ -16340,8 +16409,6 @@ function playNextEpisode() {
         S._nextBusy = false;
         if (found && S.nextEp) return playNextEpisode();
         toast('No next episode');
-        const p = S.playing;
-        if (p && p.usingNative && p.item && p.item.key === it.key) play(p.item, null, { directHandoff: true, why: 'next' });
       }).catch(() => { S._nextBusy = false; });
     }
     toast('No next episode');
@@ -16354,6 +16421,11 @@ function playNextEpisode() {
   S.nextEp = null;
   updateNextEpisodeButton();
   hideUpNextUi();
+  const cur = S.playing && S.playing.item;
+  if (cur && ne.item && ne.item.key === cur.key) {
+    toast('No next episode');
+    return;
+  }
   play(ne.item, null, { directHandoff: true, why: 'next' });
 }
 $('unPlay').addEventListener('click', playNextEpisode);
@@ -21102,9 +21174,10 @@ function mergeLocalItemsInto(map, lib, items) {
     };
     const localKey = lib && lib.id ? `local:${lib.id}:${x.idx}` : '';
     if (localKey) map[localKey] = rec;
-    if (!x.tmdbId) continue;
+    if (!x.tmdbId || !lib || !lib.id) continue;
     const key = x.kind === 'episode' ? `tmdb:tv:${x.tmdbId}:s${x.s}e${x.e}` : `tmdb:movie:${x.tmdbId}`;
-    map[key] = rec;
+    map[localScopedTmdbMapKey(lib.id, key)] = rec;
+    if (!map[key]) map[key] = rec;
   }
   return map;
 }
@@ -21134,6 +21207,7 @@ function localLookupKeysForItem(it) {
   const keys = [];
   const tmdb = localLookupKeyForItem(it);
   if (tmdb) keys.push(tmdb);
+  if (it && it._lib && it._lib.id && tmdb) keys.push(localScopedTmdbMapKey(it._lib.id, tmdb));
   if (it && it.key) keys.push(String(it.key));
   return [...new Set(keys.filter(Boolean))];
 }
@@ -21791,11 +21865,15 @@ async function deleteLibrary(lib) {
 $('railAddLib').addEventListener('click', () => { collapseRailAfterClick(); openLibModal(null); });
 // Create OR edit (pass an existing library to edit it).
 function updateLibEditActions(lib) {
-  const local = !!(lib && lib.id && lib.path);
-  $('libEditActions').style.display = local ? '' : 'none';
-  $('libEditActionsHint').textContent = local
+  const pathVal = ($('libPath').value || '').trim();
+  const hasPath = !!pathVal;
+  const localSaved = !!(lib && lib.id && lib.path);
+  $('libEditActions').style.display = localSaved ? '' : 'none';
+  $('libEditActionsHint').textContent = localSaved
     ? 'Scan the saved folder now. Save changes first if you edited the path or sharing.'
     : '';
+  $('libTmdbLabel').style.display = hasPath ? '' : 'none';
+  $('libTmdbMatch').style.display = hasPath ? '' : 'none';
 }
 async function openLibModal(lib) {
   const reqId = S.libModalReq = (S.libModalReq || 0) + 1;
@@ -21809,6 +21887,7 @@ async function openLibModal(lib) {
   $('libType').value = lib ? (lib.kind || lib.mediaType) : 'movie';
   $('libIcon').value = lib ? (lib.icon || 'auto') : 'auto';
   $('libPath').value = lib ? (lib.path || '') : '';
+  $('libTmdbMatch').value = (lib && lib.tmdbMatch === 'local') ? 'local' : 'auto';
   $('libSort').value = lib ? (lib.sort || 'popularity.desc') : 'popularity.desc';
   updateLibEditActions(lib);
   await fillLibGenres();
@@ -21845,6 +21924,7 @@ function closeLibModal(opts = {}) {
   S.libModalReq = (S.libModalReq || 0) + 1;
   closeFocusOverlay('libModal', 'libModal', opts);
 }
+$('libPath').addEventListener('input', () => updateLibEditActions(S.editingLib));
 $('libType').addEventListener('change', fillLibGenres);
 $('libCancel').addEventListener('click', () => closeLibModal());
 $('libModal').addEventListener('click', (e) => { if (e.target.id === 'libModal') closeLibModal(); });
@@ -21862,10 +21942,12 @@ $('libMetaNow').addEventListener('click', () => {
 });
 $('libCreate').addEventListener('click', async () => {
   const name = $('libName').value.trim(); if (!name) return;
+  const path = $('libPath').value.trim() || null;
   const body = {
     name, kind: $('libType').value, genreId: $('libGenre').value || null, sort: $('libSort').value,
-    path: $('libPath').value.trim() || null, icon: $('libIcon').value,
+    path, icon: $('libIcon').value,
     users: [...document.querySelectorAll('#libUsers input:checked')].map((i) => i.dataset.uid),
+    ...(path ? { tmdbMatch: $('libTmdbMatch').value === 'local' ? 'local' : 'auto' } : {}),
   };
   try {
     if (S.editingLib) await api('/api/libraries/' + S.editingLib.id, { method: 'PATCH', body });

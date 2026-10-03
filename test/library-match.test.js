@@ -10,6 +10,8 @@ const {
   libraryTitleMatches,
   pickLibraryTmdbHit,
   libraryNfoPrefersLocal,
+  libraryAutoTmdbMatch,
+  libraryScanUsesLocalMetaOnly,
   libraryItemMatchesTmdb,
   unboundLibraryItem,
   findLibraryArt,
@@ -111,6 +113,17 @@ test('stored TMDB ids are unbound when the file/folder title does not describe t
     year: 2025, file: doSagFile,
   };
   assert.strictEqual(libraryItemMatchesTmdb(originalOk), true);
+});
+
+test('per-library tmdbMatch local skips auto TMDB except admin numeric picks', () => {
+  const persian = { id: 'abc', tmdbMatch: 'local' };
+  assert.strictEqual(libraryAutoTmdbMatch(persian), false);
+  assert.strictEqual(libraryAutoTmdbMatch({ tmdbMatch: 'auto' }), true);
+  assert.strictEqual(libraryAutoTmdbMatch({}), true, 'missing field stays auto');
+  assert.strictEqual(libraryScanUsesLocalMetaOnly(persian, undefined, false), true);
+  assert.strictEqual(libraryScanUsesLocalMetaOnly(persian, 999001, false), false,
+    'Fix TMDB match still allowed on a local-only library');
+  assert.strictEqual(libraryScanUsesLocalMetaOnly({ tmdbMatch: 'auto' }, undefined, false), false);
 });
 
 test('NFO without a TMDB id stays on folder info and does not search Hollywood', () => {

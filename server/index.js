@@ -16,7 +16,7 @@ const { Store, VerdictCache, scrubOrphanTempDirs } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
-const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt } = require('./library-match');
+const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryAutoTmdbMatch, libraryScanUsesLocalMetaOnly, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
@@ -6613,6 +6613,7 @@ const H = {
       path: b.path ? String(b.path).slice(0, 300) : null, // local folder → scannable
       icon: ICONS.includes(b.icon) ? b.icon : 'auto',     // rail icon (auto = derive from kind)
       users: Array.isArray(b.users) ? b.users.map(String).slice(0, 100) : [], // empty = everyone
+      tmdbMatch: b.tmdbMatch === 'local' ? 'local' : 'auto', // local folder only; smart views ignore
     };
     store.update('libraries', { list: [] }, (s) => { s.list.push(lib); return s; });
     send(ctx.res, 200, lib);
@@ -7514,6 +7515,7 @@ const H = {
       if (b.path !== undefined) lib.path = b.path ? String(b.path).slice(0, 300) : null;
       if (b.icon !== undefined) lib.icon = ['auto', 'movie', 'tv', 'star', 'heart', 'fire', 'sparkle'].includes(b.icon) ? b.icon : 'auto';
       if (b.users !== undefined) lib.users = Array.isArray(b.users) ? b.users.map(String).slice(0, 100) : [];
+      if (b.tmdbMatch !== undefined) lib.tmdbMatch = b.tmdbMatch === 'local' ? 'local' : 'auto';
       updated = lib;
       return s;
     });
@@ -7612,11 +7614,14 @@ async function performScan(lib, state, mode = 'scan') {
     // mode 'metadata' ignores the match cache (fresh lookups) but still preserves addedAt.
     const prevItems = (libraryRecord(lib.id) || { items: [] }).items;
     const prevBy = new Map(prevItems.map((it) => [it.kind === 'show' ? `show:${it.dir || ''}` : it.file, it]));
+    const autoTmdb = libraryAutoTmdbMatch(lib) && !wantAudio && lib.kind !== 'other' && lib.kind !== 'sports';
     const reuse = (key) => {
       const p = prevBy.get(key);
       if (mode === 'metadata' || !p || !p.tmdbId) return null;
+      if (typeof p.matchOverride === 'number') return p;
+      if (!autoTmdb) return null;
       // Stale first-hit TMDB ids (Do Sag → Return of the King) must be looked up again.
-      if (typeof p.matchOverride !== 'number' && !libraryItemMatchesTmdb(p)) return null;
+      if (!libraryItemMatchesTmdb(p)) return null;
       return p;
     };
     // Admin match override (set via POST /api/libraries/:id/match), carried across scans:
@@ -7678,7 +7683,7 @@ async function performScan(lib, state, mode = 'scan') {
         return hit;
       } catch { return null; }
     };
-    const wantTmdb = !wantAudio && lib.kind !== 'other' && lib.kind !== 'sports';
+    const wantTmdb = autoTmdb;
     const pushItem = (base) => { base.idx = items.length; items.push(base); return base; };
     // TMDB lookups are queued and run in PARALLEL BATCHES after the walk — a 2000-title
     // library scans in seconds of disk walk + lookups at 6-wide instead of one-at-a-time.
@@ -7708,8 +7713,9 @@ async function performScan(lib, state, mode = 'scan') {
       const ov = ovOf(best.file);
       if (ov !== undefined) item.matchOverride = ov;
       const nfoLocal = libraryNfoPrefersLocal(nfo, ov);
-      const prev = (ov === 'none' || nfoLocal) ? null : reuse(best.file);
-      if (ov === 'none' || nfoLocal) { item.tmdbId = null; item.poster = null; item.backdrop = null; }
+      const localMeta = libraryScanUsesLocalMetaOnly(lib, ov, nfoLocal);
+      const prev = localMeta ? null : reuse(best.file);
+      if (localMeta) { item.tmdbId = null; item.poster = null; item.backdrop = null; }
       else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
         item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
         item.genres = prev.genres || [];
@@ -7743,8 +7749,9 @@ async function performScan(lib, state, mode = 'scan') {
       const ovS = ovOf(`show:${dir}`);
       if (ovS !== undefined) show.matchOverride = ovS;
       const nfoLocalShow = libraryNfoPrefersLocal(nfo, ovS);
-      const prevShow = (ovS === 'none' || nfoLocalShow) ? null : reuse(`show:${dir}`);
-      if (ovS === 'none' || nfoLocalShow) { show.tmdbId = null; show.poster = null; show.backdrop = null; }
+      const localMetaShow = libraryScanUsesLocalMetaOnly(lib, ovS, nfoLocalShow);
+      const prevShow = localMetaShow ? null : reuse(`show:${dir}`);
+      if (localMetaShow) { show.tmdbId = null; show.poster = null; show.backdrop = null; }
       else if (prevShow && (typeof ovS !== 'number' || prevShow.tmdbId === ovS)) {
         show.tmdbId = prevShow.tmdbId; show.poster = prevShow.poster; show.backdrop = prevShow.backdrop;
         show.genres = prevShow.genres || [];
@@ -7808,8 +7815,9 @@ async function performScan(lib, state, mode = 'scan') {
             genres: [], addedAt: addedAtOf(full, full) });
           const ov = ovOf(full);
           if (ov !== undefined) item.matchOverride = ov;
-          const prev = ov === 'none' ? null : reuse(full);
-          if (ov === 'none') { item.tmdbId = null; item.poster = null; item.backdrop = null; }
+          const localMetaLoose = libraryScanUsesLocalMetaOnly(lib, ov, false);
+          const prev = localMetaLoose ? null : reuse(full);
+          if (localMetaLoose) { item.tmdbId = null; item.poster = null; item.backdrop = null; }
           else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
             item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
             item.genres = prev.genres || []; item.title = prev.title;

@@ -571,8 +571,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching cards should carry the saved quality rank from watch state');
   assert.match(ui, /const meta = wlMeta\(p\.item\);[\s\S]+meta, \/\/ episodes resume \+ reopen/,
     'watch progress should save sanitized metadata, including the current quality rank, through the shared watchlist meta helper');
-  assert.match(ui, /function continueWatchingIdentity\(it\) \{[\s\S]+\^tmdb:tv:\(\\d\+\):s\\d\+e\\d\+\$[\s\S]+return `tv:\$\{m\[1\]\}`[\s\S]+\^tmdb:movie:\(\\d\+\)\$[\s\S]+return `movie:\$\{m\[1\]\}`/,
-    'Continue Watching should canonicalize movies and all episodes of a show before row rendering');
+  assert.match(ui, /function continueWatchingIdentity\(it\) \{[\s\S]+\^local:\(\[\^:\]\+\):\(\\d\+\)\$[\s\S]+return `local:\$\{m\[1\]\}:\$\{m\[2\]\}`[\s\S]+\^tmdb:tv:\(\\d\+\):s\\d\+e\\d\+\$[\s\S]+return `tv:\$\{m\[1\]\}`[\s\S]+\^tmdb:movie:\(\\d\+\)\$[\s\S]+return `movie:\$\{m\[1\]\}`/,
+    'Continue Watching should keep custom-library rows on their file key, and merge usenet rows by TMDB');
+  assert.match(ui, /function localPlaybackForItem\(it\) \{[\s\S]+if \(S\.localMap && key && S\.localMap\[key\]\) return S\.localMap\[key\];[\s\S]+localScopedTmdbMapKey/,
+    'local playback resolves the exact library file before any shared TMDB alias');
+  assert.match(ui, /async function resumeContinueWatching\(it\) \{[\s\S]+enrichLibraryEpisodeContext\(it\)[\s\S]+localPlaybackForItem\(it\)/,
+    'Continue Watching resume re-attaches library folder context before play');
   assert.match(ui, /function mergeContinueWatchingItem\(a, b\) \{[\s\S]+preferContinueWatchingItem\(a, b\)[\s\S]+normalizeQualityRank\(keep\.qualityRank\)[\s\S]+merged\._cwSortAt = Math\.max/,
     'Continue Watching canonical merges should prefer active/recent cards while preserving quality');
   assert.match(ui, /function buildCwItems\(cw\) \{[\s\S]+const seen = new Set\(items\.map\(\(it\) => continueWatchingIdentity\(it\) \|\| it\.key\)\)[\s\S]+return dedupeContinueWatchingItems\(items\)\.sort\(compareContinueWatchingItems\);/,
@@ -1454,8 +1458,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local library scans should hydrate episode keys into the local-first playback map');
   assert.match(ui, /<div id="libEditActions" class="libEditActions" style="display:none">[\s\S]+id="libScanNow"[\s\S]+id="libMetaNow"/,
     'the added-library edit panel should expose scan and metadata-refresh actions');
-  assert.match(ui, /function updateLibEditActions\(lib\) \{[\s\S]+lib && lib\.id && lib\.path[\s\S]+style\.display = local \? '' : 'none'[\s\S]+Save changes first if you edited the path or sharing/,
-    'scan actions should only show for saved local-folder libraries and warn about unsaved edits');
+  assert.match(ui, /function updateLibEditActions\(lib\) \{[\s\S]+localSaved = !!\(lib && lib\.id && lib\.path\)[\s\S]+libEditActions[\s\S]+Save changes first if you edited the path or sharing[\s\S]+libTmdbMatch[\s\S]+hasPath/,
+    'scan actions should only show for saved local-folder libraries; TMDB mode shows when a path is set');
+  assert.match(ui, /id="libTmdbMatch"[\s\S]+Folder &amp; NFO only — no TMDB search/,
+    'local libraries can opt out of TMDB matching per library');
   assert.match(ui, /\$\('libScanNow'\)\.addEventListener\('click', \(\) => \{[\s\S]+scanLibrary\(lib, 'scan'\)[\s\S]+\$\('libMetaNow'\)\.addEventListener\('click', \(\) => \{[\s\S]+scanLibrary\(lib, 'metadata'\)/,
     'edit-panel scan buttons should reuse the existing library scan API paths');
   assert.match(ui, /function localEpisodesForShow\(show\) \{[\s\S]+new RegExp\(`\^tmdb:tv:\$\{show\.tmdbId\}:s[\s\S]+Object\.keys\(S\.localMap\)[\s\S]+sort\(\(a, b\) => a\.s - b\.s \|\| a\.e - b\.e\)/,
@@ -1622,7 +1628,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'watch metadata should not persist tokenized local artwork URLs that will expire');
   assert.match(ui, /const art = freshLocalArtForKey\(w\.key\);[\s\S]+poster: poster \|\| procBackdrop[\s\S]+backdrop: backdrop \|\| procBackdrop/,
     'Continue Watching should rehydrate fresh local artwork before falling back');
-  assert.match(ui, /const loc = S\.localMap && S\.localMap\[w\.key\];[\s\S]+item\._local = \{ streamUrl: loc\.streamUrl, playUrl: loc\.playUrl, name: loc\.name \}/,
+  assert.match(ui, /item = attachLocalWatchContext\(item, w\.key\);[\s\S]+const loc = localPlaybackForItem\(item\);[\s\S]+item\._local = \{ streamUrl: loc\.streamUrl, playUrl: loc\.playUrl, name: loc\.name \}/,
     'Continue Watching attaches the personal-library stream so a click does not usenet-search');
   assert.match(ui, /function paintHomeWatchNow\(opts = \{\}\) \{\s*if \(S\.view !== 'home'\) return;/,
     'watch saves immediately repaint Home Continue Watching without an app restart');
@@ -8707,9 +8713,11 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
     'tmdbLookup folds the year back into the query when the year-filtered search misses');
   assert.match(server, /pickLibraryTmdbHit\(/,
     'library TMDB search verifies the hit title against the folder/file name');
-  assert.match(server, /const nfoLocal = libraryNfoPrefersLocal\(nfo, ov\);[\s\S]+const prev = \(ov === 'none' \|\| nfoLocal\) \? null : reuse\(best\.file\);[\s\S]+if \(ov === 'none' \|\| nfoLocal\) \{ item\.tmdbId = null/,
+  assert.match(libraryMatch, /function libraryAutoTmdbMatch\(lib\)/,
+    'libraries can disable auto TMDB matching without affecting other libraries');
+  assert.match(server, /const nfoLocal = libraryNfoPrefersLocal\(nfo, ov\);[\s\S]+const localMeta = libraryScanUsesLocalMetaOnly\(lib, ov, nfoLocal\);[\s\S]+const prev = localMeta \? null : reuse\(best\.file\);[\s\S]+if \(localMeta\) \{ item\.tmdbId = null/,
     'a movie NFO without a TMDB uniqueid stays on folder info and does not reuse a Hollywood id');
-  assert.match(server, /const nfoLocalShow = libraryNfoPrefersLocal\(nfo, ovS\);[\s\S]+if \(ovS === 'none' \|\| nfoLocalShow\) \{ show\.tmdbId = null/,
+  assert.match(server, /const nfoLocalShow = libraryNfoPrefersLocal\(nfo, ovS\);[\s\S]+const localMetaShow = libraryScanUsesLocalMetaOnly\(lib, ovS, nfoLocalShow\);[\s\S]+if \(localMetaShow\) \{ show\.tmdbId = null/,
     'a tvshow.nfo without a TMDB uniqueid stays on folder info');
   assert.match(server, /if \(!\(nfo && nfo\.title\)\) item\.title = hit\.title \|\| hit\.name \|\| item\.title/,
     'TMDB must not overwrite an NFO title with a close English Hollywood name');
