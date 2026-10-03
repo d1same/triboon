@@ -9829,6 +9829,11 @@ Object.assign(H, {
     if (jellyfinPlaylist && (sess.duration || knownDur) >= 1 && /seg\d+\.m4s/.test(raw)) raw = fullTimelinePlaylist(raw, sess.duration || knownDur, 2);
     // The first answer was the Loading card. Keep those same pieces, then the
     // movie. Swapping piece 0 for the movie is the desktop "loading failed" dialog.
+    // Android TV opens a black picture while the first movie piece buffers.
+    // Put the Loading card in front even when those pieces are already named.
+    if (jellyfinPlaylist && sessionStart < 1 && !sess.loadHold && realPieces > 0 && await ensureResumePad()) {
+      sess.loadHold = 2;
+    }
     if (jellyfinPlaylist && sessionStart < 1 && sess.loadHold && /seg\d+\.m4s/.test(raw)) raw = pictureAfterLoadingCard(sess.loadHold, raw);
     // A growing list with no end is a live channel to the phone. It then sits
     // a few seconds from the newest piece and spins whenever that piece is

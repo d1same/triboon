@@ -186,6 +186,8 @@ test('jellyfin shows a Loading card instead of a frozen picture', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   assert.match(server, /loadingCardPng\(\)/);
   assert.doesNotMatch(server, /color=c=black:s=1280x720/);
+  assert.match(server, /sessionStart < 1 && !sess\.loadHold && realPieces > 0 && await ensureResumePad\(\)/,
+    'Android TV still gets the Loading card when the movie pieces are already named');
   const picture = '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:2.000,\nseg00000.m4s\n#EXT-X-ENDLIST\n';
   const joined = pictureAfterLoadingCard(2, picture);
   assert.ok(joined.indexOf('pad.m4s') >= 0 && joined.indexOf('pad.m4s') < joined.indexOf('seg00000.m4s'), 'the card stays piece 0 when the movie arrives');
@@ -654,7 +656,21 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(episodePoster.status, 200);
   assert.match(String(episodePoster.headers['x-triboon-poster'] || ''), /dayshow\.jpg/);
   const watchedEp = await httpSend(srv.port, 'POST', `/Users/${me.json.Id}/PlayedItems/${first.Id}`, { headers: { authorization: authz } });
+  assert.strictEqual(watchedEp.status, 200);
   assert.strictEqual(watchedEp.json.Played, true);
+  assert.match(String(watchedEp.json.ItemId || ''), /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, 'mark watched must hand back an id the TV app can read');
+  assert.strictEqual(typeof watchedEp.json.PlaybackPositionTicks, 'number');
+  assert.strictEqual(typeof watchedEp.json.UnplayedItemCount, 'number');
+  const seasons = await httpSend(srv.port, 'GET', `/Shows/${showShelf.json.Items[0].Id}/Seasons`, { headers: { authorization: authz } });
+  const season = (seasons.json.Items || [])[0];
+  assert.ok(season && season.Id, 'the show has a season to mark');
+  const watchedSeason = await httpSend(srv.port, 'POST', `/Users/${me.json.Id}/PlayedItems/${season.Id}`, { headers: { authorization: authz } });
+  assert.strictEqual(watchedSeason.status, 200, 'marking a season watched must not close the app');
+  assert.strictEqual(watchedSeason.json.Played, true);
+  const seasonHeart = await httpSend(srv.port, 'POST', `/Users/${me.json.Id}/FavoriteItems/${season.Id}`, { headers: { authorization: authz } });
+  assert.strictEqual(seasonHeart.status, 200, 'a season favorite must not close the app');
+  assert.strictEqual(seasonHeart.json.IsFavorite, true);
+  assert.strictEqual(seasonHeart.json.Played, true, 'favoriting keeps the watched mark');
   const nextUp = await httpSend(srv.port, 'GET', `/Shows/NextUp?UserId=${me.json.Id}`, { headers: { authorization: authz } });
   assert.strictEqual(nextUp.status, 200);
   const nextCard = nextUp.json.Items.find((row) => row.Id === second.Id);

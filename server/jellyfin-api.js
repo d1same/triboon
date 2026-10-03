@@ -1474,7 +1474,9 @@ function watchKeyFromId(id) {
   if (parsed.type === 'movie') return `tmdb:movie:${parsed.tmdbId}`;
   if (parsed.type === 'series') return `tmdb:tv:${parsed.tmdbId}`;
   if (parsed.type === 'episode') return `tmdb:tv:${parsed.tmdbId}:s${parsed.season}e${parsed.episode}`;
+  if (parsed.type === 'season') return `tmdb:tv:${parsed.tmdbId}:s${parsed.season}`;
   if (parsed.type === 'local') return `local:${parsed.libId}:${parsed.idx}`;
+  if (parsed.type === 'localseason') return `local:${parsed.libId}:${parsed.idx}:s${parsed.season}`;
   return '';
 }
 
@@ -1489,14 +1491,24 @@ function userDataFromRow(row, fallbackSeconds, itemId) {
     ? Math.round((position / duration) * 1000) / 10
     : (pct > 2 ? pct : (duration ? Math.round((position / duration) * 1000) / 10 : 0));
   const short = internalItemId(itemId);
+  const played = !!(row && row.watched);
+  let lastPlayed = null;
+  if (played) {
+    const at = new Date(row && row.updatedAt || Date.now());
+    lastPlayed = Number.isNaN(at.getTime()) ? new Date().toISOString() : at.toISOString();
+  }
+  // Android TV reads these as numbers. A missing one, or a 404 body, closes the app
+  // when you mark watched or favorite.
   return {
-    PlaybackPositionTicks: Math.round(clock * 10000000),
-    PlayedPercentage: playedPct,
-    PlayCount: row && row.watched ? 1 : 0,
+    PlaybackPositionTicks: Math.round(clock * 10000000) || 0,
+    PlayedPercentage: Number.isFinite(playedPct) ? playedPct : 0,
+    PlayCount: played ? 1 : 0,
     IsFavorite: !!(row && row.favorite),
-    Played: !!(row && row.watched),
-    Key: short,
-    ItemId: publicItemId(short),
+    Played: played,
+    UnplayedItemCount: played ? 0 : 1,
+    LastPlayedDate: lastPlayed,
+    Key: short || publicItemId(itemId),
+    ItemId: publicItemId(short || itemId),
   };
 }
 
@@ -2826,32 +2838,47 @@ async function handleKind(kind, ctx) {
     if (ctx.m && ctx.m[1] && !owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
     const itemId = ctx.m[2];
     const key = watchKeyFromId(itemId);
-    if (!key || typeof deps.jellyfinWatchSave !== 'function') return send(ctx.res, 404, { error: 'not found' }, cors);
-    const prev = (typeof deps.jellyfinWatchGet === 'function' && deps.jellyfinWatchGet(ctx, key)) || {};
-    const item = await itemById(itemId, ctx);
-    const duration = Number(prev.duration) || (item && item.RunTimeTicks ? Math.round(item.RunTimeTicks / 10000000) : 0);
-    const meta = { ...(prev.meta || {}) };
-    if (item && item.Name && !meta.title) meta.title = item.Name;
-    if (item && item.ProductionYear && !meta.year) meta.year = item.ProductionYear;
-    const patch = {
-      position: Number(prev.position) || 0,
-      duration,
-      favorite: !!prev.favorite,
-      watched: !!prev.watched,
-      meta,
+    const fallback = {
+      position: 0,
+      duration: 0,
+      favorite: kind === 'favorite',
+      watched: kind === 'played',
     };
-    if (kind === 'favorite') patch.favorite = true;
-    if (kind === 'unfavorite') patch.favorite = false;
-    if (kind === 'played') {
-      patch.watched = true;
-      if (duration) patch.position = duration;
+    if (kind === 'unfavorite') fallback.favorite = false;
+    if (kind === 'unplayed') fallback.watched = false;
+    try {
+      if (!key || typeof deps.jellyfinWatchSave !== 'function') {
+        return send(ctx.res, 200, userDataFromRow(fallback, 0, itemId), cors);
+      }
+      const prev = (typeof deps.jellyfinWatchGet === 'function' && deps.jellyfinWatchGet(ctx, key)) || {};
+      let item = null;
+      try { item = await itemById(itemId, ctx); } catch { item = null; }
+      const duration = Number(prev.duration) || (item && item.RunTimeTicks ? Math.round(item.RunTimeTicks / 10000000) : 0);
+      const meta = { ...(prev.meta || {}) };
+      if (item && item.Name && !meta.title) meta.title = item.Name;
+      if (item && item.ProductionYear && !meta.year) meta.year = item.ProductionYear;
+      const patch = {
+        position: Number(prev.position) || 0,
+        duration,
+        favorite: !!prev.favorite,
+        watched: !!prev.watched,
+        meta,
+      };
+      if (kind === 'favorite') patch.favorite = true;
+      if (kind === 'unfavorite') patch.favorite = false;
+      if (kind === 'played') {
+        patch.watched = true;
+        if (duration) patch.position = duration;
+      }
+      if (kind === 'unplayed') {
+        patch.watched = false;
+        patch.position = 0;
+      }
+      deps.jellyfinWatchSave(ctx, key, patch);
+      return send(ctx.res, 200, userDataFromRow({ ...prev, ...patch }, duration, itemId), cors);
+    } catch {
+      return send(ctx.res, 200, userDataFromRow(fallback, 0, itemId), cors);
     }
-    if (kind === 'unplayed') {
-      patch.watched = false;
-      patch.position = 0;
-    }
-    deps.jellyfinWatchSave(ctx, key, patch);
-    return send(ctx.res, 200, userDataFromRow({ ...prev, ...patch }, duration, itemId), cors);
   }
   if (kind === 'login') {
     const body = await readJson(ctx.req);
