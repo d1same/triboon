@@ -34,6 +34,8 @@ const CONNECT_BURST = 4;
 // While someone is watching, this many lines stay theirs. Other people's
 // read-ahead cannot sit on them. Auto-expand may add more lines above this.
 const VIEWER_LINE_RESERVE = 4;
+// Of a watcher's reserved lines, this many always stay idle for their next picture piece.
+const READ_AHEAD_PICTURE_SPARE = 2;
 
 function learnedConnectionLimit(e) {
   const m = /connection limit\s*\((\d+)\)/i.exec(String((e && e.message) || e || ''));
@@ -945,7 +947,8 @@ class ProviderPool {
         const held = this.household._ownedBy(task.viewer).filter((row) => row.c.hold).length;
         const playback = this._priorityRank(task.priority) <= this._priorityRank('playback');
         if (playback && !c.hold && held < reserve) c.hold = true;
-        if (!playback) c.hold = false;
+        // A reserved line borrowed by its own watcher's read-ahead stays reserved.
+        if (!playback && held > reserve) c.hold = false;
       }
     }
     const low = this._priorityRank(task.priority) >= this._priorityRank('readAhead');
@@ -1321,7 +1324,14 @@ class NntpPool {
       if (held < reserve) return true;
       return this._reserveDeficitExcept(me) === 0;
     }
-    if (conn.hold) return false;
+    if (conn.hold) {
+      // A share of exactly 4 has no expand lines, so read-ahead never ran and a fresh start
+      // fetched one piece at a time (Unraid Lanterns, 8s at 0:48 with 16 lines idle). Own
+      // reserved lines may read ahead while 2 stay free and no picture piece of mine waits.
+      if (conn.owner !== me || this._ownerWaiting(me)) return false;
+      const idleHeld = owned.filter(({ p, c }) => c.hold && !p.busy.has(c)).length;
+      return idleHeld > READ_AHEAD_PICTURE_SPARE;
+    }
     const lowBusy = owned.filter(({ p, c }) => p.busy.has(c) && !c.hold).length;
     if (lowBusy >= Math.max(0, lines - reserve)) return false;
     if (conn.owner === me) return true;

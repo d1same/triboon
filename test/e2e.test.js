@@ -1837,7 +1837,15 @@ test('nntp: auto-expand adds lines above the reserved 4 and does not give them a
     }
     const ahead = ids.slice(0, 4).map((id) => pool.body(id, 'readAhead', { viewer: 'A' }));
     await new Promise((r) => setTimeout(r, 200));
-    assert.equal(pool.stats().inUse, 0, 'read-ahead does not spend the reserved 4');
+    // Owner-approved 2026-10-04: a share of exactly 4 may read ahead on its own reserved lines,
+    // but 2 always stay free for the picture (Unraid Lanterns stalled with read-ahead locked out).
+    const aBusy = pool.providers.reduce((n, p) => n + p.conns.filter((c) => p.busy.has(c) && c.owner === 'A').length, 0);
+    assert.ok(aBusy >= 1 && aBusy <= 2, `read-ahead uses at most 2 of A's reserved 4 (${aBusy})`);
+    const bBusy = pool.providers.reduce((n, p) => n + p.conns.filter((c) => p.busy.has(c) && c.owner === 'B').length, 0);
+    assert.equal(bBusy, 0, "A's read-ahead never touches B's reserved lines");
+    const tPic = Date.now();
+    await pool.body(ids[5], 'playback', { viewer: 'A' });
+    assert.ok(Date.now() - tPic < RTT + 250, `A's own picture piece still found a free line (${Date.now() - tPic}ms)`);
     pool.setViewerShares([{ id: 'A', lines: 8 }, { id: 'B', lines: 4 }]);
     pool.setPlaybackOpenCap(12);
     const grew = Date.now() + 3000;

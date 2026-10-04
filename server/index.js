@@ -10403,11 +10403,14 @@ Object.assign(H, {
         vf._subSyncShift.delete(syncKey);
         vf._subSyncFail.delete(syncKey);
       }
+      // A new minute earns fresh tries, but a timeout and the per-mount total do not reset: each
+      // try takes long enough for playback to move 45s, so resetting on move retried forever
+      // (Unraid pulled a 30s audio sample every 30s for 15 minutes beside four viewers).
       const moved = vf._subSyncFail.get(syncKey);
-      if (moved && Math.abs((moved.atSec || 0) - atSec) > 45) vf._subSyncFail.delete(syncKey);
+      if (moved && !moved.timedOut && Math.abs((moved.atSec || 0) - atSec) > 45) vf._subSyncFail.set(syncKey, { ...moved, tries: 0, atSec });
       // Three failures stop it. Each try reads thirty seconds of audio again, so a subtitle that
       // cannot be aligned must not stay 'pending' and let the TV ask forever.
-      const syncTerminal = () => { const f = vf._subSyncFail.get(syncKey); return !!(f && (f.timedOut || f.tries >= 3)); };
+      const syncTerminal = () => { const f = vf._subSyncFail.get(syncKey); return !!(f && (f.timedOut || f.tries >= 3 || (f.total || 0) >= 6)); };
       if (syncTerminal()) {
         return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
           { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'failed' });
@@ -10442,13 +10445,18 @@ Object.assign(H, {
             .finally(() => vf._osInflight.delete(syncKey));
           vf._osInflight.set(syncKey, work);
         }
-        try { await vf._osInflight.get(syncKey); } catch (e) {
+        const attempt = vf._osInflight.get(syncKey);
+        try { await attempt; } catch (e) {
           const msg = String(e && e.message || e);
-          const prev = vf._subSyncFail.get(syncKey) || { tries: 0, timedOut: false, atSec };
-          vf._subSyncFail.set(syncKey, { tries: prev.tries + 1, timedOut: prev.timedOut || /timed out/i.test(msg), at: Date.now(), atSec });
-          capMap(vf._subSyncFail, 24);
-          console.error(`[subsync ${vf.id}] ${msg.slice(0, 160)}`);
-          story.noteMount(vf.id, `subtitle sync failed — ${msg.slice(0, 160)}`);
+          const prev = vf._subSyncFail.get(syncKey) || { tries: 0, total: 0, timedOut: false, atSec };
+          // Every waiter on one shared attempt lands here; count the attempt once.
+          if (prev.failedWork !== attempt) {
+            vf._subSyncFail.set(syncKey, { tries: prev.tries + 1, total: (prev.total || 0) + 1, failedWork: attempt,
+              timedOut: prev.timedOut || /timed out|took too long/i.test(msg), at: Date.now(), atSec });
+            capMap(vf._subSyncFail, 24);
+            console.error(`[subsync ${vf.id}] ${msg.slice(0, 160)}`);
+            story.noteMount(vf.id, `subtitle sync failed — ${msg.slice(0, 160)}`);
+          }
         }
       }
       const synced = vf._osCache.get(syncKey);
@@ -10466,7 +10474,7 @@ Object.assign(H, {
     const _sfAudio = Math.max(0, Math.min(15, parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0));
     const _sf = vf._subSyncFail.get(`${cacheKey}:synced:a${_sfAudio}`);
     const syncHdr = looksSynced ? 'synced'
-      : (_sf && (_sf.timedOut || _sf.tries >= 3)) ? 'failed'
+      : (_sf && (_sf.timedOut || _sf.tries >= 3 || (_sf.total || 0) >= 6)) ? 'failed'
       : (detectSubSync() && vf._subSyncState.has(cacheKey) ? 'pending' : 'unavailable');
     send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
       { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': syncHdr });

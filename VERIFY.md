@@ -128,6 +128,34 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-04, v3.3.13 — Read-ahead runs when every share is exactly 4, and a failing subtitle sync stops instead of looping:
+
+- Example: five people watch on Unraid 3.3.12. Each share is exactly 4 lines,
+  all reserved, so read-ahead had no line it was allowed to use. Lanterns
+  restarted from 0:02 and "buffered 8s at 0:48 — nothing ahead" with 16 lines
+  idle and 30 pieces waiting. Owner-approved rule change: a watcher's own
+  read-ahead may use their reserved lines while 2 stay idle and none of their
+  picture pieces is queued (`READ_AHEAD_PICTURE_SPARE`). Others still never
+  touch those lines. The auto-expand e2e test now asserts at most 2 of the 4
+  busy with read-ahead, none of B's lines, and A's next picture piece served in
+  one round trip.
+- Subtitle sync: one mount pulled a 30s audio sample from usenet every 30s
+  for ~15 minutes beside four viewers ("subtitle sync audio sample took too
+  long"). The timeout flag only matched "timed out", and moving the playhead
+  45s (one 90s try) reset the strike count. Now "took too long" is terminal
+  for that subtitle/audio track, a new minute resets only the short try count,
+  6 attempts per mount is a hard stop, and one shared attempt counts and logs
+  once.
+- Unraid 3.3.12 first ~25 min: 8 plays, starts 4-7s; one 3s buffer right
+  after the restart with all 8 lines busy on one account; the Lanterns stall
+  above. No "open lines, none busy, picture waiting" freeze.
+- Gate: `verify:full -SkipHouseholdLive` — Node 854/854, Android ExoPlayer
+  Live+VOD+CC PASS on the TV emulator; exit 1 only for the three household
+  live checks skipped on purpose (family watching on Unraid). Test service
+  stopped afterwards; 0 usenet lines on this PC.
+- Version contract: `package.json` 3.3.13; Android `versionName` 3.3.13 /
+  `versionCode` 416; Windows client package/Tauri/Cargo(.lock) 3.3.13.
+
 2026-10-04, v3.3.12 — The picture never waits on an idle line, one Continue Watching card per local show, and local covers in admin Now Watching:
 
 - Example: four people stream on Unraid 3.3.11. At 17:38 every account showed
