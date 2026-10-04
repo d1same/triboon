@@ -678,6 +678,9 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(nextCard.SeriesName, 'Day Show', 'Play Next says the show name');
   assert.strictEqual(nextCard.ParentIndexNumber, 1);
   assert.strictEqual(nextCard.IndexNumber, 2);
+  const homeNext = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items/Resume`, { headers: { authorization: authz } });
+  assert.ok(homeNext.json.Items.some((row) => row.Id === second.Id),
+    'finishing a custom-library episode puts the next one on Continue Watching');
   const pausedEp = await httpSend(srv.port, 'POST', '/Sessions/Playing/Progress', {
     headers: { authorization: authz, 'content-type': 'application/json' },
     body: JSON.stringify({ ItemId: second.Id, PositionTicks: 90 * 10000000 }),
@@ -882,6 +885,36 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(zebraResume.UserData.PlaybackPositionTicks, 90 * 10000000);
   assert.strictEqual(zebraResume.UserData.ItemId, zebraResume.Id);
   assert.match(zebraResume.UserData.Key, /^l[0-9a-f]{10}i3$/);
+  const sameA = await httpJson(srv.port, 'POST', '/api/watch', {
+    key: `local:${disk.json.id}:0`,
+    position: 50,
+    duration: 1000,
+    meta: { title: 'Same Name', type: 'movie', year: 2024 },
+  }, admin);
+  const sameB = await httpJson(srv.port, 'POST', '/api/watch', {
+    key: `local:${disk.json.id}:3`,
+    position: 80,
+    duration: 1000,
+    meta: { title: 'Same Name', type: 'movie', year: 2020 },
+  }, admin);
+  assert.strictEqual(sameA.status, 200);
+  assert.strictEqual(sameB.status, 200);
+  const keptApart = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items/Resume`, { headers: { authorization: authz } });
+  assert.ok(keptApart.json.Items.some((row) => row.Id === localId), 'a custom-library movie stays on Continue Watching');
+  assert.ok(keptApart.json.Items.some((row) => row.Name === 'Zebra'),
+    'two folder movies with the same saved title stay two Continue Watching cards');
+  const artStamp = (await httpJson(srv.port, 'GET', '/api/watch', null, admin)).json.find((row) => row.key === `local:${disk.json.id}:3`);
+  const artOnly = await httpJson(srv.port, 'POST', '/api/watch', {
+    key: `local:${disk.json.id}:3`,
+    position: 80,
+    duration: 1000,
+    artOnly: true,
+    meta: { title: 'Zebra', poster: 'https://image.tmdb.org/t/p/w780/zebra.jpg' },
+  }, admin);
+  assert.strictEqual(artOnly.status, 200);
+  const artAfter = (await httpJson(srv.port, 'GET', '/api/watch', null, admin)).json.find((row) => row.key === `local:${disk.json.id}:3`);
+  assert.strictEqual(artAfter.updatedAt, artStamp.updatedAt, 'fixing a thumbnail does not reshuffle Continue Watching');
+  assert.strictEqual(artAfter.meta.poster, 'https://image.tmdb.org/t/p/w780/zebra.jpg');
 
   const mountsBefore = srv.mounts.size;
   const live = await openJfSocket(srv.port, `/socket?api_key=${encodeURIComponent(token)}`);

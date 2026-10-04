@@ -128,6 +128,19 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-03, v3.3.9 — Continue Watching stays still, and each folder show stays its own card:
+
+- Example: you leave a movie. Home was redrawing Continue Watching over and over, and two folder movies saved under the same name could become one card. The covers stay put, and both movies stay on the row. Jellyfin shows the next episode of a folder show after you finish one.
+- Gate: `npm.cmd test` 846/846, fail 0, on the 3.3.9 tree (2026-10-03).
+  `verify:full` household VOD/IPTV/overlapping Play and Android ExoPlayer
+  stress were not run (no test login in this session, and the only ready
+  device was the guest-room Onn). Windows GPU/HDR: not run.
+- Version contract: `package.json` 3.3.9; Android `versionName` 3.3.9 /
+  `versionCode` 412; Windows client package/Tauri/Cargo(.lock) 3.3.9.
+- This PC’s Windows service stays on 3.3.8 until the tag is published.
+  Live Unraid picks it up from `ghcr.io/d1same/triboon:latest` after this
+  tag’s image is published.
+
 2026-10-03, v3.3.8 — Player Back, local next episode, and Jellyfin watched/favorite plus Loading card:
 
 - Example: you pause a local episode, hit Back, and land on that title’s page.

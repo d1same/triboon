@@ -5728,6 +5728,7 @@ const bgLazy = (() => {
   const load = (el) => {
     const u = el && el.dataset ? el.dataset.bg : '';
     if (!u) return;
+    el.dataset.art = u;
     el.style.backgroundImage = u;
     delete el.dataset.bg;
   };
@@ -6798,10 +6799,13 @@ async function backfillContinueWatchingArt(rows) {
           position: w.position || 0,
           duration: w.duration || 0,
           watched: !!w.watched,
+          artOnly: true,
           meta,
         },
       }));
-      upsertWatchCache({ ...w, meta, updatedAt: Date.now() });
+      // Keep the original clock. A fresh updatedAt jumped this show to the front and
+      // made Home throw away the next-episode list, so the row flashed and reshuffled.
+      upsertWatchCache({ ...w, meta, updatedAt: w.updatedAt || 0 });
       changed = true;
     } catch { /* next row */ }
   }
@@ -6809,11 +6813,18 @@ async function backfillContinueWatchingArt(rows) {
 }
 function continueWatchingCleanTitle(s) {
   return String(s || '').toLowerCase()
-    .replace(/\s*(?:-|\u2013|\u2014)\s*S\d{1,2}E\d{1,3}.*$/i, '')
-    .replace(/\b(2160p|1080p|720p|576p|480p|4k|uhd|hdr10?|dv|dolby\s*vision|web[-.\s]?dl|webrip|bluray|brrip|remux|x26[45]|h\.?26[45]|hevc|avc)\b/gi, ' ')
+    .replace(/\s*(?:-|\u2013|\u2014)\s*s\d{1,2}\s*e\d{1,3}.*$/i, '')
     .replace(/[._()[\]{}]+/g, ' ')
+    .replace(/\b(2160p|1080p|720p|576p|480p|4k|uhd|hdr10?|dv|dolby\s*vision|web[-.\s]?dl|webrip|bluray|brrip|remux|x26[45]|h\.?26[45]|hevc|avc)\b/gi, ' ')
+    .replace(/\bs\d{1,2}\s*e\d{1,3}\b.*$/i, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+function continueWatchingTitlesMatch(a, b) {
+  const left = continueWatchingCleanTitle(a);
+  const right = continueWatchingCleanTitle(b);
+  if (!left || !right) return true;
+  return left === right || left.startsWith(right) || right.startsWith(left);
 }
 function continueWatchingIdentity(it) {
   if (!it) return '';
@@ -6834,8 +6845,12 @@ function continueWatchingIdentity(it) {
   const raw = String(it.title || it.q || (it._local && it._local.name) || key || '');
   const clean = continueWatchingCleanTitle(raw);
   if (clean) {
-    const looksEpisode = it.type === 'episode' || it._episode || /\bS\d{1,2}E\d{1,3}\b/i.test(raw);
-    return `${looksEpisode ? 'tv' : (it.type || 'title')}:${clean}`;
+    const looksEpisode = it.type === 'episode' || it._episode || /\bs\d{1,2}\s*e\d{1,3}\b/i.test(raw);
+    const year = parseInt(it.year, 10);
+    // Same bare title in two years is two movies (Heat 1995 vs a later Heat).
+    // Episodes stay one card per show, so the year is not part of that key.
+    const yearBit = !looksEpisode && year >= 1900 && year <= 2100 ? `:${year}` : '';
+    return `${looksEpisode ? 'tv' : (it.type || 'title')}:${clean}${yearBit}`;
   }
   return key ? `key:${key}` : '';
 }
@@ -6905,7 +6920,10 @@ function nextEpisodeBumps(cw, cwItems) {
     if (hiddenNext.has(nextKey)) continue; // user dismissed this next-up suggestion
     const wn = (S.watchMap || {})[nextKey];
     if (wn && (wn.hidden || wn.watched || wn.position > 30)) continue; // hidden / seen / already in progress
-    const loc = S.localMap[nextKey], meta = top.w.meta || {};
+    const copies = localCopiesForTmdbKey(nextKey);
+    if (copies.length !== 1) continue; // two folders share this TMDB id — do not guess the wrong show
+    const loc = copies[0], meta = top.w.meta || {};
+    if (!continueWatchingTitlesMatch(meta.title, loc.name)) continue;
     out.push({
       key: nextKey, title: String(meta.title || loc.name).replace(/\s*—\s*S\d+E\d+.*$/i, ''),
       year: meta.year || '', genre: meta.genre || '', rating: meta.rating || '—',
@@ -6952,7 +6970,9 @@ function cwNextFingerprint(cw) {
   const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   return day + ':' + (S.profile && S.profile.id || 'default') + ':' + (cw || [])
     .filter((w) => /^tmdb:tv:\d+:s\d+e\d+$/i.test(String(w.key || '')))
-    .map((w) => [w.key, w.watched ? 1 : 0, Math.floor(w.position || 0), w.updatedAt || 0].join('@'))
+    // Minute bucket, not the raw clock. Art repair and a 10s progress save used to
+    // change this key, drop the next-episode list, and redraw the row over and over.
+    .map((w) => [w.key, w.watched ? 1 : 0, Math.floor((+w.position || 0) / 60)].join('@'))
     .sort().join('|');
 }
 const HOME_NEXT_WAIT_MS = 900;
@@ -8142,6 +8162,7 @@ function tagSameTitleYear(items) {
 // Continue Watching / trailers). onFocus wires it to whichever spatial-nav zone owns it.
 function makeCard(it, poster, onFocus) {
   const c = document.createElement('button');
+  c.dataset.itemKey = homeItemKey(it);
   if (poster) {
     c.className = 'pcard focusable' + (tmdbAdult(it) ? ' adultBlur' : '');
     c.innerHTML = `<div class="art">` +
@@ -8229,7 +8250,68 @@ function makeCard(it, poster, onFocus) {
   c.addEventListener('mouseenter', () => pointerHover() && onFocus && onFocus());
   return c;
 }
+function cardArtValue(it, posterMode) {
+  const urls = posterMode
+    ? [it.poster, it.backdrop, artFallback(it.key || it.title, 11)]
+    : (it.trailer
+      ? [it.backdrop, artFallback(it.key || it.title, 12)]
+      : [it.backdrop, it.poster, artFallback(it.key || it.title, 13)]);
+  return artBackground(...urls);
+}
+function applyCardArt(el, it, posterMode) {
+  if (!el || (it && it._channel !== undefined)) return;
+  const safe = cardArtValue(it, posterMode);
+  if (!safe || el.dataset.art === safe) return;
+  el.dataset.art = safe;
+  el.style.backgroundImage = safe;
+}
+function updateCardFace(card, it, posterMode) {
+  if (!card || !it) return;
+  const title = String(it.title || '');
+  const cap = card.querySelector('.cap');
+  const label = card.querySelector('.label');
+  if (cap && cap.textContent !== title) cap.textContent = title;
+  if (label && label.textContent !== title) label.textContent = title;
+  const sub = card.querySelector('.sub');
+  if (sub && typeof cardSubText === 'function') {
+    const next = String(cardSubText(it) || '');
+    if (sub.textContent !== next) sub.textContent = next;
+  }
+  if (!posterMode && it._channel === undefined && !it.trailer) {
+    let bar = card.querySelector(':scope > .pb');
+    if (it.progress) {
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.className = 'pb';
+        card.appendChild(bar);
+      }
+      bar.style.width = (it.progress * 100) + '%';
+    } else if (bar) bar.remove();
+  }
+  applyCardArt(posterMode ? card.querySelector('.art') : card, it, posterMode);
+}
+function sameRowCards(cards, items) {
+  const kids = [...cards.children];
+  if (!items.length) return kids.length === 1 && kids[0].classList.contains('gridMore');
+  if (kids.length !== items.length) return false;
+  return items.every((it, i) => kids[i].dataset.itemKey && kids[i].dataset.itemKey === homeItemKey(it));
+}
 function renderRowsInto(root, rowsData, opts = {}) {
+  const rows = rowsData || [];
+  const secs = [...root.children];
+  const canPatch = secs.length === rows.length && rows.every((row, ri) => {
+    const title = secs[ri] && secs[ri].querySelector('h2');
+    const cards = secs[ri] && secs[ri].querySelector('.cards');
+    return !!(title && cards && title.textContent === (row.name || '') && sameRowCards(cards, row.items || []));
+  });
+  if (canPatch) {
+    rows.forEach((row, ri) => {
+      const cards = secs[ri].querySelector('.cards');
+      (row.items || []).forEach((it, ci) => updateCardFace(cards.children[ci], it, !!row.poster && !it.trailer));
+    });
+    sizeRowsWindow(root);
+    return true;
+  }
   root.innerHTML = ''; root.style.setProperty('--tf', '0px');
   rowsData.forEach((row, ri) => {
     const sec = document.createElement('div'); sec.className = 'row';
@@ -8257,6 +8339,7 @@ function renderRowsInto(root, rowsData, opts = {}) {
     if (/continue watching/i.test(String(row.name || ''))) {
       cards.querySelectorAll('[data-bg]').forEach((el) => {
         if (!el.dataset.bg) return;
+        el.dataset.art = el.dataset.bg;
         el.style.backgroundImage = el.dataset.bg;
         delete el.dataset.bg;
       });
@@ -8264,6 +8347,7 @@ function renderRowsInto(root, rowsData, opts = {}) {
   });
   sizeRowsWindow(root);
   if (opts.resetScroll !== false) root.scrollTop = 0; // fresh render starts on the FIRST pair of rows
+  return false;
 }
 // The row window shows EXACTLY the first two rows (one on short screens) — measured from
 // the real rendered heights, so a short Continue-Watching row + Live TV row fit precisely
@@ -8467,10 +8551,14 @@ function restoreHomeFocus(snap) {
 }
 function renderRows(opts = {}) {
   const snap = opts.preserveFocus ? (opts.focusSnapshot || homeFocusSnapshot()) : null;
-  renderRowsInto($('rows'), S.rows, { resetScroll: !snap });
+  const patched = renderRowsInto($('rows'), S.rows, { resetScroll: !snap });
   if (S.view !== 'home') return;
   setRowsView($('rows'), S.rows, true);
   maybeBootHomeReady(S.rows); // placeholder rows stay behind the original boot loader
+  if (patched && $('rows').querySelector('.focus')) {
+    signalTvReadyOnce('home-render');
+    return;
+  }
   // Default focus ONLY when the user isn't in the menu: rail rollover previews render this
   // page behind the open rail, and stealing the zone made the next D-pad press move CONTENT
   // while the user was still walking menu items.
@@ -9348,7 +9436,9 @@ function localPlaybackForItem(it) {
   if (!it) return null;
   if (it._local && it._local.streamUrl) return it._local;
   const key = String(it.key || '');
-  if (S.localMap && key && S.localMap[key]) return S.localMap[key];
+  if (/^tmdb:/i.test(key) && localCopiesForTmdbKey(key).length > 1) {
+    // Two folders claimed this TMDB id. Do not play the first one.
+  } else if (S.localMap && key && S.localMap[key]) return S.localMap[key];
   const libId = it._lib && it._lib.id;
   const parts = episodeKeyParts(it);
   if (libId && parts) {
@@ -9359,12 +9449,32 @@ function localPlaybackForItem(it) {
     const scoped = localScopedTmdbMapKey(libId, `tmdb:movie:${it.tmdbId}`);
     if (S.localMap && S.localMap[scoped]) return S.localMap[scoped];
   }
+  if (libId) return null;
   if (parts) {
-    const g = `tmdb:tv:${parts.tmdbId}:s${parts.season}e${parts.episode}`;
-    if (S.localMap && S.localMap[g]) return S.localMap[g];
+    const copies = localCopiesForTmdbKey(`tmdb:tv:${parts.tmdbId}:s${parts.season}e${parts.episode}`);
+    return copies.length === 1 ? copies[0] : null;
   }
-  if (it.type === 'movie' && it.tmdbId && S.localMap) return S.localMap[`tmdb:movie:${it.tmdbId}`] || null;
+  if (it.type === 'movie' && it.tmdbId) {
+    const copies = localCopiesForTmdbKey(`tmdb:movie:${it.tmdbId}`);
+    return copies.length === 1 ? copies[0] : null;
+  }
   return null;
+}
+function localCopiesForTmdbKey(tmdbKey) {
+  const map = S.localMap || {};
+  const want = String(tmdbKey || '');
+  const suffix = ':' + want;
+  const out = [];
+  const seen = new Set();
+  if (!want) return out;
+  for (const [k, rec] of Object.entries(map)) {
+    if (!rec || !rec.streamUrl) continue;
+    const hit = k === want || (k.startsWith('local:') && k.endsWith(suffix));
+    if (!hit || seen.has(rec.streamUrl)) continue;
+    seen.add(rec.streamUrl);
+    out.push(rec);
+  }
+  return out;
 }
 async function resumeContinueWatching(it) {
   if (!it) return;

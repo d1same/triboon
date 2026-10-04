@@ -8598,6 +8598,16 @@ Object.assign(H, {
         return all;
       }
       if (profile !== 'default' && b.watched === false && b.unwatch) deleteWatchKeyForProfile(all, ctx.user.id, profile, b.key);
+      if (b.artOnly && prev) {
+        all[k] = {
+          ...prev,
+          meta: sanitizeStoredMediaMeta({ ...(prev.meta || {}), ...(b.meta || {}) }),
+          updatedAt: prev.updatedAt || nextStamp(),
+        };
+        if (Number(prev.traktPct) > 0) all[k].traktPct = Number(prev.traktPct);
+        if (prev.fromTrakt) all[k].fromTrakt = true;
+        return all;
+      }
       becameWatched = !!b.watched && !(prev && prev.watched);
       const traktPct = b.traktPct != null ? Number(b.traktPct) : Number(prev && prev.traktPct) || 0;
       all[k] = {
@@ -8615,6 +8625,7 @@ Object.assign(H, {
       if (b.unwatch && trakt.status(ctx.user.id).linked) trakt.history(ctx.user.id, b.key, false);
       return send(ctx.res, 200, { ok: true });
     }
+    if (b.artOnly) return send(ctx.res, 200, { ok: true });
     const playedSeconds = Math.round(Number(b.playedSeconds) || 0);
     if (playedSeconds > 0) {
       watchStats.recordPlayTime(store, {
@@ -11528,25 +11539,33 @@ function jellyfinWatchRows(ctx) {
 
 function jellyfinCleanTitle(s) {
   return String(s || '').toLowerCase()
-    .replace(/\s*(?:-|\u2013|\u2014)\s*s\d{1,2}e\d{1,3}.*$/i, '')
+    .replace(/\s*(?:-|\u2013|\u2014)\s*s\d{1,2}\s*e\d{1,3}.*$/i, '')
     .replace(/\b(2160p|1080p|720p|576p|480p|4k|uhd|hdr10?|dv|dolby\s*vision|web[-.\s]?dl|webrip|bluray|brrip|remux|x26[45]|h\.?26[45]|hevc|avc)\b/gi, ' ')
     .replace(/[._()[\]{}]+/g, ' ')
+    .replace(/\bs\d{1,2}\s*e\d{1,3}\b.*$/i, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 function jellyfinResumeIdentity(row) {
   const key = String(row && row.key || '');
+  // A file in your own folder is that file. It must not merge with another
+  // folder, or with a catalog show that happens to share the title.
+  const local = /^local:([^:]+):(\d+)$/i.exec(key);
+  if (local) return `local:${local[1]}:${local[2]}`;
   const show = /^tmdb:tv:(\d+)/i.exec(key);
   if (show) return `tv:${show[1]}`;
   const movie = /^tmdb:movie:(\d+)/i.exec(key);
   if (movie) return `movie:${movie[1]}`;
-  const raw = String(row && row.meta && row.meta.title || '');
+  const meta = (row && row.meta) || {};
+  const raw = String(meta.title || '');
   const title = jellyfinCleanTitle(raw);
-  const kind = row && row.meta && row.meta.type;
-  const looksEpisode = kind === 'episode' || kind === 'tv' || /\bs\d{1,2}e\d{1,3}\b/i.test(raw);
+  const kind = meta.type;
+  const looksEpisode = kind === 'episode' || kind === 'tv' || /\bs\d{1,2}\s*e\d{1,3}\b/i.test(raw);
+  const year = parseInt(meta.year, 10);
+  const yearBit = !looksEpisode && year >= 1900 && year <= 2100 ? `:${year}` : '';
   if (title && looksEpisode) return `tv:${title}`;
-  if (title && kind === 'movie') return `movie:${title}`;
+  if (title && kind === 'movie') return `movie:${title}${yearBit}`;
   return key;
 }
 

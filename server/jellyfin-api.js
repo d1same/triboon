@@ -1681,12 +1681,48 @@ function seriesLabel(title) {
   return String(title || '').replace(/\s*(?:·\s*)?S\d+E\d+.*$/i, '').replace(/\s*[—-]\s*S\d+E\d+.*$/i, '').trim();
 }
 
+function diskPlayNext(ctx) {
+  const rows = typeof deps.jellyfinWatchRows === 'function' ? deps.jellyfinWatchRows(ctx) : [];
+  const busy = new Set();
+  const byShow = new Map();
+  for (const row of rows) {
+    const match = /^local:([a-f0-9]{8,40}):(\d+)$/.exec(row && row.key || '');
+    if (!match || typeof deps.localOne !== 'function') continue;
+    const disk = deps.localOne(ctx, match[1], Number(match[2]));
+    if (!disk || disk.kind !== 'episode') continue;
+    const showKey = `${match[1]}:${disk.showIdx}`;
+    if (!row.watched && Number(row.position) > 30) { busy.add(showKey); continue; }
+    if (!row.watched) continue;
+    const order = episodeOrder(disk.s, disk.e);
+    const cur = byShow.get(showKey);
+    if (!cur || order > cur.order) {
+      byShow.set(showKey, { libId: match[1], showIdx: Number(disk.showIdx), order, updatedAt: row.updatedAt || 0 });
+    }
+  }
+  const out = [];
+  for (const [showKey, top] of [...byShow.entries()].filter(([key]) => !busy.has(key))
+    .sort((a, b) => b[1].updatedAt - a[1].updatedAt)) {
+    const eps = localRows(ctx, top.libId, top.showIdx)
+      .map((row) => ({ row, order: episodeOrder(row.s, row.e) }))
+      .filter((ep) => ep.order > top.order)
+      .sort((a, b) => a.order - b.order);
+    const next = eps[0];
+    if (!next) continue;
+    const saved = typeof deps.jellyfinWatchGet === 'function'
+      ? deps.jellyfinWatchGet(ctx, `local:${top.libId}:${next.row.idx}`) : null;
+    if (saved && (saved.watched || Number(saved.position) > 30)) continue;
+    const item = localJellyItem(next.row, top.libId);
+    if (!item) continue;
+    out.push({ at: top.updatedAt || 0, showKey, libId: top.libId, showIdx: top.showIdx, item });
+  }
+  return out;
+}
+
 async function nextUpItems(ctx) {
   const q = ctx.url && ctx.url.searchParams;
   const series = parseItemId((q && (q.get('SeriesId') || q.get('seriesId'))) || '');
   const parent = parseItemId((q && (q.get('ParentId') || q.get('parentId'))) || '');
   const parentRaw = internalItemId(String((q && (q.get('ParentId') || q.get('parentId'))) || ''));
-  const rows = typeof deps.jellyfinWatchRows === 'function' ? deps.jellyfinWatchRows(ctx) : [];
   const ranked = [];
   const catalogOk = parentRaw !== 'viewmovies' && (!parent || parent.type !== 'locallib') && (!series || series.type === 'series');
   if (catalogOk && typeof deps.jellyfinNextCatalog === 'function') {
@@ -1719,38 +1755,10 @@ async function nextUpItems(ctx) {
   if (parentRaw === 'viewshows' || parentRaw === 'viewmovies') {
     return ranked.sort((a, b) => b.at - a.at).map((row) => row.item);
   }
-  const busy = new Set();
-  const byShow = new Map();
-  for (const row of rows) {
-    const match = /^local:([a-f0-9]{8,40}):(\d+)$/.exec(row && row.key || '');
-    if (!match || typeof deps.localOne !== 'function') continue;
-    const disk = deps.localOne(ctx, match[1], Number(match[2]));
-    if (!disk || disk.kind !== 'episode') continue;
-    if (parent && parent.type === 'locallib' && parent.libId !== match[1]) continue;
-    const showKey = `${match[1]}:${disk.showIdx}`;
-    if (series && series.type === 'local' && (series.libId !== match[1] || series.idx !== Number(disk.showIdx))) continue;
-    if (!row.watched && Number(row.position) > 30) { busy.add(showKey); continue; }
-    if (!row.watched) continue;
-    const order = episodeOrder(disk.s, disk.e);
-    const cur = byShow.get(showKey);
-    if (!cur || order > cur.order) {
-      byShow.set(showKey, { libId: match[1], showIdx: Number(disk.showIdx), order, updatedAt: row.updatedAt || 0 });
-    }
-  }
-  const shows = [...byShow.entries()].filter(([key]) => !busy.has(key))
-    .sort((a, b) => b[1].updatedAt - a[1].updatedAt);
-  for (const [, top] of shows) {
-    const eps = localRows(ctx, top.libId, top.showIdx)
-      .map((row) => ({ row, order: episodeOrder(row.s, row.e) }))
-      .filter((ep) => ep.order > top.order)
-      .sort((a, b) => a.order - b.order);
-    const next = eps[0];
-    if (!next) continue;
-    const saved = typeof deps.jellyfinWatchGet === 'function'
-      ? deps.jellyfinWatchGet(ctx, `local:${top.libId}:${next.row.idx}`) : null;
-    if (saved && (saved.watched || Number(saved.position) > 30)) continue;
-    const item = localJellyItem(next.row, top.libId);
-    if (item) ranked.push({ at: top.updatedAt || 0, item });
+  for (const row of diskPlayNext(ctx)) {
+    if (parent && parent.type === 'locallib' && parent.libId !== row.libId) continue;
+    if (series && series.type === 'local' && (series.libId !== row.libId || series.idx !== row.showIdx)) continue;
+    ranked.push({ at: row.at, item: row.item });
   }
   return ranked.sort((a, b) => b.at - a.at).map((row) => row.item);
 }
@@ -2360,6 +2368,10 @@ async function handleKind(kind, ctx) {
           }),
         });
       }
+    }
+    for (const row of diskPlayNext(ctx)) {
+      if (ranked.some((have) => have.item && have.item.Id === row.item.Id)) continue;
+      ranked.push({ at: row.at || 0, item: row.item });
     }
     ranked.sort((a, b) => b.at - a.at);
     const items = ranked.slice(start, start + limit).map((row) => row.item);
