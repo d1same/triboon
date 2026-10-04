@@ -128,6 +128,39 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-04, v3.3.11 — Local files survive a server restart, Back lands on the episode, and an idle line on one account no longer blocks the picture on another:
+
+- Example: you rewind a 4K episode. Easynews' only open line was reserved for an
+  ended session, and your own idle line was on Eweka, which cannot fetch work
+  queued on Easynews. The piece waited ~56s and the TV dropped (Onn log
+  "piece took 56s — easynews 0/1 busy (4 waiting)"; Unraid Good Doctor
+  "secure-us 0/5 busy (6 waiting)"). The borrow rule now only counts my free
+  lines on the same account.
+- Local library: a server restart remounts a library file through its local
+  play route instead of `/api/play` ("picked source not found" on Asbab
+  Zahmat). Back from a folder show with no TMDB id opens that season's episode
+  list on the played episode, from the episode grid, Continue Watching, Resume,
+  Start over, and after Next chains (Onn: E13→E16 Next 1.5-2.5s each, Back on
+  E16).
+- New `npm run soak:4k -- --device <serial>`: long 4K soak (default 20 min per
+  title) over a 4K DD+ movie (remux without passthrough), a 4K AAC movie
+  (direct), and a 4K DD+ episode; fails on any drop/crash, a stall over 10s,
+  or a set that did not cover both remux and direct. It streams real usenet:
+  run it only when the household server is idle.
+- Onn 4K soak on this PC's test service, before and after the line fix: drops
+  still repeated about every 15 min with every account at 0 open lines and
+  logins "dialing". Unraid was streaming on the same logins during most of the
+  runs, so this is not yet separated from login contention. A bare TLS greeting
+  probe to Eweka/Newshosting/Easynews every 20s for 35 min was clean
+  (50-290ms, no failures). Open follow-up: re-run `soak:4k` with Unraid idle.
+- Gate: `npm.cmd test` 851/851, fail 0. `verify:full -SkipHouseholdLive`: all
+  focused suites, full Node suite, isolated server smoke, Android lint/unit/
+  debug build, and ExoPlayer stress PASS on emulator-5554. Household VOD/IPTV/
+  overlapping Play: skipped (the family was streaming on Unraid with the same
+  usenet logins). Windows GPU/HDR: not run.
+- Version contract: `package.json` 3.3.11; Android `versionName` 3.3.11 /
+  `versionCode` 414; Windows client package/Tauri/Cargo(.lock) 3.3.11.
+
 2026-10-04, v3.3.10 — No more buffer stop every 90-120s, and each viewer keeps usenet lines:
 
 - Example: a local episode or a 4K usenet episode froze at about 1:35, 3:10,

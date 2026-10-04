@@ -1861,6 +1861,36 @@ test('nntp: auto-expand adds lines above the reserved 4 and does not give them a
   }
 });
 
+test('nntp: an idle line on another account does not stop the picture borrowing this account\'s line', () => {
+  // Onn 2026-10-04: "piece took 56s — easynews 0/1 busy (4 waiting); eweka 0/1 busy (7 waiting)".
+  // Each account's only line was held by an ended session, and the viewer's own idle line was on
+  // a different account, which cannot run work queued here.
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false },
+    { host: '127.0.0.2', port: 1, tls: false },
+  ], 4);
+  const [easynews, eweka] = pool.providers;
+  const fake = (owner) => ({ alive: true, owner, hold: true, close() { this.alive = false; } });
+  try {
+    pool._viewerShares = new Map([['me', 4], ['old', 4]]);
+    const othersLine = fake('old');
+    const myIdleElsewhere = fake('me');
+    easynews.conns = [othersLine];
+    eweka.conns = [myIdleElsewhere];
+    const piece = { viewer: 'me', priority: 'playback' };
+    assert.strictEqual(pool.viewerTaskMayUse(easynews, othersLine, piece), true,
+      'the picture may borrow an idle line when my own free line is on another account');
+    const myIdleHere = fake('me');
+    easynews.conns = [othersLine, myIdleHere];
+    assert.strictEqual(pool.viewerTaskMayUse(easynews, othersLine, piece), false,
+      'with my own free line on this account, I use it instead of borrowing');
+    assert.strictEqual(pool.viewerTaskMayUse(easynews, othersLine, { viewer: 'me', priority: 'readAhead' }), false,
+      'read-ahead still never borrows another show\'s line');
+  } finally {
+    pool.close();
+  }
+});
+
 test('nntp: a playing movie stays at the stream share instead of the account plan', async () => {
   const { articles } = makeRelease('Cap.Test.mkv', 20 * 64 * 1024, 64 * 1024);
   const ids = [...articles.keys()];

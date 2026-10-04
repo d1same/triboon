@@ -1577,7 +1577,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the main TV detail Play/Resume target should carry local playback for owned episodes');
   assert.match(ui, /function pickNextUp\(show, seasons\) \{[\s\S]+const localEpisodes = localEpisodesForShow\(show\);[\s\S]+if \(localEpisodes\.length\) \{[\s\S]+const nextLocal = localEpisodes\.find\(\(ep\) => !\(wm\[ep\.key\] && wm\[ep\.key\]\.watched\)\)[\s\S]+target: epTarget\(show, nextLocal\.s, nextLocal\.e, 0\)/,
     'matched local TV show Play should start from the next owned episode rather than a missing online source');
-  assert.match(ui, /function detailPlayEpisodeParts\(\) \{[\s\S]+episodeKeyParts\(detailPlayTarget \|\| \{\}\)[\s\S]+function detailPlayShouldFocusEpisode\(\) \{[\s\S]+Resume\|Continue[\s\S]+async function focusDetailPlayEpisode\(show, opts = \{\}\) \{[\s\S]+openSeasonEpisodes\(show, parts\.season, \{ focusEpisode: parts\.episode, reqId: opts\.reqId \}\)[\s\S]+function queueDetailPlayEpisodeFocus\(show, reqId\) \{[\s\S]+focusDetailPlayEpisode\(show, \{ reqId \}\)/,
+  assert.match(ui, /function detailPlayEpisodeParts\(\) \{[\s\S]+const target = detailPlayTarget \|\| \{\};[\s\S]+episodeKeyParts\(target\)[\s\S]+function detailPlayShouldFocusEpisode\(\) \{[\s\S]+Resume\|Continue[\s\S]+async function focusDetailPlayEpisode\(show, opts = \{\}\) \{[\s\S]+openSeasonEpisodes\(show, parts\.season, \{ focusEpisode: parts\.episode, reqId: opts\.reqId \}\)[\s\S]+function queueDetailPlayEpisodeFocus\(show, reqId\) \{[\s\S]+focusDetailPlayEpisode\(show, \{ reqId \}\)/,
     'TV show details should auto-open and focus the Resume/Continue episode instead of leaving users at the top of the show');
   assert.match(ui, /async function openSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+card\.dataset\.season = String\(seasonNumber\);[\s\S]+card\.dataset\.episode = String\(ep\.episode_number\);[\s\S]+focusRenderedDetailEpisode\(\{ season: seasonNumber, episode: focusEpisode \}\)/,
     'TMDB season episode grids should expose exact season/episode focus targets');
@@ -2063,6 +2063,27 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     'Android Back echoes the loader/player token so JS can reject stale closes');
 });
 
+test('Back from a local folder-show episode focuses that episode, not the season grid', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function detailPlayEpisodeParts() {');
+  const end = ui.indexOf('\nfunction ', start + 1);
+  assert.ok(start >= 0 && end > start, 'detailPlayEpisodeParts should be extractable');
+  const partsFor = (target, keyParts = null) => new Function('detailPlayTarget', 'episodeKeyParts',
+    `${ui.slice(start, end)}\nreturn detailPlayEpisodeParts();`)(target, () => keyParts);
+
+  assert.deepStrictEqual(
+    partsFor({ key: 'local:dbcd999592:16450', type: 'episode', season: 1, episode: 13, _local: { playUrl: '/p' } }),
+    { season: 1, episode: 13 },
+    'a local episode with no TMDB id still tells Details which episode card to focus');
+  assert.deepStrictEqual(partsFor({ key: 'local:lib:1', type: 'episode', season: 0, episode: 2 }), { season: 0, episode: 2 },
+    'local specials (season 0) are focusable too');
+  assert.deepStrictEqual(partsFor({ key: 'tmdb:tv:1:s2e3' }, { season: 2, episode: 3 }), { season: 2, episode: 3 },
+    'TMDB shows keep using their key');
+  assert.strictEqual(partsFor({ key: 'local:lib:9', type: 'movie' }), null, 'a local movie has no episode to focus');
+  assert.strictEqual(partsFor({ key: 'local:lib:9', type: 'episode', season: null, episode: null }), null,
+    'an episode with unknown numbering does not invent S0E0');
+});
+
 test('stale async recovery work cannot remount, advance, or cover a replacement episode', async () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const deferred = () => {
@@ -2205,6 +2226,22 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
   assert.deepStrictEqual(remountEvents, [],
     'a failed old remount must not retry or show Playback interrupted over the replacement');
   assert.strictEqual(remountOld._reMounting, false, 'stale remount ownership should still release its old guard');
+
+  const remountUrls = [];
+  const compileRemount = (state) => new Function('S', 'vodPlaybackStarted', 'showPlaybackInterrupted', 'currentTime',
+    'currentPlayerKind', 'toast', 'api', 'playbackRequestBody', 'canUseNativeVideoPlayer',
+    'tryNativeVideoPlayer', 'startSource', 'setTimeout', 'markPlaybackSourceSwap',
+    'maybeHoldPlaybackAcrossRestart', 'vodRestartHoldNeeded',
+    `${remountSource}\nreturn reMountAndResume;`)(
+      state, () => true, () => {}, () => 1500, () => 'direct', () => {},
+      async (url) => { remountUrls.push(url); return { id: 'm1', streamUrl: '/s' }; },
+      () => ({}), () => false, () => false, () => true, () => {}, () => {}, () => {}, () => false);
+  const localPlaying = { item: { key: 'local:lib1:16450', _local: { streamUrl: '/api/local/lib1/16450', playUrl: '/api/local/lib1/16450/play' } } };
+  await compileRemount({ playing: localPlaying, view: 'player' })('server restart');
+  const usenetPlaying = { item: { key: 'tmdb:tv:1:s1e1' }, name: 'Show.S01E01.1080p' };
+  await compileRemount({ playing: usenetPlaying, view: 'player' })('server restart');
+  assert.deepStrictEqual(remountUrls, ['/api/local/lib1/16450/play', '/api/play'],
+    'a library file remounts through its own local play route; only usenet titles search /api/play');
 
   const advanceStart = ui.indexOf('async function autoAdvance(opts = {})');
   const advanceEnd = ui.indexOf('function resetVlcPanel()', advanceStart);
@@ -4377,7 +4414,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'source recovery must never enter the next-episode path');
   assert.match(sourceRecoveryBlock, /S\._handoffQuietUntil/,
     'next-episode startup must not remount the opening after a one-time remux wobble');
-  assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+typeof waitForTriboonServer === 'function'[\s\S]+playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\)[\s\S]+resumeFrac = Math\.max\(0, Math\.min\(0\.98, at \/ remountDur\)\)[\s\S]+api\('\/api\/play', \{ method: 'POST', body: remountBody \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
+  assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+typeof waitForTriboonServer === 'function'[\s\S]+playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\)[\s\S]+resumeFrac = Math\.max\(0, Math\.min\(0\.98, at \/ remountDur\)\)[\s\S]+api\(localPlayUrl \|\| '\/api\/play', \{ method: 'POST', body: remountBody \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
     'reMountAndResume should wait for the server, re-play the same title, warm the live timestamp, reject stale ownership, resume at position, and retry with backoff then fall back');
   assert.match(ui, /async function waitForTriboonServer\(ms = 6 \* 60 \* 1000\)/,
     'a Unraid update can take minutes; stay on the last frame instead of giving up at 90s');

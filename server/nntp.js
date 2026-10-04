@@ -1243,9 +1243,9 @@ class NntpPool {
     return total;
   }
 
-  _idleOwned(id) {
+  _idleOwned(id, provider) {
     let n = 0;
-    for (const { p, c } of this._ownedBy(id)) if (!p.busy.has(c)) n++;
+    for (const { p, c } of this._ownedBy(id)) if ((!provider || p === provider) && !p.busy.has(c)) n++;
     return n;
   }
 
@@ -1280,9 +1280,11 @@ class NntpPool {
       // Another show's line. Borrow it only for the picture, only when that
       // show is not waiting, and only when this show has no free line of its own.
       // That is the small-plan case: 4 lines total cannot hold 4 per person.
+      // A free line of my own only helps if it is on this account: queues are per provider,
+      // so an idle Eweka line cannot fetch the piece waiting here on Easynews.
       if (!playback) return false;
       if (this._ownerWaiting(conn.owner)) return false;
-      if (this._idleOwned(me) > 0) return false;
+      if (this._idleOwned(me, provider) > 0) return false;
       return true;
     }
     const lines = this._viewerShares.get(me) || 0;

@@ -11542,7 +11542,12 @@ async function openPerson(id, push = true) {
 }
 
 function detailPlayEpisodeParts() {
-  const parts = episodeKeyParts(detailPlayTarget || {});
+  const target = detailPlayTarget || {};
+  // A folder show with no TMDB id has no tmdb key to parse; its episode item still carries
+  // season/episode. Without this, Back from a local episode left Details on the season grid.
+  const parts = episodeKeyParts(target)
+    || (target.type === 'episode' && target.season != null && target.episode != null
+      ? { season: +target.season, episode: +target.episode } : null);
   return parts && parts.season >= 0 && parts.episode > 0 ? parts : null;
 }
 function detailPlayShouldFocusEpisode() {
@@ -15541,7 +15546,10 @@ async function reMountAndResume(reason = '', attempt = 0) {
     remountBody.reason = String(reason || 'playback session expired').replace(/\s+/g, ' ').trim().slice(0, 80);
     const remountDur = (p.duration && isFinite(p.duration) && p.duration) || 0;
     if (at > 0 && remountDur > 0) remountBody.resumeFrac = Math.max(0, Math.min(0.98, at / remountDur));
-    const r = await api('/api/play', { method: 'POST', body: remountBody });
+    // A library file is not on usenet. Remounting it through /api/play searched the indexers
+    // and failed "picked source not found" until the player gave up.
+    const localPlayUrl = p.item._local && p.item._local.playUrl;
+    const r = await api(localPlayUrl || '/api/play', { method: 'POST', body: remountBody });
     if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; } // user moved on / replaced playback
     if (r.sessionId && r.sessionId !== p.sessionId) stopNamedActivity(p.sessionId);
     // Adopt the new mount (same field set autoAdvance maps), then resume the current source kind.
