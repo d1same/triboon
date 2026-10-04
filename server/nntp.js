@@ -31,6 +31,9 @@ const HEDGE_PRIORITIES = new Set(['startup', 'seek', 'playback']);
 // typed plan — that AUTH burst is what bans the account.
 const CAP_HIT_COOLDOWN_MS = 120000;
 const CONNECT_BURST = 4;
+// While someone is watching, this many lines stay theirs. Other people's
+// read-ahead cannot sit on them. Auto-expand may add more lines above this.
+const VIEWER_LINE_RESERVE = 4;
 
 function learnedConnectionLimit(e) {
   const m = /connection limit\s*\((\d+)\)/i.exec(String((e && e.message) || e || ''));
@@ -658,7 +661,7 @@ class ProviderPool {
     return new Promise((resolve, reject) => {
       const signal = opts.signal;
       if (signalAborted(signal)) return reject(abortError());
-      const task = { fn, resolve, reject, priority, signal };
+      const task = { fn, resolve, reject, priority, signal, viewer: opts.viewer ? String(opts.viewer) : '' };
       task.cleanupAbort = addAbortListener(signal, () => {
         const idx = this.queue.indexOf(task);
         if (idx !== -1) {
@@ -777,15 +780,20 @@ class ProviderPool {
     // account) because any queued article grew the pool to this.size.
     const limit = this._openLimit();
     if (this._playbackCap() && this.conns.length > limit) {
-      for (const c of this.conns) {
+      // Drop extra idle lines, but keep a watcher's reserved lines until the
+      // expand lines are gone. Closing their 4 is how the next piece got stuck.
+      const idle = this.conns.filter((c) => c.alive && !this.busy.has(c));
+      idle.sort((a, b) => (a.hold === b.hold) ? 0 : (a.hold ? 1 : -1));
+      for (const c of idle) {
         if (this.conns.filter((x) => x.alive).length <= limit) break;
-        if (!c.alive || this.busy.has(c)) continue;
         try { c.close(); } catch {}
         c.alive = false;
       }
       this.conns = this.conns.filter((c) => c.alive);
     }
     const ceiling = this._playbackCap() ? limit : this.size;
+    const sharesOn = !!(this.household && this.household.viewerSharesActive());
+    if (sharesOn) this.household.holdViewerLines();
     // One queued article is one login. The admin share is the ceiling once that
     // many articles are actually waiting — not a reason to AUTH 12 sockets for
     // a single STAT. Opening the whole share on the first command is what made
@@ -799,8 +807,17 @@ class ProviderPool {
       if (!signalAborted(t.signal) && !t.stayOnLive) pending++;
     }
     const openNow = this.conns.length + this.connecting;
-    const need = Math.min(ceiling, Math.max(openNow, pending));
-    if (pending && openNow < need) this._ensure(need);
+    if (sharesOn) {
+      // Open each watcher's reserved lines, plus expand lines only when that
+      // viewer's read-ahead is actually waiting. One viewer's queue must not
+      // dial the whole plan.
+      const want = this.household.viewerOpenWant();
+      const householdOpen = typeof this.householdOpen === 'function' ? this.householdOpen() : openNow;
+      if (householdOpen < want) this._ensure(Math.min(ceiling, openNow + (want - householdOpen)));
+    } else {
+      const need = Math.min(ceiling, Math.max(openNow, pending));
+      if (pending && openNow < need) this._ensure(need);
+    }
     // Active-player connection reserve: read-ahead/background must NEVER occupy the last
     // `reserve` idle connections. Otherwise read-ahead (up to maxConnPerStream) saturates the
     // pool and the next-needed PLAYBACK segment waits for a read-ahead fetch to finish to get a
@@ -812,12 +829,13 @@ class ProviderPool {
     const playbackReserve = this.opts.playbackReserve != null
       ? this.opts.playbackReserve
       : (this.size >= 4 ? 2 : 1);
-    const reserve = Math.max(0, Math.min(playbackReserve, this.size - 1));
+    const reserve = sharesOn ? 0 : Math.max(0, Math.min(playbackReserve, this.size - 1));
     for (const c of this.conns) {
       if (!this.queue.length) break;
       if (this.busy.has(c) || !c.alive) continue;
       // Hold the reserved connections idle for the active player unless the highest-priority
       // queued work IS active-player work (startup/seek/playback), which may use the whole pool.
+      // Per-viewer shares replace this house-wide spare: each watcher keeps their own 4.
       if (reserve > 0 && !this._hasActivePlayerWorkQueued()) {
         const idleFree = this.conns.reduce((n, x) => n + ((x.alive && !this.busy.has(x)) ? 1 : 0), 0);
         const alive = this.conns.reduce((n, x) => n + (x.alive ? 1 : 0), 0);
@@ -825,8 +843,8 @@ class ProviderPool {
         // that spare, the article would wait forever — do the work instead.
         if (idleFree <= reserve && idleFree < alive) break;
       }
-      const task = this._shiftTask();
-      if (!task) break;
+      const task = sharesOn ? this._shiftTaskFor(c) : this._shiftTask();
+      if (!task) continue;
       if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
       this._launch(c, task);
     }
@@ -847,11 +865,11 @@ class ProviderPool {
     if (depth > 1 && !this._hasAboveLowQueued()) {
       for (const c of this.conns) {
         if (!this.queue.length) break;
-        if (!c.alive) continue;
+        if (!c.alive || c.hold) continue;
         const st = this.inflight.get(c);
         if (!st || !st.lowOnly) continue;
         while (st.n < depth && this.queue.length) {
-          const task = this._shiftLowTask();
+          const task = this._shiftLowTask(c);
           if (!task) break;
           if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
           this._launch(c, task);
@@ -869,10 +887,43 @@ class ProviderPool {
     return false;
   }
 
+  // Highest-priority queued task this socket is allowed to run. A watcher's
+  // reserved line skips everyone else's work instead of making them wait.
+  _shiftTaskFor(conn) {
+    let best = -1;
+    let rank = Infinity;
+    for (let i = 0; i < this.queue.length; i++) {
+      const t = this.queue[i];
+      if (signalAborted(t.signal)) continue;
+      if (this.household && !this.household.viewerTaskMayUse(this, conn, t)) continue;
+      const r = this._priorityRank(t.priority);
+      if (r < rank) { best = i; rank = r; }
+    }
+    if (best < 0) return null;
+    const task = this.queue.splice(best, 1)[0];
+    if (signalAborted(task.signal)) {
+      if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
+      task.reject(abortError());
+      return this._shiftTaskFor(conn);
+    }
+    return task;
+  }
+
   // Run one task on a connection with in-flight bookkeeping. `busy` keeps meaning "has ≥1
   // in-flight command" (idle/cull/reserve checks are unchanged); `inflight` carries the count and
   // whether every command on the socket is low-lane (the only mix pipelining may stack onto).
   _launch(c, task) {
+    if (task.viewer && this.household && this.household.viewerSharesActive()) {
+      if (!c.owner) c.owner = task.viewer;
+      if (c.owner === task.viewer) {
+        const lines = this.household._viewerShares.get(task.viewer) || 0;
+        const reserve = Math.min(VIEWER_LINE_RESERVE, lines);
+        const held = this.household._ownedBy(task.viewer).filter((row) => row.c.hold).length;
+        const playback = this._priorityRank(task.priority) <= this._priorityRank('playback');
+        if (playback && !c.hold && held < reserve) c.hold = true;
+        if (!playback) c.hold = false;
+      }
+    }
     const low = this._priorityRank(task.priority) >= this._priorityRank('readAhead');
     const st = this.inflight.get(c) || { n: 0, lowOnly: true };
     st.n++;
@@ -914,14 +965,19 @@ class ProviderPool {
 
   // Lowest-rank low-lane task (readAhead/background) for the pipelining pass. Aborted entries are
   // left in place for _shiftTask's normal cleanup path.
-  _shiftLowTask() {
+  _shiftLowTask(conn) {
     const lowRank = this._priorityRank('readAhead');
     let best = -1, rank = Infinity;
     for (let i = 0; i < this.queue.length; i++) {
       const t = this.queue[i];
       if (signalAborted(t.signal)) continue;
       const r = this._priorityRank(t.priority);
-      if (r >= lowRank && r < rank) { best = i; rank = r; }
+      if (r >= lowRank && r < rank) {
+        if (conn && this.household && this.household.viewerSharesActive()
+            && !this.household.viewerTaskMayUse(this, conn, t)) continue;
+        best = i;
+        rank = r;
+      }
     }
     return best === -1 ? null : this.queue.splice(best, 1)[0];
   }
@@ -1032,7 +1088,9 @@ class NntpPool {
     this.meter = new TransferMeter();
     const preferPeerFailover = this.providers.length > 1;
     const self = this;
+    this._viewerShares = new Map();
     for (const p of this.providers) {
+      p.household = this;
       p.preferPeerFailover = preferPeerFailover;
       p.meter = this.meter;
       // A peer can take the piece when it is not in the two-minute quiet window,
@@ -1055,6 +1113,196 @@ class NntpPool {
     // The one boot login goes to a primary. A backup-only account is not dialed until needed.
     const first = this.providers.find((p) => !p.isBackup()) || this.providers[0];
     first.warm(1);
+  }
+
+  // Each person who is watching keeps `lines` sockets. The first 4 are only
+  // for their picture. Lines above 4 are the auto-expand share for read-ahead.
+  // An empty list means nobody is watching, so the old house-wide spare applies.
+  setViewerShares(list) {
+    const next = new Map();
+    for (const row of (Array.isArray(list) ? list : [])) {
+      const id = row && row.id != null ? String(row.id) : '';
+      const lines = Math.max(0, Math.floor(Number(row && row.lines) || 0));
+      if (!id || !(lines > 0)) continue;
+      next.set(id, lines);
+    }
+    this._viewerShares = next;
+    if (!next.size) {
+      for (const p of this.providers) {
+        for (const c of p.conns || []) {
+          if (c && !p.busy.has(c)) { c.owner = null; c.hold = false; }
+        }
+      }
+    }
+    for (const p of this.providers) {
+      try { p._pump(); } catch {}
+    }
+  }
+
+  viewerSharesActive() {
+    return this._viewerShares instanceof Map && this._viewerShares.size > 0;
+  }
+
+  _eachConn() {
+    const rows = [];
+    for (const p of this.providers) {
+      for (const c of p.conns || []) {
+        if (c && c.alive) rows.push({ p, c });
+      }
+    }
+    return rows;
+  }
+
+  _ownedBy(id) {
+    return this._eachConn().filter(({ c }) => c.owner === id);
+  }
+
+  _reserveFor(lines) {
+    return Math.min(VIEWER_LINE_RESERVE, Math.max(0, Math.floor(Number(lines) || 0)));
+  }
+
+  _reserveDeficitExcept(skipId) {
+    let n = 0;
+    for (const [id, lines] of this._viewerShares) {
+      if (id === skipId) continue;
+      const reserve = this._reserveFor(lines);
+      const held = this._ownedBy(id).filter(({ c }) => c.hold).length;
+      if (held < reserve) n += reserve - held;
+    }
+    return n;
+  }
+
+  // Tag idle lines round-robin so one show cannot take all four of someone
+  // else's reserved lines before they have any.
+  holdViewerLines() {
+    if (!this.viewerSharesActive()) return;
+    this._trimViewerLines();
+    const idle = [];
+    for (const { p, c } of this._eachConn()) {
+      if (!c.owner && !p.busy.has(c)) idle.push(c);
+    }
+    const ids = [...this._viewerShares.keys()];
+    let progressed = true;
+    while (progressed && idle.length) {
+      progressed = false;
+      for (const id of ids) {
+        const reserve = this._reserveFor(this._viewerShares.get(id));
+        const held = this._ownedBy(id).filter(({ c }) => c.hold).length;
+        if (held >= reserve) continue;
+        const c = idle.shift();
+        if (!c) return;
+        c.owner = id;
+        c.hold = true;
+        progressed = true;
+      }
+    }
+  }
+
+  _trimViewerLines() {
+    for (const { p, c } of this._eachConn()) {
+      if (!c.owner) { c.hold = false; continue; }
+      if (!this._viewerShares.has(c.owner) && !p.busy.has(c)) {
+        c.owner = null;
+        c.hold = false;
+      }
+    }
+    for (const [id, lines] of this._viewerShares) {
+      const reserve = this._reserveFor(lines);
+      let kept = 0;
+      for (const { p, c } of this._ownedBy(id)) {
+        kept++;
+        if (kept <= reserve) c.hold = true;
+        else if (kept <= lines) c.hold = false;
+        else if (!p.busy.has(c)) { c.owner = null; c.hold = false; kept--; }
+        else c.hold = false;
+      }
+    }
+  }
+
+  // How many lines to hold open: 4 per watcher, plus extra only for read-ahead
+  // that is already waiting on that same watcher.
+  viewerOpenWant() {
+    if (!this.viewerSharesActive()) return 0;
+    const lowQueued = new Map();
+    for (const p of this.providers) {
+      for (const t of p.queue || []) {
+        if (!t || !t.viewer || signalAborted(t.signal)) continue;
+        if (p._priorityRank(t.priority) > p._priorityRank('playback')) {
+          lowQueued.set(t.viewer, (lowQueued.get(t.viewer) || 0) + 1);
+        }
+      }
+    }
+    let total = 0;
+    for (const [id, lines] of this._viewerShares) {
+      const reserve = this._reserveFor(lines);
+      const expand = Math.max(0, lines - reserve);
+      const queued = Math.min(expand, lowQueued.get(id) || 0);
+      const lowBusy = this._ownedBy(id).filter(({ p, c }) => p.busy.has(c) && !c.hold).length;
+      total += reserve + Math.max(queued, Math.min(expand, lowBusy));
+    }
+    return total;
+  }
+
+  _idleOwned(id) {
+    let n = 0;
+    for (const { p, c } of this._ownedBy(id)) if (!p.busy.has(c)) n++;
+    return n;
+  }
+
+  _ownerWaiting(id) {
+    if (!id) return false;
+    const playback = this.providers[0] ? this.providers[0]._priorityRank('playback') : 1;
+    for (const p of this.providers) {
+      for (const t of p.queue || []) {
+        if (!t || t.viewer !== id || signalAborted(t.signal)) continue;
+        if (p._priorityRank(t.priority) <= playback) return true;
+      }
+    }
+    return false;
+  }
+
+  // True when this socket may run this article. A held line belongs to one
+  // watcher. Read-ahead, even their own, uses only the auto-expand lines.
+  viewerTaskMayUse(provider, conn, task) {
+    if (!this.viewerSharesActive()) return true;
+    const me = task && task.viewer ? String(task.viewer) : '';
+    const playback = provider._priorityRank(task && task.priority) <= provider._priorityRank('playback');
+    if (!me || !this._viewerShares.has(me)) {
+      // Health checks and a RAR volume's own picture may use a show's idle
+      // reserved line. They wait if that show's piece is already in line.
+      // Read-ahead stays off those 4 lines.
+      const pictureOrHealth = playback || provider._priorityRank(task.priority) <= provider._priorityRank('health');
+      if (!pictureOrHealth) return !conn.owner && !conn.hold;
+      if (conn.owner && this._ownerWaiting(conn.owner)) return false;
+      return true;
+    }
+    if (conn.owner && conn.owner !== me) {
+      // Another show's line. Borrow it only for the picture, only when that
+      // show is not waiting, and only when this show has no free line of its own.
+      // That is the small-plan case: 4 lines total cannot hold 4 per person.
+      if (!playback) return false;
+      if (this._ownerWaiting(conn.owner)) return false;
+      if (this._idleOwned(me) > 0) return false;
+      return true;
+    }
+    const lines = this._viewerShares.get(me) || 0;
+    const reserve = this._reserveFor(lines);
+    const owned = this._ownedBy(me);
+    if (playback) {
+      if (conn.owner === me) return true;
+      if (owned.length >= lines) return false;
+      const held = owned.filter(({ c }) => c.hold).length;
+      if (held < reserve) return true;
+      return this._reserveDeficitExcept(me) === 0;
+    }
+    if (conn.hold) return false;
+    const lowBusy = owned.filter(({ p, c }) => p.busy.has(c) && !c.hold).length;
+    if (lowBusy >= Math.max(0, lines - reserve)) return false;
+    if (conn.owner === me) return true;
+    const held = owned.filter(({ c }) => c.hold).length;
+    if (held < reserve) return false;
+    if (owned.length >= lines) return false;
+    return this._reserveDeficitExcept(me) === 0;
   }
 
   // While a movie or show is playing, this is how many usenet lines the whole

@@ -577,7 +577,7 @@ async function mountFromSavedMap(pool, nzbXml, candidates, opts, password) {
     ...sub.public,
     _source: sub.source,
   }));
-  return new ArchiveVirtualFile({
+  const reused = new ArchiveVirtualFile({
     vols,
     inner,
     container: saved.container,
@@ -587,6 +587,8 @@ async function mountFromSavedMap(pool, nzbXml, candidates, opts, password) {
     password,
     releaseSubs,
   });
+  for (const v of reused.vols || []) if (v) v.viewerId = reused.id;
+  return reused;
 }
 
 // Mount any NZB: flat post, RAR set, ZIP, or 7z. Returns a virtual file exposing
@@ -605,6 +607,11 @@ async function mountNzb(pool, nzbXml, opts = {}) {
 
   const volumeEntries = orderVolumes(candidates);
   const doneArchive = (vf) => {
+    // The playing show is this mount. RAR volumes are separate files, but their
+    // lines belong to the show, not to each volume.
+    if (vf && vf.id && Array.isArray(vf.vols)) {
+      for (const v of vf.vols) if (v) v.viewerId = vf.id;
+    }
     rememberArchiveMap(nzbXml, vf);
     return vf;
   };
@@ -800,7 +807,7 @@ function mountFlat(pool, nzb, opts) {
       const track = vf.audioFiles[index];
       if (!track || !track._source) { const e = new Error('audio track not found'); e.status = 404; throw e; }
       let s = vf._audioStreams.get(index);
-      if (!s) { s = new NzbFileStream(pool, track._source, opts); await s.mount('playback'); vf._audioStreams.set(index, s); }
+      if (!s) { s = new NzbFileStream(pool, track._source, { ...opts, viewerId: vf.id }); await s.mount('playback'); vf._audioStreams.set(index, s); }
       s._touched = Date.now();
       return s;
     };
@@ -810,7 +817,7 @@ function mountFlat(pool, nzb, opts) {
     const sub = (vf.releaseSubs || []).find((s) => String(s.id) === String(id));
     if (!sub || !sub._source) throw new Error('release subtitle not found');
     if ((sub.size || sub.bytes || 0) > maxBytes) throw new Error('release subtitle is too large');
-    const sf = new NzbFileStream(pool, sub._source, { ...opts, readAhead: 0, cacheSegments: 2, cacheBytes: maxBytes });
+    const sf = new NzbFileStream(pool, sub._source, { ...opts, viewerId: vf.id, readAhead: 0, cacheSegments: 2, cacheBytes: maxBytes });
     await sf.mount('playback');
     const chunks = [];
     for await (const c of sf.read(0, Math.min(sf.size || maxBytes, maxBytes), { priority: 'playback' })) chunks.push(c);

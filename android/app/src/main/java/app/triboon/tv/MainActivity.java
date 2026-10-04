@@ -4644,7 +4644,9 @@ public class MainActivity extends Activity {
                             nativeBackwardTicks = 0;
                             // The server sees a closed socket and nothing else. Say what the
                             // player saw and where it is picking the film back up.
+                            String cause = nativeIoCause(error);
                             reportNativePlaybackIssue("drop", "stream dropped (code " + error.errorCode + ", " + msg
+                                    + (cause.isEmpty() ? "" : ", " + cause)
                                     + ") — resuming at " + (resumeAt / 1000L) + "s via "
                                     + (nativeServerSeekMode() ? "a fresh server seek" : "the same direct stream"), 0L);
                             if (nativeServerSeekMode()) {
@@ -6375,6 +6377,12 @@ public class MainActivity extends Activity {
         // Time-priority ignores targetBytes until maxMs is filled. 4K at a 120–300s goal
         // can grow past the RAM ceiling and reboot a Shield. Size wins on heavy VOD.
         if (heavyVod && !conservative) maxMs = Math.min(maxMs, 90000);
+        // A remux/transcode is one fMP4 response that cannot resume. Home networks drop a socket
+        // left idle for about a minute, so the classic full-buffer pause (stop at maxMs, wait for
+        // minMs) killed it every 90-120s and the reconnect threw the buffer away. Keep reading in
+        // small sips at the top of the buffer instead; targetBytes still bounds memory.
+        boolean steadyRead = video && nativeServerSeekMode();
+        if (steadyRead) minMs = maxMs;
         int targetBytes = (int) Math.min(Integer.MAX_VALUE, (long) targetMb * 1024 * 1024); // long math: no overflow if a future tier raises the ceiling past 2047MB
         int backBufferMs = video ? (conservative ? (heavyVod ? 6000 : 3000) : (heavyVod ? 12000 : 8000)) : 3000;
         if (video) {
@@ -6384,13 +6392,14 @@ public class MainActivity extends Activity {
                     + " goalSec=" + nativeBufferGoalSec
                     + " targetMB=" + targetMb
                     + " maxMs=" + maxMs
+                    + " steadyRead=" + steadyRead
                     + " backBufferMs=" + backBufferMs);
         }
         return new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(minMs, maxMs, startMs, rebufferMs)
                 .setTargetBufferBytes(targetBytes)
                 .setBackBuffer(backBufferMs, false)
-                .setPrioritizeTimeOverSizeThresholds(!heavyVod)
+                .setPrioritizeTimeOverSizeThresholds(!heavyVod && !steadyRead)
                 .build();
     }
 
@@ -6453,6 +6462,14 @@ public class MainActivity extends Activity {
         }
         String name = error.getErrorCodeName();
         return name == null || name.isEmpty() ? "playback failed" : name;
+    }
+
+    private String nativeIoCause(PlaybackException error) {
+        Throwable root = error;
+        while (root != null && root.getCause() != null && root.getCause() != root) root = root.getCause();
+        if (root == null || root == error) return "";
+        String detail = root.getMessage();
+        return root.getClass().getSimpleName() + (detail == null || detail.isEmpty() ? "" : ": " + detail);
     }
 
     private String nativeHeader(Map<String, List<String>> headers, String wanted) {

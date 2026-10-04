@@ -2432,6 +2432,13 @@ class Pipeline {
     this.clearPlaybackExpiryRebalance();
   }
 
+  _setViewerShares(rows) {
+    try {
+      const pool = typeof this.pool === 'function' ? this.pool() : this.pool;
+      if (pool && typeof pool.setViewerShares === 'function') pool.setViewerShares(rows);
+    } catch {}
+  }
+
   _setUsenetOpenCap(n) {
     try {
       const pool = typeof this.pool === 'function' ? this.pool() : this.pool;
@@ -2464,6 +2471,14 @@ class Pipeline {
     // 0 used to mean "open the whole plan".
     if (!(openCap > 0)) openCap = 1;
     // Local library mounts are already left out of `active`. They play from disk.
+    const shareRows = [];
+    for (const vf of active) {
+      const lines = Math.max(AUTO_BASE_CONNS, Math.floor(Number(shares.get(vf)) || 0));
+      if (vf && vf.id) shareRows.push({ id: vf.id, lines });
+    }
+    // Tell the pool which 4 lines belong to each person before the open cap
+    // pump runs, so read-ahead cannot grab them on the way up.
+    this._setViewerShares(shareRows);
     this._setUsenetOpenCap(openCap);
     for (const vf of active) this._applyPlaybackWindow(vf, activeCount, perf, shares.get(vf), active);
     this.rebalancePreparedWindows(now);

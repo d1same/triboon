@@ -128,6 +128,29 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-04, v3.3.10 — No more buffer stop every 90-120s, and each viewer keeps usenet lines:
+
+- Example: a local episode or a 4K usenet episode froze at about 1:35, 3:10,
+  4:45 (local) or 1:50, 3:40 (4K). The TV filled its buffer, went quiet for
+  about a minute, the network dropped the idle copy stream (code 2001), and
+  the reconnect threw the buffer away. Android remux/transcode now keeps
+  reading in small sips at the top of the buffer (`steadyRead`, memory still
+  bounded by target bytes), and the drop line names the root exception.
+- Usenet: each active viewer keeps a reserve of lines so another viewer's
+  read-ahead cannot take the only line ("1/1 busy", 20s piece).
+- Emulator, this PC's Windows service on the new tree, local Kaaraagaah Alavi:
+  remote Next x8 (2.4-5.6s each), +/-30s skips on direct and remux, 4 min
+  steady remux play with 0 stalls/drops, 75s pause then resume in 5.5s, and
+  the remux read never idled longer than 7s.
+- Gate: `npm.cmd test` 849/849, fail 0. `verify:full -SkipHouseholdLive`:
+  isolated server smoke PASS, Android ExoPlayer Live+VOD+CC stress PASS on
+  emulator-5554. Household VOD/IPTV/overlapping Play: not run (no test
+  login). Windows GPU/HDR: not run.
+- Version contract: `package.json` 3.3.10; Android `versionName` 3.3.10 /
+  `versionCode` 413; Windows client package/Tauri/Cargo(.lock) 3.3.10.
+- Known, not in this release: Next from a local episode opened from Home or
+  Continue Watching can hang on "starting stream" (follow-up).
+
 2026-10-03, v3.3.9 — Continue Watching stays still, and each folder show stays its own card:
 
 - Example: you leave a movie. Home was redrawing Continue Watching over and over, and two folder movies saved under the same name could become one card. The covers stay put, and both movies stay on the row. Jellyfin shows the next episode of a folder show after you finish one.

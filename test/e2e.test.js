@@ -1754,6 +1754,113 @@ test('nntp: read-ahead never takes the last connection — the active player alw
   await mock.close();
 });
 
+test('nntp: each watcher keeps 4 lines the others cannot use', async () => {
+  // The house-wide spare is 2 lines. Once those are taken, the next person's
+  // piece waits for someone else's in-flight download. That wait is the spin.
+  const articles = new Map();
+  for (let i = 0; i < 16; i++) articles.set(`share${i}@reserve`, Buffer.from(`part-${i}\r\n`));
+  const ids = [...articles.keys()];
+  const RTT = 700;
+  const mock = createMockNntp({ articles, latencyMs: RTT });
+  const port = await mock.listen();
+  try {
+    const shared = new NntpPool({ host: '127.0.0.1', port, tls: false }, 40);
+    shared.setPlaybackOpenCap(8);
+    const ra = ids.slice(0, 8).map((id) => shared.body(id, 'readAhead', { viewer: 'A' }));
+    const filled = Date.now() + 3000;
+    while (Date.now() < filled && shared.stats().inUse < 4) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const sharedTimes = [];
+    await Promise.all(ids.slice(8, 12).map(async (id, n) => {
+      const t0 = Date.now();
+      await shared.body(id, 'playback', { viewer: ['B', 'C', 'D', 'E'][n] });
+      sharedTimes.push(Date.now() - t0);
+    }));
+    assert.ok(sharedTimes.filter((ms) => ms < RTT + 300).length >= 1, `someone got a spare line (${sharedTimes.join(', ')})`);
+    assert.ok(sharedTimes.some((ms) => ms > RTT + 500), `someone waited on the other download (${sharedTimes.join(', ')})`);
+    await Promise.all(ra);
+    shared.close();
+
+    const reserved = new NntpPool({ host: '127.0.0.1', port, tls: false }, 40);
+    reserved.setViewerShares([
+      { id: 'A', lines: 8 },
+      { id: 'B', lines: 4 },
+      { id: 'C', lines: 4 },
+      { id: 'D', lines: 4 },
+      { id: 'E', lines: 4 },
+    ]);
+    reserved.setPlaybackOpenCap(24);
+    const until = Date.now() + 4000;
+    while (Date.now() < until && reserved.stats().open < 20) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    const ahead = ids.slice(0, 8).map((id) => reserved.body(id, 'readAhead', { viewer: 'A' }));
+    await new Promise((r) => setTimeout(r, 150));
+    const busyOwners = new Set();
+    for (const p of reserved.providers) {
+      for (const c of p.conns) {
+        if (p.busy.has(c) && c.owner && c.owner !== 'A') busyOwners.add(c.owner);
+      }
+    }
+    assert.equal(busyOwners.size, 0, `read-ahead sat on someone else's line (${[...busyOwners].join(', ')})`);
+    const ownTimes = [];
+    await Promise.all(['B', 'C', 'D', 'E'].map(async (who, n) => {
+      const t0 = Date.now();
+      await reserved.body(ids[8 + n], 'playback', { viewer: who });
+      ownTimes.push(Date.now() - t0);
+    }));
+    for (const ms of ownTimes) {
+      assert.ok(ms < RTT + 400, `reserved line was one fetch, not a wait (${ownTimes.join(', ')})`);
+    }
+    await Promise.all(ahead);
+    reserved.close();
+  } finally {
+    await mock.close();
+  }
+});
+
+test('nntp: auto-expand adds lines above the reserved 4 and does not give them away', async () => {
+  const articles = new Map();
+  for (let i = 0; i < 8; i++) articles.set(`grow${i}@reserve`, Buffer.from(`part-${i}\r\n`));
+  const ids = [...articles.keys()];
+  const RTT = 400;
+  const mock = createMockNntp({ articles, latencyMs: RTT });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 40);
+  pool.setViewerShares([{ id: 'A', lines: 4 }, { id: 'B', lines: 4 }]);
+  pool.setPlaybackOpenCap(8);
+  try {
+    const until = Date.now() + 3000;
+    while (Date.now() < until && pool.stats().open < 8) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    const ahead = ids.slice(0, 4).map((id) => pool.body(id, 'readAhead', { viewer: 'A' }));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(pool.stats().inUse, 0, 'read-ahead does not spend the reserved 4');
+    pool.setViewerShares([{ id: 'A', lines: 8 }, { id: 'B', lines: 4 }]);
+    pool.setPlaybackOpenCap(12);
+    const grew = Date.now() + 3000;
+    while (Date.now() < grew && pool.stats().inUse < 1) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    assert.ok(pool.stats().inUse >= 1, 'auto-expand let read-ahead use the extra lines');
+    const t0 = Date.now();
+    await pool.body(ids[4], 'playback', { viewer: 'B' });
+    const ms = Date.now() - t0;
+    assert.ok(ms < RTT + 250, `B still had a free line after A grew (${ms}ms)`);
+    let aOwned = 0;
+    for (const p of pool.providers) {
+      for (const c of p.conns) if (c.owner === 'A') aOwned++;
+    }
+    assert.ok(aOwned <= 8, `A stayed inside the expanded share (${aOwned})`);
+    await Promise.all(ahead);
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
 test('nntp: a playing movie stays at the stream share instead of the account plan', async () => {
   const { articles } = makeRelease('Cap.Test.mkv', 20 * 64 * 1024, 64 * 1024);
   const ids = [...articles.keys()];

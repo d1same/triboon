@@ -322,18 +322,7 @@ skipping a few times"). Bounds and exceptions:
 Covered by `test/e2e.test.js` ("drains to completion", "drain is bounded",
 "a skip keeps its connections", "retries instead of truncating").
 
-**Active-player connection reserve.** Queue priority alone is insufficient:
-priority cannot preempt an in-flight BODY, so read-ahead (which can fan out up to
-`maxConnPerStream` segments) was able to occupy *every* connection, forcing the
-next-needed playback segment to wait for a read-ahead fetch to finish before it
-got a socket — a multi-second head-of-line stall that drained the buffer and
-caused "plays fine, then buffers every couple of minutes." `NntpPool._pump` now
-holds back a small reserve (`playbackReserve`, default 2 for pools ≥ 4
-connections, else 1, clamped to `size - 1`): read-ahead/background tasks may not
-take the last `reserve` idle connections, while startup/seek/playback bypass the
-reserve and may use the whole pool. This guarantees the active player a socket on
-demand. Covered by `test/e2e.test.js` ("read-ahead never takes the last
-connection").
+**Active-player lines.** Queue priority cannot preempt an in-flight BODY, so one viewer's read-ahead used to fill every open line and the next person's piece waited until that download finished. While someone is watching, the first 4 lines of their share are theirs (`VIEWER_LINE_RESERVE`). Other people, and even their own read-ahead, cannot take those 4. Auto-expand still adds lines above 4 when the house has room; read-ahead uses only those extra lines. The older house-wide spare (2 idle lines) still applies before any per-viewer share is set. Covered by `test/e2e.test.js` ("each watcher keeps 4 lines" and "read-ahead never takes the last connection").
 
 If these priorities change, add or update a focused test in `test/e2e.test.js`.
 

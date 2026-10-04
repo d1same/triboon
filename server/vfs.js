@@ -134,12 +134,13 @@ function priorityRank(priority) {
 class NzbFileStream {
   constructor(pool, fileEntry, {
     readAhead = 4, cacheSegments = 24, cacheBytes = DEFAULT_CACHE_BYTES, signal = null,
-    abortDrainMs = ABORT_DRAIN_MS,
+    abortDrainMs = ABORT_DRAIN_MS, viewerId = null,
   } = {}) {
     this.pool = pool;
     this.file = fileEntry;
     this.name = fileNameFromSubject(fileEntry.subject);
     this.id = crypto.randomBytes(6).toString('hex');
+    this.viewerId = viewerId || null;
     this.segments = fileEntry.segments;
     this.size = null;       // learned from =ybegin size=
     this.partSize = null;   // learned from segment 1 (=ypart end - begin)
@@ -458,7 +459,7 @@ class NzbFileStream {
       const player = priority === 'playback' || priority === 'seek' || priority === 'startup';
       const thin = player && Number.isFinite(ahead) && ahead < 4 * 1024 * 1024;
       return {
-        signal: sig, verify, drainMs: this.abortDrainMs,
+        signal: sig, verify, drainMs: this.abortDrainMs, viewer: this.viewerId || this.id,
         needSlots: streamStartupNeedSlots(this.size, priority, this._releaseName || this.name),
         // 1 MB ahead is ~1s of 1080p. A 3s hedge is too late — the TV is already empty.
         ...(thin ? { hedgeMs: 400 } : {}),

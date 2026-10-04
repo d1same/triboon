@@ -2671,7 +2671,9 @@ test('logging contract: every failure names its cause — ffmpeg tail, HTTP 5xx,
 
   // Android: audio sink / underrun / codec errors and stream drops reach the server log.
   assert.match(java, /nativePlayer\.addAnalyticsListener\(new AnalyticsListener\(\) \{[\s\S]+onAudioSinkError[\s\S]+reportNativePlaybackIssue\("audio"[\s\S]+onAudioUnderrun[\s\S]+onAudioCodecError[\s\S]+onVideoCodecError/);
-  assert.match(java, /reportNativePlaybackIssue\("drop", "stream dropped \(code " \+ error\.errorCode \+ ", " \+ msg\s*\+ "\) — resuming at "/);
+  assert.match(java, /String cause = nativeIoCause\(error\);\s*reportNativePlaybackIssue\("drop", "stream dropped \(code " \+ error\.errorCode \+ ", " \+ msg\s*\+ \(cause\.isEmpty\(\) \? "" : ", " \+ cause\)\s*\+ "\) — resuming at "/);
+  // A 2001 alone does not say reset vs. EOF vs. refused; the root exception does.
+  assert.match(java, /private String nativeIoCause\(PlaybackException error\) \{[\s\S]+root\.getCause\(\)[\s\S]+root\.getClass\(\)\.getSimpleName\(\)/);
 
   // Windows: mpv's own error text reaches the page, never a fixed "Windows player error" alone.
   assert.match(bridge, /function playerErrorText\(event\)[\s\S]+replace\(\/https\?:\\\/\\\/\\S\+\/gi, '\[url\]'\)/);
@@ -6675,8 +6677,12 @@ test('Android native player: direct source and native chrome stay out of the web
   // setting) × the file bitrate, clamped to a device-RAM-safe ceiling — not a hard-coded constant.
   assert.match(android, /if \(video && nativeBufferGoalSec > 0\) \{[\s\S]+nativeBufferCeilingMb\(conservative, heavyVod\)[\s\S]+nativePlaybackSizeBytes \/ nativePlaybackDurationSec[\s\S]+maxMs = \(int\) Math\.max\(30000L, Math\.min\(conservative \? 120000L : 300000L, nativeBufferGoalSec \* 1000L\)\)/,
     'the on-device buffer scales with the owner read-ahead-goal setting and the file bitrate');
-  assert.match(android, /if \(heavyVod && !conservative\) maxMs = Math\.min\(maxMs, 90000\);[\s\S]+setPrioritizeTimeOverSizeThresholds\(!heavyVod\)/,
+  assert.match(android, /if \(heavyVod && !conservative\) maxMs = Math\.min\(maxMs, 90000\);[\s\S]+setPrioritizeTimeOverSizeThresholds\(!heavyVod && !steadyRead\)/,
     '4K/heavy VOD must honor the RAM byte ceiling so Shield cannot grow a 300s buffer past device memory');
+  // Remux/transcode cannot resume a dropped response. The old 5s/22s low-water mark left the
+  // socket idle ~70s after every fill, and home networks dropped it (code 2001 every 90-120s).
+  assert.match(android, /boolean steadyRead = video && nativeServerSeekMode\(\);\s*if \(steadyRead\) minMs = maxMs;[\s\S]+setBufferDurationsMs\(minMs, maxMs, startMs, rebufferMs\)[\s\S]+setTargetBufferBytes\(targetBytes\)/,
+    'native remux/transcode keeps reading at the top of the buffer so the unresumable stream never sits idle');
   assert.match(android, /private int nativeBufferCeilingMb\(boolean conservative, boolean heavyVod\) \{[\s\S]+getMemoryInfo\(mi\)[\s\S]+totalRamMb \* 22 \/ 100[\s\S]+conservative \? \(heavyVod \? 96 : 48\) : \(heavyVod \? 768 : 256\)/,
     'the buffer ceiling is a safe share of THIS device RAM, capped per tier so cheap boxes never over-commit');
   assert.match(android, /int bufferGoalSec = Math\.max\(0, j\.optInt\("bufferGoalSec", 0\)\)[\s\S]+nativeBufferGoalSec = bufferGoalSec/,

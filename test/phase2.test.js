@@ -4518,6 +4518,33 @@ test('pipeline: first login stays at the admin share, not the 140-connection pla
   assert.ok(cap > 0 && cap <= 12, `one movie asked for ${cap} connections on a 140-line plan`);
 });
 
+test('pipeline: a playing show reserves its own lines', () => {
+  let shares = null;
+  let cap = null;
+  const vf = {
+    id: 'show-a', streamable: true, size: 2e9, name: 'Runner.2026.1080p.mkv',
+    _activeStreamReads: 1,
+  };
+  const pipeline = new Pipeline({
+    pool: () => ({
+      setPlaybackOpenCap: (n) => { cap = n; },
+      setViewerShares: (rows) => { shares = rows; },
+    }),
+    performance: () => ({
+      connectionMode: 'auto',
+      usableConnections: 80,
+      reserveConnections: 8,
+    }),
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map([[vf.id, vf]]),
+  });
+  pipeline.rebalancePlaybackWindows();
+  assert.ok(shares && shares.length === 1, 'the playing show is the only share');
+  assert.equal(shares[0].id, 'show-a');
+  assert.ok(shares[0].lines >= 4, `reserved share starts at 4 (${shares[0].lines})`);
+  assert.ok(cap >= shares[0].lines, 'the house cap covers that share');
+});
+
 test('pipeline: provider 502 pressure shrinks the 4K connection window', () => {
   const pipeline = new Pipeline({
     pool: () => ({ providers: [{ capHitAt: Date.now() }] }),
