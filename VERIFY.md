@@ -128,6 +128,40 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-04, v3.3.12 — The picture never waits on an idle line, one Continue Watching card per local show, and local covers in admin Now Watching:
+
+- Example: four people stream on Unraid 3.3.11. At 17:38 every account showed
+  open lines and none busy ("news-us 0/6 busy (11 waiting); secure-us 0/2;
+  newshosting 0/3; eweka 0/2") and a Good Doctor 4K piece "took 23.9s on the
+  playback lane". Each viewer-share rule refused the waiting picture piece
+  somewhere. After the share pass, a still-queued startup/seek/playback piece
+  now runs on any idle line of its own account; read-ahead keeps the share
+  contract. New e2e test reproduces the refusal; the "each watcher keeps 4
+  lines" and auto-expand tests still pass unchanged.
+- Home: local folder-show episodes are keyed per file, so every started episode
+  was its own Continue Watching card (Kaaraagaah Alavi x6, Asbab Zahmat x3 on
+  the test account). They now fold to one card per show per library, resuming
+  the most recent episode; Remove clears every merged episode. Local movies are
+  never merged. Checked on this PC's test service: one card each.
+- Admin Now Watching / Recently watched: local rows showed blank covers (their
+  tokened poster URL is scrubbed) and one card per episode. The admin payload
+  folds history rows onto the show and hands the admin a fresh art URL bound to
+  the viewing admin; the live row keeps the episode title. Security test covers
+  fold, cover, no echo of the viewer's token, and the art route accepting it.
+- Unmatched folder titles (no TMDB id) no longer send `/api/prepare`; Unraid
+  logged "No releases found on 4 indexers" for each focused Persian episode.
+- Unraid 3.3.11 follow-up over ~55 min with 2-4 streams: starts 3-6s, warm
+  joins ~20ms, the 17:38 stall above, one 3s skip wait at 17:27 (same
+  pattern), and one browser decode crash (PIPELINE_ERROR_DECODE, unrelated to
+  lines). No ~15-minute drop pattern in that window.
+- Gate: `verify:full -SkipHouseholdLive`: focused suites, full Node suite
+  854/854 fail 0, isolated server smoke, Android lint/unit/debug build, and
+  ExoPlayer Live+VOD+CC stress PASS on emulator-5554. Household VOD/IPTV/
+  overlapping Play: skipped (the family was streaming on Unraid with the same
+  usenet logins). Windows GPU/HDR: not run.
+- Version contract: `package.json` 3.3.12; Android `versionName` 3.3.12 /
+  `versionCode` 415; Windows client package/Tauri/Cargo(.lock) 3.3.12.
+
 2026-10-04, v3.3.11 — Local files survive a server restart, Back lands on the episode, and an idle line on one account no longer blocks the picture on another:
 
 - Example: you rewind a 4K episode. Easynews' only open line was reserved for an

@@ -6831,6 +6831,14 @@ function continueWatchingIdentity(it) {
   const key = String(it.key || '');
   // Custom library rows must never merge by TMDB id alone — two folders can share a wrong match.
   let m = /^local:([^:]+):(\d+)$/i.exec(key);
+  // Folder-show episodes are keyed per file, and the home cache rarely holds episode rows, so
+  // the show is its show title inside that one library, else the episode's showIdx.
+  if (m && (it.type === 'episode' || it._kind === 'episode')) {
+    const show = continueWatchingCleanTitle(String(it.title || '').replace(/\s*[—·]\s*S\d+E\d+.*$/i, ''));
+    if (show) return `localshow:${m[1]}:${show}`;
+    const showIdx = it._showIdx != null ? it._showIdx : it._showOpen;
+    if (showIdx != null) return `localshow:${m[1]}:${showIdx}`;
+  }
   if (m) return `local:${m[1]}:${m[2]}`;
   if (it._lib && it._lib.id != null && it._idx != null) return `local:${it._lib.id}:${it._idx}`;
   m = /^tmdb:tv:(\d+):s\d+e\d+$/i.exec(key);
@@ -6878,6 +6886,9 @@ function mergeContinueWatchingItem(a, b) {
   const otherQ = normalizeQualityRank(other.qualityRank);
   if (keepQ || otherQ) merged.qualityRank = keepQ || otherQ;
   merged._cwSortAt = Math.max(+a._cwSortAt || +a.updatedAt || 0, +b._cwSortAt || +b.updatedAt || 0);
+  const keys = new Set([a.key, b.key, ...(a._cwMergedKeys || []), ...(b._cwMergedKeys || [])].filter(Boolean));
+  keys.delete(merged.key);
+  merged._cwMergedKeys = [...keys];
   return merged;
 }
 function dedupeContinueWatchingItems(items) {
@@ -7734,7 +7745,16 @@ function continueWatchingRemoveBody(it) {
   const existing = key && S.watchMap && S.watchMap[key];
   return (it && it._nextEp && !existing) ? { hidden: true, position: 0, duration: 0 } : { remove: true };
 }
-function removeContinueWatchingItem(it, snap) {
+async function removeContinueWatchingItem(it, snap) {
+  // One card can stand for several in-progress episodes of the same show; removing only the
+  // newest would surface the next-newest in its place.
+  for (const key of (it && it._cwMergedKeys) || []) {
+    if (!(S.watchMap && S.watchMap[key])) continue;
+    try {
+      await trackWatchPost(api('/api/watch', { method: 'POST', body: { key, profile: S.profile ? S.profile.id : undefined, remove: true } }));
+      removeWatchCacheKey(key);
+    } catch {}
+  }
   return cwOp(it, continueWatchingRemoveBody(it), `“${it.title}” removed from Continue Watching`, { focusSnapshot: snap });
 }
 function showTitleFromEpisodeItem(it) {
@@ -8744,6 +8764,9 @@ function preparePlaybackSource(it, delay = 900) {
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
   startLocalPlaybackLookup(it);
+  // A folder title with no TMDB match has nothing an indexer could find; searching it only
+  // logged "no releases found on 4 indexers" for every Persian episode someone focused.
+  if (/^local:/i.test(String(it.key || '')) && !it.tmdbId) return;
   // An earlier prepare for this exact target that went out without year + imdb/tvdb gets ONE
   // stronger re-fire once those ids land; otherwise a warm or in-flight target is left alone.
   const key = playbackWarmKey(it, qRank);
@@ -26366,6 +26389,12 @@ function openDashRecent(key, title) {
   const show = /^tmdb:tv:(\d+)/i.exec(key || '');
   if (movie) return openDetail({ type: 'movie', tmdbId: +movie[1], title, key });
   if (show) return openDetail({ type: 'tv', tmdbId: +show[1], title, key: `tmdb:tv:${show[1]}` });
+  const local = /^local:(\w+):(\d+)$/.exec(key || '');
+  if (local) {
+    const lib = (S.libraries || []).find((l) => String(l.id) === local[1]);
+    const x = lib && (((S.libCache || {})[lib.id] || {}).data || {}).items?.find((it) => String(it.idx) === local[2]);
+    if (lib && x) return openDetail(mapLocal(lib, x));
+  }
 }
 function paintDashTop(data, box) {
   if (!box) return;

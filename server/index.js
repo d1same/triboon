@@ -4913,9 +4913,32 @@ function watchPosterIndex() {
   }
   return map;
 }
-function withActivityPosters(rows) {
+// A folder-library row is keyed per episode (local:<lib>:<idx>) and its poster is a tokened
+// /api/local/ URL the heartbeat scrub drops. Fold episodes onto their show and hand the admin
+// a fresh art URL bound to the viewing admin, so Activity shows one covered card per show.
+function withLocalActivityArt(ctx, row, foldTitle) {
+  const m = /^local:(\w+):(\d+)$/.exec(String((row && row.key) || ''));
+  if (!m) return row;
+  let item;
+  try { item = libraryItemByIndex(m[1], m[2]); } catch { item = null; }
+  if (!item) return row;
+  let owner = item;
+  if (item.kind === 'episode' && item.showIdx != null) {
+    try { owner = libraryItemByIndex(m[1], item.showIdx) || item; } catch { owner = item; }
+  }
+  const ownerIdx = owner.idx != null ? owner.idx : +m[2];
+  const out = { ...row, key: `local:${m[1]}:${ownerIdx}` };
+  if (foldTitle && owner !== item && owner.title) out.title = scrubActivityText(owner.title, 180);
+  if (!row.poster) {
+    out.poster = tmdbImageUrl(owner.poster, 'w342')
+      || (ctx && ctx.user ? `/api/local/${m[1]}/art/${ownerIdx}?t=${auth.stableStreamToken(ctx.user.id, `art:${m[1]}:${ownerIdx}`)}` : '');
+  }
+  return out;
+}
+function withActivityPosters(rows, ctx, opts = {}) {
   const idx = watchPosterIndex();
   return (Array.isArray(rows) ? rows : []).map((row) => {
+    if (row && /^local:\w+:\d+$/.test(String(row.key || ''))) return withLocalActivityArt(ctx, row, !!opts.foldTitle);
     if (!row || row.poster) return row;
     const poster = idx.get(`${row.userId}|${row.key}`) || idx.get(`${row.userId}|${activityTitleKey(row.key)}`) || '';
     return poster ? { ...row, poster } : row;
@@ -8655,9 +8678,9 @@ Object.assign(H, {
     const sessions = activeActivityRows();
     const online = activeOnlineRows();
     send(ctx.res, 200, {
-      sessions: withActivityPosters(sessions),
+      sessions: withActivityPosters(sessions, ctx),
       online,
-      history: withActivityPosters(activityHistoryRows()),
+      history: withActivityPosters(activityHistoryRows(), ctx, { foldTitle: true }),
       activeCount: sessions.length,
       onlineCount: online.length,
       retentionDays: ACTIVITY_HISTORY_DAYS,

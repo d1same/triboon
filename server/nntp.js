@@ -848,6 +848,7 @@ class ProviderPool {
       if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
       this._launch(c, task);
     }
+    if (sharesOn && this.queue.length) this._dispatchStarved();
     // Opt-in NNTP pipelining (TRIBOON_NNTP_PIPELINE=2..4, default off): stack ADDITIONAL low-lane
     // (readAhead/background) fetches onto connections already running ONLY low-lane work, up to
     // `depth` in flight per socket. NNTP answers strictly in order (the connection's waiter FIFO
@@ -875,6 +876,29 @@ class ProviderPool {
           this._launch(c, task);
         }
       }
+    }
+  }
+
+  // Viewer shares pick WHO gets a line first; they must never leave a line idle while work
+  // waits on this same account. With every watcher's piece refused somewhere (a share full on
+  // another account, an owner "waiting" on a different queue), Unraid sat at 13 open, 0 busy,
+  // 24 waiting and the picture paid 24s. Only picture work (startup/seek/playback) is rescued:
+  // read-ahead staying off reserved lines is the share contract, and it can wait.
+  _dispatchStarved() {
+    const pictureRank = this._priorityRank('playback');
+    for (const c of this.conns) {
+      if (!c.alive || this.busy.has(c)) continue;
+      let best = -1, rank = Infinity;
+      for (let i = 0; i < this.queue.length; i++) {
+        const t = this.queue[i];
+        if (signalAborted(t.signal)) continue;
+        const r = this._priorityRank(t.priority);
+        if (r <= pictureRank && r < rank) { best = i; rank = r; }
+      }
+      if (best < 0) return;
+      const task = this.queue.splice(best, 1)[0];
+      if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
+      this._launch(c, task);
     }
   }
 

@@ -2084,6 +2084,44 @@ test('Back from a local folder-show episode focuses that episode, not the season
     'an episode with unknown numbering does not invent S0E0');
 });
 
+test('Continue Watching shows one card per local folder show, and removing it clears every episode', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const fn = (name) => {
+    const start = ui.indexOf(`function ${name}(`);
+    const end = ui.indexOf('\nfunction ', start + 1);
+    assert.ok(start >= 0 && end > start, `${name} should be extractable`);
+    return ui.slice(start, end);
+  };
+  const src = ['continueWatchingCleanTitle', 'continueWatchingIdentity', 'preferContinueWatchingItem',
+    'mergeContinueWatchingItem', 'dedupeContinueWatchingItems'].map(fn).join('\n');
+  const dedupe = new Function('normalizeQualityRank', 'homeItemKey',
+    `${src}\nreturn dedupeContinueWatchingItems;`)((q) => q || 0, (it) => it.key);
+
+  const title = 'IR - Kaaraagaah Alavi کاراگاه علوی [1080p]';
+  const out = dedupe([
+    { key: 'local:lib1:15115', title, type: 'episode', resume: 600, _cwSortAt: 1 },
+    { key: 'local:lib1:15120', title, type: 'episode', resume: 300, _cwSortAt: 5 },
+    { key: 'local:lib1:15117', title, type: 'episode', resume: 900, _cwSortAt: 3 },
+    { key: 'local:lib1:16450', title: 'IR - Asbab Zahmat (2025) اسباب زحمت', type: 'episode', resume: 120, _cwSortAt: 4 },
+    { key: 'local:lib2:15116', title, type: 'episode', resume: 100, _cwSortAt: 2 },
+    { key: 'local:lib1:1520', title: 'Rejime Talaei', type: 'movie', resume: 50, _cwSortAt: 1 },
+    { key: 'local:lib1:1521', title: 'Rejime Talaei', type: 'movie', resume: 50, _cwSortAt: 1 },
+  ]);
+  const alavi = out.filter((it) => it.title === title && it.key.startsWith('local:lib1:'));
+  assert.strictEqual(alavi.length, 1, 'three in-progress episodes of one folder show are one card');
+  assert.strictEqual(alavi[0].key, 'local:lib1:15120', 'that card resumes the most recently watched episode');
+  assert.deepStrictEqual([...alavi[0]._cwMergedKeys].sort(), ['local:lib1:15115', 'local:lib1:15117'],
+    'the card remembers the other episodes so Remove clears all of them');
+  assert.ok(out.some((it) => it.key === 'local:lib2:15116'), 'the same title in another library stays its own card');
+  assert.ok(out.some((it) => it.key === 'local:lib1:16450'), 'a different show stays its own card');
+  assert.strictEqual(out.filter((it) => /^local:lib1:152[01]$/.test(it.key)).length, 2,
+    'local movies are never merged by title');
+  assert.match(fn('removeContinueWatchingItem'), /for \(const key of \(it && it\._cwMergedKeys\) \|\| \[\]\)[\s\S]+remove: true[\s\S]+return cwOp\(/,
+    'Remove clears the merged episodes before the shown one');
+  assert.match(fn('preparePlaybackSource'), /startLocalPlaybackLookup\(it\);[\s\S]{0,300}if \(\/\^local:\/i\.test\(String\(it\.key \|\| ''\)\) && !it\.tmdbId\) return;[\s\S]+api\('\/api\/prepare'/,
+    'an unmatched folder title never asks the usenet indexers for a release');
+});
+
 test('stale async recovery work cannot remount, advance, or cover a replacement episode', async () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const deferred = () => {

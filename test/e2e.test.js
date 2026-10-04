@@ -1891,6 +1891,42 @@ test('nntp: an idle line on another account does not stop the picture borrowing 
   }
 });
 
+test('nntp: the picture never waits while a line on its account sits idle', async () => {
+  // Unraid 2026-10-04 17:38: "piece took 23.9s — news-us 0/6 busy (11 waiting); secure-us 0/2
+  // busy (4 waiting); newshosting 0/3 busy (5 waiting); eweka 0/2 busy (4 waiting)". Every share
+  // rule said no somewhere, so 13 open lines idled while the picture waited.
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false },
+    { host: '127.0.0.2', port: 1, tls: false },
+  ], 4);
+  const [easynews, eweka] = pool.providers;
+  const fake = (owner) => ({ alive: true, owner, hold: !!owner, close() { this.alive = false; } });
+  try {
+    pool._viewerShares = new Map([['me', 4]]);
+    const idleHere = fake(null);
+    easynews.conns = [idleHere];
+    eweka.conns = [fake('me'), fake('me'), fake('me'), fake('me')];
+    for (const c of eweka.conns) eweka.busy.add(c);
+    const picture = { viewer: 'me', priority: 'playback' };
+    assert.strictEqual(pool.viewerTaskMayUse(easynews, idleHere, picture), false,
+      'precondition: the share rule alone refuses this line (my 4 are busy on the other account)');
+
+    let ran = null;
+    const done = new Promise((resolve) => {
+      easynews.queue.push({ ...picture, fn: (c) => { ran = c; return Promise.resolve('ok'); }, resolve, reject: resolve });
+    });
+    const ahead = { viewer: 'me', priority: 'readAhead', fn: () => Promise.resolve('ra'), resolve() {}, reject() {} };
+    easynews.queue.push(ahead);
+    easynews._pumpNow();
+    assert.strictEqual(await done, 'ok', 'the queued picture piece ran');
+    assert.strictEqual(ran, idleHere, 'it ran on the idle line of its own account');
+    assert.ok(easynews.queue.includes(ahead), 'read-ahead is not rescued onto a line its share refuses');
+  } finally {
+    easynews.queue = [];
+    pool.close();
+  }
+});
+
 test('nntp: a playing movie stays at the stream share instead of the account plan', async () => {
   const { articles } = makeRelease('Cap.Test.mkv', 20 * 64 * 1024, 64 * 1024);
   const ids = [...articles.keys()];

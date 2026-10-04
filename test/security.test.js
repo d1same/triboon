@@ -410,6 +410,48 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   await httpJson(srv.port, 'POST', '/api/activity', { sessionId: liveId, state: 'stopped' }, user);
 });
 
+test('activity: local folder episodes fold into one show card with a working cover', async () => {
+  const login = await httpJson(srv.port, 'POST', '/api/login', { name: 'fam', password: 'fam-pass' });
+  const user = login.json.token;
+  const libs = srv.store.read('libraries', { list: [] });
+  srv.store.write('libraries', { list: [...libs.list.filter((l) => l.id !== 'actlib'), { id: 'actlib', name: 'IR TV', path: '/no/such/actlib', kind: 'tv' }] });
+  const libitems = srv.store.read('libitems', {});
+  libitems.actlib = { scannedAt: Date.now(), items: [
+    { idx: 0, kind: 'show', title: 'Asbab Zahmat', poster: null },
+    { idx: 1, kind: 'episode', showIdx: 0, s: 1, e: 1, title: 'Asbab Zahmat · S01E01', poster: null },
+    { idx: 2, kind: 'episode', showIdx: 0, s: 1, e: 2, title: 'Asbab Zahmat · S01E02', poster: null },
+  ] };
+  srv.store.write('libitems', libitems);
+  const now = Date.now();
+  srv.store.write('activityHistory', { rows: [
+    { id: 'loc-1', userId: 'u-fam', userName: 'fam', title: 'Asbab Zahmat · S01E01', key: 'local:actlib:1', type: 'episode', updatedAt: now - 10 },
+    { id: 'loc-2', userId: 'u-fam', userName: 'fam', title: 'Asbab Zahmat · S01E02', key: 'local:actlib:2', type: 'episode', updatedAt: now },
+  ] });
+  const sessionId = 'test-local-activity';
+  await httpJson(srv.port, 'POST', '/api/activity', {
+    sessionId, state: 'watching', title: 'Asbab Zahmat · S01E02', key: 'local:actlib:2', type: 'episode',
+    poster: '/api/local/actlib/art/2?t=private-user-token', position: 60, duration: 3000,
+  }, user);
+
+  const view = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  const hist = view.json.history.filter((r) => String(r.key).startsWith('local:actlib:'));
+  assert.deepStrictEqual([...new Set(hist.map((r) => r.key))], ['local:actlib:0'],
+    'every episode row points at the show, so Recently watched shows one card');
+  assert.ok(hist.every((r) => r.title === 'Asbab Zahmat'), 'the history card is titled by the show, not the episode');
+  assert.ok(hist.every((r) => /^\/api\/local\/actlib\/art\/0\?t=/.test(r.poster)), 'the history card carries a show cover URL');
+  const row = view.json.sessions.find((s) => s.sessionId === sessionId);
+  assert.ok(row && /^\/api\/local\/actlib\/art\/0\?t=/.test(row.poster), 'Now watching gets the show cover too');
+  assert.ok(!row.poster.includes('private-user-token'), "the viewer's own tokened URL is never echoed to the admin");
+  assert.strictEqual(row.title, 'Asbab Zahmat · S01E02', 'the live row keeps the episode in its title');
+
+  const art = await httpJson(srv.port, 'GET', hist[0].poster, null, null);
+  assert.notStrictEqual(art.status, 401, 'the cover token is accepted by the art route');
+  await httpJson(srv.port, 'POST', '/api/activity', { sessionId, state: 'stopped' }, user);
+  srv.store.write('libraries', libs);
+  delete libitems.actlib;
+  srv.store.write('libitems', libitems);
+});
+
 test('presence: connected devices (browsing or watching) appear in the online list; admin-only', async () => {
   const login = await httpJson(srv.port, 'POST', '/api/login', { name: 'fam', password: 'fam-pass' });
   const user = login.json.token;
