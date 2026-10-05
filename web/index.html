@@ -8575,6 +8575,9 @@ function renderRows(opts = {}) {
   if (S.view !== 'home') return;
   setRowsView($('rows'), S.rows, true);
   maybeBootHomeReady(S.rows); // placeholder rows stay behind the original boot loader
+  // A background refresh (progress, prepare, Trakt) while the hold-OK menu is open must not pull
+  // focus back onto the card under it. Closing the menu refocuses the card by row/column.
+  if ($('cwMenu').classList.contains('open')) { signalTvReadyOnce('home-render'); return; }
   if (patched && $('rows').querySelector('.focus')) {
     signalTvReadyOnce('home-render');
     return;

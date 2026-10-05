@@ -128,6 +128,23 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-04, v3.3.14 — Hold-OK menu stays focused, and a queued piece opens one line on a dark account:
+
+- Android TV: hold OK on Continue Watching, the menu opens, then a home refresh
+  pulled focus back onto the poster under it. `renderRows` now leaves focus
+  alone while `#cwMenu` is open. Closing the menu still returns to the card.
+- Unraid 3.3.13, right after the 19:36 restart: The Good Doctor S02E03 buffered
+  18s at 38:11 with newshosting and eweka at 0 open and pieces waiting. Failover
+  had parked those pieces on accounts with no line, and a full house share
+  refused to dial them. That account now opens one line while a piece is queued.
+- Gate: `npm.cmd test` 855/855 before the hold-OK test; both new tests pass.
+  Android lint/unit/debug build PASS. Emulator ExoPlayer stress PASS on
+  emulator-5554 against this PC at 3.3.14 (`ok: true`, home 109 cards, signed
+  in as owner). Household VOD/IPTV/overlapping Play not run (Onn off, family
+  sleeping). Local test service stopped afterwards; 0 usenet lines on this PC.
+- Version contract: `package.json` 3.3.14; Android `versionName` 3.3.14 /
+  `versionCode` 417; Windows client package/Tauri/Cargo(.lock) 3.3.14.
+
 2026-10-04, v3.3.13 — Read-ahead runs when every share is exactly 4, and a failing subtitle sync stops instead of looping:
 
 - Example: five people watch on Unraid 3.3.12. Each share is exactly 4 lines,

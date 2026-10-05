@@ -816,6 +816,9 @@ class ProviderPool {
       const want = this.household.viewerOpenWant();
       const householdOpen = typeof this.householdOpen === 'function' ? this.householdOpen() : openNow;
       if (householdOpen < want) this._ensure(Math.min(ceiling, openNow + (want - householdOpen)));
+      // Failover parks pieces on accounts that have no line. The house being at its target does
+      // not help them: only a line on THIS account can run its queue.
+      else if (pending && openNow === 0 && ceiling > 0) this._ensure(1);
     } else {
       const need = Math.min(ceiling, Math.max(openNow, pending));
       if (pending && openNow < need) this._ensure(need);

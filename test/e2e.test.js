@@ -1935,6 +1935,34 @@ test('nntp: the picture never waits while a line on its account sits idle', asyn
   }
 });
 
+test('nntp: a piece queued on an account with no line dials one even when the house share is full', () => {
+  // Unraid 3.3.13 19:40: "buffered 18s — news-us 0/7 busy (11 waiting); secure-us 0/1 busy
+  // (9 waiting); newshosting 0/0 busy (6 waiting); eweka 0/0 busy (3 waiting)". Failover put
+  // pieces on accounts with no line, and with viewer shares on an account only dialed while the
+  // whole house was under its target, so those pieces never got a line.
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false },
+    { host: '127.0.0.2', port: 1, tls: false },
+  ], 4);
+  const [newsUs, newshosting] = pool.providers;
+  const fake = (owner) => ({ alive: true, owner, hold: true, close() { this.alive = false; } });
+  try {
+    pool.setPlaybackOpenCap(4);
+    pool._viewerShares = new Map([['me', 4]]);
+    newsUs.conns = [fake('me'), fake('me'), fake('me'), fake('me')];
+    for (const c of newsUs.conns) newsUs.busy.add(c);
+    const asked = [];
+    newshosting._ensure = (n) => { asked.push(n); };
+    newshosting.queue.push({ viewer: 'me', priority: 'playback', fn: () => Promise.resolve('ok'), resolve() {}, reject() {} });
+    newshosting._pumpNow();
+    assert.ok(asked.some((n) => n >= 1), `the account holding the piece dialed a line (asked ${JSON.stringify(asked)})`);
+    assert.ok(asked.every((n) => n <= 1), 'it dials one line, not the whole plan');
+  } finally {
+    newshosting.queue = [];
+    pool.close();
+  }
+});
+
 test('nntp: a playing movie stays at the stream share instead of the account plan', async () => {
   const { articles } = makeRelease('Cap.Test.mkv', 20 * 64 * 1024, 64 * 1024);
   const ids = [...articles.keys()];

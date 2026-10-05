@@ -2084,6 +2084,31 @@ test('Back from a local folder-show episode focuses that episode, not the season
     'an episode with unknown numbering does not invent S0E0');
 });
 
+test('a home refresh while the hold-OK menu is open leaves focus on the menu', () => {
+  // Android TV 2026-10-04: hold OK on a Continue Watching card, the menu opens, then a background
+  // home re-render put focus back on the thumbnail under it.
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function renderRows(');
+  const end = ui.indexOf('\nfunction ', start + 1);
+  assert.ok(start >= 0 && end > start, 'renderRows should be extractable');
+  const run = (menuOpen) => {
+    const moved = [];
+    const el = (open) => ({ classList: { contains: (c) => c === 'open' && open }, querySelector: () => null, scrollTop: 0 });
+    const $ = (id) => (id === 'cwMenu' ? el(menuOpen) : el(false));
+    const S = { view: 'home', zone: 'rows', rows: [{ name: 'Continue Watching', items: [{ key: 'a' }] }], heroIdx: 0 };
+    const renderRows = new Function('S', '$', 'renderRowsInto', 'setRowsView', 'maybeBootHomeReady', 'signalTvReadyOnce',
+      'homeFocusSnapshot', 'restoreHomeFocus', 'paintRailPreviewHero', 'focusHero', 'focusCard',
+      `${ui.slice(start, end)}; return renderRows;`)(
+      S, $, () => true, () => {}, () => {}, () => {},
+      () => ({ zone: 'rows', rowIdx: 0 }), () => { moved.push('restore'); return true; }, () => {},
+      () => moved.push('hero'), () => moved.push('card'));
+    renderRows({ preserveFocus: true });
+    return moved;
+  };
+  assert.deepEqual(run(true), [], 'menu open: focus is not moved back to the card');
+  assert.deepEqual(run(false), ['restore'], 'menu closed: the refresh still restores home focus');
+});
+
 test('Continue Watching shows one card per local folder show, and removing it clears every episode', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const fn = (name) => {
