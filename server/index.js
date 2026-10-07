@@ -7,7 +7,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { NntpPool, NntpConnection, providersReadyToDial } = require('./nntp');
+const { NntpPool, NntpConnection, providersReadyToDial, linesSummary } = require('./nntp');
 const { mountNzb } = require('./archive');
 const { configureSegmentDisk, getSegmentDisk } = require('./segment-cache');
 const { configureNzbStore } = require('./nzb-store');
@@ -5219,20 +5219,7 @@ function noteStartupTime(vf, candidate, totalMs, searchMs, label = '', requestT0
 // Host and counts only — the same fields the Activity screen already shows.
 function usenetLinesSnapshot() {
   if (!pool || typeof pool.stats !== 'function') return '';
-  let stats;
-  try { stats = pool.stats(); } catch { return ''; }
-  if (!stats || !Array.isArray(stats.providers) || !stats.providers.length) return '';
-  return stats.providers.map((p) => {
-    const host = String(p.host || 'usenet').toLowerCase().replace(/^news\./, '').split('.')[0];
-    const flags = [];
-    if (p.queued > 0) flags.push(`${p.queued} waiting`);
-    if (p.connecting > 0) flags.push(`${p.connecting} dialing`);
-    if (p.quiet) flags.push('quiet after 480');
-    if (p.down) flags.push('down');
-    if (p.noLogin) flags.push('no login saved');
-    else if (p.authBroken) flags.push('login rejected');
-    return `${host} ${p.inUse}/${p.open} busy${flags.length ? ` (${flags.join(', ')})` : ''}`;
-  }).join('; ');
+  try { return linesSummary(pool.stats()); } catch { return ''; }
 }
 // Bound a per-mount result cache to its newest N entries (Maps keep insertion order, so the first
 // key is the oldest). Mirrors the _subCache cap so a marathon session that toggles many subtitle

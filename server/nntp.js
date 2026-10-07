@@ -31,6 +31,11 @@ const HEDGE_PRIORITIES = new Set(['startup', 'seek', 'playback']);
 // typed plan — that AUTH burst is what bans the account.
 const CAP_HIT_COOLDOWN_MS = 120000;
 const CONNECT_BURST = 4;
+// Picture work (startup/seek/playback) must never sit in a queue next to an idle line. Nothing
+// wakes the dispatcher when lines are open, idle, and work is waiting, so a watchdog re-checks.
+const STUCK_CHECK_MS = 500;
+const STUCK_PICTURE_MS = 1000;
+const STUCK_LOG_EVERY_MS = 10000;
 // While someone is watching, this many lines stay theirs. Other people's
 // read-ahead cannot sit on them. Auto-expand may add more lines above this.
 const VIEWER_LINE_RESERVE = 4;
@@ -663,7 +668,7 @@ class ProviderPool {
     return new Promise((resolve, reject) => {
       const signal = opts.signal;
       if (signalAborted(signal)) return reject(abortError());
-      const task = { fn, resolve, reject, priority, signal, viewer: opts.viewer ? String(opts.viewer) : '' };
+      const task = { fn, resolve, reject, priority, signal, at: Date.now(), viewer: opts.viewer ? String(opts.viewer) : '' };
       task.cleanupAbort = addAbortListener(signal, () => {
         const idx = this.queue.indexOf(task);
         if (idx !== -1) {
@@ -718,6 +723,58 @@ class ProviderPool {
   _pump() {
     this._pumpNow();
     this._watchParked();
+    this._watchStuck();
+  }
+
+  // What is waiting here and how many lines sit idle. "Picture" = startup/seek/playback work the
+  // player is blocked on; everything else (read-ahead, health, background) can wait.
+  _queueDetail(now = Date.now()) {
+    const pictureRank = this._priorityRank('playback');
+    let picture = 0, low = 0, oldestPictureMs = 0;
+    for (const t of this.queue) {
+      if (signalAborted(t.signal)) continue;
+      if (this._priorityRank(t.priority) <= pictureRank) {
+        picture++;
+        oldestPictureMs = Math.max(oldestPictureMs, now - (t.at || now));
+      } else low++;
+    }
+    let idle = 0;
+    for (const c of this.conns) if (c.alive && !this.busy.has(c)) idle++;
+    return { picture, low, oldestPictureMs, idle };
+  }
+
+  // _pumpNow only runs on events. Lines open and idle with work queued has no event coming (the
+  // parked watcher only covers ZERO lines), so a picture piece could wait for the player's own
+  // 30s timeout beside a free socket. While that state holds, re-check twice a second and hand
+  // picture work to an idle line no matter whose share it is. Read-ahead is left to the share rules.
+  _watchStuck() {
+    const d = this.closed ? null : this._queueDetail();
+    if (!d || d.idle <= 0 || d.picture + d.low <= 0) {
+      if (this._stuckTimer) { clearTimeout(this._stuckTimer); this._stuckTimer = null; }
+      return;
+    }
+    if (this._stuckTimer) return;
+    this._stuckTimer = setTimeout(() => {
+      this._stuckTimer = null;
+      if (this.closed) return;
+      try { this._rescueStuck(); this._pump(); } catch {}
+    }, STUCK_CHECK_MS);
+    if (this._stuckTimer.unref) this._stuckTimer.unref();
+  }
+
+  _rescueStuck() {
+    const now = Date.now();
+    const d = this._queueDetail(now);
+    if (d.idle <= 0 || d.picture <= 0 || d.oldestPictureMs < STUCK_PICTURE_MS) return;
+    this.stuckRescues = (this.stuckRescues || 0) + 1;
+    if (now - (this._stuckLoggedAt || 0) >= STUCK_LOG_EVERY_MS) {
+      this._stuckLoggedAt = now;
+      const host = (this.opts && this.opts.host) || 'usenet';
+      const why = `${host}: ${d.picture} picture request(s) waited ${(d.oldestPictureMs / 1000).toFixed(1)}s beside ${d.idle} idle line(s) — handing them to the idle line`;
+      debug.fail('buffer', why);
+      debug.issue(`dispatch stuck — reason: ${why}`);
+    }
+    this._dispatchStarved();
   }
 
   // _pumpNow only runs on events: a task finishing, a socket connecting, the quiet-window
@@ -1076,6 +1133,7 @@ class ProviderPool {
   // Instantaneous connection snapshot for the admin Activity screen. Never includes credentials —
   // only the host and live counts. inUse = connections actively running a command right now.
   stats() {
+    const d = this._queueDetail();
     return {
       host: String(this.opts.host || ''),
       inUse: this.busy.size,
@@ -1083,6 +1141,11 @@ class ProviderPool {
       connecting: this.connecting,
       size: this.size,
       queued: this.queue.length,
+      pictureWaiting: d.picture,
+      lowWaiting: d.low,
+      oldestPictureMs: d.oldestPictureMs,
+      idle: d.idle,
+      stuckRescues: this.stuckRescues || 0,
       down: this.down(),
       authBroken: this.authBroken(),
       noLogin: !!this.noLogin,
@@ -1658,6 +1721,7 @@ class NntpPool {
       open: providers.reduce((n, p) => n + p.open, 0),
       size: providers.reduce((n, p) => n + p.size, 0),
       queued: providers.reduce((n, p) => n + p.queued, 0),
+      openCap: this._playbackOpenCap || 0,
       throughput: this.meter ? this.meter.snapshot() : { houseMbps: 0, mbpsPerConn: 0, at: 0, samples: 0 },
     };
   }
@@ -1667,6 +1731,30 @@ class NntpPool {
 // A saved password with a blank username still looks like a free account.
 // Playback then asks it first, gets "not logged in", and the desktop gives up
 // before an account that can sign in gets the movie.
+// One short clause per account for the playback log, shared by every "lines:" line. Host and
+// counts only. Extra detail appears only when there is something to explain: what kind of work is
+// waiting, how long the picture has waited, and lines sitting idle beside waiting work.
+function linesSummary(stats) {
+  if (!stats) return '';
+  const providers = Array.isArray(stats.providers) && stats.providers.length ? stats.providers : [stats];
+  const rows = providers.map((p) => {
+    const host = String(p.host || 'usenet').toLowerCase().replace(/^news\./, '').split('.')[0];
+    const flags = [];
+    if (p.queued > 0) flags.push(`${p.queued} waiting`);
+    if (p.connecting > 0) flags.push(`${p.connecting} dialing`);
+    if (p.quiet) flags.push('quiet after 480');
+    if (p.down) flags.push('down');
+    if (p.noLogin) flags.push('no login saved');
+    else if (p.authBroken) flags.push('login rejected');
+    if (p.pictureWaiting > 0) flags.push(`${p.pictureWaiting} picture, oldest ${(p.oldestPictureMs / 1000).toFixed(1)}s`);
+    if (p.idle > 0 && p.queued > 0) flags.push(`${p.idle} idle beside waiting work`);
+    if (p.stuckRescues > 0) flags.push(`${p.stuckRescues} rescued`);
+    return `${host} ${p.inUse || 0}/${p.open || 0} busy${flags.length ? ` (${flags.join(', ')})` : ''}`;
+  });
+  const house = stats.openCap > 0 && Number.isFinite(stats.open) ? ` [house ${stats.open} open of ${stats.openCap}]` : '';
+  return rows.join('; ') + house;
+}
+
 function providersReadyToDial(list) {
   const rows = Array.isArray(list) ? list : [];
   const ready = rows.filter((p) => p && String(p.user || '').trim());
@@ -1675,7 +1763,7 @@ function providersReadyToDial(list) {
 
 module.exports = {
   NntpConnection, NntpPool, ProviderPool, ArticleMissCache, TransferMeter, isTooManyConnections,
-  providersReadyToDial,
+  providersReadyToDial, linesSummary,
   providerPickScore, providerHeadroom, streamStartupNeedSlots,
   learnedConnectionLimit, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS, CONNECT_BURST,
   isCorruptArticle, isDefinitiveFailure,

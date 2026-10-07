@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const http = require('http');
 const { encodePart, decode, crc32 } = require('../server/yenc');
 const { parseNzb, pickPrimaryFile } = require('../server/nzb');
-const { NntpPool, ProviderPool, NntpConnection, CONNECT_BURST, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS, providersReadyToDial } = require('../server/nntp');
+const { NntpPool, ProviderPool, NntpConnection, CONNECT_BURST, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS, providersReadyToDial, linesSummary } = require('../server/nntp');
 const debug = require('../server/debug');
 const { VirtualFile, SharedCacheBudget } = require('../server/vfs');
 const { createMockNntp } = require('./mock-nntp');
@@ -1933,6 +1933,51 @@ test('nntp: the picture never waits while a line on its account sits idle', asyn
     easynews.queue = [];
     pool.close();
   }
+});
+
+test('nntp: a picture piece waiting beside an idle line is handed to it without any other event', async () => {
+  // Unraid 2026-10-07 18:22: "eweka 0/1 busy (2 waiting)" — a line open and idle, work queued, and
+  // the player gave up after 30s. Nothing re-runs the dispatcher in that state (the parked watcher
+  // only covers zero lines), so a missed event stranded the piece. The watchdog must rescue it.
+  const pool = new NntpPool([{ host: '127.0.0.1', port: 1, tls: false }], 4);
+  const [acct] = pool.providers;
+  const idle = { alive: true, owner: null, hold: false, lastUsed: Date.now(), close() { this.alive = false; } };
+  try {
+    acct.conns = [idle];
+    let ran = null;
+    const done = new Promise((resolve) => {
+      acct.queue.push({
+        viewer: 'me', priority: 'playback', at: Date.now() - 3000,
+        fn: (c) => { ran = c; return Promise.resolve('ok'); }, resolve, reject: resolve,
+      });
+    });
+    const read = acct.stats();
+    assert.strictEqual(read.pictureWaiting, 1, 'stats count the picture piece');
+    assert.strictEqual(read.idle, 1, 'stats count the idle line');
+    assert.ok(read.oldestPictureMs >= 2900, 'stats carry how long the picture has waited');
+    acct._watchStuck(); // no _pumpNow: this is the missed-event state
+    assert.strictEqual(await Promise.race([done, new Promise((r) => setTimeout(() => r('stuck'), 3000))]), 'ok',
+      'the watchdog dispatched it');
+    assert.strictEqual(ran, idle);
+    assert.ok(acct.stats().stuckRescues >= 1, 'the rescue is counted for the log');
+  } finally {
+    acct.queue = [];
+    pool.close();
+  }
+});
+
+test('nntp: the lines log says what is waiting, how long, and where lines sit idle', () => {
+  const line = linesSummary({
+    openCap: 14, open: 9,
+    providers: [
+      { host: 'news.eweka.nl', inUse: 0, open: 1, queued: 3, pictureWaiting: 2, lowWaiting: 1, oldestPictureMs: 4100, idle: 1 },
+      { host: 'news-us.newshosting.com', inUse: 2, open: 5, queued: 0, idle: 3 },
+    ],
+  });
+  assert.match(line, /eweka 0\/1 busy \(3 waiting, 2 picture, oldest 4\.1s, 1 idle beside waiting work\)/);
+  assert.match(line, /news-us 2\/5 busy(;|\s)/, 'a healthy account stays terse');
+  assert.match(line, /\[house 9 open of 14\]/, 'the household cap rides along');
+  assert.strictEqual(linesSummary(null), '');
 });
 
 test('nntp: a piece queued on an account with no line dials one even when the house share is full', () => {

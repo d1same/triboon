@@ -29,11 +29,11 @@ function xml(value) {
 }
 
 // The pipeline's stub/incomplete guard (server/pipeline.js stubFeatureReason) rejects any mounted
-// feature under 80MB outright, and under 300MB when the release NAME claims 1080p/2160p. The QA
+// feature under 80MB outright, and under 400MB when the release NAME claims 1080p/2160p. The QA
 // releases MUST keep their 1080p/2160p tags (the stress verifies the Sources drawer keeps the two
-// quality classes separated), so media under the 300MB floor is padded with a legal MP4 `free`
+// quality classes separated), so media under the 400MB floor is padded with a legal MP4 `free`
 // box — every parser skips it, playback and seeking are untouched.
-const STUB_FLOOR_BYTES = 320 * 1024 * 1024; // 300MB tagged-release floor + margin
+const STUB_FLOOR_BYTES = 420 * 1024 * 1024; // 400MB tagged-release floor (declared >= 2GB) + margin
 function padToStubFloor(data) {
   if (data.length >= STUB_FLOOR_BYTES) return data;
   const padBytes = STUB_FLOOR_BYTES - data.length;

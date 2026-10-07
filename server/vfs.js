@@ -6,7 +6,7 @@
 
 const { decode } = require('./yenc');
 const { parseNzb, pickPrimaryFile, fileNameFromSubject } = require('./nzb');
-const { streamStartupNeedSlots } = require('./nntp');
+const { streamStartupNeedSlots, linesSummary } = require('./nntp');
 const { getSegmentDisk } = require('./segment-cache');
 const debug = require('./debug');
 const crypto = require('crypto');
@@ -195,19 +195,7 @@ class NzbFileStream {
 
   _poolPicture() {
     try {
-      const stats = this.pool && typeof this.pool.stats === 'function' ? this.pool.stats() : null;
-      if (!stats) return '';
-      const providers = Array.isArray(stats.providers) && stats.providers.length ? stats.providers : [stats];
-      return providers.map((p) => {
-        const host = String(p.host || 'usenet').toLowerCase().replace(/^news\./, '').split('.')[0];
-        const flags = [];
-        if (p.queued > 0) flags.push(`${p.queued} waiting`);
-        if (p.connecting > 0) flags.push(`${p.connecting} dialing`);
-        if (p.quiet) flags.push('quiet after 480');
-        if (p.down) flags.push('down');
-        if (p.authBroken) flags.push('login broken');
-        return `${host} ${p.inUse || 0}/${p.open || 0} busy${flags.length ? ` (${flags.join(', ')})` : ''}`;
-      }).join('; ');
+      return linesSummary(this.pool && typeof this.pool.stats === 'function' ? this.pool.stats() : null);
     } catch { return ''; }
   }
 

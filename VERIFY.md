@@ -128,6 +128,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-07, v3.3.15 — The log says what is waiting beside an idle line, and a picture piece stranded there is handed to it:
+
+- Unraid 3.3.14: The Good Doctor S02E16 froze ~30s at 9:52 (player timeout), with
+  `eweka 0/1 busy (2 waiting)` — a line open and idle, work queued. Nothing re-ran
+  the dispatcher in that state (the parked watcher only covers zero lines). A
+  watchdog now re-checks twice a second and hands picture work waiting over 1s
+  to an idle line, logging `dispatch stuck`. It is a safety net; the exact stall
+  was not reproduced, so the next live stall must be read from the new log.
+- Every `lines:` log entry now shows picture vs read-ahead waiting, the oldest
+  picture wait, idle lines beside waiting work, and `[house N open of CAP]`.
+- Checked on the live provider accounts: all 2,826 articles of the S02E15 release
+  exist on all four providers (STAT); corruption of article bytes not completed.
+- Gate: `npm.cmd test` 858/858. `verify:full -SkipHouseholdLive`: syntax, IPTV,
+  fast-VOD, CC, local-library, full suite, isolated server smoke, Android
+  lint/unit/debug build PASS. Household VOD/IPTV/overlapping Play NOT run
+  (unverified; owner will test on the live server after deploy). Android
+  stress smoke did not run: adb saw only the release-signed Shield and the
+  harness could not reach a debug WebView.
+- QA emulator + isolated QA server (fake usenet): native playback started in
+  691ms, new `lines:` format seen in the log, no `dispatch stuck`. QA fixture
+  media padding raised to 420MB (the stub floor is now 400MB). All rig processes
+  stopped afterwards.
+- Version contract: `package.json` 3.3.15; Android `versionName` 3.3.15 /
+  `versionCode` 418; Windows client package/Tauri/Cargo(.lock) 3.3.15.
+
 2026-10-04, v3.3.14 — Hold-OK menu stays focused, and a queued piece opens one line on a dark account:
 
 - Android TV: hold OK on Continue Watching, the menu opens, then a home refresh
