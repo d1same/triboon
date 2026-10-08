@@ -128,6 +128,19 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-08, v3.3.19 — Jellyfin apps on Apple TV and Roku can heart and mark watched, and browse pages answer JSON instead of the website:
+
+- Cause: Jellyfin 10.9+ apps (Swiftfin, current Roku) call /UserFavoriteItems/{id} and
+  /UserPlayedItems/{id}. The door only knew /Users/{id}/FavoriteItems and PlayedItems, so the new
+  calls fell through to the Triboon website (HTML, 200). Fix: new set/clear routes, POST
+  /UserItems/{id}/UserData, and JSON lists for /Genres /Persons /Studios /Artists /Playlists
+  /MusicGenres /Items/Filters plus an ack for /Sessions/Playing/Ping. test/jellyfin-api.test.js covers each.
+- Verified: jellyfin-api + security + phase4 suites (260 pass), verify:full automated parts
+  (syntax, full npm test, Android lint/unit/debug build).
+- NOT verified (no device or credentials on this box; owner chose to release anyway): household
+  VOD/IPTV/overlap live smokes, Android ExoPlayer stress, and any real Roku or Apple TV run.
+  Roku/Apple TV crash causes beyond these routes are undiagnosed; need [fail:jellyfin] log lines.
+
 2026-10-08, v3.3.18 — A burst of skips no longer freezes the stream, a short response reopens at once, cancelled work leaves the queue, passthrough audio has room on quick starts, and CC says when subtitles are still loading:
 
 - Shield on the live server (3.3.17): The Rookie S08E15, six quick +30s skips, froze 60s at 28:05

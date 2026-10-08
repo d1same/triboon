@@ -24,6 +24,12 @@ const PREFIXES = [
   '/displaypreferences', '/quickconnect', '/branding', '/sessions',
   '/plugins', '/startup', '/localization', '/videos', '/livetv', '/playback',
   '/mediasegments', '/socket', '/search',
+  // Jellyfin 10.9+ apps (Swiftfin, current Roku, Findroid) heart and mark
+  // watched here, not under /Users/{id}/.
+  '/userfavoriteitems', '/userplayeditems',
+  // Browse pages the TV apps open. Outside the door these fell through to the
+  // Triboon website and answered 200 with HTML, which a JSON reader chokes on.
+  '/genres', '/persons', '/studios', '/musicgenres', '/artists', '/playlists',
 ];
 
 let deps = null;
@@ -2846,18 +2852,29 @@ async function handleKind(kind, ctx) {
     }
     return send(ctx.res, 200, { Genres: genres, Tags: [], OfficialRatings: [], Years: years }, cors);
   }
-  if (kind === 'favorite' || kind === 'unfavorite' || kind === 'played' || kind === 'unplayed') {
+  if (kind === 'favorite' || kind === 'unfavorite' || kind === 'played' || kind === 'unplayed' || kind === 'userdata') {
     if (ctx.m && ctx.m[1] && !owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
     const itemId = ctx.m[2];
     const key = watchKeyFromId(itemId);
+    // userdata carries the flags in a body; the others carry them in the path.
+    let want = { favorite: undefined, watched: undefined };
+    if (kind === 'userdata') {
+      let body = {};
+      try { body = (await readJson(ctx.req)) || {}; } catch { body = {}; }
+      if (typeof body.IsFavorite === 'boolean') want.favorite = body.IsFavorite;
+      if (typeof body.Played === 'boolean') want.watched = body.Played;
+    } else {
+      if (kind === 'favorite') want.favorite = true;
+      if (kind === 'unfavorite') want.favorite = false;
+      if (kind === 'played') want.watched = true;
+      if (kind === 'unplayed') want.watched = false;
+    }
     const fallback = {
       position: 0,
       duration: 0,
-      favorite: kind === 'favorite',
-      watched: kind === 'played',
+      favorite: want.favorite === true,
+      watched: want.watched === true,
     };
-    if (kind === 'unfavorite') fallback.favorite = false;
-    if (kind === 'unplayed') fallback.watched = false;
     try {
       if (!key || typeof deps.jellyfinWatchSave !== 'function') {
         return send(ctx.res, 200, userDataFromRow(fallback, 0, itemId), cors);
@@ -2876,13 +2893,11 @@ async function handleKind(kind, ctx) {
         watched: !!prev.watched,
         meta,
       };
-      if (kind === 'favorite') patch.favorite = true;
-      if (kind === 'unfavorite') patch.favorite = false;
-      if (kind === 'played') {
+      if (want.favorite !== undefined) patch.favorite = want.favorite;
+      if (want.watched === true) {
         patch.watched = true;
         if (duration) patch.position = duration;
-      }
-      if (kind === 'unplayed') {
+      } else if (want.watched === false) {
         patch.watched = false;
         patch.position = 0;
       }
@@ -3142,6 +3157,14 @@ const JELLYFIN_ROUTES = [
   { m: 'DELETE', re: /^\/users\/([a-z0-9-]{4,64})\/favoriteitems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'unfavorite', h: serveJellyfin },
   { m: 'POST', re: /^\/users\/([a-z0-9-]{4,64})\/playeditems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'played', h: serveJellyfin },
   { m: 'DELETE', re: /^\/users\/([a-z0-9-]{4,64})\/playeditems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'unplayed', h: serveJellyfin },
+  // The user is the signed-in account, so group 1 stays empty and group 2
+  // is the item, the same shape as the older /Users/{id}/ routes above.
+  { m: 'POST', re: /^\/()userfavoriteitems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'favorite', h: serveJellyfin },
+  { m: 'DELETE', re: /^\/()userfavoriteitems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'unfavorite', h: serveJellyfin },
+  { m: 'POST', re: /^\/()userplayeditems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'played', h: serveJellyfin },
+  { m: 'DELETE', re: /^\/()userplayeditems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'unplayed', h: serveJellyfin },
+  { m: 'POST', re: /^\/()useritems\/([a-z0-9-]{1,64})\/userdata$/, auth: 'user', kind: 'userdata', h: serveJellyfin },
+  { m: 'POST', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/userdata$/, auth: 'user', kind: 'userdata', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/latest$/, auth: 'user', kind: 'latest', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items$/, auth: 'user', kind: 'shelf', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/intros$/, auth: 'user', kind: 'intros', h: serveJellyfin },
@@ -3151,6 +3174,14 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/userviews$/, auth: 'user', kind: 'views', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/counts$/, auth: 'user', kind: 'counts', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/filters2$/, auth: 'user', kind: 'filters', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/filters$/, auth: 'user', kind: 'filters', h: serveJellyfin },
+  { m: 'GET', re: /^\/genres$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/musicgenres$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/persons$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/studios$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/artists(?:\/albumartists)?$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/playlists$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'POST', re: /^\/sessions\/playing\/ping$/, auth: 'user', kind: 'ack', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/latest$/, auth: 'user', kind: 'latest', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/images\/(primary|backdrop|thumb|logo)(?:\/\d+)?$/, auth: 'public', kind: 'image', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/thememedia$/, auth: 'user', kind: 'theme', h: serveJellyfin },

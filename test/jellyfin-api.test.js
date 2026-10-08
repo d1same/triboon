@@ -636,6 +636,32 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.strictEqual(showShelf.json.TotalRecordCount, 1, 'a scanned show library lists the show, not every episode');
   assert.strictEqual(showShelf.json.Items[0].Name, 'Day Show');
   assert.strictEqual(showShelf.json.Items[0].Type, 'Series');
+  // Jellyfin 10.9+ apps (Swiftfin on Apple TV, current Roku) use the new paths.
+  const newHeart = await httpSend(srv.port, 'POST', `/UserFavoriteItems/${aardvark.Id}`, { headers: { authorization: authz } });
+  assert.strictEqual(newHeart.status, 200, 'the new heart path answers');
+  assert.strictEqual(newHeart.json.IsFavorite, true);
+  const newUnheart = await httpSend(srv.port, 'DELETE', `/UserFavoriteItems/${aardvark.Id}`, { headers: { authorization: authz } });
+  assert.strictEqual(newUnheart.json.IsFavorite, false);
+  const newUnplayed = await httpSend(srv.port, 'DELETE', `/UserPlayedItems/${aardvark.Id}`, { headers: { authorization: authz } });
+  assert.strictEqual(newUnplayed.json.Played, false, 'the new unwatched path clears the mark');
+  const newPlayed = await httpSend(srv.port, 'POST', `/UserPlayedItems/${aardvark.Id}`, { headers: { authorization: authz } });
+  assert.strictEqual(newPlayed.json.Played, true, 'the new watched path sets the mark');
+  const viaData = await httpSend(srv.port, 'POST', `/UserItems/${aardvark.Id}/UserData`, {
+    headers: { authorization: authz, 'content-type': 'application/json' }, body: JSON.stringify({ IsFavorite: true, Played: false }),
+  });
+  assert.strictEqual(viaData.json.IsFavorite, true);
+  assert.strictEqual(viaData.json.Played, false);
+  for (const p of ['/Genres', '/Persons', '/Studios', '/Artists', '/Playlists', '/MusicGenres']) {
+    const page = await httpSend(srv.port, 'GET', p, { headers: { authorization: authz } });
+    assert.strictEqual(page.status, 200, `${p} answers`);
+    assert.ok(page.json && Array.isArray(page.json.Items), `${p} answers JSON with an Items list, not the website page`);
+  }
+  const filtersOld = await httpSend(srv.port, 'GET', '/Items/Filters', { headers: { authorization: authz } });
+  assert.ok(filtersOld.json && Array.isArray(filtersOld.json.Genres), '/Items/Filters answers like Filters2');
+  const ping = await httpSend(srv.port, 'POST', '/Sessions/Playing/Ping', { headers: { authorization: authz } });
+  assert.strictEqual(ping.status, 204, 'the play ping is acknowledged');
+  const noToken = await httpSend(srv.port, 'POST', `/UserFavoriteItems/${aardvark.Id}`);
+  assert.strictEqual(noToken.status, 401, 'the new heart path needs a login');
   const showHeart = await httpSend(srv.port, 'POST', `/Users/${me.json.Id}/FavoriteItems/${showShelf.json.Items[0].Id}`, { headers: { authorization: authz } });
   assert.strictEqual(showHeart.json.IsFavorite, true);
   const showHearts = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items?Filters=IsFavorite&IncludeItemTypes=Series&Recursive=true`, { headers: { authorization: authz } });
