@@ -4179,12 +4179,12 @@ test('pipeline: Auto uses fewer sockets when each one is fast, more when evening
     [uhd, hd],
     {
       usableConnections: 40, reserveConnections: 4, connectionMode: 'auto',
-      serverDownloadMbps: 800, measuredMbpsPerConn: 28,
+      serverDownloadMbps: 800, liveMbpsPerConn: 28, // lines measured fast RIGHT NOW (a saved test alone is derated)
     },
     { viewerChanged: false, now },
   );
   assert.ok(fast[0] >= fast[1], '4K still gets at least as many sockets as 1080p');
-  assert.ok(fast[0] <= 6, 'a 28 Mbps socket feeds 4K without opening a pile of them');
+  assert.ok(fast[0] <= 8, 'a 28 Mbps socket feeds 4K (with headroom) without opening a pile of them');
   assert.ok(fast.reduce((s, n) => s + n, 0) * 28 < 800 * 0.8, 'fast sockets stay under the 800 Mbps safe pipe');
 
   const evening = allocateStreamConnections(
@@ -4280,6 +4280,70 @@ test('pipeline: prepared-only mounts keep a bounded speculative window without c
   assert.ok(prepared.readAhead >= 4 && prepared.readAhead > playing.readAhead, 'a promoted 4K prepare takes a larger need-based share than the live 1080p');
 });
 
+test('pipeline: a saved speed test alone is derated, live speed is clamped to it, and neither is ever optimistic', () => {
+  const { sizingMbpsPerConn } = require('../server/pipeline');
+  assert.strictEqual(sizingMbpsPerConn({ measuredMbpsPerConn: 22.6 }), 22.6 * 0.5,
+    'a quiet one-account test overstates lines under household load');
+  assert.strictEqual(sizingMbpsPerConn({ measuredMbpsPerConn: 22.6, liveMbpsPerConn: 6 }), 22.6 * 0.5,
+    'a noisy low live reading never drops below half the saved test (bursty fetching into full buffers reads low)');
+  assert.strictEqual(sizingMbpsPerConn({ measuredMbpsPerConn: 22.6, liveMbpsPerConn: 15 }), 15, 'a live reading inside that band wins');
+  assert.strictEqual(sizingMbpsPerConn({ liveMbpsPerConn: 6 }), 6, 'with no saved test, live is all there is');
+  assert.strictEqual(sizingMbpsPerConn({ measuredMbpsPerConn: 10, liveMbpsPerConn: 30 }), 10,
+    'live can never claim more than the saved test');
+  assert.strictEqual(sizingMbpsPerConn({}), 8, 'unmeasured falls back to the default');
+});
+
+test('pipeline: Auto gives a fresh 4K enough lines to start (Unraid 4K timed out at 0:05 on 4 lines)', () => {
+  const now = 5_000_000;
+  const perf = {
+    connectionMode: 'auto', usableConnections: 142, reserveConnections: 36, serverDownloadMbps: 900,
+    measuredMbpsPerConn: 22.6, maxConnPerStream1080: 10, maxConnPerStream4k: 12,
+  };
+  const uhd = { size: 9e9, _releaseName: 'Show.S03E02.2160p.WEB-DL.H.265', _tracks: { duration: 2520 },
+    _activeStreamReads: 1, _playbackTouched: now - 30_000, aheadCacheBytes: 0 };
+  const [lines] = allocateStreamConnections([uhd], perf, { now });
+  assert.ok(lines >= 9, `a 4K with an empty buffer got ${lines} lines; it needs its stream share, not the 4-line floor`);
+  assert.ok(lines <= 12, 'but never above the owner Max 4K setting');
+});
+
+test('pipeline: Auto jumps a nearly empty buffer to its ceiling without waiting out the hold time', () => {
+  const now = 5_000_000;
+  const perf = { connectionMode: 'auto', usableConnections: 142, reserveConnections: 36, serverDownloadMbps: 900,
+    measuredMbpsPerConn: 22.6, maxConnPerStream4k: 12 };
+  const mk = (aheadSec) => {
+    const m = { size: 9e9, _releaseName: 'Show.2160p.WEB-DL', _tracks: { duration: 2520 },
+      _activeStreamReads: 1, _playbackTouched: now - 30_000 };
+    m.aheadCacheBytes = Math.floor(aheadSec * streamNeedMbps(m) * 1e6 / 8);
+    return m;
+  };
+  const [empty] = allocateStreamConnections([mk(2)], perf, { now });
+  const [comfy] = allocateStreamConnections([mk(45)], perf, { now });
+  assert.strictEqual(empty, 12, 'a buffer under 8s is an emergency: full ceiling at once');
+  assert.ok(comfy < empty, 'a comfortable buffer does not hog lines');
+});
+
+test('pipeline: six viewers share the pool without exceeding it, and a starving 4K is served first', () => {
+  const now = 5_000_000;
+  const perf = { connectionMode: 'auto', usableConnections: 142, reserveConnections: 36, serverDownloadMbps: 900,
+    measuredMbpsPerConn: 22.6, maxConnPerStream1080: 10, maxConnPerStream4k: 12 };
+  const mk = (name, gb, aheadSec) => {
+    const m = { size: gb * 1e9, _releaseName: name, _tracks: { duration: 2520 },
+      _activeStreamReads: 1, _playbackTouched: now - 30_000 };
+    m.aheadCacheBytes = Math.floor(aheadSec * streamNeedMbps(m) * 1e6 / 8);
+    return m;
+  };
+  const mounts = [
+    mk('A.2160p.WEB-DL', 9, 1), mk('B.2160p.WEB-DL', 9, 120), mk('C.2160p.WEB-DL', 9, 120),
+    mk('D.1080p.WEB-DL', 3, 120), mk('E.1080p.WEB-DL', 3, 120), mk('F.1080p.WEB-DL', 3, 120),
+  ];
+  const out = allocateStreamConnections(mounts, perf, { now });
+  const total = out.reduce((n, v) => n + v, 0);
+  assert.ok(total <= 142 - 36, `six viewers took ${total} lines of a 106-line pool`);
+  assert.ok(out.every((n) => n >= 4), 'nobody drops under the 4-line floor');
+  assert.ok(out[0] > out[1] && out[0] >= out[3], 'the starving 4K gets more than the comfortable ones');
+  assert.ok(out[3] <= out[1], 'a comfortable 1080p never outgrows a comfortable 4K');
+});
+
 test('pipeline: a local library Play does not steal usenet sockets', () => {
   const now = Date.now();
   const mounts = new Map();
@@ -4303,6 +4367,9 @@ test('pipeline: a local library Play does not steal usenet sockets', () => {
     _touched: now, _playbackTouched: now, _activeStreamReads: 1, trimCache() {},
   };
   mounts.set(usenet.id, usenet);
+  assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1);
+  // A just-started stream grows on its second pass; settle it first so the comparison below is
+  // about the local file, not about startup growth.
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1);
   const ahead = usenet.readAhead;
   const cache = usenet.cacheMaxBytes;
@@ -6660,4 +6727,114 @@ test('pipeline: slow first-article probe does not reject an otherwise playable s
   assert.ok(!verdictJson.includes('probe-timeout'), 'slow preflight does not poison the verdict cache');
 
   pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
+test('pipeline: a clean STAT never erases a playback failure, and repeats stay a demotion (never a house-wide block)', () => {
+  const store = new Map();
+  const verdicts = {
+    get: (k) => store.get(k) || null,
+    set: (k, verdict, detail) => store.set(k, { verdict, detail, checkedAt: Date.now() }),
+  };
+  const pipeline = new Pipeline({ pool: () => null, verdicts, mounts: new Map(), performance: () => ({}) });
+  const cand = { nzbUrl: 'http://indexer.test/getnzb/abc', name: 'The.Good.Doctor.S02E15.1080p.WEB-DL-FLUX' };
+  pipeline._recordPlaybackFailed(cand, { episodeScoped: true });
+  const key = [...store.keys()][0];
+  assert.strictEqual(store.get(key).verdict, 'playback-failed', 'first failure demotes');
+  pipeline._recordVerdict(cand, 'verified', {});
+  assert.strictEqual(store.get(key).verdict, 'playback-failed', 'the next clean mount does not erase it');
+  pipeline._recordPlaybackFailed(cand, { episodeScoped: true });
+  assert.strictEqual(store.get(key).verdict, 'playback-failed',
+    'a second client-reported failure is still only a demotion: one weak Wi-Fi or throttled line must not block a season pack house-wide for 6h');
+  assert.strictEqual(store.get(key).detail.count, 2, 'but the repeat is counted for diagnostics');
+  pipeline._recordVerdict(cand, 'verified', {});
+  assert.strictEqual(store.get(key).verdict, 'playback-failed', 'and a clean STAT does not revive it');
+});
+
+test('scoring: plain WEB, upscales and DDP5.1 are read correctly, and a title word is not a source', () => {
+  const { scoreRelease } = require('../server/scoring');
+  const score = (name, sizeBytes = 3e9) => scoreRelease({ name, sizeBytes }, {}).score;
+  assert.ok(score('Show.S01E01.1080p.WEB.h264-ETHEL') > score('Movie.2020.720p.HDTV.x264'),
+    'a scene .WEB. 1080p beats a 720p HDTV (it scored 165 vs 175 while WEB was unrecognised)');
+  assert.ok(score('Show.S01E01.1080p.WEB.h264-ETHEL') < score('Show.S01E01.1080p.WEB-DL.H.264-ETHEL'),
+    'WEB-DL stays above plain WEB');
+  assert.ok(score("Charlotte's.Web.2006.DVDRip.XviD") <= 60, "a title word 'Web' never upgrades a DVDRip");
+  assert.ok(score('Movie.2020.2160p.AI.UPSCALED.WEB-DL.x265', 8e9) < score('Movie.2020.2160p.WEB-DL.x265', 8e9) - 100,
+    'UPSCALED is penalised (the old pattern could not match it)');
+  assert.strictEqual(score('Movie.2020.1080p.WEB-DL.DDP5.1.H.264-NTb'), score('Movie.2020.1080p.WEB-DL.DDP.5.1.H.264-NTb'),
+    'DDP5.1 and DDP.5.1 earn the same audio bonus');
+});
+
+test('search: a multi-episode file is accepted for each episode it contains', () => {
+  const { releaseMatches, parseWantedTitle } = require('../server/pipeline');
+  const e2 = parseWantedTitle('Show S01E02');
+  assert.strictEqual(releaseMatches('Show.S01E01E02.720p.HDTV.x264-GRP', e2), true, 'S01E01E02 contains E02');
+  assert.strictEqual(releaseMatches('Show.S01E01E02E03.720p.HDTV.x264-GRP', e2), true, 'so does S01E01E02E03');
+  assert.strictEqual(releaseMatches('Show.S01E01E02.720p.HDTV.x264-GRP', parseWantedTitle('Show S01E05')), false,
+    'but it is not episode 5');
+});
+
+test('search: a result that is missing an indexer answer is retried after a minute, not served for two hours', () => {
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(), performance: () => ({}) });
+  const twoHours = 2 * 60 * 60 * 1000;
+  const rows = [{ name: 'Movie.2020.1080p.WEB-DL-GRP', nzbUrl: 'http://ix/1' }];
+  pipeline._rememberSearchHit('whole', { at: Date.now() - 5 * 60 * 1000, results: rows, errors: [] });
+  pipeline._rememberSearchHit('thin', { at: Date.now() - 5 * 60 * 1000, results: rows, errors: [{ indexer: 'B', error: 'timeout' }], partial: true });
+  assert.ok(pipeline._getFreshSearchHit('whole', twoHours), 'a complete fan-out stays fresh for the evening');
+  assert.strictEqual(pipeline._getFreshSearchHit('thin', twoHours), null, 'one that lost an indexer is searched again after a minute');
+  pipeline._rememberSearchHit('thin2', { at: Date.now() - 10 * 1000, results: rows, errors: [{ indexer: 'B' }], partial: true });
+  assert.ok(pipeline._getFreshSearchHit('thin2', twoHours), 'but a seconds-old partial hit is still reused');
+});
+
+test('search: the yearless query drops only the wanted year, never a number that is part of the title', () => {
+  const { yearlessSearchQuery } = require('../server/pipeline');
+  assert.strictEqual(yearlessSearchQuery('Blade Runner 2049 2017', { year: 2017 }), 'Blade Runner 2049');
+  assert.strictEqual(yearlessSearchQuery('1917 2019', { year: 2019 }), '1917');
+  assert.strictEqual(yearlessSearchQuery('2001 A Space Odyssey 1968', { year: 1968 }), '2001 A Space Odyssey');
+  assert.strictEqual(yearlessSearchQuery('Dune 2021', { year: 2021 }), 'Dune');
+  assert.strictEqual(yearlessSearchQuery('Heat', { year: 1995 }), '', 'nothing to drop');
+});
+
+test('pipeline: with only a saved speed test, a realistic 4K still gets a bounded number of sockets', () => {
+  const { autoStreamCap, streamNeedMbps } = require('../server/pipeline');
+  const uhd = { size: 9e9, _releaseName: 'Show.2160p.WEB-DL', _tracks: { duration: 2520 } };
+  const need = streamNeedMbps(uhd);
+  const cap = autoStreamCap(uhd, { measuredMbpsPerConn: 28 });
+  assert.ok(need > 50 && need < 80, `a 9 GB 42-minute 4K needs ~${Math.round(need)} Mbps`);
+  assert.ok(cap >= 6 && cap <= 8, `saved-test-only sizing gives ${cap} sockets (need x1.5 over a derated 14 Mbps), not a pile and not 4`);
+});
+
+test('search: only transient indexer errors make a result short-lived; a bad key or quota does not', () => {
+  const { isTransientSearchError } = require('../server/pipeline');
+  assert.strictEqual(isTransientSearchError('timeout after 2000ms'), true);
+  assert.strictEqual(isTransientSearchError({ indexer: 'A', error: 'connect ECONNRESET' }), true);
+  assert.strictEqual(isTransientSearchError({ indexer: 'A', error: 'HTTP 503' }), true);
+  assert.strictEqual(isTransientSearchError({ indexer: 'A', error: 'Incorrect user credentials (api key)' }), false);
+  assert.strictEqual(isTransientSearchError({ indexer: 'A', error: 'daily API limit reached' }), false);
+});
+
+test('search: a glued multi-episode name is a LIST, a spaced one is a range; and WEB never beats a cam tag', () => {
+  const { releaseMatches, parseWantedTitle } = require('../server/pipeline');
+  const { scoreRelease } = require('../server/scoring');
+  assert.strictEqual(releaseMatches('Show.S01E01E03.720p.HDTV.x264-GRP', parseWantedTitle('Show S01E02')), false, 'E01E03 is not E02');
+  assert.strictEqual(releaseMatches('Show.S01E01E03.720p.HDTV.x264-GRP', parseWantedTitle('Show S01E03')), true);
+  assert.strictEqual(releaseMatches('Show.S01E01-E08.720p.HDTV.x264-GRP', parseWantedTitle('Show S01E04')), true, 'a hyphen range covers E04');
+  const sc = (name) => scoreRelease({ name, sizeBytes: 3e9 }, {}).score;
+  assert.ok(sc('The.Web.2024.HDCAM') < -5000, 'a title word Web next to a cam tag stays a cam');
+  assert.ok(sc('Show.S01E01.1080p.WEB.h264-ETHEL') > 200, 'but a scene .WEB. release is still a WEB source');
+});
+
+test('pipeline: a switch caused by repeated stalls moves on without demoting the release; a real failure still demotes', async () => {
+  const store = new Map();
+  const verdicts = { get: (k) => store.get(k) || null, set: (k, verdict, detail) => store.set(k, { verdict, detail, checkedAt: Date.now() }) };
+  const pipeline = new Pipeline({ pool: () => null, verdicts, mounts: new Map(), performance: () => ({}) });
+  pipeline._advance = async () => ({ ok: true });
+  pipeline._clearTitleStandby = () => {};
+  const cand = { nzbUrl: 'http://ix/getnzb/1', name: 'Movie.2020.1080p.WEB-DL-GRP', pickKey: 'k1' };
+  pipeline.sessions.set('s1', { id: 's1', activeCandidate: cand, query: {}, policy: {} });
+  await pipeline.advance('s1', { cause: 'stall-repeat' });
+  assert.strictEqual(store.size, 0, 'repeated stalls may be the viewer’s own line: no verdict for anyone else');
+  assert.strictEqual(pipeline.sessions.get('s1').activeCandidate, null, 'but this session still moves past the source');
+  pipeline.sessions.set('s2', { id: 's2', activeCandidate: cand, query: {}, policy: {} });
+  await pipeline.advance('s2', {});
+  assert.ok([...store.values()].some((v) => v.verdict === 'playback-failed'), 'an advance without the stall cause (old clients, content errors) still demotes');
 });

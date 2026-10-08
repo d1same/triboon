@@ -704,6 +704,59 @@ the Cast device (a LAN IP, not `localhost`), and the `?t=` stream token must
 outlive a full playback (the receiver pulls with Range for hours). Long-session
 token refresh is handled receiver-side via the custom Cast namespace.
 
+## Allocation, Routing And Stealing (3.3.16)
+
+Found with `bench/multi-viewer-sim.js` (six virtual viewers, four mock accounts
+with different speeds) and a real Unraid incident (a 4K start timed out at 0:05
+on a house cap of 8):
+
+- **Per-line speed for sizing.** `sizingMbpsPerConn` in `server/pipeline.js`
+  uses the live figure when fresh (clamped to between half and the full saved
+  test, because live readings are noisy), else the saved
+  Test-provider-speed figure x 0.5 (a quiet one-account test overstates lines
+  under household load), else 8 Mbps. `mbpsPerConnection` stays the optimistic
+  figure for "does this release fit the pipe" checks. The Settings speed test
+  now averages accounts weighted by their line counts instead of taking the
+  fastest.
+- **Auto sizing.** Sockets = peak need x 1.5 headroom / per-line speed. A
+  just-started stream may use the owner ceiling (Max 1080p/4K); a buffer under
+  8 s skips the hold time and grows at once; comfortable buffers sit at their
+  need-based share and never hog lines.
+- **Routing.** `NntpPool._ordered` prefers an account with an idle open line
+  (`immediateRoom() > 0`) over the biggest plan, when no startup slots are needed.
+- **Work stealing.** Queues are per account but an article is the same
+  everywhere. `NntpProvider._stealIdle` lets an idle line take eligible waiting
+  article fetches from another account's queue (`NntpPool.stealFor`): picture
+  work first, then read-ahead, oldest first, each task stolen at most once and
+  only if the viewer-share rules allow that line. A stolen task that fails on
+  the thief returns to its own account, so a thief 430 never marks the owner
+  account as missing the article.
+- **Steal guards.** A backup-only, dark, login-refusing or auth-broken account
+  never steals; an article already known missing on the thief is not stolen;
+  read-ahead steals only while the thief keeps its playback reserve of idle lines.
+  Article bytes are verified inside the account that fetched them, so a bad
+  copy on the thief goes back to its owner instead of being blamed on it. A
+  returned task gets its abort listener re-armed. Idle peers are nudged when work
+  queues with no free line.
+- **Stranded work.** `_watchStuck` re-checks twice a second while lines are idle
+  and work is queued; picture work waiting over 1 s is handed to an idle line
+  and logged as `dispatch stuck`.
+- **Logs.** Every `lines:` entry (`linesSummary`) shows picture vs read-ahead
+  waiting, the oldest picture wait, idle lines beside waiting work, and
+  `[house N open of CAP]`.
+- **Article integrity.** `yenc.decode` reports `intact`: it ends with `=yend`,
+  has bytes, and either its checksum matched or (with no checksum) its decoded
+  length matches its own `=yend size=` / `=ypart` range. A matching checksum wins
+  over odd declared sizes (some encoders write the whole-file size). A cut-off copy fails over to the next provider instead of being
+  zero-filled into the picture. A zero-filled hole in a non-final slot is
+  counted and logged.
+- **Failure memory.** `playback-failed` is never overwritten by a clean
+  `verified` STAT; repeats are counted but stay a demotion (never `blocked`: a
+  client-reported failure can be one weak line, and `blocked` is a house-wide 6 h
+  skip). A candidate whose live mount holds an unreadable piece fails the walk
+  ("blocked: live mount holds an unreadable piece") instead of being re-joined
+  or re-mounted.
+
 ## When Changing This Area
 
 Before changing performance behavior, check:
@@ -721,8 +774,12 @@ Before changing performance behavior, check:
    startup work without interrupting another joined consumer. Probe/deadline
    exits leave no startup BODY behind.
 9. Web/native recovery retries the same source/kind once before release
-   failover, except a confirmed blocked health verdict may advance immediately;
-   both paths retain the title/episode and timestamp.
+   failover, except a confirmed blocked health verdict may advance immediately,
+   and a repeat at the same spot advances to the next release
+   (`playbackRepeatFailure` in `web/index.html`): a CONTENT error (container
+   parse/malformed) on the 2nd failure within 20 s of media time; a stall or
+   timeout (which can be one weak line) on the 3rd, or five in two minutes. Both
+   paths retain the title/episode and timestamp.
 10. Live TV tune epochs, stable channel ids, and XMLTV worker parsing stay
     responsive during rapid zaps.
 11. Docs remain aligned: this file, `docs-architecture.md`,

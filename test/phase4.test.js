@@ -3257,8 +3257,8 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'a restart holds the last frame only after the on-device leftover is under 8s');
   assert.match(ui, /maybeHoldPlaybackAcrossRestart\(p\);[\s\S]+const at = currentTime\(\);/,
     'remount resumes at the second they reached while leftover kept playing, not the second the server died');
-  assert.match(ui, /if \(sourceDead\) \{[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true/,
-    'a new NZB is only when health says the release is dead');
+  assert.match(ui, /if \(sourceDead \|\| repeatedHere\) \{[\s\S]+autoAdvance\(\{[\s\S]{0,40}allowMidstreamAdvance: true/,
+    'a new NZB is only when health says the release is dead, or the same spot failed again');
 });
 
 test('async page loaders ignore stale shared-grid results and finish on a usable surface', () => {
@@ -4468,8 +4468,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // When same-source resume fails because the mount is gone (server restarted/updated/swept), re-mount
   // the SAME title on a fresh mount and resume at the current position, with backoff to ride out the
   // restart — instead of giving up. Failure-path only, so healthy playback is untouched.
-  assert.match(ui, /if \(sourceDead\) \{[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason/,
-    'a buffer/wifi stall must stay on the same file; only a dead-source reason may change NZB');
+  assert.match(ui, /if \(sourceDead \|\| repeatedHere\) \{[\s\S]+autoAdvance\(\{[\s\S]{0,40}allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative,[\s\S]{0,40}reason/,
+    'a single buffer/wifi stall stays on the same file; only a dead-source reason or a repeat at the same spot may change NZB');
   assert.doesNotMatch(ui, /recoveryCount >= 3/,
     'stall retries must not count toward a new source hunt');
   const sourceRecoveryBlock = ui.slice(ui.indexOf('function recoverSamePlaybackSource'), ui.indexOf('function resetVlcPanel'));
@@ -8888,9 +8888,9 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
   const pipelineSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
   assert.match(pipelineSrc, /async advance\(sessionId, mountOpts = \{\}\) \{[\s\S]{0,900}session\.query = \{ \.\.\.\(session\.query \|\| \{\}\), resumeFrac: frac \};/,
     'pipeline.advance updates the session resume fraction');
-  assert.match(server, /await pipeline\.advance\(ctx\.m\[1\], \{ resumeFrac: b && b\.resumeFrac \}\)/,
+  assert.match(server, /await pipeline\.advance\(ctx\.m\[1\], \{\s*resumeFrac: b && b\.resumeFrac,/,
     'the advance route forwards the reported position');
-  assert.match(ui, /body: at > 0 && advDur > 0 \? \{ resumeFrac: Math\.max\(0, Math\.min\(0\.98, at \/ advDur\)\) \} : \{\}/,
+  assert.match(ui, /\.{3}\(at > 0 && advDur > 0 \? \{ resumeFrac: Math\.max\(0, Math\.min\(0\.98, at \/ advDur\)\) \} : \{\}\)/,
     'the player reports its current position on advance');
 
   // Chronically slow sources get the probe-timeout demotion HEALTH_SCORE was designed with
@@ -9630,4 +9630,76 @@ test('android Next Episode chip sizes to its text so a display-mode switch canno
   assert.match(card, /LinearLayout\.LayoutParams playLp = new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, LinearLayout\.LayoutParams\.WRAP_CONTENT\);/);
   assert.match(card, /row\.addView\(dismiss, new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, LinearLayout\.LayoutParams\.WRAP_CONTENT\)\);/);
   assert.doesNotMatch(card, /LayoutParams\([^)]*dp\(36\)\)/, 'no fixed-pixel chip height');
+});
+
+test('player: a repeated failure at the same spot switches release; stalls need a 3rd and never carry over to a new release', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('const REPEAT_FAIL_SPOT_SEC');
+  const end = ui.indexOf('function recoverSamePlaybackSource');
+  assert.ok(start > 0 && end > start, 'the repeat-failure helper exists before the recovery function');
+  const { playbackRepeatFailure, re } = new Function(`${ui.slice(start, end)}
+return { playbackRepeatFailure, re: PLAYBACK_CONTENT_ERROR_RE };`)();
+  const p = { sourcePickKey: 'A' };
+  assert.strictEqual(playbackRepeatFailure(p, 1010, 1000, true), false, 'the first content error retries the same file once');
+  assert.strictEqual(playbackRepeatFailure(p, 1016, 5000, true), true, 'a 2nd content error within 20s of the same spot is a bad source (Unraid 16:54 x5)');
+  const q = { sourcePickKey: 'A' };
+  assert.strictEqual(playbackRepeatFailure(q, 1010, 1000, false), false);
+  assert.strictEqual(playbackRepeatFailure(q, 1016, 5000, false), false, 'a single stall, and a 2nd one, stay on the same file');
+  assert.strictEqual(playbackRepeatFailure(q, 1019, 9000, false), true, 'a 3rd stall at the same spot switches release');
+  const w = { sourcePickKey: 'A' };
+  for (let i = 0; i < 6; i++) assert.strictEqual(playbackRepeatFailure(w, 100 + i * 500, i * 1000, false), false, 'stalls at different spots (weak Wi-Fi) never switch');
+  const n = { sourcePickKey: 'A' };
+  playbackRepeatFailure(n, 1010, 1000, true);
+  n.sourcePickKey = 'B'; // autoAdvance switched release; the same player object carries on
+  assert.strictEqual(playbackRepeatFailure(n, 1012, 3000, true), false, 'a NEW release starts with a clean history');
+  const t = { sourcePickKey: 'A' };
+  playbackRepeatFailure(t, 100, 0, true);
+  assert.strictEqual(playbackRepeatFailure(t, 105, 130000, true), false, 'an old failure outside the two-minute window does not count');
+  assert.ok(re.test('ERROR_CODE_PARSING_CONTAINER_MALFORMED') && re.test('IllegalStateException: No valid varint length mask found'), 'parse errors are content errors');
+  assert.ok(!re.test('ERROR_CODE_TIMEOUT') && !re.test('native rebuffer stalled') && !re.test('ERROR_CODE_IO_UNSPECIFIED'),
+    'timeouts, stalls and Exo 2xxx IO errors are not');
+  assert.match(ui, /const repeatedHere = !sourceDead && !decoderFailure && playbackRepeatFailure\(p, at, now, contentError\);/);
+  assert.match(ui, /repeatedHere && !contentError \? \{ cause: 'stall-repeat' \}/, 'a stall-caused switch tells the server not to demote');
+  assert.match(ui, /opts\.cause === 'stall-repeat' \? \{ cause: 'stall-repeat' \}/, 'autoAdvance forwards the cause');
+});
+
+test('TV: the hold-OK menu keeps the highlight against background focus moves (3.3.14 only guarded renderRows)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const a = ui.indexOf('function clearFocus(all = false)');
+  const b = ui.indexOf('function focusContentStillWanted');
+  const c = ui.indexOf('function cwMenuOwnsFocus');
+  const d = ui.indexOf('function applyFocus(el, scroll = true)');
+  assert.ok(a > 0 && b > a && c > 0 && d > c, 'the guard helpers exist');
+  const mk = (open, pointer) => {
+    const classes = new Set(['focus']);
+    const menuBtn = { classList: { _s: new Set(['focus']), add(x) { this._s.add(x); }, remove(x) { this._s.delete(x); }, contains(x) { return this._s.has(x); } } };
+    const card = { classList: { _s: new Set(['focus']), add(x) { this._s.add(x); }, remove(x) { this._s.delete(x); }, contains(x) { return this._s.has(x); } } };
+    const menu = {
+      classList: { contains: (x) => x === 'open' && open },
+      contains: (el) => el === menuBtn,
+    };
+    const S = { pointer };
+    const $ = (id) => (id === 'cwMenu' ? menu : null);
+    const document = { querySelectorAll: () => [menuBtn, card] };
+    const fns = new Function('S', '$', 'document', `${ui.slice(a, b)}\n${ui.slice(c, d)}\nreturn { clearFocus, cwMenuOwnsFocus };`)(S, $, document);
+    return { ...fns, menuBtn, card };
+  };
+  let t = mk(true, false);
+  assert.strictEqual(t.cwMenuOwnsFocus(t.card), true, 'with the menu open, a cover outside it may not take focus');
+  assert.strictEqual(t.cwMenuOwnsFocus(t.menuBtn), false, 'the menu own buttons may');
+  assert.strictEqual(t.cwMenuOwnsFocus(null), true, 'a bare re-land (no target) is blocked too');
+  t.clearFocus();
+  assert.ok(t.menuBtn.classList.contains('focus'), 'a stray clear does not strip the menu highlight');
+  assert.ok(!t.card.classList.contains('focus'), 'but it still clears everything else');
+  t.clearFocus(true);
+  assert.ok(!t.menuBtn.classList.contains('focus'), 'applyFocus clears everything when it has already allowed its target');
+  t = mk(false, false);
+  assert.strictEqual(t.cwMenuOwnsFocus(t.card), false, 'a closed menu blocks nothing');
+  t = mk(true, true);
+  assert.strictEqual(t.cwMenuOwnsFocus(t.card), false, 'a mouse user hovering another cover is not blocked');
+  assert.match(ui, /function applyFocus\(el, scroll = true\) \{\s*if \(el && cwMenuOwnsFocus\(el\)\)/, 'applyFocus checks it first');
+  for (const fn of ['focusCard(ri, ci, opts = {}) {', 'focusHero(i) {', 'focusContent(retried) {']) {
+    const at = ui.indexOf('function ' + fn);
+    assert.ok(at > 0 && /cwMenuOwnsFocus\(null\)/.test(ui.slice(at, at + 420)), `${fn.split('(')[0]} yields while the menu is open`);
+  }
 });

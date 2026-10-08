@@ -128,6 +128,47 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-07, v3.3.16 — Lines no longer idle beside waiting work, Auto sizes 4K honestly, a bad spot switches release, and the hold-OK menu keeps its highlight:
+
+- Unraid 3.3.15 log: a 4K start timed out at 0:05 on `[house 8 open of 8]` with 4 lines
+  idle beside waiting work. Auto sized 4K from a 22.6 Mbps/line speed test (best account,
+  quiet) -> 4 lines. Now: live speed clamped to [0.5x, 1x] of the saved test, saved test
+  alone x0.5, 1.5x headroom, startup/critical (<8 s buffer) streams get the owner ceiling.
+  Speed test averages accounts by line count. Routing prefers an account with a free line;
+  idle lines steal eligible article fetches from other accounts' queues (backup/dark/refusing
+  accounts never steal; known misses skipped; read-ahead keeps the playback reserve; bytes
+  verified on the fetching account). Kill switch: `TRIBOON_NNTP_STEAL=0`.
+- `bench/multi-viewer-sim.js` (6 viewers, 4 mock accounts 0.6-1.4 s/article): 3.3.14 started
+  0/6 viewers in 30 s; 3.3.16 starts 6/6 in <=3.1 s, total stall 7.9-10.8 s; with
+  `TRIBOON_NNTP_STEAL=0` total stall 53.8 s. 10 slow-account 1080p viewers: 0/10 vs 10/10.
+- yEnc: a cut-off / empty / self-inconsistent copy (no matching checksum) fails over instead of
+  being zero-filled; a matching checksum wins over odd declared sizes.
+- Web: a 2nd CONTENT (parse) error within 20 s of media time, or a 3rd stall there, switches
+  release; history is per release; a stall-caused switch sends `cause: stall-repeat` and is not
+  recorded as a playback failure. OWNER-VISIBLE CONTRACT CHANGE: two phase4 tests that pinned
+  "only a dead-source reason may change NZB" now pin this rule (owner asked to ship this batch).
+- `playback-failed` survives a clean STAT (never escalates to `blocked`); a live mount with an
+  unreadable piece fails the walk; the first-article probe asks every account before saying
+  `missing` and maps non-430 answers to `error`.
+- Search/scoring: S01E01E02(E03) lists, plain `.WEB.` source (after cam), UPSCALED, DDP5.1,
+  transient-only 60 s cache for partial fan-outs, yearless query keeps numeric title words.
+- Status `playback.loop` reports event-loop p50/p99/max and utilization (30 s window); a slow
+  window during playback is logged.
+- TV: the hold-OK action menu kept losing its highlight to background focus moves (3.3.14 had
+  guarded renderRows only). `applyFocus`/`focusCard`/`focusHero`/`focusContent`/`clearFocus`
+  now yield while it is open (D-pad modality). Browser repro: every focus thief blocked, Up/Down
+  in the menu, Escape returns to the same card. Admin "Now Watching" tab/heading -> "Watching".
+- Gate: `npm.cmd test` 883/883. `verify:full` against the QA rig (fixture usenet + QA server on
+  this code + emulator-5554): whitespace, JS syntax, inline script, IPTV/P9, fast VOD/P14,
+  CC/P11, local next episode, full suite, isolated server smoke, household VOD/seek/resume/CC,
+  household IPTV first-byte + retune, household overlapping Play, Android lint/unit/debug build
+  all PASS. Android stress: boot, page churn, live start, multiview handoff, VOD start, sources
+  PASS; `playerAbout` (`no-people`) and the seek loop fail IDENTICALLY on the released 3.3.15
+  server code against the same fixture (its test movie is ~1 min and has no cast data), so not a
+  regression. Not run: Windows GPU/HDR, real Shield (release-signed).
+- Version contract: `package.json` 3.3.16; Android `versionName` 3.3.16 / `versionCode` 419;
+  Windows client package/Tauri/Cargo(.lock) 3.3.16.
+
 2026-10-07, v3.3.15 — The log says what is waiting beside an idle line, and a picture piece stranded there is handed to it:
 
 - Unraid 3.3.14: The Good Doctor S02E16 froze ~30s at 9:52 (player timeout), with

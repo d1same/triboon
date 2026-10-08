@@ -168,7 +168,7 @@ function mountIdentity(candidate, mountOpts = {}) {
 // codec, edition/region words. A PLAIN word right after the matched title means the release's
 // real title is LONGER than the wanted one — a different film/show.
 const STRUCTURAL_AFTER_TITLE = new RegExp('^(' + [
-  '(19|20)\\d{2}', 's\\d{1,2}(e\\d{1,3})?', '\\d{1,2}x\\d{1,3}', // year / SxxEyy / season / 1x01
+  '(19|20)\\d{2}', 's\\d{1,2}(e\\d{1,3})*', '\\d{1,2}x\\d{1,3}', // year / SxxEyy / season / 1x01
   '(2160|1080|720|576|480)[pi]', '4k', 'uhd', 'hdr', 'hdr10', 'dv', 'dovi', 'sdr',
   'x26[45]', 'h26[45]', 'hevc', 'avc', 'av1', 'xvid', 'divx',
   'web', 'webrip', 'webdl', 'rip', 'dl', 'bluray', 'blu', 'ray', 'bd', 'bdrip', 'brrip',
@@ -271,7 +271,13 @@ function aliasSearchQueries(paramsQ, aliases, wanted) {
 function yearlessSearchQuery(paramsQ, wanted) {
   if (!wanted || !wanted.year) return '';
   const current = String(paramsQ || '').trim();
-  const next = current.replace(/\b(19|20)\d{2}\b/g, ' ').replace(/\s+/g, ' ').trim();
+  // Drop only the wanted YEAR (its last occurrence), never a number that is part of the title:
+  // "Blade Runner 2049 2017" -> "Blade Runner 2049", "1917 2019" -> "1917".
+  const y = String(wanted.year);
+  const last = current.toLowerCase().lastIndexOf(y);
+  const atBoundary = last >= 0 && !/\w/.test(current[last - 1] || ' ') && !/\w/.test(current[last + y.length] || ' ');
+  const stripped = atBoundary ? current.slice(0, last) + ' ' + current.slice(last + y.length) : current;
+  const next = stripped.replace(/\s+/g, ' ').trim();
   return next && next.toLowerCase() !== current.toLowerCase() ? next : '';
 }
 
@@ -579,8 +585,13 @@ function releaseMatches(name, wanted) {
       //  - a multi-episode RANGE covering it: S02E01-E08 → norm "s02e01 e08" (the 'e' prefix on the
       //    second number is what distinguishes a real range from a trailing "1080p"); and
       //  - a whole-season PACK: the exact season token with NO single-episode token anywhere.
-      const range = /\bs0?(\d{1,2})e0?(\d{1,3})\s*e0?(\d{1,3})\b/.exec(norm);
-      const inRange = !!(range && +range[1] === s && +range[2] <= e && e <= +range[3]);
+      // Two or more episodes in one file: S02E01-E08 (a range) or S01E01E02E03 (a glued list).
+      const range = /\bs0?(\d{1,2})((?:\s*e0?\d{1,3}){2,})\b/.exec(norm);
+      const rangeEps = range ? [...range[2].matchAll(/e0?(\d{1,3})/g)].map((m) => +m[1]) : [];
+      // Glued (S01E01E03) is a LIST of episodes; spaced (S02E01 E08, from a hyphen) is a RANGE.
+      const gluedList = range ? !/\s/.test(range[2]) : false;
+      const inRange = !!(range && +range[1] === s && rangeEps.length >= 2
+        && (rangeEps.includes(e) || (!gluedList && rangeEps.length === 2 && rangeEps[0] <= e && e <= rangeEps[1])));
       const seasonToken = new RegExp(`\\b(s0?${s}|season\\s?0?${s})\\b`).test(norm);
       // DETACHED episode: season and episode split by other tokens ("S02 720p E05", "S02 Episode 5").
       // Accept ONLY when the standalone episode number is the WANTED one — a DIFFERENT detached episode
@@ -789,6 +800,14 @@ function summarizeAttempts(attempts = []) {
 // "the indexers all timed out" from "usenet has nothing" from "everything found was
 // dead". Say which, and carry the indexer failures so the log and the Sources panel
 // name the indexer and its error (HTTP 429, wrong key, deadline).
+// A timeout or dropped connection may clear in a minute; a bad key, suspended account or daily
+// quota will not, and re-asking every minute only burns API hits.
+function isTransientSearchError(e) {
+  const text = typeof e === 'string' ? e : JSON.stringify(e || '');
+  if (/api ?key|invalid key|incorrect user|suspend|account|quota|daily|limit|unauthori[sz]ed|forbidden|"?40[13]"?/i.test(text)) return false;
+  return /timeout|timed out|abort|econn|etimedout|enotfound|socket|"?5\d\d"?|temporar|busy|unavailable|too many/i.test(text);
+}
+
 function noPlayableError(candidates = [], errors = [], total = 0) {
   const e = new Error('no playable releases found');
   const found = (candidates || []).length;
@@ -929,6 +948,14 @@ const ALLOC_STEAL_COOLDOWN_MS = 5000;
 const AUTO_BASE_CONNS = 4;
 const AUTO_HARD_MAX = 24;
 const DEFAULT_MBPS_PER_CONN = 8;
+// The saved speed-test number comes from a quiet test on one account; real lines under household
+// load, spread over mixed accounts and regions, do less. Sizing from it unchanged gave a 4K stream
+// 4 lines (Unraid 2026-10-07: 4K Good Doctor timed out at 0:05 on a 8-line house cap).
+const MEASURED_LINE_DERATE = 0.5;
+// Sockets are sized for the stream's PEAK need plus this much slack for latency and VBR spikes.
+const SOCKET_HEADROOM = 1.5;
+// A buffer under this many seconds is an emergency: skip the hold time and grow now.
+const ALLOC_CRITICAL_SEC = 8;
 const PIPE_FULL_RATIO = 0.75;
 const UHD_SIZE_BYTES = 4e9;
 const UHD_AVG_MBPS = 20;
@@ -1045,6 +1072,29 @@ function mbpsPerConnection(perf = {}) {
   return DEFAULT_MBPS_PER_CONN;
 }
 
+// Per-line speed for SIZING sockets. Live throughput wins when fresh (it is what lines really do
+// right now, never above the quiet-test figure). The saved test alone is derated. mbpsPerConnection
+// stays the optimistic figure for "does this source fit the pipe" checks.
+function sizingMbpsPerConn(perf = {}) {
+  const live = Number(perf && perf.liveMbpsPerConn);
+  const measured = Number(perf && perf.measuredMbpsPerConn);
+  let v;
+  // The live figure is noisy (bursty fetching into full buffers reads low), so with a saved test
+  // it is clamped to between half and the full saved figure.
+  if (Number.isFinite(live) && live > 0) v = measured > 0 ? Math.max(measured * MEASURED_LINE_DERATE, Math.min(live, measured)) : live;
+  else if (Number.isFinite(measured) && measured > 0) v = measured * MEASURED_LINE_DERATE;
+  else v = DEFAULT_MBPS_PER_CONN;
+  return Math.max(2, Math.min(40, v));
+}
+
+// Seconds of video already buffered ahead of the player, or null when unknown.
+function streamCoverageSec(vf) {
+  const ahead = mountAheadBytes(vf);
+  if (ahead == null) return null;
+  const mbps = streamNeedMbps(vf);
+  return mbps > 0 ? (ahead * 8) / (mbps * 1e6) : null;
+}
+
 function needSocketsFor(needMbps, perConn) {
   const p = Number(perConn) > 0 ? Number(perConn) : DEFAULT_MBPS_PER_CONN;
   const n = Math.ceil((Number(needMbps) || 0) / p);
@@ -1058,8 +1108,9 @@ function pipeIsSaturated(perf = {}) {
 }
 
 function autoStreamCap(vf, perf = {}, { starving = false } = {}) {
-  const base = needSocketsFor(streamNeedMbps(vf), mbpsPerConnection(perf));
-  const room = starving ? Math.ceil(base * 1.6) : base;
+  const base = needSocketsFor(streamNeedMbps(vf) * SOCKET_HEADROOM, sizingMbpsPerConn(perf));
+  // A starving or just-started stream may use everything the owner ceiling allows.
+  const room = starving ? AUTO_HARD_MAX : base;
   return Math.max(AUTO_BASE_CONNS, Math.min(AUTO_HARD_MAX, room));
 }
 
@@ -1156,12 +1207,18 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
   const meta = list.map((vf, i) => {
     const floor = 4;
     const raw = custom ? 'ok' : classifyStreamNeed(vf, now);
-    const kind = custom ? 'ok' : heldAllocKind(vf, raw, now, holdMs);
+    let kind = custom ? 'ok' : heldAllocKind(vf, raw, now, holdMs);
+    // A nearly empty buffer past the startup grace cannot wait out the hold time.
+    if (!custom && kind === 'ok' && raw === 'starve') {
+      const cov = streamCoverageSec(vf);
+      if (cov != null && cov < ALLOC_CRITICAL_SEC) kind = 'starve';
+    }
+    const startup = !custom && isStartupViewer(vf, now);
     const configured = Number(caps && caps[i]);
     const ownerCap = streamIsUhd(vf)
       ? Number(perf.maxConnPerStream4k)
       : Number(perf.maxConnPerStream1080);
-    const autoCap = autoStreamCap(vf, perf, { starving: kind === 'starve' });
+    const autoCap = autoStreamCap(vf, perf, { starving: kind === 'starve' || startup });
     const fallback = custom
       ? Math.max(floor, Number.isFinite(ownerCap) && ownerCap > 0 ? ownerCap : (streamIsUhd(vf) ? 20 : 12))
       : (Number.isFinite(ownerCap) && ownerCap > 0 ? Math.min(autoCap, ownerCap) : autoCap);
@@ -1171,7 +1228,7 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
 
   const totalNeed = meta.reduce((sum, m) => sum + (Number.isFinite(m.needMbps) ? m.needMbps : 0), 0);
   const bandwidthBound = downMbps > 0 && totalNeed > downMbps * 0.9;
-  const perConn = measuredPerConn > 0 ? measuredPerConn : mbpsPerConnection(perf);
+  const perConn = sizingMbpsPerConn({ ...perf, measuredMbpsPerConn: measuredPerConn || perf.measuredMbpsPerConn });
 
   let assignable = pool;
   if (downMbps > 0 && perConn > 0) {
@@ -1191,7 +1248,7 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
       const start = noBudget ? m.cap : evenFair;
       return Math.min(m.cap, Math.max(m.floor, start));
     }
-    const needSock = needSocketsFor(m.needMbps, perConn);
+    const needSock = needSocketsFor(m.needMbps * SOCKET_HEADROOM, perConn);
     const share = (totalNeed > 0 && assignable > 0)
       ? Math.max(m.floor, Math.floor(assignable * (m.needMbps / totalNeed)))
       : evenFair;
@@ -1212,7 +1269,7 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
   }
   if (!custom) {
     meta.forEach((m, i) => {
-      const needSock = needSocketsFor(m.needMbps, perConn);
+      const needSock = needSocketsFor(m.needMbps * SOCKET_HEADROOM, perConn);
       if (fileIsFullyAhead(m.vf) && !isStartupViewer(m.vf, now)) assigned[i] = m.floor;
       else if (m.kind === 'fat' && assigned[i] > needSock) assigned[i] = needSock;
     });
@@ -1538,7 +1595,9 @@ async function probeFirstArticle(pool, msgId) {
         .catch((e) => {
           if (e && e.code === 'ABORT_ERR') return 'timeout';
           if (e && e.code === 'NO_PROVIDER') return 'unreachable'; // can't reach a provider != article gone
-          return 'missing';
+          // Anything else (a 503, a login refusal, an inconclusive mix) is not proof the article is
+          // gone, and 'missing' is a release-wide 6h verdict. Let the mount decide.
+          return 'error';
         }),
       new Promise((resolve) => {
         timer = setTimeout(() => {
@@ -1575,6 +1634,7 @@ class PlaySession {
   }
 }
 
+const SEARCH_PARTIAL_MS = 60 * 1000; // a hit missing an indexer's answer is retried after a minute
 const SEARCH_FRESH_MS = 2 * 60 * 60 * 1000; // a good search stays for an evening; a bad release is a separate 6h verdict
 
 class Pipeline {
@@ -1963,7 +2023,10 @@ class Pipeline {
   _getFreshSearchHit(key, maxAgeMs = 60000) {
     const hit = this.searchCache.get(key);
     if (!hit) return null;
-    if (Number.isFinite(maxAgeMs) && Date.now() - hit.at > maxAgeMs) return null;
+    // A fan-out where an indexer timed out or errored is missing that indexer's releases. Serving
+    // it for the full 2h hid them all evening; retry such a hit after a minute.
+    const ageLimit = hit.partial && Number.isFinite(maxAgeMs) ? Math.min(maxAgeMs, SEARCH_PARTIAL_MS) : maxAgeMs;
+    if (Number.isFinite(ageLimit) && Date.now() - hit.at > ageLimit) return null;
     // LRU touch: re-insert so the eviction (delete oldest key) drops the genuinely least-recently-USED
     // entry, not the oldest-inserted. A hot replayed title survives a burst of unrelated browses.
     this.searchCache.delete(key); this.searchCache.set(key, hit);
@@ -2585,7 +2648,7 @@ class Pipeline {
     const extraFailed = extras.length
       && extras.every((e) => !(e.results && e.results.length) && (e.errors && e.errors.length));
     const skipCache = extraFailed && results.length < 4;
-    return { at: Date.now(), results, errors, skipCache };
+    return { at: Date.now(), results, errors, skipCache, partial: !!(errors && errors.some(isTransientSearchError)) };
   }
 
   // Search + rank only (powers the Sources drawer). Applies cached verdict adjustments.
@@ -2842,6 +2905,13 @@ class Pipeline {
   }
 
   _recordVerdict(candidate, verdict, detail = {}) {
+    // A clean STAT sample is not evidence about a file that already failed while someone was
+    // watching it: the next mount of the same NZB passes the same sample and used to overwrite
+    // the demotion, so the next Play picked the file that froze at 26:03 again.
+    if (verdict === 'verified') {
+      const prior = this.verdicts.get(nzbVerdictKey(candidate.nzbUrl));
+      if (prior && (prior.verdict === 'playback-failed' || prior.verdict === 'blocked')) return;
+    }
     this.verdicts.set(nzbVerdictKey(candidate.nzbUrl), verdict, detail);
     // unmappable is "this NZB's extents failed", not "the release name is 7z". Title-keying
     // it made every FLUX/NTb copy of that name unplayable for the verdict TTL.
@@ -2856,7 +2926,13 @@ class Pipeline {
   // stay movie-only so one episode stall cannot blacklist a season pack's siblings.
   _recordPlaybackFailed(candidate, { episodeScoped = false } = {}) {
     if (!candidate) return;
-    this.verdicts.set(nzbVerdictKey(candidate.nzbUrl), 'playback-failed', { stage: 'recovery-advance' });
+    // Counted for diagnostics only. It stays a demotion (-800), never `blocked`: a client-reported
+    // failure can come from one bad Wi-Fi or throttled line, and `blocked` is a house-wide 6 h skip
+    // (for a season pack, every episode in it).
+    const key = nzbVerdictKey(candidate.nzbUrl);
+    const prior = this.verdicts.get(key);
+    const count = ((prior && prior.verdict === 'playback-failed' && prior.detail && prior.detail.count) || 0) + 1;
+    this.verdicts.set(key, 'playback-failed', { stage: 'recovery-advance', count });
     if (!episodeScoped) {
       this.verdicts.set('t:' + normTitle(candidate.name), 'playback-failed', { stage: 'recovery-advance' });
     }
@@ -2876,6 +2952,13 @@ class Pipeline {
     const liveId = this.mountByUrl.get(identity);
     if (liveId) {
       const live = this.mounts.get(liveId);
+      // A mount that already holds an unreadable piece is not a source: re-joining it re-serves
+      // the same dead spot. Drop it so this Play builds (or picks) a fresh one.
+      const deadLive = live && ((live.health && live.health.verdict === 'blocked')
+        || (typeof live.deadPieceCount === 'function' && live.deadPieceCount() > 0));
+      // The same NZB would mount again and die at the same piece (it failed on every provider),
+      // and detaching the mount would leave other viewers on it running a second copy. Skip it.
+      if (deadLive) return { fail: 'blocked: live mount holds an unreadable piece' };
       if (live && live.streamable) {
         live._touched = Date.now();
         if (candidate.name) live._releaseName = candidate.name;
@@ -3035,7 +3118,7 @@ class Pipeline {
           this.metrics.firstProbeMaxMs = Math.max(this.metrics.firstProbeMaxMs, probeMs);
           if (verdict === 'missing') this.metrics.firstProbeMissing++;
           else if (verdict === 'timeout') { this.metrics.firstProbeTimeout++; candidate._probeTimeout = true; }
-          else if (verdict === 'unreachable') this.metrics.firstProbeError++;
+          else if (verdict === 'unreachable' || verdict === 'error') this.metrics.firstProbeError++;
           else this.metrics.firstProbePresent++;
           return verdict;
         }, () => { this.metrics.firstProbeError++; return 'error'; });
@@ -3911,7 +3994,7 @@ class Pipeline {
     // press-play resume point: a source dying at minute 70 used to warm the file HEAD while the
     // player seeked deep — re-introducing the exact cold-resume stall the resume warm was built
     // to kill. resumeFrac rides session.query, which _commitMount already feeds the warmup.
-    const { resumeFrac, ...rest } = mountOpts;
+    const { resumeFrac, cause, ...rest } = mountOpts;
     const frac = Number(resumeFrac);
     if (Number.isFinite(frac) && frac > 0 && frac < 1) {
       session.query = { ...(session.query || {}), resumeFrac: frac };
@@ -3928,8 +4011,11 @@ class Pipeline {
     // release-wide verdict from one episode's stall must not blacklist a season pack's healthy
     // siblings (the existing post-mount judgment contract).
     if (session.activeCandidate) {
-      debug.issue(`file died — "${session.activeCandidate.name || ''}" — reason: playback failed, trying another copy`);
-      this._recordPlaybackFailed(session.activeCandidate, { episodeScoped: !!_we });
+      // A switch caused by repeated STALLS (not unreadable bytes) may be this viewer's own line:
+      // move on for this session, but leave the release's reputation alone for everyone else.
+      const stallOnly = cause === 'stall-repeat';
+      debug.issue(`file died — "${session.activeCandidate.name || ''}" — reason: ${stallOnly ? 'repeated stalls at one spot, trying another copy (not demoted)' : 'playback failed, trying another copy'}`);
+      if (!stallOnly) this._recordPlaybackFailed(session.activeCandidate, { episodeScoped: !!_we });
       this._clearTitleStandby(session.query || {}, session.policy || {}, session.activeCandidate.pickKey);
       session.activeCandidate = null;
     }
@@ -3954,7 +4040,7 @@ module.exports = {
   summarizeAttempts, noPlayableError, summarizeUnplayable, stubFeatureReason, parseWantedBook, bookMatches,
   isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, mountNeedsUsenetShare, ACTIVE_PLAYBACK_GRACE_MS,
   allocateStreamConnections, classifyStreamNeed, streamNeedMbps, streamIsUhd, mountAheadBytes, fileIsFullyAhead,
-  needSocketsFor, pipeIsSaturated, mbpsPerConnection, oneViewerOpenCap,
+  needSocketsFor, pipeIsSaturated, mbpsPerConnection, sizingMbpsPerConn, streamCoverageSec, oneViewerOpenCap, isTransientSearchError,
   householdConnPressure, preparedHouseHasRoom, preparedPeekSockets, autoStreamCap, cacheNeedWeight,
   playbackRamFraction, playbackCacheCapMb,
   AUTO_BASE_CONNS,

@@ -51,6 +51,10 @@ function decode(articleBuf, opts = {}) {
   let pos = 0;
   let meta = { begin: null, end: null, size: null, name: null };
   let pcrc = null;
+  let endSeen = false;
+  let yendSize = null;
+  let sawPart = false;
+  let fileCrc = null;
   // Pre-size output generously; trimmed at the end.
   const out = Buffer.allocUnsafe(Math.max(0, text.length - skipDecoded));
   let o = 0;
@@ -71,11 +75,15 @@ function decode(articleBuf, opts = {}) {
         const n = /name=(.+)$/.exec(line); if (n) meta.name = n[1].trim();
         inBody = true;
       } else if (line.startsWith('=ypart')) {
+        sawPart = true;
         const b = /begin=(\d+)/.exec(line); const e = /end=(\d+)/.exec(line);
         if (b) meta.begin = parseInt(b[1], 10) - 1; // store 0-based
         if (e) meta.end = parseInt(e[1], 10);       // exclusive
       } else if (line.startsWith('=yend')) {
         const c = /pcrc32=([0-9a-fA-F]{8})/.exec(line); if (c) pcrc = parseInt(c[1], 16) >>> 0;
+        const f = /(?:^|\s)crc32=([0-9a-fA-F]{8})/.exec(line); if (f) fileCrc = parseInt(f[1], 16) >>> 0;
+        const z = /(?:^|\s)size=(\d+)/.exec(line); if (z) yendSize = parseInt(z[1], 10);
+        endSeen = true;
         inBody = false;
       }
     } else if (inBody) {
@@ -94,9 +102,22 @@ function decode(articleBuf, opts = {}) {
     pos = nl + 1;
   }
   const data = out.subarray(0, o);
-  const crcOk = pcrc === null ? true : ((crc ^ 0xffffffff) >>> 0) === pcrc;
+  // A single-part post only carries crc32= (no pcrc32): that is its checksum.
+  const expectCrc = pcrc !== null ? pcrc : (!sawPart && fileCrc !== null ? fileCrc : null);
+  const crcOk = expectCrc === null ? true : ((crc ^ 0xffffffff) >>> 0) === expectCrc;
   const part = meta.begin !== null ? { begin: meta.begin, end: meta.end } : null;
-  return { data, part, size: meta.size, name: meta.name, crcOk };
+  // The article agrees with ITSELF: it ends (=yend), has bytes, and its decoded length matches the
+  // sizes it declares. A cut-off or mangled copy that still passes the CRC check (no checksum, or
+  // truncated before =yend) used to be accepted and later zero-filled into the picture.
+  const partLen = part && Number.isFinite(part.end) ? part.end - part.begin : null;
+  // A checksum that matched is the strongest proof the bytes are right: some encoders write the
+  // WHOLE-file size in =yend size= or an off-by-one =ypart end, and those articles are fine. The
+  // declared-length comparisons only decide when there is no checksum to lean on.
+  const intact = endSeen && decoded > 0
+    && (expectCrc !== null
+      ? crcOk
+      : ((yendSize === null || decoded === yendSize) && (partLen === null || decoded === partLen)));
+  return { data, part, size: meta.size, name: meta.name, crcOk, intact, decodedLen: decoded };
 }
 
 module.exports = { encodePart, decode, crc32 };

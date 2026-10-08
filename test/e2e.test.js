@@ -689,7 +689,10 @@ test('e2e: remux mid-file Range past a short yEnc part keeps streaming', async (
   const { data, articles, nzb } = makeRelease('Paper.Hole.mkv', SIZE, PART, 'paper.hole');
   const hole = 10;
   const shortEnd = hole * PART + 1000;
-  articles.set(`seg${hole + 1}@paper.hole`, encodePart(data.subarray(hole * PART, shortEnd), {
+  // A genuine short part: the article declares 1000 bytes and delivers exactly 1000. (This used to
+  // pass an already-sliced buffer into encodePart, which produced an EMPTY article that merely
+  // claimed 1000 bytes — a cut-off copy, which is now rejected as corrupt.)
+  articles.set(`seg${hole + 1}@paper.hole`, encodePart(data, {
     name: 'Paper.Hole.mkv', partNum: hole + 1, totalParts: 12,
     begin: hole * PART, end: shortEnd, totalSize: SIZE,
   }));
@@ -714,6 +717,59 @@ test('e2e: remux mid-file Range past a short yEnc part keeps streaming', async (
 
   pool.close();
   await mock.close();
+});
+
+test('yenc: a cut-off, empty or length-mismatched article is not intact, and a single-part crc32 is checked', () => {
+  const data = Buffer.from('The quick brown fox jumps over the lazy dog'.repeat(40));
+  const good = encodePart(data, { name: 'a.bin', partNum: 1, totalParts: 1, begin: 0, end: data.length, totalSize: data.length });
+  const ok = decode(good);
+  assert.ok(ok.crcOk && ok.intact, 'a normal article is intact');
+  const text = good.toString('latin1');
+  const cut = Buffer.from(text.slice(0, text.indexOf('=yend')), 'latin1');
+  assert.strictEqual(decode(cut).intact, false, 'truncated before =yend');
+  const header = text.slice(0, text.indexOf('\r\n', text.indexOf('=ypart')) + 2);
+  const empty = Buffer.from(header + '=yend size=' + data.length + ' part=1 pcrc32=00000000\r\n', 'latin1');
+  assert.strictEqual(decode(empty).intact, false, 'a header that declares bytes the article does not carry');
+  const hello = Buffer.from([0x68, 0x65, 0x6c, 0x6c, 0x6f].map((b) => (b + 42) & 0xff)).toString('latin1');
+  const single = Buffer.from('=ybegin line=128 size=5 name=x\r\n' + hello + '\r\n=yend size=5 crc32=deadbeef\r\n', 'latin1');
+  assert.strictEqual(decode(single).crcOk, false, 'a single-part post that only has crc32= is verified against it');
+});
+
+test('yenc: a matching checksum wins over odd declared sizes (whole-file =yend size, off-by-one =ypart end)', () => {
+  const data = Buffer.from('payload '.repeat(500));
+  const good = encodePart(data, { name: 'a.bin', partNum: 1, totalParts: 2, begin: 0, end: data.length, totalSize: data.length * 2 }).toString('latin1');
+  const quirky = Buffer.from(good.replace(/=yend size=\d+/, '=yend size=' + data.length * 2), 'latin1'); // whole-file size in =yend
+  const dec = decode(quirky);
+  assert.ok(dec.crcOk && dec.intact, 'the checksum matched, so the article is fine');
+  const off = Buffer.from(good.replace(/=ypart begin=1 end=\d+/, '=ypart begin=1 end=' + (data.length + 1)), 'latin1');
+  assert.ok(decode(off).intact, 'an off-by-one =ypart end with a matching checksum is accepted too');
+});
+
+test('vfs: a cut-off copy on one provider fails over to a clean copy on the next', async () => {
+  const PART = 64 * 1024;
+  const { data, articles, nzb } = makeRelease('Cutoff.mkv', 4 * PART, PART, 'cutoff');
+  const full = articles.get('seg3@cutoff');
+  const cutArticles = new Map(articles);
+  const txt = full.toString('latin1');
+  cutArticles.set('seg3@cutoff', Buffer.from(txt.slice(0, Math.floor(txt.length / 2)), 'latin1')); // no =yend
+  const bad = createMockNntp({ articles: cutArticles });
+  const good = createMockNntp({ articles });
+  const [pa, pb] = [await bad.listen(), await good.listen()];
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: pa, tls: false },
+    { host: '127.0.0.1', port: pb, tls: false },
+  ], 4);
+  const vf = new VirtualFile(pool, nzb, { readAhead: 1 });
+  try {
+    await vf.mount();
+    const chunks = [];
+    for await (const c of vf.read(2 * PART, 3 * PART)) chunks.push(c);
+    assert.ok(Buffer.concat(chunks).equals(data.subarray(2 * PART, 3 * PART)), 'the clean copy was served, not zeros');
+  } finally {
+    pool.close();
+    await bad.close();
+    await good.close();
+  }
 });
 
 test('e2e: HTTP Range endpoint serves 206 with correct bytes and headers', async () => {
@@ -756,6 +812,45 @@ test('e2e: HTTP Range endpoint serves 206 with correct bytes and headers', async
 
   await shutdown();
   await mock.close();
+});
+
+test('e2e: a piece that fails mid-response drops the connection instead of leaving the player waiting', async () => {
+  // Headers (with Content-Length) are already out when a piece dies on every provider. Node closes
+  // the connection on the short body, so the player errors at once; this pins that behaviour (a
+  // review suspected the player would wait for its own 30s read timeout — it does not).
+  const SIZE = 512 * 1024;
+  const PART = 64 * 1024;
+  const { articles, nzb } = makeRelease('Cut.Test.mp4', SIZE, PART);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const { bootServer, setupAdmin, httpJson } = require('./helpers');
+  const { shutdown, port } = await bootServer({
+    NNTP_HOST: '127.0.0.1', NNTP_PORT: nntpPort, NNTP_TLS: 'false', NNTP_USER: null,
+  });
+  try {
+    const token = await setupAdmin(port);
+    const mountRes = (await httpJson(port, 'POST', '/api/mount', nzb, token)).json;
+    mock.markMissing('seg5@triboon.test');
+    const outcome = await new Promise((resolve) => {
+      const http = require('http');
+      const req = http.request({ host: '127.0.0.1', port, path: mountRes.streamUrl, method: 'GET' }, (res) => {
+        let got = 0;
+        res.on('data', (d) => { got += d.length; });
+        res.on('end', () => resolve({ ended: res.complete, got, want: Number(res.headers['content-length']) }));
+        res.on('aborted', () => resolve({ aborted: true, got }));
+        res.on('error', () => resolve({ aborted: true, got }));
+        res.on('close', () => { if (!res.complete) resolve({ aborted: true, got }); });
+      });
+      req.on('error', () => resolve({ aborted: true, got: 0 }));
+      req.end();
+      setTimeout(() => resolve({ hung: true }), 8000);
+    });
+    assert.ok(!outcome.hung, 'the response must not hang waiting for bytes that never come');
+    assert.ok(outcome.aborted, `the connection is cut so the player sees the error (got ${JSON.stringify(outcome)})`);
+  } finally {
+    await shutdown();
+    await mock.close();
+  }
 });
 
 test('triage: verdicts for healthy, degraded, and dead releases', async () => {
@@ -1106,7 +1201,11 @@ test('nntp: an account that answers 480 on fresh logins trips a breaker — othe
   ], 4);
   const badProvider = pool.providers[0];
   try {
+    // Routing now prefers an account with an idle open line, so after the first failover the pool
+    // stops trying the broken account at all. Provoke the fresh-login 480s on it directly, then
+    // check the pool still serves every article through the healthy one.
     for (let i = 0; i < 3; i++) {
+      try { await badProvider.body(id, 'readAhead'); } catch { /* expected: this account answers 480 */ }
       const body = await pool.body(id, 'readAhead'); // non-hedged path: sequential failover
       assert.ok(body.length > 0, `article ${i} still served via the healthy provider`);
     }
@@ -1980,6 +2079,136 @@ test('nntp: the lines log says what is waiting, how long, and where lines sit id
   assert.strictEqual(linesSummary(null), '');
 });
 
+test('nntp: an idle line takes waiting work from another account instead of sitting idle', async () => {
+  // Simulation 2026-10-07: a 1080p viewer's early piece waited 20s in the biggest account's queue
+  // (every line there belonged to someone else) while 20+ lines on other accounts sat idle.
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false },
+    { host: '127.0.0.2', port: 1, tls: false },
+  ], 4);
+  const [busyAcct, idleAcct] = pool.providers;
+  const mkIdle = () => ({ alive: true, owner: null, hold: false, lastUsed: Date.now(), close() { this.alive = false; } });
+  const idleLines = [mkIdle(), mkIdle(), mkIdle()]; // more than the playback reserve of 2
+  try {
+    idleAcct.conns = [...idleLines];
+    let ran = null;
+    const done = new Promise((resolve) => {
+      busyAcct.queue.push({
+        viewer: 'me', priority: 'readAhead', stealable: true, at: Date.now() - 5000,
+        fn: (c) => { ran = c; return Promise.resolve('ok'); }, resolve, reject: resolve,
+      });
+    });
+    idleAcct._pumpNow();
+    assert.strictEqual(await Promise.race([done, new Promise((r) => setTimeout(() => r('not stolen'), 2000))]), 'ok', 'the waiting piece ran');
+    assert.ok(idleLines.includes(ran), 'it ran on an idle line of the OTHER account');
+    assert.strictEqual(busyAcct.queue.length, 0, 'and left the first account queue');
+    // A thief with no spare line beyond its playback reserve does not take read-ahead.
+    idleAcct.conns = [mkIdle()];
+    let ranLow = false;
+    busyAcct.queue.push({
+      viewer: 'me', priority: 'readAhead', stealable: true, at: Date.now(),
+      fn: () => { ranLow = true; return Promise.resolve('x'); }, resolve() {}, reject() {},
+    });
+    idleAcct._pumpNow();
+    assert.strictEqual(ranLow, false, 'read-ahead never takes the last lines kept free for the picture');
+    assert.strictEqual(busyAcct.queue.length, 1, 'it stays queued on its own account');
+  } finally {
+    pool.close();
+  }
+});
+
+test('nntp: stolen work that fails on the thief goes back to its own account, and non-body work is never stolen', async () => {
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false },
+    { host: '127.0.0.2', port: 1, tls: false },
+  ], 4);
+  const [owner, thief] = pool.providers;
+  const idle = { alive: true, owner: null, hold: false, lastUsed: Date.now(), close() { this.alive = false; } };
+  try {
+    thief.conns = [idle];
+    owner._pump = () => {}; // keep the returned task visible; the owner has no real server here
+    let rejected = null;
+    const task = {
+      viewer: 'me', priority: 'playback', stealable: true, at: Date.now(),
+      fn: () => Promise.reject(Object.assign(new Error('430 no such article'), { code: '430' })),
+      resolve() {}, reject: (e) => { rejected = e; },
+    };
+    owner.queue.push(task);
+    thief._pumpNow();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(rejected, null, 'the thief 430 is not the final answer — the owning account must try it');
+    assert.ok(owner.queue.includes(task), 'the task is back on its own account');
+    assert.strictEqual(task.noSteal, true, 'and can no longer be stolen');
+    owner.queue = [];
+    const statTask = { viewer: 'me', priority: 'health', at: Date.now(), fn: () => Promise.resolve('x'), resolve() {}, reject() {} };
+    owner.queue.push(statTask);
+    thief._pumpNow();
+    assert.ok(owner.queue.includes(statTask), 'a task that is not a plain article fetch stays where it is');
+  } finally {
+    owner.queue = [];
+    pool.close();
+  }
+});
+
+test('nntp: stealing never feeds a backup account, a known miss, or a copy that fails its check on the thief', async () => {
+  const mkIdle = () => ({ alive: true, owner: null, hold: false, lastUsed: Date.now(), close() { this.alive = false; } });
+  const mkTask = (extra = {}) => ({
+    viewer: 'me', priority: 'playback', stealable: true, at: Date.now(), msgId: 'seg1@x',
+    fn: () => Promise.resolve('ok'), resolve() {}, reject() {}, ...extra,
+  });
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false },
+    { host: '127.0.0.2', port: 1, tls: false, backup: true },
+  ], 4);
+  const [owner, backup] = pool.providers;
+  try {
+    backup.conns = [mkIdle(), mkIdle(), mkIdle()];
+    owner.queue.push(mkTask());
+    backup._pumpNow();
+    assert.strictEqual(owner.queue.length, 1, 'a backup-only account never takes primary work');
+    backup.opts.backup = false;
+    pool.missCache.mark(backup, 'seg1@x');
+    backup._pumpNow();
+    assert.strictEqual(owner.queue.length, 1, 'an article already known missing on the thief is not stolen to pay another 430');
+    // A copy that fails verify on the thief is judged there and goes back to the owner.
+    let rejected = null;
+    owner.queue = [];
+    owner._pump = () => {};
+    const task = {
+      viewer: 'me', priority: 'playback', stealable: true, at: Date.now(), msgId: 'seg2@x',
+      fn: () => Promise.reject(Object.assign(new Error('corrupt'), { code: 'CORRUPT_ARTICLE' })),
+      resolve() {}, reject: (e) => { rejected = e; },
+    };
+    owner.queue.push(task);
+    backup.opts.backup = false;
+    backup._pumpNow();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(rejected, null, 'a corrupt copy on the thief is not the final answer');
+    assert.ok(owner.queue.includes(task) && task.noSteal === true, 'it returns to its own account for a real attempt');
+  } finally {
+    owner.queue = [];
+    pool.close();
+  }
+});
+
+test('nntp: routing prefers an account that can start the piece now over the biggest plan', () => {
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false, connections: 100 },
+    { host: '127.0.0.2', port: 1, tls: false, connections: 20 },
+  ], 4);
+  const [big, small] = pool.providers;
+  try {
+    big.size = 100; small.size = 20;
+    big.conns = [{ alive: true, close() {} }]; big.busy.add(big.conns[0]);                        // one line, busy
+    small.conns = [{ alive: true, close() {} }, { alive: true, close() {} }]; small.queue = [];               // two idle lines
+    assert.strictEqual(pool._ordered()[0], small, 'the small account has a free line right now');
+    small.busy.add(small.conns[0]); small.busy.add(small.conns[1]);
+    assert.strictEqual(pool._ordered()[0], big, 'with no free line anywhere the plan-size rule applies again');
+  } finally {
+    pool.close();
+  }
+});
+
 test('nntp: a piece queued on an account with no line dials one even when the house share is full', () => {
   // Unraid 3.3.13 19:40: "buffered 18s — news-us 0/7 busy (11 waiting); secure-us 0/1 busy
   // (9 waiting); newshosting 0/0 busy (6 waiting); eweka 0/0 busy (3 waiting)". Failover put
@@ -2082,4 +2311,57 @@ test('speed budget: time-to-first-byte after seek < 250ms on local mock', async 
 
   pool.close();
   await mock.close();
+});
+
+test('nntp: the first-article check asks every account before calling a release missing', async () => {
+  const mk = () => new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false },
+    { host: '127.0.0.2', port: 1, tls: false },
+  ], 4);
+  const answer = (p, fn) => { p.stat = fn; };
+  let pool = mk();
+  try {
+    const [a, b] = pool.providers;
+    let bAsked = 0;
+    answer(a, async () => false);                    // short-retention account: 430
+    answer(b, async () => { bAsked++; return true; }); // the other account has it
+    assert.strictEqual(await pool.stat('x@y', 'startup', { parallel: true, throwIfUnreachable: true }), true,
+      'one account 430 + another has it = present (it used to record a release-wide 6h "missing")');
+    assert.strictEqual(bAsked, 1, 'the unasked account was asked exactly once');
+  } finally { pool.close(); }
+  pool = mk();
+  try {
+    const [a, b] = pool.providers;
+    answer(a, async () => false);
+    answer(b, async () => false);
+    assert.strictEqual(await pool.stat('x@z', 'startup', { parallel: true, throwIfUnreachable: true }), false, 'every account 430 = missing');
+  } finally { pool.close(); }
+  pool = mk();
+  try {
+    const [a] = pool.providers;
+    answer(a, async () => { throw Object.assign(new Error('503 service unavailable'), { code: '503' }); });
+    await assert.rejects(pool.stat('x@w', 'startup', { parallel: true, throwIfUnreachable: true }),
+      (e) => e.code === 'PROBE_INCONCLUSIVE', 'a 503 is an error, never a miss');
+  } finally { pool.close(); }
+});
+
+test('nntp: TRIBOON_NNTP_STEAL=0 turns work stealing and idle-line routing off without a new image', () => {
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false },
+    { host: '127.0.0.2', port: 1, tls: false },
+  ], 4);
+  const [owner, idleAcct] = pool.providers;
+  const mkIdle = () => ({ alive: true, owner: null, hold: false, lastUsed: Date.now(), close() { this.alive = false; } });
+  const prev = process.env.TRIBOON_NNTP_STEAL;
+  try {
+    process.env.TRIBOON_NNTP_STEAL = '0';
+    idleAcct.conns = [mkIdle(), mkIdle(), mkIdle()];
+    owner.queue.push({ viewer: 'me', priority: 'playback', stealable: true, at: Date.now(), fn: () => Promise.resolve('x'), resolve() {}, reject() {} });
+    idleAcct._pumpNow();
+    assert.strictEqual(owner.queue.length, 1, 'with the switch off, nothing is stolen');
+  } finally {
+    if (prev === undefined) delete process.env.TRIBOON_NNTP_STEAL; else process.env.TRIBOON_NNTP_STEAL = prev;
+    owner.queue = [];
+    pool.close();
+  }
 });

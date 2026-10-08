@@ -34,6 +34,9 @@ const SOURCE = [
   // HC.V2 / 1080p.HC.x264 is a theater cam with burned-in subs. Do not treat a trailing
   // -HC group (Movie.2024.1080p.WEB-DL.HEVC-HC) as a cam — that is a release-group name.
   { key: 'cam', score: -8000, re: /\b(cam|ts|telesync|telecine|hdcam|hdts|hc[ ._-]v\d+)\b|\b(?:2160p|1080p|720p)[ ._-]hc(?:[ ._-]v\d+)?[ ._-](?:x26[45]|h\.?26[45]|avc|hevc)\b/i },
+  // Scene TV is overwhelmingly `.WEB.h264-GROUP` with no -DL/-Rip suffix. LAST, after cam, so a title
+  // word ("Charlotte's.Web.2006.DVDRip", "The.Web.2024.HDCAM") never beats a real source tag.
+  { key: 'web', score: 85, re: /\bweb\b/i },
 ];
 
 // Theater cams. Play never auto-picks them (score −8000). Sources hides them unless
@@ -65,7 +68,7 @@ const FEATURE = [
   { key: 'atmos', score: 14, re: /\b(atmos)\b/i },
   { key: 'truehd', score: 10, re: /\b(truehd)\b/i },
   { key: 'dts-hd', score: 9, re: /\b(dts-?hd|dts-?x|dtsma)\b/i },
-  { key: 'ddp', score: 6, re: /\b(ddp|eac3|dd\+)\b/i },
+  { key: 'ddp', score: 6, re: /\b(ddp(?=\d|\b)|eac3|dd\+)/i },
   { key: 'repack', score: 18, re: /\b(repack|rerip)\b/i },
   { key: 'proper', score: 22, re: /\bproper\b/i },
   { key: 'imax', score: 6, re: /\b(imax)\b/i },
@@ -103,7 +106,7 @@ const BAD_FLAGS = [
   // a bare "HC" (group fragment, unrelated token) must NOT eat a −200. korsub/hardsub/hardcoded are
   // unambiguous on their own.
   { key: 'hardcoded-subs', score: -200, re: /\bhc[ ._-](?:v\d+|hdrip|hdtc|hdcam|hdts|cam|ts|web|webrip|bdrip|dvdrip)\b|\b(?:korsub|hardsub|hardcoded)\b/i },
-  { key: 'upscaled', score: -150, re: /\b(upscal|fake4k)\b/i },
+  { key: 'upscaled', score: -150, re: /\b(upscal(?:e|ed|ing)?|fake4k)\b/i },
   { key: 'sample', score: -1000, re: /\bsample\b/i },
 ];
 

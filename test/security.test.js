@@ -276,6 +276,9 @@ test('security: ?t= session tokens are rejected on non-stream routes; /api/statu
   assert.ok(!us.json.nntp || us.json.nntp.host === undefined, 'regular user does not receive the provider host/port');
   assert.ok(as.json.device && typeof as.json.device.node === 'string', 'admin still receives the full device fingerprint');
   assert.ok(as.json.nntp && typeof as.json.nntp.host === 'string', 'admin still receives the provider host');
+  const loop = as.json.playback && as.json.playback.loop;
+  assert.ok(loop && Number.isFinite(loop.p99Ms) && Number.isFinite(loop.utilization),
+    'Status carries event-loop health (p99 delay + utilization) so a CPU-bound server is visible');
 });
 
 test('activity: users heartbeat playback and only admins see now-watching rows', async () => {

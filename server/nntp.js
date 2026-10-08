@@ -34,6 +34,9 @@ const CONNECT_BURST = 4;
 // Picture work (startup/seek/playback) must never sit in a queue next to an idle line. Nothing
 // wakes the dispatcher when lines are open, idle, and work is waiting, so a watchdog re-checks.
 const STUCK_CHECK_MS = 500;
+// Kill switch for cross-account work stealing and idle-line routing (3.3.16). TRIBOON_NNTP_STEAL=0 in
+// the container env restores 3.3.15 dispatch without a new image.
+function stealingEnabled() { return process.env.TRIBOON_NNTP_STEAL !== '0'; }
 const STUCK_PICTURE_MS = 1000;
 const STUCK_LOG_EVERY_MS = 10000;
 // While someone is watching, this many lines stay theirs. Other people's
@@ -668,7 +671,7 @@ class ProviderPool {
     return new Promise((resolve, reject) => {
       const signal = opts.signal;
       if (signalAborted(signal)) return reject(abortError());
-      const task = { fn, resolve, reject, priority, signal, at: Date.now(), viewer: opts.viewer ? String(opts.viewer) : '' };
+      const task = { fn, resolve, reject, priority, signal, at: Date.now(), viewer: opts.viewer ? String(opts.viewer) : '', stealable: opts.stealable === true, msgId: opts.msgId || '' };
       task.cleanupAbort = addAbortListener(signal, () => {
         const idx = this.queue.indexOf(task);
         if (idx !== -1) {
@@ -679,6 +682,10 @@ class ProviderPool {
       });
       this.queue.push(task);
       this._pump();
+      // Nothing here to run it? An idle line on another account has no event of its own to wake it.
+      if (task.stealable && this.household && typeof this.household.nudgeIdle === 'function' && this.immediateRoom() < 0) {
+        this.household.nudgeIdle(this);
+      }
     });
   }
 
@@ -724,6 +731,32 @@ class ProviderPool {
     this._pumpNow();
     this._watchParked();
     this._watchStuck();
+  }
+
+  // Queues are per account, but an article is the same on every account. A line that is open and
+  // idle here takes eligible waiting work from another account's queue instead of sitting idle
+  // while a viewer's early piece waits behind lines that belong to somebody else (simulation:
+  // a 1080p viewer never started in 30s with 20+ idle lines in the house).
+  _stealIdle() {
+    if (!stealingEnabled()) return;
+    if (this.closed || !this.household || typeof this.household.stealFor !== 'function') return;
+    const sharesOn = !!(this.household.viewerSharesActive && this.household.viewerSharesActive());
+    const playbackReserve = this.opts.playbackReserve != null ? this.opts.playbackReserve : (this.size >= 4 ? 2 : 1);
+    const reserve = sharesOn ? 0 : Math.max(0, Math.min(playbackReserve, this.size - 1));
+    for (const c of this.conns) {
+      if (!c.alive || this.busy.has(c)) continue;
+      const idleNow = this.conns.reduce((n, x) => n + ((x.alive && !this.busy.has(x)) ? 1 : 0), 0);
+      const task = this.household.stealFor(this, c, { lowAllowed: idleNow > reserve });
+      if (!task) return;
+      this._launch(c, task);
+    }
+  }
+
+  // Idle open lines minus work already queued here: above 0, a new piece starts without waiting.
+  immediateRoom() {
+    let idle = 0;
+    for (const c of this.conns) if (c.alive && !this.busy.has(c)) idle++;
+    return idle - this.queue.length;
   }
 
   // What is waiting here and how many lines sit idle. "Picture" = startup/seek/playback work the
@@ -911,6 +944,7 @@ class ProviderPool {
       this._launch(c, task);
     }
     if (sharesOn && this.queue.length) this._dispatchStarved();
+    this._stealIdle();
     // Opt-in NNTP pipelining (TRIBOON_NNTP_PIPELINE=2..4, default off): stack ADDITIONAL low-lane
     // (readAhead/background) fetches onto connections already running ONLY low-lane work, up to
     // `depth` in flight per socket. NNTP answers strictly in order (the connection's waiter FIFO
@@ -1023,7 +1057,7 @@ class ProviderPool {
         // A connection-level failure (timeout/closed/reset) gets ONE retry on a fresh
         // connection so a single dead socket can't sink a whole mount.
         if (e && e.code === 'NNTP_AUTH_LOST') this.noteAuthLost(c);
-        if (!isAbortError(e) && !task.retried && !/^\d{3}$/.test(String(e && e.code || ''))) {
+        if (!isAbortError(e) && !task.retried && !isCorruptArticle(e) && !/^\d{3}$/.test(String(e && e.code || ''))) {
           // One dead socket must not sink a solo-provider mount. With a second provider ready,
           // leave immediately so the stall window is paid once, on the next host — not twice here.
           if (e && e.code === 'NNTP_STALL' && this.preferPeerFailover) task.reject(e);
@@ -1120,8 +1154,12 @@ class ProviderPool {
     return this.run(async (c) => {
       const buf = await c.body(msgId, opts);
       if (this.meter) this.meter.note(buf && buf.length, this.busy.size);
+      // Judge the bytes HERE, on the account that fetched them. A copy fetched by an idle line of
+      // another account (a steal) that fails the check must go back to its owner and be tried there,
+      // not be blamed on the owner and tip two accounts into "corrupt on every provider".
+      if (typeof opts.verify === 'function' && !opts.verify(buf, this)) throw corruptArticleError(this, msgId);
       return buf;
-    }, priority, opts);
+    }, priority, { ...opts, stealable: true, msgId });
   }
   // Circuit breaker: a provider with zero live connections and a connect failure in the last
   // 60s is "down" — multi-provider routing deprioritizes it instead of paying the failure on
@@ -1234,6 +1272,72 @@ class NntpPool {
 
   viewerSharesActive() {
     return this._viewerShares instanceof Map && this._viewerShares.size > 0;
+  }
+
+  // An account that just queued work it cannot start now lets idle peers look at it.
+  nudgeIdle(except) {
+    if (!stealingEnabled()) return;
+    for (const p of this.providers) {
+      if (p === except || p.closed) continue;
+      let idle = false;
+      for (const c of p.conns) if (c.alive && !p.busy.has(c)) { idle = true; break; }
+      if (idle) { try { p._stealIdle(); } catch {} }
+    }
+  }
+
+  // Take one waiting article from another account's queue for `conn` (idle, on `thief`). Picture
+  // work first, then read-ahead; oldest first. Each task is stolen at most once. If the thief
+  // account errors on it, the task goes back to its own account and tries there for real, so a
+  // 430 from the thief never marks the owner account as missing the article.
+  stealFor(thief, conn, { lowAllowed = true } = {}) {
+    if (this.providers.length < 2) return null;
+    // A backup-only account is reached only when every primary ran out; an account that refuses
+    // logins or is dark takes nothing new either.
+    if (thief.isBackup() || thief.authBroken() || thief.refusingNewLogins() || thief.down()) return null;
+    const lowRank = thief._priorityRank('readAhead');
+    const pictureRank = thief._priorityRank('playback');
+    let best = null, bestQ = null, bestIdx = -1, bestRank = Infinity, bestAt = Infinity;
+    for (const q of this.providers) {
+      if (q === thief || !q.queue.length) continue;
+      for (let i = 0; i < q.queue.length; i++) {
+        const t = q.queue[i];
+        if (!t || !t.stealable || t.stolen || t.noSteal || signalAborted(t.signal)) continue;
+        const r = q._priorityRank(t.priority);
+        if (r > lowRank) continue;
+        if (r > pictureRank && !lowAllowed) continue; // keep the thief's playback reserve free
+        if (t.msgId && this.missCache.has(thief, t.msgId)) continue; // known 430 here: do not pay it again
+        if (this.viewerSharesActive() && !this.viewerTaskMayUse(thief, conn, t)) continue;
+        const at = t.at || 0;
+        if (r < bestRank || (r === bestRank && at < bestAt)) { best = t; bestQ = q; bestIdx = i; bestRank = r; bestAt = at; }
+      }
+    }
+    if (!best) return null;
+    bestQ.queue.splice(bestIdx, 1);
+    if (typeof best.cleanupAbort === 'function') best.cleanupAbort();
+    best.stolen = true;
+    const origin = bestQ;
+    const finalReject = best.reject;
+    best.reject = (e) => {
+      if (!best.noSteal && !isAbortError(e)) {
+        best.noSteal = true;
+        best.reject = finalReject;
+        best.retried = false;
+        best.stayOnLive = false;
+        // Re-arm the abort listener the steal removed, so a cancelled hedge loser leaves the
+        // owner's queue instead of sitting there inflating its counts.
+        best.cleanupAbort = addAbortListener(best.signal, () => {
+          const i = origin.queue.indexOf(best);
+          if (i !== -1) {
+            origin.queue.splice(i, 1);
+            best.cleanupAbort();
+            finalReject(abortError());
+          }
+        });
+        origin.queue.push(best);
+        try { origin._pump(); } catch {}
+      } else finalReject(e);
+    };
+    return best;
   }
 
   _eachConn() {
@@ -1465,10 +1569,20 @@ class NntpPool {
     // the 60-plan account won the idle tie on headroom while the one warm login sat on the
     // 40-plan account, and every health check parked there. Reuse the login that is up.
     const noRoom = (p) => !live(p) && typeof p._roomForNewLine === 'function' && p._roomForNewLine() === 0;
+    // A line that is open and idle runs the piece NOW; an account's plan size says nothing about
+    // how many of its lines are actually open. Under the household cap the biggest plan kept
+    // attracting work (27 waiting on 9 open lines) while smaller accounts held 20+ idle ones.
+    const readyNow = (p) => (typeof p.immediateRoom === 'function' ? p.immediateRoom() : 0);
     const sorted = [...list].sort((a, b) => {
       const da = dark(a) || noRoom(a);
       const db = dark(b) || noRoom(b);
       if (da !== db) return da ? 1 : -1;
+      if (need <= 0 && stealingEnabled()) {
+        const ra = readyNow(a);
+        const rb = readyNow(b);
+        if ((ra > 0) !== (rb > 0)) return ra > 0 ? -1 : 1;
+        if (ra > 0 && rb > 0 && ra !== rb) return rb - ra;
+      }
       const ha = providerHeadroom(a);
       const hb = providerHeadroom(b);
       const aFit = need <= 0 || ha >= need;
@@ -1547,31 +1661,63 @@ class NntpPool {
     // (TCP+TLS+AUTH to rebuild) on every successful probe, and a late 430 still feeds the miss
     // cache for the BODY chain that follows.
     const { signal, ...rest } = opts;
+    // One short-retention account answering 430 is not "this release is missing": that verdict
+    // is release-wide and lasts 6h. If everyone asked said 430, ask the accounts that were not
+    // asked yet, one at a time (at most one new login each), before concluding missing. A non-430
+    // answer (503, 480, a dropped line) is an ERROR, never a miss.
+    const unasked = ordered.filter((p) => !providers.includes(p));
     return new Promise((resolve, reject) => {
       let pending = providers.length;
       let reachedAny = false;
+      let missed = 0;
+      let errored = 0;
       let settled = false;
       const extCleanup = addAbortListener(signal, () => { if (!settled) { settled = true; reject(abortError()); } });
       const finish = (fn) => { if (settled) return; settled = true; extCleanup(); fn(); };
       if (signalAborted(signal)) return finish(() => reject(abortError()));
+      const conclude = async () => {
+        if (missed > 0 && errored === 0 && unasked.length) {
+          for (const p of unasked) {
+            if (settled) return;
+            try {
+              const ok = await p.stat(msgId, priority, rest);
+              reachedAny = true;
+              if (ok) return finish(() => resolve(true));
+              missed++;
+              this.missCache.mark(p, msgId);
+            } catch (e) {
+              if (isAbortError(e)) return;
+              errored++;
+              if (/^\d{3}$/.test(String(e && e.code || ''))) reachedAny = true;
+            }
+          }
+        }
+        if (!reachedAny && rest.throwIfUnreachable) {
+          const err = new Error('no usenet provider reachable');
+          err.code = 'NO_PROVIDER';
+          return finish(() => reject(err));
+        }
+        if (errored > 0 && rest.throwIfUnreachable) {
+          // Some account could not say yes or no. Do not let that become a release-wide "missing".
+          const err = new Error('first-article check was inconclusive');
+          err.code = 'PROBE_INCONCLUSIVE';
+          return finish(() => reject(err));
+        }
+        finish(() => resolve(false));
+      };
       for (const p of providers) {
         p.stat(msgId, priority, rest).then(
           (ok) => {
             if (ok) return finish(() => resolve(true));
             reachedAny = true;
+            missed++;
             this.missCache.mark(p, msgId);
-            if (--pending === 0) finish(() => resolve(false));
+            if (--pending === 0) conclude();
           },
           (e) => {
+            errored++;
             if (/^\d{3}$/.test(String(e && e.code || ''))) reachedAny = true; // a real NNTP answer, just not 223/430
-            if (--pending === 0) {
-              if (!reachedAny && rest.throwIfUnreachable) {
-                const err = new Error('no usenet provider reachable');
-                err.code = 'NO_PROVIDER';
-                return finish(() => reject(err));
-              }
-              finish(() => resolve(false));
-            }
+            if (--pending === 0) conclude();
           },
         );
       }
@@ -1609,9 +1755,7 @@ class NntpPool {
   // corrupt article on one backbone failed the piece outright while the other backbone had a
   // clean copy (Dickensian S01E03 looped on "segment 6 CRC mismatch" with two idle providers).
   async _verifiedBody(p, msgId, priority, opts) {
-    const raw = await p.body(msgId, priority, opts);
-    if (typeof opts.verify === 'function' && !opts.verify(raw, p)) throw corruptArticleError(p, msgId);
-    return raw;
+    return p.body(msgId, priority, opts); // verified inside the provider that fetched it
   }
 
   // Tell the caller whether this article is dead. A mount only gives a piece up (health →

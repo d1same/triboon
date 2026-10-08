@@ -4936,7 +4936,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
   <div id="setTabs">
     <button data-tab="server" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg><span>Status</span></button>
-    <button data-tab="activity" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h4l2-5 4 10 2-5h4"/><circle cx="19" cy="6" r="2"/></svg><span>Now Watching</span></button>
+    <button data-tab="activity" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h4l2-5 4 10 2-5h4"/><circle cx="19" cy="6" r="2"/></svg><span>Watching</span></button>
     <button data-tab="logs" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg><span>Logs</span></button>
     <button data-tab="performance" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14a8 8 0 1 1 16 0"/><path d="M12 14l4-4"/><path d="M8 18h8"/></svg><span>Performance</span></button>
     <button data-tab="sources" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="2"/></svg><span>Providers</span></button>
@@ -5075,7 +5075,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <div class="setGrid" data-stab="activity" hidden>
   <div class="panel activityPanel">
     <div class="activityTop">
-      <div class="activityTitle"><h2>Now Watching</h2><p id="activitySummary" class="activitySummary"></p></div>
+      <div class="activityTitle"><h2>Watching</h2><p id="activitySummary" class="activitySummary"></p></div>
       <button class="btn primary focusable" id="activityRefresh">Refresh</button>
     </div>
     <div class="activitySectionHead" id="activityConnHead" hidden><span>Usenet connections</span><small id="activityConnStatus"></small></div>
@@ -15394,6 +15394,27 @@ function playbackServerGone(reason) {
   if (/^(playback interrupted|native playback interrupted|native player idle)$/i.test(msg)) return true;
   return /HTTP 404|HTTP 500|HTTP 502|HTTP 503|mount not found|session expired|stream unavailable|Failed to connect|ECONNRESET|ECONNREFUSED|connection refused|Unable to connect|UnknownHost|Source error|502 Bad Gateway|503 Service|ERR_CONNECTION|network is unreachable/i.test(msg);
 }
+// Same file, same spot, again. Re-loading a source that just failed at 26:03 re-reads the same
+// bytes (Unraid 2026-10-07: the player reloaded one stream five times at 16:54). A CONTENT error
+// (the player could not parse the bytes) repeating within 20s of media time means the source is
+// unreadable THERE: switch release on the 2nd. A STALL or timeout can be one weak Wi-Fi or
+// throttled line, so it needs a 3rd failure at the same spot, and the switch it causes does not
+// demote the release for anyone else (see `cause: 'stall-repeat'`). History is kept per release:
+// a new release starts clean, so one weak moment cannot burn through several copies.
+// Pure; the ledger lives on the playing object.
+const REPEAT_FAIL_SPOT_SEC = 20;
+const REPEAT_FAIL_WINDOW_MS = 120000;
+function playbackRepeatFailure(p, atSec, nowMs, contentError = false) {
+  const src = String(p.sourcePickKey || p.mountId || '');
+  const ledger = (p._failLedger || []).filter((f) => nowMs - f.t < REPEAT_FAIL_WINDOW_MS && f.src === src);
+  const pos = Math.max(0, Math.floor(Number(atSec) || 0));
+  const sameSpot = ledger.filter((f) => Math.abs(f.pos - pos) <= REPEAT_FAIL_SPOT_SEC).length;
+  ledger.push({ pos, t: nowMs, src });
+  p._failLedger = ledger;
+  return contentError ? sameSpot >= 1 : sameSpot >= 2;
+}
+// ExoPlayer 3xxx parsing errors only. 2xxx (including IO_UNSPECIFIED) are network/IO errors.
+const PLAYBACK_CONTENT_ERROR_RE = /PARSING_|MALFORMED|varint|extractor|invalid (data|media)/i;
 function recoverSamePlaybackSource(reason = '') {
   const p = S.playing; if (!vodPlaybackStarted(p)) return false;
   const kind = currentPlayerKind(p);
@@ -15434,9 +15455,16 @@ function recoverSamePlaybackSource(reason = '') {
   // stalls toward a hunt made a bad pipe look like "Finding source."
   p._sameSourceRecoveryKey = key;
   p._sameSourceRecoveryAt = now;
-  if (sourceDead) {
+  const contentError = PLAYBACK_CONTENT_ERROR_RE.test(String(reason || ''));
+  const repeatedHere = !sourceDead && !decoderFailure && playbackRepeatFailure(p, at, now, contentError);
+  if (sourceDead || repeatedHere) {
     if (!p._sourceAdvancePending) {
-      autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: reason || 'source health blocked' });
+      autoAdvance({
+        allowMidstreamAdvance: true, nativePreferred: !!p.usingNative,
+        reason: repeatedHere ? `failed again at ${Math.floor(at)}s: ${reason || 'playback interrupted'}` : (reason || 'source health blocked'),
+        // Repeated stalls may be this viewer's line: move on, but do not demote the release house-wide.
+        ...(repeatedHere && !contentError ? { cause: 'stall-repeat' } : {}),
+      });
     }
     return true;
   }
@@ -15661,7 +15689,10 @@ async function autoAdvance(opts = {}) {
     const advDur = (p.duration && isFinite(p.duration) && p.duration) || 0;
     const r = await api('/api/advance/' + p.sessionId, {
       method: 'POST',
-      body: at > 0 && advDur > 0 ? { resumeFrac: Math.max(0, Math.min(0.98, at / advDur)) } : {},
+      body: {
+        ...(at > 0 && advDur > 0 ? { resumeFrac: Math.max(0, Math.min(0.98, at / advDur)) } : {}),
+        ...(opts.cause === 'stall-repeat' ? { cause: 'stall-repeat' } : {}),
+      },
     });
     if (S.playing !== p || S.view !== 'player') return;
     const carriedSubTrack = carrySubtitleAcrossSourceSwap(p, p.subTrack);
@@ -28756,7 +28787,7 @@ $('perfSpeed').addEventListener('click', async () => {
   out.innerHTML = '<div class="perfStatusLine">Measuring provider speed &amp; connection cap… (a few seconds — best run when nobody is watching)</div>';
   const conn4k = parseInt($('perfConn4k').value, 10) || 0;
   const rows = [];
-  let totalCap = 0, bestPerConn = 0, anyCap = false, tested = 0;
+  let totalCap = 0, speedWeighted = 0, speedWeight = 0, anyCap = false, tested = 0;
   try {
     for (let i = 0; i < 12; i++) {
       if (i > 0) await new Promise((res) => setTimeout(res, 1200)); // let the previous provider's slots release first
@@ -28768,7 +28799,13 @@ $('perfSpeed').addEventListener('click', async () => {
       tested++;
       totalCap += (r.capHit ? r.connCap : r.connections) || 0;
       if (r.capHit) anyCap = true;
-      bestPerConn = Math.max(bestPerConn, r.mbpsPerConn || 0);
+      // Weight each account's speed by its lines: the household draws from ALL accounts, so the
+      // fastest one alone (the old Math.max) overstated what a typical line delivers.
+      if ((r.mbpsPerConn || 0) > 0) {
+        const w = Math.max(1, (r.capHit ? r.connCap : r.configured) || 1);
+        speedWeighted += r.mbpsPerConn * w;
+        speedWeight += w;
+      }
       const speedTxt = `<strong>${esc(r.mbpsPerConn)} Mbps/conn</strong> · ~${esc(r.mbpsTotal)} Mbps total`;
       if (r.capHit) {
         const warn = (conn4k && r.connCap < conn4k) ? `, also below your ${conn4k}/stream 4K setting` : '';
@@ -28782,7 +28819,7 @@ $('perfSpeed').addEventListener('click', async () => {
       : '<div class="perfStatusLine">No providers configured to test.</div>';
     if (tested) {
       // Hand the measured per-connection speed + total connection cap to the recommendation calc.
-      S.perfMeasured = { measuredMbpsPerConn: bestPerConn || 0, measuredConnCap: anyCap ? totalCap : 0 };
+      S.perfMeasured = { measuredMbpsPerConn: speedWeight ? +(speedWeighted / speedWeight).toFixed(1) : 0, measuredConnCap: anyCap ? totalCap : 0 };
       try { await calcRecommendation(); } catch {}
     }
   } catch (e) {
@@ -29767,7 +29804,13 @@ window.addEventListener('hashchange', () => {
   handleRouteTraversal();
 });
 
-function clearFocus() { document.querySelectorAll('.focus').forEach((e) => e.classList.remove('focus')); }
+// While the hold-OK menu is open, a stray clear (a refresh, an overlay close) must not strip the
+// menu's own highlight. `all` is for applyFocus, which has already decided the target is allowed.
+function clearFocus(all = false) {
+  const m = !all && !S.pointer ? $('cwMenu') : null;
+  const keep = m && m.classList.contains('open') ? m : null;
+  document.querySelectorAll('.focus').forEach((e) => { if (!keep || !keep.contains(e)) e.classList.remove('focus'); });
+}
 // Land focus on the CURRENT view's natural element — used when entering content from the
 // rail and when an overlay (detail/person) closes. retried=internal: async views (calendar,
 // home rows) may still be rendering on the first attempt.
@@ -29777,6 +29820,7 @@ function focusContentStillWanted() {
     && !($('rail') && $('rail').classList.contains('expanded'));
 }
 function focusContent(retried) {
+  if (cwMenuOwnsFocus(null)) return; // the hold-OK menu is open: nothing may re-land focus under it
   // Movies/Calendar can still be painting when Back opens the menu. A 200ms
   // retry used to hit leaveRail() and slam the rail shut — first Back looked dead.
   if (retried && !focusContentStillWanted()) return;
@@ -29969,14 +30013,24 @@ function scrollSectionTabIntoView(el) {
   else if (row.bottom > box.bottom) tabs.scrollTop += row.bottom - box.bottom;
   return true;
 }
+// The hold-OK action menu (#cwMenu) owns the highlight while it is open. Background code — a home
+// refresh, hero/backdrop updates, restore-after-render routines, retry timers — must not move it
+// back onto the cover underneath (it did, twice: 3.3.14 guarded renderRows only). D-pad modality
+// only: a mouse hovering another cover is the user's own choice.
+function cwMenuOwnsFocus(el) {
+  if (S.pointer) return false;
+  const m = $('cwMenu');
+  return !!(m && m.classList.contains('open') && !(el && m.contains(el)));
+}
 function applyFocus(el, scroll = true) {
+  if (el && cwMenuOwnsFocus(el)) { S._cwFocusBlocked = (S._cwFocusBlocked || 0) + 1; return; }
   // Reclaim REAL focus from any lingering form control — a focused <select>/<input> eats
   // every subsequent key natively and the spatial nav goes dead (live TV finding).
   // Search typing is the exception: landing the mic must never blur the box / kill IME.
   if (el && el.id === 'micBtn' && searchInputBusy()) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae !== el) ae.blur();
-  clearFocus();
+  clearFocus(true);
   if (!el) return;
   el.classList.add('focus');
   // TV Music/Audiobooks: pin native focus on the cover so the WebView cannot snap the caret
@@ -29998,6 +30052,7 @@ function applyFocus(el, scroll = true) {
 }
 function focusCard(ri, ci, opts = {}) {
   const view = S.rowsView; if (!view) return;
+  if (cwMenuOwnsFocus(null)) { S._cwFocusBlocked = (S._cwFocusBlocked || 0) + 1; return; } // keep row/col for the return
   leaveRail();
   S.zone = 'rows'; S.rowIdx = ri; S.colIdx[ri] = ci;
   const el = view.root.querySelector(`[data-row="${ri}"][data-col="${ci}"]`);
@@ -30532,6 +30587,7 @@ function heroFocusables() {
   return []; // hero is info-only → D-pad falls through to the cards
 }
 function focusHero(i) {
+  if (cwMenuOwnsFocus(null)) { S._cwFocusBlocked = (S._cwFocusBlocked || 0) + 1; return; }
   const els = heroFocusables();
   if (!els.length) return focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0); // no hero buttons → cards
   leaveRail();

@@ -437,7 +437,7 @@ class NzbFileStream {
     const verify = (raw) => {
       try {
         const dec = decode(raw);
-        if (!dec.crcOk) return false;
+        if (!dec.crcOk || !dec.intact) return false;
         verified = { raw, dec };
         return true;
       } catch { return false; }
@@ -467,6 +467,7 @@ class NzbFileStream {
         return dec.data;
       }
       if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
+      if (!dec.intact) throw new Error(`segment ${i} is cut off or its length does not match its own header`);
       if (dec.size !== null) this.size = dec.size;
       // A malformed =ypart (begin without a valid end) would yield NaN here and poison ALL
       // offset→segment math (NaN segment indices). Only learn partSize from a sane header.
@@ -670,6 +671,12 @@ class NzbFileStream {
         const slotEnd = Math.min(end, this.size, (segIdx + 1) * this.partSize);
         const hole = slotEnd - offset;
         if (hole > 0) {
+          // Zeros in the picture look like a glitch or a container parse error. Count them and say
+          // so in the log, unless this is the final (legitimately short) slot.
+          this.playbackStats.holes = (this.playbackStats.holes || 0) + 1;
+          if (slotEnd < this.size && (this.playbackStats.holes === 1 || this.playbackStats.holes % 50 === 0)) {
+            this._troubleLine(`${this.playbackStats.holes} piece(s) shorter than their slot were padded with zeros (uneven yEnc parts)`);
+          }
           this.playbackStats.segmentsServed++;
           this.playbackStats.readBytes += hole;
           yield Buffer.alloc(hole);

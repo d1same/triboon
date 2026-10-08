@@ -24,7 +24,7 @@ const {
   streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist, playlistClockShift, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard,
   directGrantUser,
 } = require('./jellyfin-api');
-const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch, articleFlipQuery, collectArticleSiblings } = require('./pipeline');
+const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch, articleFlipQuery, collectArticleSiblings, sizingMbpsPerConn } = require('./pipeline');
 const {
   isCamCandidate, camScoringEnabled, sourceDrawerCandidates,
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
@@ -704,8 +704,11 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
   // intent plans for, but never below what sustains the PEAK bitrate. This is what makes the preset
   // scale with capacity: fewer planned streams → bigger share → richer streams; more → more viewers fit.
   const share = planUsers ? Math.floor(effActive / planUsers) : effActive;
-  const floor1080 = measuredPerConn > 0 ? Math.ceil((br1080 * 1.6) / measuredPerConn) : rec1080;
-  const floor4k = measuredPerConn > 0 ? Math.ceil((br4k * 2.5) / measuredPerConn) : rec4k;
+  // Same honest per-line figure Auto sizes sockets from (the saved test is derated), so the ceiling
+  // we recommend can actually carry the peak bitrate of one stream.
+  const sizingPerConn = measuredPerConn > 0 ? sizingMbpsPerConn({ measuredMbpsPerConn: measuredPerConn }) : 0;
+  const floor1080 = sizingPerConn > 0 ? Math.ceil((br1080 * 1.6) / sizingPerConn) : rec1080;
+  const floor4k = sizingPerConn > 0 ? Math.ceil((br4k * 2.5) / sizingPerConn) : rec4k;
   const perStream1080 = Math.max(6, Math.min(24, Math.max(floor1080, share)));
   const perStream4k = Math.max(12, Math.min(40, Math.max(floor4k, share)));
   // Simultaneous viewers are limited by the SMALLER of two ceilings:
@@ -4720,6 +4723,37 @@ function mountPayload(vf, uid, extra = {}) {
     ...extra,
   };
 }
+// Event-loop health. The thread that decodes yEnc also writes video bytes to every player, so a
+// busy loop shows up as buffering with idle usenet lines. Sampled every 30s; the last window is
+// what Status shows, and a slow window during playback is logged once per window.
+const { monitorEventLoopDelay, performance: loopPerf } = require('perf_hooks');
+const LOOP_WINDOW_MS = 30000;
+const LOOP_WARN_P99_MS = 100;
+const loopDelay = monitorEventLoopDelay({ resolution: 10 }); // readings include up to ~resolution of timer slack
+loopDelay.enable();
+let loopEluMark = loopPerf.eventLoopUtilization();
+let lastLoopHealth = { p50Ms: 0, p99Ms: 0, maxMs: 0, utilization: 0, windowMs: 0, at: 0 };
+function sampleLoopHealth() {
+  const elu = loopPerf.eventLoopUtilization(loopEluMark);
+  loopEluMark = loopPerf.eventLoopUtilization();
+  const ms = (ns) => Math.round((Number(ns) || 0) / 1e5) / 10;
+  lastLoopHealth = {
+    p50Ms: ms(loopDelay.percentile(50)), p99Ms: ms(loopDelay.percentile(99)), maxMs: ms(loopDelay.max),
+    utilization: Math.round((elu.utilization || 0) * 100) / 100, windowMs: LOOP_WINDOW_MS, at: Date.now(),
+  };
+  loopDelay.reset();
+  return lastLoopHealth;
+}
+const loopHealthTimer = setInterval(() => {
+  const h = sampleLoopHealth();
+  if (h.p99Ms < LOOP_WARN_P99_MS) return;
+  const now = Date.now();
+  const watching = [...mounts.values()].filter((m) => mountHasActivePlayback(m, now)).length;
+  if (!watching) return;
+  debug.fail('buffer', `server busy: event-loop p99 ${h.p99Ms}ms (max ${h.maxMs}ms), CPU ${Math.round(h.utilization * 100)}% while ${watching} stream(s) play — video bytes wait behind decoding`);
+}, LOOP_WINDOW_MS);
+if (loopHealthTimer.unref) loopHealthTimer.unref();
+
 function playbackRuntimeStats(now = Date.now()) {
   const active = [...mounts.values()].filter((m) => mountHasActivePlayback(m, now));
   const out = {
@@ -4762,6 +4796,7 @@ function playbackRuntimeStats(now = Date.now()) {
     }
   }
   out.avgSegmentWaitMs = out.segmentWaits ? Math.round(out.segmentWaitMs / out.segmentWaits) : 0;
+  out.loop = lastLoopHealth;
   return out;
 }
 function subtitleReleaseName(vf) {
@@ -6381,7 +6416,10 @@ const H = {
       // The player sends its CURRENT position as a fraction so the replacement mount warms the
       // right byte window (see pipeline.advance). Empty body = old clients → original behavior.
       const b = await readJson(ctx.req).catch(() => ({}));
-      const { session, vf, candidate, attempts } = await pipeline.advance(ctx.m[1], { resumeFrac: b && b.resumeFrac });
+      const { session, vf, candidate, attempts } = await pipeline.advance(ctx.m[1], {
+        resumeFrac: b && b.resumeFrac,
+        cause: b && b.cause === 'stall-repeat' ? 'stall-repeat' : undefined,
+      });
       vf._q = session.query && session.query.q;
       vf._subQuery = episodeSubtitleQuery(vf._q, session.query && session.query.season, session.query && session.query.ep);
       vf._caps = session.caps || {}; // same client, same hardware claims
