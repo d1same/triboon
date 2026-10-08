@@ -4851,6 +4851,12 @@ public class MainActivity extends Activity {
                 showNativeLoading(title, backdropUrl);
             }
             if (reuseLivePlayer || reuseQuietVideo) {
+                // A quiet remount (release switch, same-source recover, server restart) rebuilt the
+                // player with no log at all; a "jump back" on the Shield could not be traced.
+                if (reuseQuietVideo) {
+                    Log.i(TAG, "Native quiet remount to " + startMs + "ms (player was at "
+                            + nativePlayer.getCurrentPosition() + "ms)");
+                }
                 nativePlayer.stop();
                 nativePlayer.clearMediaItems();
             }

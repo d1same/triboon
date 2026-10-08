@@ -15621,6 +15621,9 @@ async function reMountAndResume(reason = '', attempt = 0) {
     const localPlayUrl = p.item._local && p.item._local.playUrl;
     const r = await api(localPlayUrl || '/api/play', { method: 'POST', body: remountBody });
     if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; } // user moved on / replaced playback
+    // The player kept playing from its buffer while the server came back and remounted; resuming at
+    // the position read before that wait jumped the picture back. Take the live one, forward only.
+    { const now = Number(currentTime()); if (Number.isFinite(now) && now > at) at = now; }
     if (r.sessionId && r.sessionId !== p.sessionId) stopNamedActivity(p.sessionId);
     // Adopt the new mount (same field set autoAdvance maps), then resume the current source kind.
     p.sessionId = r.sessionId; p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl; p.hlsUrl = r.hlsUrl;
@@ -15711,6 +15714,17 @@ async function autoAdvance(opts = {}) {
       },
     });
     if (S.playing !== p || S.view !== 'player') return;
+    // A mid-stream switch keeps the old player running while the server finds the next release, so
+    // `at` is seconds old by now. Resuming there jumped the picture back (Shield, 4K, 16:38). Take the
+    // live position again, forward only.
+    const liveAt = () => {
+      if (!opts.allowMidstreamAdvance) return resumeAt;
+      const now = Number(currentTime());
+      return Number.isFinite(now) && now > resumeAt ? now : resumeAt;
+    };
+    let resumeAt = at;
+    resumeAt = liveAt();
+    if (typeof notePlaybackIssue === 'function') notePlaybackIssue('source', `switched release ${opts.allowMidstreamAdvance ? 'mid-stream' : 'before start'}: ${opts.reason || opts.cause || 'source unhealthy'}`, resumeAt);
     const carriedSubTrack = carrySubtitleAcrossSourceSwap(p, p.subTrack);
     p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl; p.hlsUrl = r.hlsUrl;
     p.encoder = r.encoder; p.fileName = r.name; p.sourceAttributes = r.candidate && r.candidate.attributes;
@@ -15721,7 +15735,7 @@ async function autoAdvance(opts = {}) {
     p.sourcePickKey = (r.candidate && r.candidate.pickKey) || null; // resume must pin the REPLACEMENT, not the dead source
     p._resumeSourceOk = false; // the replacement re-earns its 30s before it is pinned for resume
     markPlaybackSourceSwap(p);
-    p.duration = 0; p.nativePos = at; p.nativeDuration = 0; p.started = false; p.startedAt = 0;
+    p.duration = 0; p.nativePos = resumeAt; p.nativeDuration = 0; p.started = false; p.startedAt = 0;
     p.nativeStartKind = playbackStartKind(r); p.nativeTried = {};
     p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0;
     p.tracks = null; p._tracksJob = null; p.subTrack = null; p.audioTrack = 0; p.forceAacRemux = false;
@@ -15734,9 +15748,10 @@ async function autoAdvance(opts = {}) {
       startKind = await prepareNativeStartKindForAudio(startKind);
       if (S.playing !== p || S.view !== 'player') return;
     }
+    resumeAt = liveAt();
     const quiet = !!opts.allowMidstreamAdvance;
     if (nativePreferred && carriedSubTrack) p.subTrack = carriedSubTrack;
-    if (nativePreferred && tryNativePlaybackLadder(at, startKind, quiet ? { quietSeek: true } : {})) {
+    if (nativePreferred && tryNativePlaybackLadder(resumeAt, startKind, quiet ? { quietSeek: true } : {})) {
       startNativePlayerHousekeeping(p.item);
       if (typeof p.subTrack === 'string' && p.subTrack.startsWith('os:')) autoSyncNative(p, p.subTrack);
       return;
@@ -15748,7 +15763,7 @@ async function autoAdvance(opts = {}) {
     }
     revealWebPlayerShell(p.item);
     startWebPlayerHousekeeping(r, p.item);
-    startSource(startKind, at, quiet ? { quietSeek: true } : {});
+    startSource(startKind, resumeAt, quiet ? { quietSeek: true } : {});
     if (carriedSubTrack) setSubtitle(carriedSubTrack, { startup: true });
   } catch (e) {
     if (S.playing !== p || S.view !== 'player') return;

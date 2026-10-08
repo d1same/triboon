@@ -4505,9 +4505,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'a restart remount holds the last frame and must not cycle Preparing');
   assert.match(ui, /function cwNextFingerprint\(cw\) \{[\s\S]+getFullYear\(\)[\s\S]+HOME_NEXT_STALE_MS = 30 \* 60 \* 1000/,
     'Home next-up must expire by local day and every 30 minutes so a weekly episode appears');
-  assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+p\._sourceAdvancePending = true;[\s\S]+const reportedAt = Number\(currentTime\(\)\);[\s\S]+Number\(p\.item && p\.item\.resume\)[\s\S]+markPlaybackSourceSwap\(p\);[\s\S]+p\.nativePos = at;[\s\S]+p\.started = false; p\.startedAt = 0;/,
+  assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+p\._sourceAdvancePending = true;[\s\S]+const reportedAt = Number\(currentTime\(\)\);[\s\S]+Number\(p\.item && p\.item\.resume\)[\s\S]+markPlaybackSourceSwap\(p\);[\s\S]+p\.nativePos = resumeAt;[\s\S]+p\.started = false; p\.startedAt = 0;/,
     'source advance should coalesce callbacks, preserve an early Continue Watching timestamp, and give the replacement a fresh startup boundary');
-  assert.match(ui, /const quiet = !!opts\.allowMidstreamAdvance;[\s\S]+tryNativePlaybackLadder\(at, startKind, quiet \? \{ quietSeek: true \} : \{\}\)[\s\S]+startSource\(startKind, at, quiet \? \{ quietSeek: true \} : \{\}\)/,
+  assert.match(ui, /const quiet = !!opts\.allowMidstreamAdvance;[\s\S]+tryNativePlaybackLadder\(resumeAt, startKind, quiet \? \{ quietSeek: true \} : \{\}\)[\s\S]+startSource\(startKind, resumeAt, quiet \? \{ quietSeek: true \} : \{\}\)/,
     'mid-play source swap must stay quiet so the user never sees Preparing or a loader');
   assert.match(ui, /catch \(e\) \{[\s\S]+opts\.allowMidstreamAdvance && e && e\.status === 404[\s\S]+reMountAndResume\(opts\.reason/,
     'a server restart that lost the play session should re-mount the title instead of being mistaken for source exhaustion');
@@ -4585,7 +4585,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native auto-advance should reset native fallback order for each new source');
   assert.match(ui, /autoAdvance\(\{ nativePreferred: true \}\)/,
     'native player source failures should advance to the next release instead of closing playback');
-  assert.match(ui, /if \(nativePreferred\) \{[\s\S]+startKind = await prepareNativeStartKindForAudio\(startKind\);[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) return;[\s\S]+if \(nativePreferred && tryNativePlaybackLadder\(at, startKind, quiet \? \{ quietSeek: true \} : \{\}\)\) \{[\s\S]+startNativePlayerHousekeeping\(p\.item\);/,
+  assert.match(ui, /if \(nativePreferred\) \{[\s\S]+startKind = await prepareNativeStartKindForAudio\(startKind\);[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) return;[\s\S]+if \(nativePreferred && tryNativePlaybackLadder\(resumeAt, startKind, quiet \? \{ quietSeek: true \} : \{\}\)\) \{[\s\S]+startNativePlayerHousekeeping\(p\.item\);/,
     'Android auto-advance should keep playback ownership and hand the next release back to ExoPlayer when native playback is active');
   assert.match(ui, /if \(nativePreferred\) \{\s*toast\('Native player could not start the next release'\);\s*closePlayer\(\);\s*return;\s*\}\s*revealWebPlayerShell\(p\.item\);/,
     'Android auto-advance must stop instead of falling back to the web player when ExoPlayer cannot start');
@@ -9489,7 +9489,7 @@ test('subtitles: a mid-movie source switch keeps captions on in the same languag
   assert.ok(adv.indexOf('carrySubtitleAcrossSourceSwap(p, p.subTrack)') < adv.indexOf('p.tracks = null'),
     'the language is read before the old tracks are cleared');
   assert.match(adv, /if \(nativePreferred && carriedSubTrack\) p\.subTrack = carriedSubTrack;/);
-  assert.match(ui, /startSource\(startKind, at, quiet \? \{ quietSeek: true \} : \{\}\);\s+if \(carriedSubTrack\) setSubtitle\(carriedSubTrack, \{ startup: true \}\);/);
+  assert.match(ui, /startSource\(startKind, resumeAt, quiet \? \{ quietSeek: true \} : \{\}\);\s+if \(carriedSubTrack\) setSubtitle\(carriedSubTrack, \{ startup: true \}\);/);
 });
 
 test('jellyfin subtitles: the Loading card and resume pads move the captions with the picture', () => {
@@ -9759,4 +9759,34 @@ test('native player: CC while subtitles load says so and opens later; passthroug
     'an empty refresh tells the viewer instead of looping');
   assert.match(java, /buildAudioSink\([\s\S]+DefaultAudioTrackBufferSizeProvider\.Builder\(\)\s*\.setPassthroughBufferDurationUs\(500_000\)/,
     'receiver passthrough keeps a 0.5s AudioTrack buffer (quick starts underran the 0.25s default)');
+});
+
+test('mid-stream release switch resumes at the live position, not the one read before the server call', async () => {
+  // Shield, 4K, 16:38: the health poll switched release mid-stream. autoAdvance read the position,
+  // then waited on /api/advance and the audio check while the old player kept playing, and resumed
+  // the new release at the old number: the picture jumped back a few seconds.
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const a = ui.indexOf('async function autoAdvance(opts = {})');
+  const b = ui.indexOf('function resetVlcPanel()', a);
+  let clock = 600; // the old player advances while we wait
+  const ladderAt = [];
+  const make = (allowMidstreamAdvance) => {
+    const state = { playing: { sessionId: 's1', item: { key: 'k' }, duration: 2600, streamUrl: '/old', usingNative: true }, view: 'player' };
+    const fn = new Function('S', 'showVlcPanel', 'vodPlaybackStarted', 'recoverSamePlaybackSource', 'currentTime',
+      'canUseNativeVideoPlayer', 'toast', 'api', '$', 'updatePlayerMeta', 'playbackStartKind', 'prepareNativeStartKindForAudio',
+      'tryNativePlaybackLadder', 'startNativePlayerHousekeeping', 'closePlayer', 'revealWebPlayerShell',
+      'startWebPlayerHousekeeping', 'startSource', 'markPlaybackSourceSwap', 'carrySubtitleAcrossSourceSwap',
+      `${ui.slice(a, b)}\nreturn autoAdvance;`)(
+      state, () => {}, () => true, () => {}, () => clock, () => true, () => {},
+      async () => { clock += 4; return { streamUrl: '/new', id: 'm2', name: 'new' }; },
+      () => ({ textContent: '' }), () => {}, () => 'direct', async (k) => { clock += 2; return k; },
+      (at) => { ladderAt.push(at); return true; }, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => null);
+    return { fn, state };
+  };
+  const mid = make(true);
+  await mid.fn({ allowMidstreamAdvance: true, nativePreferred: true, reason: 'source blocked' });
+  assert.strictEqual(ladderAt[0], 606, 'resumes where the old player actually is after both waits (600 + 4 + 2)');
+  assert.strictEqual(mid.state.playing.nativePos, 604, 'the position kept on the player record is the post-advance one, not 600');
+  assert.match(ui, /async function reMountAndResume[\s\S]+const now = Number\(currentTime\(\)\); if \(Number\.isFinite\(now\) && now > at\) at = now;/,
+    'a remount after a server restart also resumes at the live position (forward only)');
 });

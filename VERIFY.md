@@ -128,6 +128,29 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-08, v3.3.20 — A release switch mid-stream (or a remount after a server restart) resumes where the viewer is, not a few seconds back:
+
+- Shield on the live server (3.3.18), 4K HEVC + E-AC3, ~11 min in: a ~1 s hiccup that jumped the
+  picture back. Logcat: the SAME ExoPlayer stopped and re-prepared in place (audio focus
+  abandon/request 40 ms apart, new decoder + AudioTrack, no "Init"/"buffer profile" line) = the web
+  layer's quiet remount, which logged nothing. Server log was lost (container recreated 16:41).
+- autoAdvance (health-blocked / stall-repeat switch) read currentTime() before awaiting
+  /api/advance and the audio check while the old player kept playing, then set p.nativePos and
+  resumed at that stale value. Now: the live position is re-read after each await, forward only.
+  reMountAndResume (server restart) gets the same forward-only re-read after /api/play.
+- Logging: the server records every release switch (notePlaybackIssue 'source'); Android logs
+  "Native quiet remount to Xms (player was at Yms)" on every in-place restart.
+- AudioTrack underrun log lines on quick starts confirmed inaudible by the owner — not changed.
+- New test: mid-stream switch resumes at 600+4+2 s (fails on 3.3.19 with 600). Built on top of
+  v3.3.19 (another session's Jellyfin release, which recreated the Unraid container at 16:41).
+- Gate: `npm.cmd test` 900 (898 + 2 pinned contracts updated from `at` to `resumeAt`, same intent).
+  `verify:full` on the QA rig: whitespace, JS syntax, inline script, IPTV/P9, fast VOD/P14, CC/P11,
+  local next episode, full suite, isolated server smoke, household VOD/seek/resume/CC, household
+  IPTV first-byte + retune, household overlapping Play, Android lint/unit/debug build all PASS.
+  Android stress: only the known `playerAbout` + seek-loop fixture-limit failures (as 3.3.15-3.3.18).
+- Version contract: `package.json` 3.3.20; Android `versionName` 3.3.20 / `versionCode` 423;
+  Windows client package/Tauri/Cargo(.lock) 3.3.20.
+
 2026-10-08, v3.3.19 — Jellyfin apps on Apple TV and Roku can heart and mark watched, and browse pages answer JSON instead of the website:
 
 - Cause: Jellyfin 10.9+ apps (Swiftfin, current Roku) call /UserFavoriteItems/{id} and
