@@ -389,13 +389,22 @@ function audioDescriptor(codecOrTrack) {
   return String(codecOrTrack || '').toLowerCase();
 }
 
+// Before the probe lands we only have the release name. A name that says TrueHD is (almost
+// always) TrueHD on track 0: guess that instead of the "unknown codec, copy it" default.
+function audioHintFromName(name) {
+  return /\b(true[ ._-]?hd|mlp)\b/i.test(String(name || '')) ? { codec: 'truehd', guessed: true } : undefined;
+}
+
 function audioCopyOk(codec, caps = {}) {
   const c = audioDescriptor(codec);
   const primary = c.split(/\s+/)[0] || c;
   const passthrough = !!(caps.native && caps.passthrough);
   if (!c) return !!(caps.ac3 && caps.eac3);
   if (BROWSER_SAFE_AUDIO.has(primary)) return true;
-  if (/\b(true[ ._-]?hd|mlp)\b/.test(c)) return passthrough && !!caps.truehd;
+  // TrueHD never rides the remux: ffmpeg refuses it in MP4 ("truehd in MP4 support is experimental"
+  // -> 0-byte output) and the player saw no stream at all (Shield, 2026-10-08: four 4K releases
+  // failed in a row). A passthrough device still gets bit-exact TrueHD by playing the MKV directly.
+  if (/\b(true[ ._-]?hd|mlp)\b/.test(c)) return false;
   if (/\b(dts[ ._-]?hd|dts[ ._-]?x|dtsma|dts[ ._-]?ma)\b/.test(c)) return passthrough && !!caps.dtsHd;
   if (primary === 'ac3') return !!caps.ac3;
   if (primary === 'eac3' || primary === 'eac3-joc' || c.includes('e-ac-3')) return !!(caps.eac3 || caps.eac3Joc);
@@ -726,4 +735,4 @@ function probeCacheKey(name, size) {
   return `${label}|${bytes}`;
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey };

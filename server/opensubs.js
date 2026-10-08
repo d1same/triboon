@@ -127,7 +127,11 @@ function explicitSeasonNumber(value) {
 // SRT → WebVTT: header + comma→dot in timestamps. Cue ids/text pass through (VTT allows ids).
 function srtToVtt(srt) {
   const body = String(srt).replace(/^﻿/, '').replace(/\r/g, '')
-    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+    // Old fan subs write "0:00:01,500" or "00:00:04,5". Those are invalid VTT, so the player
+    // dropped the cue (missing lines) and sync could not read it. Normalize every timing line to
+    // HH:MM:SS.mmm; the "-->" guard keeps dialogue that merely contains digits untouched.
+    .replace(/^.*-->.*$/gm, (line) => line.replace(/\b(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})\b/g,
+      (m, h, mi, se, ms) => `${h.padStart(2, '0')}:${mi}:${se}.${ms.padEnd(3, '0')}`));
   return body.startsWith('WEBVTT') ? body : 'WEBVTT\n\n' + body;
 }
 
@@ -359,6 +363,14 @@ function sdhBias(d, pref) {
   if (pref === 'either') return 0;
   return sdh ? -120 : 0; // 'avoid' (default): clean dialogue-only wins among equal candidates
 }
+// A release name without the parts that do not change timing: resolution, codec, bit depth,
+// HDR, audio. "Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX" and its 2160p H.265 sibling share
+// "shows01e01amznwebdlflux".
+const RELEASE_TIMING_NEUTRAL = /\b(2160p|1080p|720p|576p|480p|4k|uhd|x26[45]|h[ .]?26[45]|hevc|avc|av1|10bit|8bit|hdr10p|hdr10plus|hdr10|hdr|dv|dovi|sdr|ddp?\d?(?:[ .]\d)?|dd\+?\d?(?:[ .]\d)?|eac3|ac3|aac\d?(?:[ .]\d)?|atmos|truehd|dts(?:[ .-]?hd)?(?:[ .-]?ma)?|\d[ .]\d)\b/gi;
+function releaseCoreKey(s) {
+  const base = String(s || '').split(/[\\/]/).pop().replace(/\.(mkv|mp4|m4v|avi|mov|ts|srt|vtt)$/i, '');
+  return base.replace(/[._]/g, ' ').replace(RELEASE_TIMING_NEUTRAL, ' ').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
 function releaseKey(s) {
   return String(s || '')
     .split(/[\\/]/).pop()
@@ -553,6 +565,15 @@ function subtitleLooksSynced(d, releaseName = '') {
   const theirs = releaseKey(theirText);
   if (!theirs) return false;
   if (theirs === mine) return true; // identical release key → genuinely the same file, skip alass
+  // The same group's 720p/1080p/2160p (or x264/x265, DDP/AAC) encodes of one episode share their
+  // timing. Comparing full keys called them "not matched", so alass pulled audio and could nudge an
+  // already-correct subtitle (a FLUX 1080p sub on a FLUX 1080p file was moved 0.73s).
+  {
+    const g1 = releaseGroupTag(releaseName), g2 = releaseGroupTag(theirText);
+    const s1 = releaseSourceTag(releaseName), s2 = releaseSourceTag(theirText);
+    const c1 = releaseCoreKey(releaseName), c2 = releaseCoreKey(theirText);
+    if (g1 && g1 === g2 && s1 && s1 === s2 && c1.length >= 10 && c1 === c2) return true;
+  }
   // A NON-identical name overlap only proves "same encode lineage", not in-sync timing. Trust it as
   // synced ONLY when the release group AND source class both agree and one key fully contains the
   // other with enough length to be meaningful. Anything looser (a different cut/edit of the same

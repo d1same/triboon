@@ -9616,6 +9616,11 @@ function beginPlaybackTransition(it, opts = {}) {
   const now = (typeof appMs === 'function' ? appMs() : Date.now());
   S._handoffQuietUntil = opts.directHandoff ? now + 12000 : 0;
   const stopP = stopActivePlaybackForReplacement({ preserveNativeSurface });
+  // On disk already (playLocal), or a hot Play whose title has a local copy at the wanted quality.
+  const local = !!(it && it._local)
+    || (!!opts.hot && typeof localTitleHasPlayback === 'function' && localTitleHasPlayback(it)
+      && localPlaybackFitsQuality(it, qualityRankForItem(it)));
+  S._loadingLocal = local;
   if (nativeFirst) showNativePlayLoading(it, playTicket, !!opts.hot);
   else showPlayLoading(it, !!opts.hot);
   return { nativeFirst, playTicket, stopP };
@@ -9751,6 +9756,9 @@ async function playStart(it, pick, opts, playIntent) {
 }
 // Full-screen loading: cover + film reel + a living stage line (no toast chatter).
 const PLAYER_LOADING_STAGES = ['Preparing', 'Finding source', 'Mounting', 'Checking health...', 'Starting stream'];
+// A file already on this server's disk is not searched, mounted from usenet, or health-checked:
+// say what actually happens instead of the usenet sequence.
+const LOCAL_LOADING_STAGES = ['Opening file', 'Starting playback'];
 function rememberPlayerReturn() {
   if (S.view === 'player') return;
   const livePane = document.querySelector('.liveChannelPane') || document.querySelector('#guide');
@@ -9771,14 +9779,21 @@ function rememberPlayerReturn() {
 function setPlayerLoadingStage(idx) {
   const el = $('plStage');
   if (!el) return;
-  el.textContent = PLAYER_LOADING_STAGES[Math.max(0, Math.min(PLAYER_LOADING_STAGES.length - 1, idx || 0))];
+  const stages = S._loadingStages || PLAYER_LOADING_STAGES;
+  el.textContent = stages[Math.max(0, Math.min(stages.length - 1, idx || 0))];
 }
 function clearPlayerLoadingStages() {
   if (Array.isArray(S._stageTimers)) S._stageTimers.forEach((t) => clearTimeout(t));
   S._stageTimers = [];
 }
-function startPlayerLoadingStages(hot) {
+function startPlayerLoadingStages(hot, local = false) {
   clearPlayerLoadingStages();
+  S._loadingStages = local ? LOCAL_LOADING_STAGES : PLAYER_LOADING_STAGES;
+  if (local) {
+    setPlayerLoadingStage(0);
+    S._stageTimers = [700].map((delay) => setTimeout(() => setPlayerLoadingStage(1), delay));
+    return;
+  }
   if (hot) {
     setPlayerLoadingStage(2);
     S._stageTimers = [500, 1100]
@@ -9789,7 +9804,7 @@ function startPlayerLoadingStages(hot) {
   S._stageTimers = [650, 1400, 2200, 3000]
     .map((delay, i) => setTimeout(() => setPlayerLoadingStage(i + 1), delay));
 }
-function showPlayLoading(it, hot) {
+function showPlayLoading(it, hot, local = !!S._loadingLocal) {
   rememberPlayerReturn();
   S._nativeLoadingTicket = 0;
   S.view = 'player';
@@ -9800,7 +9815,7 @@ function showPlayLoading(it, hot) {
   $('plCover').style.backgroundImage = artBackground(it.backdrop, it.poster, artFallback(it.key || it.title, 20));
   $('plTitle').textContent = it.title || '';
   $('playerLoader').classList.add('show');
-  startPlayerLoadingStages(!!hot);
+  startPlayerLoadingStages(!!hot, !!local);
 }
 function showNativePlayLoading(it, playTicket = 0, hot = false) {
   rememberPlayerReturn();
@@ -9817,6 +9832,7 @@ function showNativePlayLoading(it, playTicket = 0, hot = false) {
       backdropUrl: absoluteArtworkUrl(it.backdrop, it.poster),
       playbackToken: S._nativeLoadingTicket,
       hot: !!hot,
+      local: !!S._loadingLocal, // older TV apps ignore it and keep the usenet wording
     }));
   } catch {}
   clearPlayerLoadingStages();
@@ -18360,7 +18376,10 @@ async function loadSubtitleVersions(lang) {
 function subShiftKey(track) {
   const p = S.playing; if (!p || !p.item || !track) return '';
   const id = p.item.key || (p.item.type + ':' + p.item.tmdbId) || p.item.title || p.name || 'title';
-  return 'triboon.subshift.' + encodeURIComponent(String(id)) + '.' + encodeURIComponent(String(track));
+  // A nudge made on one release is wrong for another copy (auto-advance, a rewatch on a new pick).
+  const release = String(p.name || p.sourcePickKey || '');
+  return 'triboon.subshift.' + encodeURIComponent(String(id)) + '.' + encodeURIComponent(String(track))
+    + (release ? '.' + encodeURIComponent(release) : '');
 }
 function subChoiceKey() {
   const p = S.playing; if (!p || !p.item) return '';

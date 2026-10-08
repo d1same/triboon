@@ -2365,3 +2365,93 @@ test('nntp: TRIBOON_NNTP_STEAL=0 turns work stealing and idle-line routing off w
     pool.close();
   }
 });
+
+test('nntp: the chunked receive loop resolves every reply exactly like the legacy loop (differential fuzz)', () => {
+  // The legacy loop re-copied and re-scanned the whole article on every network piece (~9 ms per
+  // 790 KB article). The chunked loop must be byte-identical for every split, dot-stuffed line,
+  // single-line reply and error reply. (Mid-stream EMPTY bodies are left out: there the legacy loop
+  // merged two replies, and the chunked loop is the correct one — pinned in the next test.)
+  let seed = 4242;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  const body = () => {
+    const lines = []; const n = 1 + rnd(30);
+    for (let i = 0; i < n; i++) {
+      const k = rnd(10);
+      if (k === 0) lines.push('.'); else if (k === 1) lines.push('..x'); else if (k === 2) lines.push('');
+      else { let l = ''; const len = rnd(100); for (let j = 0; j < len; j++) l += String.fromCharCode(33 + rnd(90)); lines.push(l); }
+    }
+    return lines.map((l) => (l.startsWith('.') ? '.' + l : l) + '\r\n').join('');
+  };
+  const reply = () => {
+    const k = rnd(4);
+    if (k === 0) return { wire: '223 0 <a@b> exists\r\n', multiline: false };
+    if (k === 1) return { wire: '430 no such article\r\n', multiline: true };
+    return { wire: '222 0 <a@b> body\r\n' + body() + '.\r\n', multiline: true };
+  };
+  const run = (mode, wire, specs, cuts) => {
+    const prev = process.env.TRIBOON_NNTP_PARSER;
+    process.env.TRIBOON_NNTP_PARSER = mode;
+    try {
+      const c = new NntpConnection({ host: 'x', port: 1, commandTimeoutMs: 600000 });
+      c.sock = { destroy() {} };
+      c.buf = Buffer.alloc(0);
+      const out = [];
+      c.waiters = specs.map((s, i) => ({ multiline: s.multiline, cmdName: 'X', resolve: (r) => out.push([i, r.status, r.body && r.body.toString('latin1')]), reject: (e) => out.push([i, 'ERR', e.message]) }));
+      const buf = Buffer.from(wire, 'latin1');
+      let at = 0;
+      for (const cut of cuts) { c._onData(buf.subarray(at, cut)); at = cut; }
+      c._onData(buf.subarray(at));
+      for (const w of c.waiters) clearTimeout(w.timer);
+      return JSON.stringify(out);
+    } finally {
+      if (prev === undefined) delete process.env.TRIBOON_NNTP_PARSER; else process.env.TRIBOON_NNTP_PARSER = prev;
+    }
+  };
+  for (let iter = 0; iter < 1500; iter++) {
+    const specs = Array.from({ length: 1 + rnd(4) }, reply);
+    const wire = specs.map((s) => s.wire).join('');
+    const cuts = Array.from({ length: rnd(10) }, () => 1 + rnd(Math.max(1, wire.length - 1))).sort((a, b) => a - b);
+    assert.strictEqual(run('', wire, specs, cuts), run('legacy', wire, specs, cuts), `split ${JSON.stringify(cuts)}`);
+  }
+  const small = '222 0 <a@b>\r\nab\r\n..c\r\n.\r\n223 0 <c@d>\r\n';
+  const specs = [{ multiline: true }, { multiline: false }];
+  for (let i = 1; i < small.length; i++) for (let j = i; j < small.length; j++) {
+    assert.strictEqual(run('', small, specs, [i, j]), run('legacy', small, specs, [i, j]), `marker split at ${i},${j}`);
+  }
+});
+
+test('nntp: back-to-back empty article bodies stay separate replies (the legacy loop merged them)', () => {
+  const c = new NntpConnection({ host: 'x', port: 1, commandTimeoutMs: 600000 });
+  c.sock = { destroy() {} };
+  c.buf = Buffer.alloc(0);
+  const out = [];
+  c.waiters = [0, 1, 2].map(() => ({ multiline: true, cmdName: 'B', resolve: (r) => out.push(r.body.toString('latin1')), reject() {} }));
+  c._onData(Buffer.from('222 0 <a>\r\n.\r\n222 0 <b>\r\n.\r\n222 0 <c>\r\nhi\r\n.\r\n', 'latin1'));
+  assert.deepStrictEqual(out, ['', '', 'hi\r\n']);
+});
+
+test('yenc: the zlib.crc32 decoder matches the table decoder on every field (differential fuzz)', () => {
+  const { decodeLegacy } = require('../server/yenc');
+  let seed = 99;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  for (let iter = 0; iter < 2500; iter++) {
+    const len = rnd(2500);
+    const data = Buffer.alloc(len);
+    for (let i = 0; i < len; i++) data[i] = rnd(256);
+    for (let i = 0; i < len; i += 1 + rnd(40)) data[i] = [0xd6, 0xe8, 0xd3, 0xf3, 0x04, 0xf6][rnd(6)];
+    let art = encodePart(data, { name: 'f', partNum: 1, totalParts: 1 + rnd(2), begin: 0, end: len, lineLen: [16, 64, 128][rnd(3)], totalSize: len }).toString('latin1');
+    const m = rnd(7);
+    if (m === 0) art = art.slice(0, rnd(art.length));
+    else if (m === 1) art = art.split('\r\n').join('\n');
+    else if (m === 2) { const k = rnd(art.length); art = art.slice(0, k) + String.fromCharCode(rnd(256)) + art.slice(k + 1); }
+    else if (m === 3) art = art.replace(/=yend[^\r\n]*/, '');
+    else if (m === 4) art = art.replace(/ pcrc32=[0-9a-f]{8}/, ' crc32=deadbeef');
+    else if (m === 5) art = art.replace(/=yend size=\d+/, '=yend size=' + (len + 7));
+    const buf = Buffer.from(art, 'latin1');
+    for (const skip of [0, 1, rnd(len + 10), len + 10]) {
+      const a = decodeLegacy(buf, skip ? { skipDecoded: skip } : undefined);
+      const b = decode(buf, skip ? { skipDecoded: skip } : undefined);
+      assert.deepStrictEqual({ ...b, data: b.data.toString('base64') }, { ...a, data: a.data.toString('base64') }, `mutation ${m} skip ${skip}`);
+    }
+  }
+});

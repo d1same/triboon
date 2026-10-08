@@ -1369,8 +1369,14 @@ const RACE_COMMIT_GRACE_MS = 250;
 // fetch + 30s mount deadline), and the next real Play then waited out its whole budget and died
 // with "all candidates failed" — nothing tried. Prepares are guesses; a pressed Play is not.
 class StartupGate {
-  constructor(max = STARTUP_SLOTS) {
+  // opts.prepareLimit(): how many background prepares may hold a slot right now. While someone is
+  // watching, prepares (Continue Watching / detail warm-ups) are guesses competing with real bytes:
+  // Unraid ran ~15 of them back to back next to one stream, each 20-50s, with the event loop at
+  // 80% CPU. One at a time then; a pressed Play still preempts it.
+  constructor(max = STARTUP_SLOTS, opts = {}) {
     this.max = max;
+    this.prepareLimit = typeof opts.prepareLimit === 'function' ? opts.prepareLimit : null;
+    this._prepTimer = null;
     this.active = 0;
     this.peak = 0;
     this.playWait = [];
@@ -1395,6 +1401,32 @@ class StartupGate {
     }
     return false;
   }
+  _prepareHolders() {
+    let n = 0;
+    for (const h of this.holders) if (h.priority === 'prepare') n++;
+    return n;
+  }
+  _prepareAllowed() {
+    if (!this.prepareLimit) return true;
+    let limit = this.max;
+    try { limit = Math.max(0, Math.floor(Number(this.prepareLimit()) || 0)); } catch {}
+    return this._prepareHolders() < limit;
+  }
+  // A prepare parked by the cap has no event to wake it when the viewer stops; look again shortly.
+  _schedulePrepDrain() {
+    if (this._prepTimer || !this.prepWait.length) return;
+    this._prepTimer = setTimeout(() => { this._prepTimer = null; this._drainPrep(); }, 2000);
+    if (this._prepTimer.unref) this._prepTimer.unref();
+  }
+  _drainPrep() {
+    while (this.prepWait.length && this.active < this.max && this._prepareAllowed()) {
+      const next = this.prepWait.shift();
+      this.active++;
+      this.peak = Math.max(this.peak, this.active);
+      next.finish(() => next.resolve());
+    }
+    this._schedulePrepDrain();
+  }
   acquire({ signal, priority = 'play', preempt = null } = {}) {
     const abortErr = () => Object.assign(new Error('request aborted'), { code: 'ABORT_ERR' });
     const ticket = () => {
@@ -1410,7 +1442,8 @@ class StartupGate {
       return t;
     };
     if (signal && signal.aborted) return Promise.reject(abortErr());
-    if (this.active < this.max) {
+    const prepCapped = priority === 'prepare' && !this._prepareAllowed();
+    if (this.active < this.max && !prepCapped) {
       this.active++;
       this.peak = Math.max(this.peak, this.active);
       return Promise.resolve(ticket());
@@ -1433,12 +1466,17 @@ class StartupGate {
       };
       if (signal) signal.addEventListener('abort', rec.onAbort, { once: true });
       q.push(rec);
+      if (prepCapped) this._schedulePrepDrain();
     }).then(() => ticket());
   }
   release() {
-    const next = this.playWait.shift() || this.hedgeWait.shift() || this.prepWait.shift();
+    const next = this.playWait.shift() || this.hedgeWait.shift()
+      || (this._prepareAllowed() ? this.prepWait.shift() : null);
     if (next) next.finish(() => next.resolve());
-    else this.active = Math.max(0, this.active - 1);
+    else {
+      this.active = Math.max(0, this.active - 1);
+      this._schedulePrepDrain();
+    }
   }
 }
 
@@ -1676,7 +1714,9 @@ class Pipeline {
     this.titlePreparedReady = new Map(); // prepareJobKey -> { vf, candidate, at } after prepare wins
     this.titlePreparedStandby = new Map(); // next-ranked backup mount, warmed during Details
     this.mountByUrl = new Map();  // mountIdentity -> mount id (same selected payload reuses instantly)
-    this._startupGate = new StartupGate(STARTUP_SLOTS);
+    this._startupGate = new StartupGate(STARTUP_SLOTS, {
+      prepareLimit: () => (this._hasActiveForeignPlayback() ? 1 : STARTUP_SLOTS),
+    });
     this._inflightAdvances = 0;
     this._activeFanouts = 0;
     this.metrics = {

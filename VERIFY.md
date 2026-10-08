@@ -128,6 +128,40 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-08, v3.3.17 — Less CPU per article, TrueHD files play, background warm-ups wait while someone watches, subtitles stop drifting, and local files say "Opening file":
+
+- Unraid 3.3.16: event loop p99 170-500 ms with 1-2 streams (CPU-bound article receive +
+  decode); a 4K start took 16 s joining a slow prepare while ~15 Continue Watching prepares ran
+  back to back beside one viewer; four Resident Evil releases failed with 0-byte remux output.
+- NNTP body receive keeps chunks and scans only new bytes for the terminator (11x faster on
+  790 KB articles; `TRIBOON_NNTP_PARSER=legacy` restores the old parser). Differential fuzz vs
+  legacy across split points, dot-stuffing and back-to-back empty bodies: identical.
+- yEnc decode uses `zlib.crc32` and one buffer (1.6x faster); 60,000-case differential fuzz vs
+  the legacy decoder (truncated, LF-only, flipped byte, missing `=yend`, wrong size/CRC, skips):
+  0 mismatches.
+- TrueHD/MLP is never copied into an MP4 remux (ffmpeg rejects it); before tracks are probed,
+  a release name saying TrueHD transcodes audio from the start.
+- StartupGate: while any viewer plays, at most ONE background prepare holds a slot (Play and
+  hedges unchanged, Play still preempts); a capped prepare wakes itself within 2 s once the
+  viewer stops. Tests in phase2.
+- Subtitles: malformed SRT timestamps (`0:00:01,5`) normalized only on `-->` lines; same
+  group+source+episode at another resolution counts as synced (no audio pull/nudge); framerate
+  drift only when it matches a 25/23.976/24 ratio within 15%, right sign, confirmed by a third
+  slice 2 min away; a sub-400 ms move needs two agreeing slices; manual nudges are stored per
+  release; Play waits for the moviehash only when OpenSubtitles is enabled.
+- Local library: loading says "Opening file / Starting playback" (web + Android native), never
+  "Mounting".
+- Gate: `npm.cmd test` 895/895 (one phase4 contract that pinned the old drift line `if (gap > 600)`
+  now pins the new `subtitleDriftPer30s(...)` call; behavior is tested in phase2). `verify:full` on the
+  QA rig (fixture usenet + QA server on this code + emulator-5554): whitespace, JS syntax, inline
+  script, IPTV/P9, fast VOD/P14, CC/P11, local next episode, full suite, isolated server smoke,
+  household VOD/seek/resume/CC, household IPTV first-byte + retune, household overlapping Play,
+  Android lint/unit/debug build all PASS. Android stress: boot, page churn, live, multiview, VOD
+  start, sources PASS; `playerAbout` and the seek loop fail exactly as on released 3.3.15 against
+  this fixture (1-min movie, no cast). Not run: Windows GPU/HDR, real Shield (release-signed).
+- Version contract: `package.json` 3.3.17; Android `versionName` 3.3.17 / `versionCode` 420;
+  Windows client package/Tauri/Cargo(.lock) 3.3.17.
+
 2026-10-07, v3.3.16 — Lines no longer idle beside waiting work, Auto sizes 4K honestly, a bad spot switches release, and the hold-OK menu keeps its highlight:
 
 - Unraid 3.3.15 log: a 4K start timed out at 0:05 on `[house 8 open of 8]` with 4 lines

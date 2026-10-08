@@ -159,6 +159,24 @@ function isDefinitiveMiss(e) {
 // A provider answered 222 with bytes whose yEnc CRC does not match. That copy is bad on THAT
 // account; another backbone usually still has a clean one. Not a miss (never miss-cached) and not
 // a line fault (the socket is fine) — the pool simply asks the next provider.
+// NNTP dot-stuffing: a body line that starts with "." was sent as "..". Buffer-only (the legacy
+// path round-tripped the whole article through a latin1 string and a regex).
+function unstuffNntpBody(body) {
+  const MARK = Buffer.from('\r\n..', 'latin1');
+  let start = body.length >= 2 && body[0] === 0x2e && body[1] === 0x2e ? 1 : 0;
+  let i = body.indexOf(MARK, start);
+  if (i === -1) return start ? body.subarray(1) : body;
+  const parts = [];
+  let from = start;
+  while (i !== -1) {
+    parts.push(body.subarray(from, i + 3)); // keep "\r\n."
+    from = i + 4;                           // drop the second "."
+    i = body.indexOf(MARK, from);
+  }
+  parts.push(body.subarray(from));
+  return Buffer.concat(parts);
+}
+
 function corruptArticleError(provider, msgId) {
   const e = new Error(`corrupt article from ${providerLabel(provider)}: <${msgId}>`);
   e.code = 'CORRUPT_ARTICLE';
@@ -298,6 +316,88 @@ class NntpConnection {
   }
 
   _onData(d) {
+    if (process.env.TRIBOON_NNTP_PARSER === 'legacy') return this._onDataLegacy(d);
+    return this._onDataChunked(d);
+  }
+
+  // Article bodies arrive in TLS-record-sized pieces (~16 KB). The legacy path re-copied the whole
+  // buffer and re-scanned it for the end marker on every piece: ~9 ms of main-thread CPU per
+  // 790 KB article, on the thread that also writes video to every player. This keeps the pieces in
+  // a list, scans only the new bytes (plus a 4-byte carry for a marker split across pieces), and
+  // joins once per article: ~0.4 ms. Output is byte-identical (differential test in e2e).
+  _onDataChunked(d) {
+    if (d && d.length) for (const w of this.waiters) this._armWaiterTimer(w);
+    let data = d;
+    while (data && data.length) {
+      const w = this.waiters[0];
+      if (!w) { this.buf = this.buf.length ? Buffer.concat([this.buf, data]) : data; return; }
+      if (!w.statusLine) {
+        const head = this.buf.length ? Buffer.concat([this.buf, data]) : data;
+        const nl = head.indexOf(0x0a);
+        if (nl === -1) { this.buf = head; return; }
+        this.buf = Buffer.alloc(0);
+        w.statusLine = head.toString('latin1', 0, head[nl - 1] === 0x0d ? nl - 1 : nl);
+        data = head.subarray(nl + 1);
+        const code = w.statusLine.slice(0, 3);
+        if (!(w.multiline && /^(2)/.test(code))) { // only 2xx carries a body
+          this._finishWaiter(w, null);
+          continue;
+        }
+        w.chunks = [];
+        w.bodyLen = 0;
+        // The status line's own CRLF opens the body, so an empty body (".\r\n") and a body whose
+        // first line is dot-stuffed are found by the same "\r\n.\r\n" search as every other end.
+        w.tail = Buffer.from('\r\n', 'latin1');
+        if (!data.length) return;
+      }
+      const end = this._findBodyEnd(w, data);
+      if (!end) {
+        w.chunks.push(data);
+        w.bodyLen += data.length;
+        const t = w.tail.length + data.length > 4 ? Buffer.concat([w.tail, data.subarray(Math.max(0, data.length - 4))]) : Buffer.concat([w.tail, data]);
+        w.tail = t.subarray(Math.max(0, t.length - 4));
+        if (w.bodyLen > MAX_NNTP_BODY_BYTES) { this._fail(new Error('NNTP body too large')); return; }
+        return;
+      }
+      if (end.bodyLen > MAX_NNTP_BODY_BYTES) { this._fail(new Error('NNTP body too large')); return; }
+      const parts = end.consumed > 0 ? w.chunks.concat([data.subarray(0, end.consumed)]) : w.chunks;
+      let body = Buffer.concat(parts, w.bodyLen + Math.max(0, end.consumed)).subarray(0, end.bodyLen);
+      body = unstuffNntpBody(body);
+      data = data.subarray(Math.max(0, end.consumed));
+      w.chunks = null;
+      this._finishWaiter(w, body);
+    }
+  }
+
+  // Where does this body end, given the bytes seen so far (w.bodyLen + the 4-byte w.tail) and the
+  // new piece? Coordinates are "bytes after the status line". bodyLen keeps the last line's CRLF,
+  // exactly like the legacy slice (term + 2). consumed = how much of `data` belongs to this reply.
+  _findBodyEnd(w, data) {
+    const MARK = '\r\n.\r\n';
+    const tail = w.tail;
+    const virtualStart = 2; // the status-line CRLF that opens the stream
+    const streamLenBefore = virtualStart + w.bodyLen; // stream length before `data`
+    const probe = Buffer.concat([tail, data.subarray(0, Math.min(4, data.length))]);
+    const p = probe.indexOf(MARK);
+    if (p !== -1 && p < tail.length) {
+      const termStart = streamLenBefore - tail.length + p;
+      return { bodyLen: Math.max(0, termStart), consumed: termStart + 5 - streamLenBefore };
+    }
+    const i = data.indexOf(MARK);
+    if (i === -1) return null;
+    return { bodyLen: w.bodyLen + i + 2, consumed: i + 5 };
+  }
+
+  _finishWaiter(w, body) {
+    this.waiters.shift();
+    clearTimeout(w.timer);
+    clearTimeout(w.drainTimer);
+    if (typeof w.cleanupAbort === 'function') w.cleanupAbort();
+    this.lastUsed = Date.now();
+    w.resolve({ status: w.statusLine, body });
+  }
+
+  _onDataLegacy(d) {
     this.buf = this.buf.length ? Buffer.concat([this.buf, d]) : d;
     // Progress on in-flight commands (NNTP responses are strictly FIFO, so waiters[0] is the one
     // being answered): reset stall timers so a slow-but-alive BODY transfer is never killed
@@ -1910,5 +2010,5 @@ module.exports = {
   providersReadyToDial, linesSummary,
   providerPickScore, providerHeadroom, streamStartupNeedSlots,
   learnedConnectionLimit, shrinkSizeFromLive, CAP_HIT_COOLDOWN_MS, CONNECT_BURST,
-  isCorruptArticle, isDefinitiveFailure,
+  isCorruptArticle, isDefinitiveFailure, unstuffNntpBody,
 };

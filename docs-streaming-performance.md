@@ -511,7 +511,10 @@ health gate. That join stays valid after the 60-second search cache expires, so
 Play Next in the last two minutes does not wait on a second indexer fan-out. Two or three people pressing Play at once share indexer fan-out
 and startup mount slots: each Play keeps a front-runner, extra source hedges
 and background `/api/prepare` wait behind those Plays, and a lone Play still
-uses leftover slots to skip dead top picks. Fast home/card focus still uses cheap `/api/search` warming only;
+uses leftover slots to skip dead top picks. While anyone is watching, at most ONE
+background prepare holds a startup slot at a time (the rest queue and wake within 2 s of
+the last viewer stopping); a pressed Play still preempts it. Unraid 3.3.16 ran ~15 Continue
+Watching prepares back to back beside one stream with the event loop CPU-bound. Fast home/card focus still uses cheap `/api/search` warming only;
 it does not mount every title the user scrolls past.
 
 TV playback applies the same rule late, not at episode start: once the exact

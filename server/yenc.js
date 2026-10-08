@@ -45,7 +45,7 @@ function encodePart(data, { name, partNum, totalParts, begin, end, lineLen = 128
 // Decode one yEnc article body. Returns { data, part: {begin,end}|null, size, name, crcOk }.
 // skipDecoded: walk-and-CRC the prefix (so crcOk stays honest) but do not keep those bytes —
 // a mid-segment seek only needs the suffix.
-function decode(articleBuf, opts = {}) {
+function decodeLegacy(articleBuf, opts = {}) {
   const skipDecoded = Math.max(0, Math.floor(Number(opts && opts.skipDecoded) || 0));
   const text = articleBuf;
   let pos = 0;
@@ -120,4 +120,75 @@ function decode(articleBuf, opts = {}) {
   return { data, part, size: meta.size, name: meta.name, crcOk, intact, decodedLen: decoded };
 }
 
-module.exports = { encodePart, decode, crc32 };
+// Hot path. Same contract as decodeLegacy (differential fuzz in e2e), but the CRC is computed once
+// over the decoded bytes with zlib.crc32 (native, Node >= 22.2) instead of a table step per byte:
+// ~3x faster decode on the thread that also serves video. skipDecoded still CRCs the WHOLE article
+// (the checksum covers every byte); only the returned data is the suffix.
+const zlibCrc32 = typeof require('zlib').crc32 === 'function' ? require('zlib').crc32 : null;
+function decode(articleBuf, opts = {}) {
+  if (!zlibCrc32) return decodeLegacy(articleBuf, opts);
+  const skipDecoded = Math.max(0, Math.floor(Number(opts && opts.skipDecoded) || 0));
+  const text = articleBuf;
+  let pos = 0;
+  const meta = { begin: null, end: null, size: null, name: null };
+  let pcrc = null;
+  let endSeen = false;
+  let yendSize = null;
+  let sawPart = false;
+  let fileCrc = null;
+  const out = Buffer.allocUnsafe(text.length);
+  let o = 0;
+  let inBody = false;
+
+  while (pos < text.length) {
+    let nl = text.indexOf(0x0a, pos); // \n
+    if (nl === -1) nl = text.length;
+    let lineEnd = nl;
+    if (lineEnd > pos && text[lineEnd - 1] === 0x0d) lineEnd--; // strip \r
+    const isKeyword = text[pos] === 0x3d && text[pos + 1] === 0x79; // "=y"
+    if (isKeyword) {
+      const line = text.toString('latin1', pos, lineEnd);
+      if (line.startsWith('=ybegin')) {
+        const m = /size=(\d+)/.exec(line); if (m) meta.size = parseInt(m[1], 10);
+        const n = /name=(.+)$/.exec(line); if (n) meta.name = n[1].trim();
+        inBody = true;
+      } else if (line.startsWith('=ypart')) {
+        sawPart = true;
+        const b = /begin=(\d+)/.exec(line); const e = /end=(\d+)/.exec(line);
+        if (b) meta.begin = parseInt(b[1], 10) - 1;
+        if (e) meta.end = parseInt(e[1], 10);
+      } else if (line.startsWith('=yend')) {
+        const c = /pcrc32=([0-9a-fA-F]{8})/.exec(line); if (c) pcrc = parseInt(c[1], 16) >>> 0;
+        const f = /(?:^|\s)crc32=([0-9a-fA-F]{8})/.exec(line); if (f) fileCrc = parseInt(f[1], 16) >>> 0;
+        const z = /(?:^|\s)size=(\d+)/.exec(line); if (z) yendSize = parseInt(z[1], 10);
+        endSeen = true;
+        inBody = false;
+      }
+    } else if (inBody) {
+      for (let i = pos; i < lineEnd; i++) {
+        let c = text[i];
+        if (c === 0x3d) {
+          if (i + 1 >= lineEnd) break;
+          i++;
+          c = (text[i] - 64) & 0xff;
+        }
+        out[o++] = (c - 42) & 0xff;
+      }
+    }
+    pos = nl + 1;
+  }
+  const decoded = o;
+  const all = out.subarray(0, decoded);
+  const expectCrc = pcrc !== null ? pcrc : (!sawPart && fileCrc !== null ? fileCrc : null);
+  const crcOk = expectCrc === null ? true : (zlibCrc32(all) >>> 0) === expectCrc;
+  const data = skipDecoded > 0 ? all.subarray(Math.min(skipDecoded, decoded)) : all;
+  const part = meta.begin !== null ? { begin: meta.begin, end: meta.end } : null;
+  const partLen = part && Number.isFinite(part.end) ? part.end - part.begin : null;
+  const intact = endSeen && decoded > 0
+    && (expectCrc !== null
+      ? crcOk
+      : ((yendSize === null || decoded === yendSize) && (partLen === null || decoded === partLen)));
+  return { data, part, size: meta.size, name: meta.name, crcOk, intact, decodedLen: decoded };
+}
+
+module.exports = { encodePart, decode, decodeLegacy, crc32 };

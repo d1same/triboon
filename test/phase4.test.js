@@ -2798,7 +2798,7 @@ test('resume/subtitle/search contract: nudge applied once, guide return keeps th
   assert.match(rust, /let url = strip_shift_param\(&subtitle\.url\);\s*mpv\.command\(\s*"sub-add",\s*&\[url\.as_str\(\), "select"/);
   assert.match(rust, /mpv\.set_property\("sub-delay", subtitle_delay\(subtitle\.shift, stream_offset\)\)/);
   // Framerate drift between the two witness slices is named in the log; the nearest slice still wins.
-  assert.match(serverSrc, /if \(gap > 600\) driftMsPer30s = /);
+  assert.match(serverSrc, /driftMsPer30s = subtitleDriftPer30s\(shiftMs, spoken\.originMs, paired, pairedOrigin\);/);
   assert.match(serverSrc, /subtitle drifts \$\{Math\.abs\(res\.driftMsPer30s\)\}ms every 30s \(framerate mismatch\)/);
 
   // Start over is one press. Coming back from the Live TV guide lands on the minute you left.
@@ -8070,8 +8070,11 @@ test('client caps: hardware that decodes the codec gets a bit-exact copy (true d
   // Unknown codec (no probe yet): trust a broad AC3-family claim, else convert.
   assert.strictEqual(audioCopyOk('', tv), true);
   assert.strictEqual(audioCopyOk('', { ac3: true }), false);
-  // Lossless codecs copy only for native passthrough devices; plain browser/WebView stays AAC.
-  assert.strictEqual(audioCopyOk('truehd', { native: true, passthrough: true, truehd: true }), true);
+  // Lossless DTS-HD copies only for native passthrough devices; plain browser/WebView stays AAC.
+  // TrueHD never copies into the remux: ffmpeg refuses TrueHD in MP4 ("experimental", 0-byte
+  // output) and the Shield saw an empty stream on four 4K releases in a row (2026-10-08). A
+  // passthrough device gets bit-exact TrueHD by playing the MKV directly (decidePlayback below).
+  assert.strictEqual(audioCopyOk('truehd', { native: true, passthrough: true, truehd: true }), false);
   assert.strictEqual(audioCopyOk('truehd', { truehd: true }), false);
   assert.strictEqual(audioCopyOk({ codec: 'dts', profile: 'DTS-HD MA' }, { native: true, passthrough: true, dts: true, dtsHd: true }), true);
   assert.strictEqual(audioCopyOk({ codec: 'dts', profile: 'DTS-HD MA' }, { dts: true, dtsHd: true }), false);
@@ -9702,4 +9705,46 @@ test('TV: the hold-OK menu keeps the highlight against background focus moves (3
     const at = ui.indexOf('function ' + fn);
     assert.ok(at > 0 && /cwMenuOwnsFocus\(null\)/.test(ui.slice(at, at + 420)), `${fn.split('(')[0]} yields while the menu is open`);
   }
+});
+
+test('player: a file on the server disk says "Opening file", not the usenet "Mounting" sequence (web + TV)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(ui, /const LOCAL_LOADING_STAGES = \['Opening file', 'Starting playback'\];/);
+  assert.match(ui, /function startPlayerLoadingStages\(hot, local = false\) \{[\s\S]{0,200}S\._loadingStages = local \? LOCAL_LOADING_STAGES : PLAYER_LOADING_STAGES;/,
+    'the web loader picks the local wording');
+  assert.match(ui, /const local = !!\(it && it\._local\)\s*\|\| \(!!opts\.hot && typeof localTitleHasPlayback === 'function' && localTitleHasPlayback\(it\)\s*&& localPlaybackFitsQuality\(it, qualityRankForItem\(it\)\)\);\s*S\._loadingLocal = local;/,
+    'every Play transition works out whether the title plays from disk');
+  assert.match(ui, /function showPlayLoading\(it, hot, local = !!S\._loadingLocal\)/, 'the web loader reads the same flag');
+  assert.match(ui, /local: !!S\._loadingLocal, \/\/ older TV apps ignore it/, 'the TV bridge receives the flag (old APKs ignore it)');
+  assert.match(java, /localLoadingStatuses = new String\[\]\{"Opening file", "Starting playback"\}/);
+  assert.match(java, /local = j\.optBoolean\("local", false\);/, 'the TV reads the flag from the loading JSON');
+  assert.match(java, /nativeLoadingStatuses = local \? localLoadingStatuses : usenetLoadingStatuses;\s*if \(local\) hot = false;/);
+  assert.match(java, /private void stopNativeLoadingStatus\(\) \{[\s\S]{0,160}nativeLoadingStatuses = usenetLoadingStatuses;/, 'the next usenet Play gets its own wording back');
+});
+
+test('remux: a TrueHD release is converted to AAC even before the probe lands (no 0-byte MP4)', () => {
+  const { audioCopyOk, audioHintFromName } = require('../server/transcode');
+  const shield = { native: true, passthrough: true, truehd: true, ac3: true, eac3: true, mkv: true };
+  const hint = audioHintFromName('Resident Evil Welcome to Raccoon City 2021 UHD BluRay 2160p HDR10 DV HEVC TrueHD Atmos 7.1 x265-E');
+  assert.deepStrictEqual(hint, { codec: 'truehd', guessed: true }, 'the name says TrueHD');
+  assert.strictEqual(audioCopyOk(hint, shield), false, 'so the remux converts it instead of copying an unknown codec');
+  assert.strictEqual(audioHintFromName('Movie.2024.1080p.WEB-DL.DDP5.1.H.264-NTb'), undefined, 'other names keep the probe/claim path');
+  assert.strictEqual(audioCopyOk(undefined, shield), true, 'an unknown, non-TrueHD codec still trusts a broad AC3-family claim');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const uses = server.match(/const aud = \(vf\._tracks && vf\._tracks\.audio && vf\._tracks\.audio\[audioTrack\]\) \|\| \(audioTrack === 0 \? audioHintFromName\(vf\._releaseName \|\| vf\.name\) : undefined\);/g) || [];
+  assert.strictEqual(uses.length, 2, 'both the remux and the HLS route use the name hint');
+});
+
+test('subtitles: a manual nudge is stored per release, so another copy does not inherit it', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const a = ui.indexOf('function subShiftKey(track)');
+  const b = ui.indexOf('function subChoiceKey()');
+  const S = { playing: { item: { key: 'tmdb:tv:1:s1e1' }, name: 'Show.S01E01.1080p.WEB-DL-FLUX' } };
+  const key = new Function('S', `${ui.slice(a, b)}\nreturn subShiftKey;`)(S);
+  const k1 = key('ws:en:1');
+  S.playing.name = 'Show.S01E01.720p.HDTV-OTHER';
+  const k2 = key('ws:en:1');
+  assert.notStrictEqual(k1, k2, 'a different release gets its own nudge');
+  assert.match(k1, /^triboon\.subshift\.tmdb%3Atv%3A1%3As1e1\.ws%3Aen%3A1\.Show\.S01E01\.1080p\.WEB-DL-FLUX$/);
 });

@@ -6838,3 +6838,85 @@ test('pipeline: a switch caused by repeated stalls moves on without demoting the
   await pipeline.advance('s2', {});
   assert.ok([...store.values()].some((v) => v.verdict === 'playback-failed'), 'an advance without the stall cause (old clients, content errors) still demotes');
 });
+
+test('subtitles: malformed SRT timestamps from old fan subs become valid VTT; dialogue digits are untouched', () => {
+  const { srtToVtt } = require('../server/opensubs');
+  const vtt = srtToVtt('1\r\n0:00:01,500 --> 00:00:04,5\r\nHello 1:23:45,6 world\r\n\r\n2\r\n00:00:05,000 --> 00:00:06.250\r\nok\r\n');
+  assert.match(vtt, /^WEBVTT\n\n1\n00:00:01\.500 --> 00:00:04\.500\n/, 'one-digit hour and one-digit ms are padded');
+  assert.match(vtt, /Hello 1:23:45,6 world/, 'text lines keep their digits');
+  assert.match(vtt, /00:00:05\.000 --> 00:00:06\.250/, 'normal stamps are unchanged');
+});
+
+test('subtitles: the same group/source/episode at another resolution counts as already synced', () => {
+  const { subtitleLooksSynced } = require('../server/opensubs');
+  const mine = 'Lanterns.S01E01.Pilot.REPACK.1080p.AMZN.WEB-DL.DDP5.1.Atmos.H.264-FLUX';
+  assert.strictEqual(subtitleLooksSynced({ release: 'Lanterns.S01E01.Pilot.REPACK.720p.AMZN.WEB-DL.DDP5.1.H.264-FLUX' }, mine), true,
+    'FLUX 720p and 1080p of one episode share timing: no audio pull, no nudge');
+  assert.strictEqual(subtitleLooksSynced({ release: 'Lanterns.S01E01.Pilot.REPACK.2160p.AMZN.WEB-DL.DDP5.1.Atmos.H.265-FLUX' }, mine), true);
+  assert.strictEqual(subtitleLooksSynced({ release: 'Lanterns.S01E01.Pilot.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb' }, mine), false, 'another group is not assumed in sync');
+  assert.strictEqual(subtitleLooksSynced({ release: 'Lanterns.S01E02.Pilot.REPACK.720p.AMZN.WEB-DL.DDP5.1.H.264-FLUX' }, mine), false, 'another episode is not');
+  assert.strictEqual(subtitleLooksSynced({ release: 'Lanterns.S01E01.Pilot.REPACK.1080p.HMAX.WEB-DL.DDP5.1.H.264-FLUX' }, mine), false, 'another service cut is not');
+});
+
+test('subtitles: drift is only a framerate ratio, snapped, with the right sign; slice noise never stretches the file', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const a = src.indexOf('const FRAMERATE_DRIFT_MS_PER_30S');
+  const b = src.indexOf('async function onDemandSubSync');
+  assert.ok(a > 0 && b > a);
+  const drift = new Function(`${src.slice(a, b)}\nreturn subtitleDriftPer30s;`)();
+  // PAL sub on a 23.976 file: the offset grows ~1281ms per 30s of subtitle time.
+  assert.strictEqual(drift(1281, 630000, 0, 600000), Math.round(30000 * (25 / 23.976 - 1)), 'measured later slice ahead by 1.28s -> +1281/30s');
+  assert.strictEqual(drift(0, 600000, 1281, 630000), Math.round(30000 * (25 / 23.976 - 1)),
+    'same slide measured with the paired slice AFTER the first: same sign (the old code inverted it)');
+  assert.strictEqual(drift(2562, 660000, 0, 600000), Math.round(30000 * (25 / 23.976 - 1)), 'a slice 60s away is not doubled');
+  assert.strictEqual(drift(-1229, 630000, 0, 600000), Math.round(30000 * (23.976 / 25 - 1)), 'the opposite ratio');
+  assert.strictEqual(drift(700, 630000, 0, 600000), 0, 'a 0.7s disagreement is noise, not a framerate');
+  assert.strictEqual(drift(3000, 630000, 0, 600000), 0, 'a 3s jump is two slices on different lines, not a slide');
+  assert.strictEqual(drift(1281, 605000, 0, 600000), 0, 'slices too close together prove nothing');
+  assert.match(src, /if \(farShift == null \|\| Math\.abs\(farShift - predicted\) > 700\) driftMsPer30s = 0;/,
+    'a third slice two minutes away must confirm the slide before the whole file is stretched');
+  assert.match(src, /if \(Math\.abs\(shiftMs\) < 400 && !\(pairedShift != null && Math\.abs\(pairedShift - shiftMs\) <= 200\)\) shiftMs = 0;/,
+    'a sub-400ms move needs two agreeing slices');
+});
+
+test('subtitles: Play waits for the moviehash only when OpenSubtitles (its only user) is on', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /if \(!variant && osActive && vf\._moviehash === undefined\) \{/);
+});
+
+test('startup gate: while someone watches, only one background prepare runs; Play still goes first', async () => {
+  const { StartupGate } = require('../server/pipeline');
+  let watching = true;
+  const gate = new StartupGate(3, { prepareLimit: () => (watching ? 1 : 3) });
+  const p1 = await gate.acquire({ priority: 'prepare' });
+  let p2 = null;
+  const p2Promise = gate.acquire({ priority: 'prepare' }).then((t) => { p2 = t; return t; });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(p2, null, 'a second prepare waits while one already runs next to a viewer');
+  const play = await gate.acquire({ priority: 'play' });
+  assert.ok(play, 'a pressed Play is not held back by the prepare cap');
+  p1.release();
+  await p2Promise;
+  assert.ok(p2, 'the waiting prepare runs once the first one finishes');
+  play.release(); p2.release();
+  // With nobody watching the cap opens back up to every slot.
+  watching = false;
+  const a = await gate.acquire({ priority: 'prepare' });
+  const b = await gate.acquire({ priority: 'prepare' });
+  assert.ok(a && b, 'two prepares at once when nobody is watching');
+  a.release(); b.release();
+});
+
+test('startup gate: a prepare parked by the cap wakes up on its own when the viewer stops', async () => {
+  const { StartupGate } = require('../server/pipeline');
+  let watching = true;
+  const gate = new StartupGate(3, { prepareLimit: () => (watching ? 0 : 3) });
+  let got = null;
+  gate.acquire({ priority: 'prepare' }).then((t) => { got = t; });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.strictEqual(got, null);
+  watching = false;
+  await new Promise((r) => setTimeout(r, 2300));
+  assert.ok(got, 'the drain timer admitted it without any other event');
+  got.release();
+});

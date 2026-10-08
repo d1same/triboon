@@ -192,7 +192,10 @@ public class MainActivity extends Activity {
     private ObjectAnimator nativeLoadingLaneAnimator;
     private int nativeLoadingToken;
     private int nativeLoadingStatusIndex;
-    private final String[] nativeLoadingStatuses = new String[]{"Preparing", "Finding source", "Mounting", "Checking health...", "Starting stream"};
+    private String[] nativeLoadingStatuses = new String[]{"Preparing", "Finding source", "Mounting", "Checking health...", "Starting stream"};
+    private final String[] usenetLoadingStatuses = nativeLoadingStatuses;
+    // A file already on the server's disk is not searched, mounted from usenet, or health-checked.
+    private final String[] localLoadingStatuses = new String[]{"Opening file", "Starting playback"};
     private final Runnable nativeLoadingStatusTick = new Runnable() {
         @Override public void run() {
             if (nativeLoading == null || nativeLoading.getVisibility() != View.VISIBLE || nativeLoadingStatus == null) return;
@@ -3745,6 +3748,7 @@ public class MainActivity extends Activity {
     private void stopNativeLoadingStatus() {
         nativeProgress.removeCallbacks(nativeLoadingStatusTick);
         nativeLoadingStatusIndex = 0;
+        nativeLoadingStatuses = usenetLoadingStatuses;
         if (nativeLoadingStatus != null) nativeLoadingStatus.setText(nativeLoadingStatuses[nativeLoadingStatusIndex]);
     }
 
@@ -4329,12 +4333,14 @@ public class MainActivity extends Activity {
         String backdropUrl = "";
         long playbackToken = 0L;
         boolean hot = false;
+        boolean local = false;
         try {
             org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
             title = j.optString("title", title);
             backdropUrl = j.optString("backdropUrl", "");
             playbackToken = Math.max(0L, j.optLong("playbackToken", 0L));
             hot = j.optBoolean("hot", false);
+            local = j.optBoolean("local", false);
         } catch (Exception ignored) {
         }
         try {
@@ -4344,6 +4350,8 @@ public class MainActivity extends Activity {
             nativePlaybackToken = playbackToken;
             enterNativeFullscreenMode();
             silenceNativeVideoForHandoff();
+            nativeLoadingStatuses = local ? localLoadingStatuses : usenetLoadingStatuses;
+            if (local) hot = false; // the local wording starts at its first line
             showNativeLoading(title, backdropUrl, hot);
         } catch (Throwable e) {
             handleNativePlaybackStartFailure(e, "video", title, backdropUrl, "direct", "", "", 0L);

@@ -34,7 +34,7 @@ const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInW
 const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, audioHintFromName, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey } = require('./transcode');
 const { spawn: spawnResumePad } = require('child_process');
 let resumePadReady = null;
 function ensureResumePad() {
@@ -426,6 +426,25 @@ async function measureSubSyncWindow(dir, tag, streamUrl, windowed, audioIndex) {
   if (shiftMs == null) throw new Error('subtitle sync offset was not a single gap');
   return shiftMs;
 }
+// How fast the offset changes, per 30s of subtitle time, from two measured slices. Only a
+// framerate mismatch makes a real linear slide (PAL 25 vs 23.976/24 fps: about 1.2-1.3s every 30s),
+// so anything else is two slices that grabbed different lines: no stretch. The value is snapped to
+// the known ratio so slice noise cannot stretch a whole episode (a 1.2s disagreement used to move a
+// 40:00 cue by 72s). Sign and spacing come from where the paired slice really was.
+const FRAMERATE_DRIFT_MS_PER_30S = [30000 * (25 / 23.976 - 1), 30000 * (25 / 24 - 1), 30000 * (23.976 / 25 - 1), 30000 * (24 / 25 - 1)];
+function subtitleDriftPer30s(shiftA, originA, shiftB, originB) {
+  const spanMs = Number(originA) - Number(originB);
+  if (!Number.isFinite(spanMs) || Math.abs(spanMs) < 15000) return 0;
+  const per30 = ((Number(shiftA) - Number(shiftB)) * 30000) / spanMs;
+  if (!Number.isFinite(per30)) return 0;
+  let best = 0;
+  let bestErr = Infinity;
+  for (const r of FRAMERATE_DRIFT_MS_PER_30S) {
+    const err = Math.abs(per30 - r) / Math.abs(r);
+    if (err < bestErr) { bestErr = err; best = r; }
+  }
+  return bestErr <= 0.15 ? Math.round(best) : 0;
+}
 async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
   const os2 = require('os');
   const fsp = fs.promises;
@@ -455,9 +474,11 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
       : (after ? { ...after, originMs: spoken.originMs + 30000 } : null);
     let agreed = 1;
     let driftMsPer30s = 0;
+    let pairedShift = null;
     if (witness) {
       const second = await measureSubSyncWindow(dir, 'b', selfUrl, witness, audioIndex);
       let paired = second;
+      let pairedOrigin = witness.originMs;
       if (Math.abs(second - shiftMs) > 1500) {
         // One slice grabbed the next line (several seconds off) and the other did not.
         // A third slice breaks the tie. Two that agree win. Three that disagree still
@@ -466,17 +487,26 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
           : (spoken.originMs >= 30000 ? spoken.originMs - 30000 : spoken.originMs + 60000);
         const tie = windowSrt(srt, tieAt, 30000);
         const third = tie ? await measureSubSyncWindow(dir, 'c', selfUrl, { ...tie, originMs: tieAt }, audioIndex) : null;
-        if (third != null && Math.abs(third - shiftMs) <= 1500) paired = third;
+        if (third != null && Math.abs(third - shiftMs) <= 1500) { paired = third; pairedOrigin = tieAt; }
         else if (third != null && Math.abs(third - second) <= 1500) shiftMs = second;
         else throw new Error(`subtitle sync witnesses disagree (${shiftMs}ms vs ${second}ms)`);
       }
       agreed = 2;
-      // Two slices thirty seconds apart that agree on direction but not on size is a
-      // framerate mismatch (23.976 vs 25 fps slides ~1.3s every 30s), not noise. The
-      // nearest slice is still right for THIS minute; the log says why later minutes slide.
-      const gap = Math.abs(paired - shiftMs);
-      if (gap > 600) driftMsPer30s = Math.round(shiftMs - paired) * (spoken.originMs > witness.originMs ? 1 : -1);
+      pairedShift = paired;
+      driftMsPer30s = subtitleDriftPer30s(shiftMs, spoken.originMs, paired, pairedOrigin);
+      if (driftMsPer30s) {
+        // Two slices can look like a framerate slide by accident. Stretch the whole file only when
+        // a slice two minutes away lands where that slide predicts.
+        const farAt = spoken.originMs >= 150000 ? spoken.originMs - 120000 : spoken.originMs + 120000;
+        const far = windowSrt(srt, farAt, 30000);
+        const farShift = far ? await measureSubSyncWindow(dir, 'd', selfUrl, { ...far, originMs: farAt }, audioIndex).catch(() => null) : null;
+        const predicted = shiftMs + (driftMsPer30s * (farAt - spoken.originMs)) / 30000;
+        if (farShift == null || Math.abs(farShift - predicted) > 700) driftMsPer30s = 0;
+      }
     }
+    // A sub-400ms move is within what one slice can mis-measure. Keep it only when both slices
+    // agree within 200ms; otherwise leave the words where they were.
+    if (Math.abs(shiftMs) < 400 && !(pairedShift != null && Math.abs(pairedShift - shiftMs) <= 200)) shiftMs = 0;
     return { vtt: shiftVtt(vtt, shiftMs / 1000, driftMsPer30s, origin), shiftMs, originSec: origin, cues: spoken.count, agreed, driftMsPer30s };
   } finally {
     fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -9607,7 +9637,7 @@ Object.assign(H, {
     // hardware: a device that decodes it natively gets a bit-exact copy (true direct audio);
     // anything else gets a cheap AAC pass — video is always copied either way. A background
     // probe upgrades the unknown-codec guess for seek-restarts.
-    const aud = vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack];
+    const aud = (vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack]) || (audioTrack === 0 ? audioHintFromName(vf._releaseName || vf.name) : undefined);
     const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
     const transcodeAudio = forceAudioSafe || !audioCopyOk(aud, vf._caps);
     if (!vf._tracks && detectFfprobe() && !vf._probing) {
@@ -9789,7 +9819,7 @@ Object.assign(H, {
     let sess = vf._hls.get(key);
     if (!sess) {
       const dir = await fsp.mkdtemp(path.join(os2.tmpdir(), 'triboon-hls-'));
-      const aud = vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack];
+      const aud = (vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack]) || (audioTrack === 0 ? audioHintFromName(vf._releaseName || vf.name) : undefined);
       // Same as /api/remux: iOS sends audioSafe=1 to FORCE stereo-AAC (Safari can't decode AC3/EAC3 in a
       // local <video>, even inside HLS — its canPlayType over-reports Dolby for AirPlay/passthrough only).
       const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
@@ -10259,7 +10289,7 @@ Object.assign(H, {
     // Play waits for this file's fingerprint so the first subtitle can be the exact match.
     // The CC menu stays on the short cap inside getVariants. Eight seconds is the ceiling;
     // a slow mount still gets the closest name, then audio sync.
-    if (!variant && vf._moviehash === undefined) {
+    if (!variant && osActive && vf._moviehash === undefined) {
       await Promise.race([
         moviehashForMount(vf).catch(() => null),
         new Promise((r) => { const t = setTimeout(() => r(null), 8000); if (t.unref) t.unref(); }),
