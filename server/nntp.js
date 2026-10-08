@@ -828,9 +828,39 @@ class ProviderPool {
   }
 
   _pump() {
+    this._purgeAborted();
     this._pumpNow();
     this._watchParked();
     this._watchStuck();
+  }
+
+  // A cancelled task must leave the queue and settle. The share-aware pickers skip aborted entries
+  // without removing them, so one whose listener was gone sat there for good: it inflated
+  // "waiting" (routing pushed work off the big account), and a reader that joined its fetch hung.
+  _purgeAborted() {
+    if (!this.queue.length) return;
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      const t = this.queue[i];
+      if (!signalAborted(t.signal)) continue;
+      this.queue.splice(i, 1);
+      if (typeof t.cleanupAbort === 'function') t.cleanupAbort();
+      try { t.reject(abortError()); } catch {}
+    }
+  }
+
+  // Put a task back after its line failed. _launch removed its abort listener, so re-arm it:
+  // without one, a seek that cancels it while it waits left it in the queue forever.
+  _requeue(task) {
+    if (signalAborted(task.signal)) { task.reject(abortError()); return; }
+    task.cleanupAbort = addAbortListener(task.signal, () => {
+      const idx = this.queue.indexOf(task);
+      if (idx !== -1) {
+        this.queue.splice(idx, 1);
+        task.cleanupAbort();
+        task.reject(abortError());
+      }
+    });
+    this.queue.push(task);
   }
 
   // Queues are per account, but an article is the same on every account. A line that is open and
@@ -1165,7 +1195,7 @@ class ProviderPool {
           // already signed in. Move the piece there. Signing in again is the wait.
           else if (e && e.code === 'NNTP_AUTH_LOST' && this.hasLiveSocket()) {
             task.stayOnLive = true;
-            this.queue.push(task);
+            this._requeue(task);
           }
           // A brand-new socket that 480s never finished a command. Logging in
           // again on the same account is a second strike, not a retry.
@@ -1174,7 +1204,7 @@ class ProviderPool {
           else if (e && e.code === 'NNTP_AUTH_LOST' && this._peerCanTakeOver()
               && (!(c && c.served) || this.authBroken() || this.authCapped || this.refusingNewLogins())) task.reject(e);
           else if (e && e.code === 'NNTP_AUTH_LOST' && this.refusingNewLogins()) task.reject(e);
-          else { task.retried = true; task.stayOnLive = false; this.queue.push(task); }
+          else { task.retried = true; task.stayOnLive = false; this._requeue(task); }
         } else task.reject(e);
       })
       .finally(() => {

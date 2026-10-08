@@ -6139,7 +6139,26 @@ public class MainActivity extends Activity {
     }
 
     private DefaultRenderersFactory nativeRenderersFactory() {
-        return new DefaultRenderersFactory(this)
+        return new DefaultRenderersFactory(this) {
+                    // Passthrough (AC3/E-AC3/DTS/TrueHD to the receiver) gets Media3's default ~250 ms
+                    // AudioTrack buffer. On a quick start the first seconds arrive just in time, and a
+                    // 0.3 s gap ran that dry: the Shield logged "disabled due to previous underrun" 2-7
+                    // times in the first 5 s while video kept going (crackles right after Resume).
+                    // Twice the room rides out those gaps; A/V sync accounts for the extra latency.
+                    @Override
+                    protected androidx.media3.exoplayer.audio.AudioSink buildAudioSink(
+                            android.content.Context context, boolean enableFloatOutput,
+                            boolean enableAudioOutputPlaybackParameters) {
+                        return new androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                                .setEnableFloatOutput(enableFloatOutput)
+                                .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParameters)
+                                .setAudioTrackBufferSizeProvider(
+                                        new androidx.media3.exoplayer.audio.DefaultAudioTrackBufferSizeProvider.Builder()
+                                                .setPassthroughBufferDurationUs(500_000)
+                                                .build())
+                                .build();
+                    }
+                }
                 .setEnableDecoderFallback(true)
                 .setEnableAudioOutputPlaybackParameters(true);
     }
@@ -7020,7 +7039,8 @@ public class MainActivity extends Activity {
             applyNativeSubtitleChoices(choices);
             if (nativeOpenSubtitleMenuAfterRefresh && nativePlayer != null && "video".equals(nativeMode)) {
                 nativeOpenSubtitleMenuAfterRefresh = false;
-                showNativeTrackMenu(C.TRACK_TYPE_TEXT);
+                if (nativeSubtitleHasOptions()) showNativeTrackMenu(C.TRACK_TYPE_TEXT);
+                else Toast.makeText(this, "No subtitles found for this file", Toast.LENGTH_SHORT).show();
             } else {
                 nativeOpenSubtitleMenuAfterRefresh = false;
             }
@@ -7568,8 +7588,18 @@ public class MainActivity extends Activity {
 
     private void showNativeTrackMenu(int trackType) {
         if (nativePlayer == null) return;
-        if (trackType == C.TRACK_TYPE_TEXT && !nativeSubtitleHasOptions()) return;
-        if (trackType == C.TRACK_TYPE_AUDIO && !nativeAudioHasOptions()) return;
+        // The CC button stays enabled once subtitles were offered (nativeCcOptionsLatch), so an
+        // empty list here means they are still loading. OK used to do nothing at all; say so and
+        // open the menu when the list arrives.
+        if (trackType == C.TRACK_TYPE_TEXT && !nativeSubtitleHasOptions()) {
+            nativeOpenSubtitleMenuAfterRefresh = true;
+            Toast.makeText(this, "Finding subtitles...", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (trackType == C.TRACK_TYPE_AUDIO && !nativeAudioHasOptions()) {
+            Toast.makeText(this, "This file has one audio track", Toast.LENGTH_SHORT).show();
+            return;
+        }
         showNativeChrome(false);
 
         java.util.ArrayList<NativeTrackChoice> choices = new java.util.ArrayList<>();

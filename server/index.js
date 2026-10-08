@@ -9524,8 +9524,10 @@ Object.assign(H, {
     ctx.res.once('close', stopResRead);
     const suReadT0 = STARTUP_TRACE ? Date.now() : 0;
     let suFirstChunk = STARTUP_TRACE;
+    let sentBytes = 0;
     try {
       for await (const chunk of vf.read(start, end, { priority: readPriority, signal: readSignal })) {
+        sentBytes += chunk.length;
         if (suFirstChunk) {
           suFirstChunk = false;
           if (vf._su && (readPriority === 'startup' || readPriority === 'seek')) {
@@ -9546,7 +9548,7 @@ Object.assign(H, {
         });
         if (readSignal.aborted || ctx.res.destroyed) break;
       }
-      completedRead = !readSignal.aborted && !ctx.res.destroyed;
+      completedRead = !readSignal.aborted && !ctx.res.destroyed && sentBytes >= end - start;
       if (completedRead) vf._streamHighWaterEnd = Math.max(Number(vf._streamHighWaterEnd || 0), end);
     } catch (e) {
       if (!readSignal.aborted) {
@@ -9559,6 +9561,13 @@ Object.assign(H, {
       if (playerRead) endMountPlayerRead(vf);
     }
     if (readSignal.aborted) {
+      try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
+      return;
+    }
+    // Ending a body short of its Content-Length leaves the socket open and ExoPlayer waits out its
+    // 30s read timeout for bytes that will never come. Drop the connection so it reopens at once.
+    if (sentBytes < end - start) {
+      console.error(`[stream ${vf.id}] sent ${sentBytes} of ${end - start} bytes; closing so the player reopens`);
       try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
       return;
     }
@@ -10491,7 +10500,7 @@ Object.assign(H, {
               console.log(`[subsync ${vf.id}] moved the words ${secs}s ${dir} (heard ${mmss(res.originSec)} to ${mmss(res.originSec + 30)}, ${res.cues} lines, ${res.agreed === 2 ? 'two slices agree' : 'one slice'})`);
               story.noteMount(vf.id, `subtitle sync moved the words ${secs}s ${dir}`);
               if (res.driftMsPer30s) {
-                const line = `subtitle drifts ${Math.abs(res.driftMsPer30s)}ms every 30s (framerate mismatch) — right at ${mmss(atSec)}, will slide later; pick another subtitle if it goes off`;
+                const line = `subtitle drifts ${Math.abs(res.driftMsPer30s)}ms every 30s (framerate mismatch) — stretched the whole file to match, anchored at ${mmss(atSec)}`;
                 console.log(`[subsync ${vf.id}] ${line}`);
                 story.noteMount(vf.id, line);
               }

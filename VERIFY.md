@@ -128,6 +128,39 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-08, v3.3.18 — A burst of skips no longer freezes the stream, a short response reopens at once, cancelled work leaves the queue, passthrough audio has room on quick starts, and CC says when subtitles are still loading:
+
+- Shield on the live server (3.3.17): The Rookie S08E15, six quick +30s skips, froze 60s at 28:05
+  ("rebuffer stalled after 30054ms; retrying same source", then recovered). Cause: ExoPlayer opens
+  the new Range before the server sees the old socket close; that close bumped the mount's
+  read-ahead epoch after the new reader captured it, so the new reader never read ahead again.
+  Fix: a live reader re-arms read-ahead once it has its piece (vfs.js read loop).
+- A live reader whose piece died with a cancel it did not ask for (boost path, pipelined drain)
+  used to return quietly and the route ended the body short of Content-Length (the player waits
+  30s). Now: the boost path falls back to the read-ahead copy, read() fetches the piece once more,
+  and /api/stream destroys a short response instead of ending it.
+- nntp: a task requeued after a dropped line lost its abort listener; with viewer shares on, a
+  cancelled one stayed queued forever (inflated "waiting", a joined reader hung). _requeue re-arms
+  it and every pump sweeps aborted entries. vfs inflight records are deleted only by their owner.
+- Shield: warm 4K resume and fast 1080p start logged 2-7 AudioTrack underruns in the first 5s
+  (cold 4K: 0). Passthrough AudioTrack buffer 250 -> 500 ms. Audible result needs the owner.
+- CC pressed while the subtitle list is still loading toasts "Finding subtitles..." and opens the
+  menu when it arrives (it did nothing). Subtitle-sync log no longer says "will slide later".
+- Measured on the Shield against media.mobasheri.us (3.3.17): cold 4K Resident Evil (the TrueHD
+  title) press -> player 8.5 s, playing ~10 s; warm 4K resume 1.1 s; 1080p 1.1 s.
+- New tests (each fails on 3.3.17): late cancel keeps read-ahead, boost-path stray cancel is not
+  cut short, requeued cancelled piece leaves the queue; contract tests for the short-body destroy
+  and the Android CC/passthrough changes.
+- Gate: `npm.cmd test` 898/898 (+ the Android contract test). `verify:full` on the QA rig
+  (fixture usenet + QA server on this code + emulator-5554): whitespace, JS syntax, inline script,
+  IPTV/P9, fast VOD/P14, CC/P11, local next episode, full suite, isolated server smoke, household
+  VOD/seek/resume/CC, household IPTV first-byte + retune, household overlapping Play, Android
+  lint/unit/debug build all PASS. Android stress: only `playerAbout` and the seek loop fail, the
+  same two fixture-limit failures as 3.3.15-3.3.17 (1-min movie, no cast). Not run: Windows
+  GPU/HDR; real Shield re-test follows the Unraid update.
+- Version contract: `package.json` 3.3.18; Android `versionName` 3.3.18 / `versionCode` 421;
+  Windows client package/Tauri/Cargo(.lock) 3.3.18.
+
 2026-10-08, v3.3.17 — Less CPU per article, TrueHD files play, background warm-ups wait while someone watches, subtitles stop drifting, and local files say "Opening file":
 
 - Unraid 3.3.16: event loop p99 170-500 ms with 1-2 streams (CPU-bound article receive +

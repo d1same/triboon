@@ -9748,3 +9748,15 @@ test('subtitles: a manual nudge is stored per release, so another copy does not 
   assert.notStrictEqual(k1, k2, 'a different release gets its own nudge');
   assert.match(k1, /^triboon\.subshift\.tmdb%3Atv%3A1%3As1e1\.ws%3Aen%3A1\.Show\.S01E01\.1080p\.WEB-DL-FLUX$/);
 });
+
+test('native player: CC while subtitles load says so and opens later; passthrough audio gets a deeper buffer', () => {
+  const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const a = java.indexOf('private void showNativeTrackMenu(int trackType)');
+  const head = java.slice(a, a + 900);
+  assert.match(head, /trackType == C\.TRACK_TYPE_TEXT && !nativeSubtitleHasOptions\(\)\) \{[\s\S]+nativeOpenSubtitleMenuAfterRefresh = true;[\s\S]+Finding subtitles/,
+    'OK on CC before the list loads must not silently do nothing (Shield: focus jumped to Play)');
+  assert.match(java, /if \(nativeSubtitleHasOptions\(\)\) showNativeTrackMenu\(C\.TRACK_TYPE_TEXT\);\s*else Toast\.makeText\(this, "No subtitles found/,
+    'an empty refresh tells the viewer instead of looping');
+  assert.match(java, /buildAudioSink\([\s\S]+DefaultAudioTrackBufferSizeProvider\.Builder\(\)\s*\.setPassthroughBufferDurationUs\(500_000\)/,
+    'receiver passthrough keeps a 0.5s AudioTrack buffer (quick starts underran the 0.25s default)');
+});

@@ -502,7 +502,9 @@ class NzbFileStream {
         };
         fast.then(win, (e) => {
           if (settled) return;
-          if (signalAborted(signal) || (e && e.code === 'ABORT_ERR')) { settled = true; unlink(); reject(e); return; }
+          if (signalAborted(signal)) { settled = true; unlink(); reject(e); return; }
+          // A cancel we did not ask for (pipelined line draining) falls back to the read-ahead copy
+          // like any other failure. Rejecting with ABORT_ERR here cut the player's response short.
           rec.promise.then(win, (e2) => { if (!settled) { settled = true; unlink(); reject(e2); } });
         });
         if (ahead) ahead.then(win, () => {});
@@ -516,10 +518,13 @@ class NzbFileStream {
       // cache, connection preserved) instead of destroying the connection; a still-queued fetch is
       // dequeued immediately either way. This is what keeps a 4K pause/skip storm from killing the
       // whole pool's connections and lagging the next seek behind a reconnect storm.
+      // Delete only our own record: a seek can replace it (line above) and the newer fetch must
+      // stay tracked so it is still cancelled when its readers leave.
+      const own = rec;
       rec.promise = this.pool.body(this.segments[i].msgId, priority, bodyOpts(controller.signal)).then((raw) => {
-        this.inflight.delete(i);
+        if (this.inflight.get(i) === own) this.inflight.delete(i);
         return decodeAndCache(raw, skipDecoded);
-      }).catch((e) => { this.inflight.delete(i); this._noteDeadPiece(i, e); throw e; });
+      }).catch((e) => { if (this.inflight.get(i) === own) this.inflight.delete(i); this._noteDeadPiece(i, e); throw e; });
       this.inflight.set(i, rec);
     }
     rec.consumers++;
@@ -599,7 +604,7 @@ class NzbFileStream {
     // ranges. Starting one read must not silently disable another reader's
     // future read-ahead; only a true interrupted request/seek calls
     // cancelReadAhead() and advances this epoch.
-    const readAheadEpoch = this.readAheadEpoch;
+    let readAheadEpoch = this.readAheadEpoch;
     const aborted = () => !!(signal && signal.aborted);
     if (this.partSize === null) await this.mount(priority);
     end = Math.min(end, this.size);
@@ -634,9 +639,26 @@ class NzbFileStream {
           signal, skipDecoded: wasCached ? 0 : from, pin: priority === 'seek' || opts.pin === true,
         });
       } catch (e) {
-        if (aborted() || e.code === 'ABORT_ERR') return;
-        this._noteFailedPiece(segIdx, activePriority, e);
-        throw e;
+        if (aborted()) return;
+        let err = e;
+        if (e && e.code === 'ABORT_ERR') {
+          // Our own request is still open, so someone else's cancel (a pipelined line draining, a
+          // shared fetch whose other readers left) killed this piece. Returning here ended the
+          // HTTP body short of its Content-Length and the player waited 30s for bytes that never
+          // came. Fetch it once more on our own; if that fails too, fail loudly.
+          try {
+            data = await this._fetchSegment(segIdx, activePriority, { signal, skipDecoded: wasCached ? 0 : from });
+            err = null;
+          } catch (e2) {
+            if (aborted()) return;
+            err = e2;
+          }
+        }
+        if (err) {
+          // A second cancel is not the source's fault; do not count it against the release.
+          if (err.code !== 'ABORT_ERR') this._noteFailedPiece(segIdx, activePriority, err);
+          throw err;
+        }
       }
       const waitMs = Date.now() - waitStart;
       if (wasCached) this.playbackStats.cacheHits++;
@@ -651,6 +673,12 @@ class NzbFileStream {
       }
       if (activePriority === 'startup' || activePriority === 'seek') activePriority = 'playback';
       if (aborted()) return;
+      // On a seek ExoPlayer opens the new Range before the server sees the old socket close, so
+      // the old request's cancelReadAhead() lands AFTER this reader captured the epoch. It then
+      // never read ahead again: one article at a time after every skip, and the Shield sat 30s on
+      // a spinner until its watchdog reopened the stream (The Rookie, 28:05). The cancel already
+      // stopped the stale prefetch; a reader that is still live and just got its piece resumes.
+      if (readAheadEpoch !== this.readAheadEpoch) readAheadEpoch = this.readAheadEpoch;
       const startInBuf = this.cache.has(segIdx) ? from : 0;
       let want = Math.min(data.length - startInBuf, end - offset);
       if (want <= 0 && from > 0 && !this.cache.has(segIdx)) {

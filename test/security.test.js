@@ -3888,7 +3888,7 @@ test('streaming: HTTP range reads use startup/seek lanes and keep completed rang
     'owner-cap, idle, and overflow eviction must never delete an active Range reader');
   assert.match(serverCode, /const owned = \[\.\.\.mounts\.values\(\)\][\s\S]+vf\._ownerUid === uid && vf\.id !== keepId[\s\S]+const removable = owned[\s\S]+!mountHasActivePlayback\(vf, now\)[\s\S]+let existing = owned\.length;[\s\S]+while \(existing >= limit\)[\s\S]+const vf = removable\.shift\(\);[\s\S]+existing--;/,
     'mixed active+idle owner caps count every existing mount but evict only enough inactive mounts to make room');
-  assert.match(serverCode, /let completedRead = false;[\s\S]+const abortRead = \(\) => \{[\s\S]+readController\.abort\(\);[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+const stopReqRead = \(\) => \{[\s\S]+if \(!ctx\.req\.complete\) abortRead\(\);[\s\S]+const stopResRead = \(\) => \{[\s\S]+if \(!completedRead && !ctx\.res\.writableEnded\) abortRead\(\);[\s\S]+completedRead = !readSignal\.aborted && !ctx\.res\.destroyed;[\s\S]+vf\._streamHighWaterEnd = Math\.max\(Number\(vf\._streamHighWaterEnd \|\| 0\), end\)/,
+  assert.match(serverCode, /let completedRead = false;[\s\S]+const abortRead = \(\) => \{[\s\S]+readController\.abort\(\);[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+const stopReqRead = \(\) => \{[\s\S]+if \(!ctx\.req\.complete\) abortRead\(\);[\s\S]+const stopResRead = \(\) => \{[\s\S]+if \(!completedRead && !ctx\.res\.writableEnded\) abortRead\(\);[\s\S]+completedRead = !readSignal\.aborted && !ctx\.res\.destroyed && sentBytes >= end - start;[\s\S]+vf\._streamHighWaterEnd = Math\.max\(Number\(vf\._streamHighWaterEnd \|\| 0\), end\)/,
     'client disconnects should stop stale read-ahead, but completed ExoPlayer ranges should keep their warm buffer');
   // v2.3.0 quick wins: the static UI is gzipped + ETag/304-revalidated, and the per-Range rebalance is
   // throttled with a cached os.totalmem (see the functional test below + pipeline.js).
@@ -3901,6 +3901,8 @@ test('streaming: HTTP range reads use startup/seek lanes and keep completed rang
     'the search cache is LRU (touch-on-hit) so a hot replayed title survives unrelated browses');
   assert.match(serverCode, /if \(readSignal\.aborted\) \{[\s\S]+ctx\.res\.destroy\(\);[\s\S]+return;[\s\S]+\}/,
     'aborted VOD reads should not end a short body under the original content-length');
+  assert.match(serverCode, /if \(sentBytes < end - start\) \{[\s\S]+ctx\.res\.destroy\(\);[\s\S]+return;[\s\S]+\}[\s\S]+ctx\.res\.end\(\);/,
+    'a read that finished short (not aborted) also drops the socket instead of ending under Content-Length (Shield waited 30s)');
   assert.match(vfsCode, /cancelReadAhead\(\) \{[\s\S]+this\.readAheadEpoch\+\+;[\s\S]+\}/,
     'virtual files should expose a safe read-ahead cancel hook');
   assert.match(vfsCode, /async mount\(priority = 'startup', opts = \{\}\)[\s\S]+const signal = opts\.signal \|\| this\.mountSignal \|\| null;[\s\S]+this\._fetchSegment\(0, priority \|\| 'startup', \{ signal \}\)/,

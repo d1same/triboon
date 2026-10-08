@@ -1807,6 +1807,87 @@ test('vfs: a rapid seek storm keeps first-byte latency bounded and never churns 
   await mock.close();
 });
 
+test('vfs: after a seek, the new reader keeps reading ahead when the old request\'s cancel lands late', async () => {
+  // Shield, The Rookie 28:05: ExoPlayer opened the new Range before the server saw the old socket
+  // close. That close bumped the mount's read-ahead epoch AFTER the new reader captured it, so the
+  // new reader never read ahead again: one article at a time, and a 30s freeze until the watchdog.
+  const rel = makeRelease('LateCancel.Test.mkv', 20 * 64 * 1024, 64 * 1024);
+  const mock = createMockNntp({ articles: rel.articles, latencyMs: 40 });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+  const vf = new VirtualFile(pool, rel.nzb, { readAhead: 4 });
+  await vf.mount();
+  const ac = new AbortController();
+  const it = vf.read(5 * 64 * 1024, vf.size, { priority: 'seek', signal: ac.signal });
+  assert.ok((await it.next()).value, 'the seek produced its first piece');
+  vf.cancelReadAhead(); // the OLD request's close, handled after the new one began
+  for (let k = 0; k < 3; k++) assert.ok((await it.next()).value, `piece ${6 + k} arrived`);
+  await new Promise((r) => setTimeout(r, 60));
+  const asked = [11, 12].map((n) => mock.bodyCount(`seg${n}@triboon.test`));
+  assert.ok(asked.some((n) => n > 0), `the live reader went back to reading ahead (pieces 11/12 requested: ${asked.join(',')})`);
+  ac.abort();
+  pool.close();
+  await mock.close();
+});
+
+test('vfs: a stray cancel on a live reader\'s piece is fetched again, not ended short', async () => {
+  // A pipelined line draining (or a shared fetch whose other readers left) rejects with ABORT_ERR
+  // while THIS request is still open. read() used to return quietly: the HTTP body ended short of
+  // its Content-Length and the player waited 30s for bytes that never came.
+  const rel = makeRelease('StrayAbort.Test.mkv', 6 * 64 * 1024, 64 * 1024);
+  const real = rel.articles;
+  // Piece 3 is already on its way as read-ahead (slow) when the player needs it, so the player
+  // takes the "boost" path: a fast re-fetch raced against the read-ahead copy. The fast copy dies
+  // with a cancel the player never asked for; the read-ahead copy still lands a moment later.
+  let strayLeft = 1;
+  const fakePool = {
+    body(msgId, priority) {
+      const id = String(msgId).replace(/[<>]/g, '');
+      const raw = real.get(id);
+      if (!raw) return Promise.reject(Object.assign(new Error('430'), { code: '430' }));
+      if (id === 'seg3@triboon.test' && priority === 'readAhead') return new Promise((r) => setTimeout(() => r(raw), 120));
+      if (id === 'seg3@triboon.test' && strayLeft > 0) {
+        strayLeft--;
+        return Promise.reject(Object.assign(new Error('aborted'), { code: 'ABORT_ERR', name: 'AbortError' }));
+      }
+      return Promise.resolve(raw);
+    },
+  };
+  const vf = new VirtualFile(fakePool, rel.nzb, { readAhead: 2 });
+  await vf.mount();
+  const ac = new AbortController();
+  const parts = [];
+  for await (const chunk of vf.read(0, vf.size, { priority: 'playback', signal: ac.signal })) parts.push(chunk);
+  const got = Buffer.concat(parts);
+  assert.strictEqual(got.length, vf.size, 'every byte arrived; the stream was not cut short');
+  assert.ok(got.equals(rel.data), 'and they are the right bytes');
+  assert.strictEqual(strayLeft, 0, 'the stray cancel really happened');
+});
+
+test('nntp: a requeued piece that the player then cancels leaves the queue and settles', async () => {
+  // A line dropped mid-article; _launch puts the piece back but had already removed its cancel
+  // listener. The seek then cancelled it: with viewer shares on, the pickers skip aborted entries
+  // without removing them, so it sat in "waiting" forever and a reader that joined it hung.
+  const pool = new ProviderPool({}, 1);
+  const ac = new AbortController();
+  let settled = null;
+  const task = { fn: () => Promise.resolve(), resolve: () => { settled = 'resolved'; }, reject: (e) => { settled = e && e.code; }, priority: 'seek', signal: ac.signal, at: Date.now(), viewer: '' };
+  pool._requeue(task);
+  assert.strictEqual(pool.queue.length, 1);
+  ac.abort();
+  assert.strictEqual(pool.queue.length, 0, 'the cancel removed it from the queue');
+  assert.strictEqual(settled, 'ABORT_ERR', 'and its promise settled');
+  // Belt and braces: an aborted entry with no listener at all is swept on the next dispatch pass.
+  const ac2 = new AbortController();
+  let settled2 = null;
+  pool.queue.push({ fn: () => Promise.resolve(), resolve: () => {}, reject: (e) => { settled2 = e && e.code; }, priority: 'seek', signal: ac2.signal, at: Date.now(), viewer: '' });
+  ac2.abort();
+  pool._purgeAborted();
+  assert.strictEqual(pool.queue.length, 0);
+  assert.strictEqual(settled2, 'ABORT_ERR');
+  pool.close();
+});
+
 test('nntp: a fully stalled provider fails within the timeout budget instead of hanging', async () => {
   const { articles, nzb } = makeRelease('Dead.Test.mkv', 128 * 1024, 64 * 1024);
   const mock = createMockNntp({ articles });
