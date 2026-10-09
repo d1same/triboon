@@ -128,6 +128,21 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-09, v3.3.22 — Roku title pages no longer close the Jellyfin channel:
+
+- Cause (read from the open-source Jellyfin Roku code, not seen on a device): MovieDetails.bs loops
+  itemData.people and itemData.mediaStreams, TVSeriesDetails.bs calls itemData.studios.count(), all
+  with no check. The door left those lists out when empty, and never sent top-level MediaStreams.
+  Fix: stampItem now gives every Movie/Episode/Series/Season/Video People, Genres, Studios,
+  GenreItems, Taglines (plus MediaStreams for videos, AirDays for series). Also answered:
+  /Items/{id}/SpecialFeatures and /Years. With Debug logging on, every door call is logged with its
+  status ("GET /Items/... Roku -> 200"), so the last line before a crash names the call.
+- Verified: npm.cmd test 901/901 (fail 0); test/jellyfin-api.test.js checks the lists on movie,
+  episode, show and season detail plus every Home/Resume/NextUp/Latest card Roku reads unguarded.
+- NOT verified (no device, no credentials on this box; owner chose to release): any real Roku or
+  Apple TV run, household VOD/IPTV/overlap live smokes, Android ExoPlayer stress. Roku playback of
+  the 1080p HLS copy and Apple TV (Swiftfin/Infuse) beyond the favorite/watched paths are unaudited.
+
 2026-10-08, v3.3.21 — Startup pieces go to open idle lines, an idle line is lent to another viewer's waiting read-ahead, and subtitle sync stops after two disagreements:
 
 - Unraid 3.3.20 log, 2-3 viewers: 20:01:35 The Good Doctor 4K buffered 8s then 24s with

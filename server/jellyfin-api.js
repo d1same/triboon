@@ -29,7 +29,7 @@ const PREFIXES = [
   '/userfavoriteitems', '/userplayeditems',
   // Browse pages the TV apps open. Outside the door these fell through to the
   // Triboon website and answered 200 with HTML, which a JSON reader chokes on.
-  '/genres', '/persons', '/studios', '/musicgenres', '/artists', '/playlists',
+  '/genres', '/persons', '/studios', '/musicgenres', '/artists', '/playlists', '/years',
 ];
 
 let deps = null;
@@ -399,7 +399,27 @@ function stampItem(item) {
     && !(Array.isArray(item.MediaSources) && item.MediaSources.length)) {
     item.MediaSources = [placeholderSource(item.Id, item.RunTimeTicks)];
   }
+  rokuDetailLists(item);
   return item;
+}
+
+// Jellyfin Roku loops these lists with no check (MovieDetails.bs reads
+// itemData.mediaStreams and itemData.people, TVSeriesDetails.bs reads
+// itemData.studios.count()). A real server always sends them, empty when it
+// has nothing. A missing one is a BrightScript crash that closes the channel
+// the moment a title page opens.
+const LISTED_TYPES = new Set(['Movie', 'Episode', 'Series', 'Season', 'Video']);
+
+function rokuDetailLists(item) {
+  if (!item.Id || !LISTED_TYPES.has(item.Type)) return;
+  for (const key of ['People', 'Genres', 'Studios', 'GenreItems', 'Taglines']) {
+    if (!Array.isArray(item[key])) item[key] = [];
+  }
+  if (item.Type === 'Series' && !Array.isArray(item.AirDays)) item.AirDays = [];
+  if ((item.Type === 'Movie' || item.Type === 'Episode' || item.Type === 'Video') && !Array.isArray(item.MediaStreams)) {
+    const first = Array.isArray(item.MediaSources) && item.MediaSources[0];
+    item.MediaStreams = first && Array.isArray(first.MediaStreams) ? first.MediaStreams : [];
+  }
 }
 
 function placeholderSource(id, runTimeTicks) {
@@ -3181,6 +3201,10 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/studios$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
   { m: 'GET', re: /^\/artists(?:\/albumartists)?$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
   { m: 'GET', re: /^\/playlists$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/years$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  // Roku's detail page asks for special features; a missing list is a crash there.
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/specialfeatures$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/specialfeatures$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/playing\/ping$/, auth: 'user', kind: 'ack', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/latest$/, auth: 'user', kind: 'latest', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/images\/(primary|backdrop|thumb|logo)(?:\/\d+)?$/, auth: 'public', kind: 'image', h: serveJellyfin },

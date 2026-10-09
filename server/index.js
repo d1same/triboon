@@ -11953,6 +11953,12 @@ const server = http.createServer(async (req, res) => {
       const pathLower = p.toLowerCase();
       res._failScope = 'jellyfin';
       res._failWhat = `${method} ${p}${jellyfinQueryHint(url)} ${jellyfinClientLabel(req)}`;
+      // With Debug logging on, every door call is written with its answer, so
+      // the last line before a TV app closes names the call that broke it.
+      if (debug.enabled()) {
+        const began = Date.now();
+        res.once('close', () => debug.log('jellyfin', `${res._failWhat} -> ${res.statusCode} ${Date.now() - began}ms`));
+      }
       const route = JELLYFIN_ROUTES.find((r) => r.m === method && r.re.test(pathLower));
       if (!route) return send(res, 404, { error: 'not found' });
       const ctx = { req, res, url, m: route.re.exec(pathLower), kind: route.kind };

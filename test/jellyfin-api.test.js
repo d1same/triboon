@@ -651,7 +651,10 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   });
   assert.strictEqual(viaData.json.IsFavorite, true);
   assert.strictEqual(viaData.json.Played, false);
-  for (const p of ['/Genres', '/Persons', '/Studios', '/Artists', '/Playlists', '/MusicGenres']) {
+  const features = await httpSend(srv.port, 'GET', `/Items/${aardvark.Id}/SpecialFeatures`, { headers: { authorization: authz } });
+  assert.strictEqual(features.status, 200, 'the Roku detail page reads special features');
+  assert.ok(Array.isArray(features.json), 'special features is a list, not an error object');
+  for (const p of ['/Genres', '/Persons', '/Studios', '/Artists', '/Playlists', '/MusicGenres', '/Years']) {
     const page = await httpSend(srv.port, 'GET', p, { headers: { authorization: authz } });
     assert.strictEqual(page.status, 200, `${p} answers`);
     assert.ok(page.json && Array.isArray(page.json.Items), `${p} answers JSON with an Items list, not the website page`);
@@ -712,6 +715,47 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
     body: JSON.stringify({ ItemId: second.Id, PositionTicks: 90 * 10000000 }),
   });
   assert.strictEqual(pausedEp.status, 204);
+  // Jellyfin Roku reads these fields with no guard on Home and detail cards
+  // (HomeData.bs: UserData.Played, ImageTags.Primary, BackdropImageTags[0]).
+  // One missing object is a BrightScript crash that closes the channel.
+  const rokuReads = [
+    ['movie shelf', movieShelf.json.Items], ['show shelf', showShelf.json.Items],
+    ['episodes', episodes.json.Items], ['seasons', seasons.json.Items],
+    ['next up', nextUp.json.Items], ['resume', homeNext.json.Items],
+  ];
+  for (const latestPath of [`/Users/${me.json.Id}/Items/Latest`, '/Items/Latest']) {
+    const latest = await httpSend(srv.port, 'GET', latestPath, { headers: { authorization: authz } });
+    rokuReads.push([latestPath, Array.isArray(latest.json) ? latest.json : (latest.json && latest.json.Items) || []]);
+  }
+  for (const [where, rows] of rokuReads) {
+    for (const row of rows) {
+      const tag = `${where}: ${row.Name}`;
+      assert.ok(row.UserData && typeof row.UserData === 'object', `${tag} has UserData`);
+      assert.strictEqual(typeof row.UserData.Played, 'boolean', `${tag} UserData.Played`);
+      assert.ok(row.ImageTags && typeof row.ImageTags === 'object', `${tag} has ImageTags`);
+      assert.ok(Array.isArray(row.BackdropImageTags), `${tag} has BackdropImageTags list`);
+      assert.strictEqual(typeof row.Name, 'string', `${tag} Name`);
+      assert.strictEqual(typeof row.Id, 'string', `${tag} Id`);
+    }
+  }
+  // The Roku title page loops People, MediaStreams and Studios with no check.
+  for (const [label, id, lists] of [
+    ['movie', aardvark.Id, ['People', 'Genres', 'Studios', 'MediaStreams', 'MediaSources']],
+    ['episode', second.Id, ['People', 'Genres', 'Studios', 'MediaStreams', 'MediaSources']],
+    ['show', showShelf.json.Items[0].Id, ['People', 'Genres', 'Studios', 'AirDays']],
+    ['season', season.Id, ['People', 'Genres', 'Studios']],
+  ]) {
+    const detail = await httpSend(srv.port, 'GET', `/Items/${id}?userId=${me.json.Id}&fields=Chapters,Trickplay`, { headers: { authorization: authz } });
+    assert.strictEqual(detail.status, 200, `${label} detail answers`);
+    for (const key of lists) assert.ok(Array.isArray(detail.json[key]), `${label} detail carries a ${key} list (Roku loops it without a check)`);
+  }
+  for (const [where, rows] of rokuReads) {
+    for (const row of rows) {
+      if (row.Type === 'Movie' || row.Type === 'Episode') {
+        assert.ok(Array.isArray(row.MediaStreams) && Array.isArray(row.People), `${where}: ${row.Name} carries MediaStreams and People`);
+      }
+    }
+  }
   const homeAfterPause = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items/Resume`, { headers: { authorization: authz } });
   const pausedCard = homeAfterPause.json.Items.find((row) => row.Id === second.Id);
   assert.ok(pausedCard, 'the paused episode is on Continue Watching');
