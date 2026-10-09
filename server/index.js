@@ -10474,7 +10474,9 @@ Object.assign(H, {
       if (moved && !moved.timedOut && Math.abs((moved.atSec || 0) - atSec) > 45) vf._subSyncFail.set(syncKey, { ...moved, tries: 0, atSec });
       // Three failures stop it. Each try reads thirty seconds of audio again, so a subtitle that
       // cannot be aligned must not stay 'pending' and let the TV ask forever.
-      const syncTerminal = () => { const f = vf._subSyncFail.get(syncKey); return !!(f && (f.timedOut || f.tries >= 3 || (f.total || 0) >= 6)); };
+      // Slices that disagree at two different minutes mean this subtitle does not fit this cut; more
+      // tries only pull more audio beside the viewers (Kill Jackie S01E08 measured 6 times in 6 min).
+      const syncTerminal = () => { const f = vf._subSyncFail.get(syncKey); return !!(f && (f.timedOut || f.tries >= 3 || (f.total || 0) >= 6 || (f.disagree || 0) >= 2)); };
       if (syncTerminal()) {
         return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
           { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'failed' });
@@ -10516,6 +10518,7 @@ Object.assign(H, {
           // Every waiter on one shared attempt lands here; count the attempt once.
           if (prev.failedWork !== attempt) {
             vf._subSyncFail.set(syncKey, { tries: prev.tries + 1, total: (prev.total || 0) + 1, failedWork: attempt,
+              disagree: (prev.disagree || 0) + (/witnesses disagree/i.test(msg) ? 1 : 0),
               timedOut: prev.timedOut || /timed out|took too long/i.test(msg), at: Date.now(), atSec });
             capMap(vf._subSyncFail, 24);
             console.error(`[subsync ${vf.id}] ${msg.slice(0, 160)}`);
@@ -10538,7 +10541,7 @@ Object.assign(H, {
     const _sfAudio = Math.max(0, Math.min(15, parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0));
     const _sf = vf._subSyncFail.get(`${cacheKey}:synced:a${_sfAudio}`);
     const syncHdr = looksSynced ? 'synced'
-      : (_sf && (_sf.timedOut || _sf.tries >= 3 || (_sf.total || 0) >= 6)) ? 'failed'
+      : (_sf && (_sf.timedOut || _sf.tries >= 3 || (_sf.total || 0) >= 6 || (_sf.disagree || 0) >= 2)) ? 'failed'
       : (detectSubSync() && vf._subSyncState.has(cacheKey) ? 'pending' : 'unavailable');
     send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
       { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': syncHdr });

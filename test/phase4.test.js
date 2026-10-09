@@ -8492,9 +8492,9 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
   // no new alass spawn happens (each doomed retry re-pulled the mount audio from usenet).
   assert.match(server, /vf\._subSyncFail = vf\._subSyncFail \|\| new Map\(\);/,
     'per-mount sync-failure map exists');
-  assert.match(server, /const syncTerminal = \(\) => \{ const f = vf\._subSyncFail\.get\(syncKey\); return !!\(f && \(f\.timedOut \|\| f\.tries >= 3 \|\| \(f\.total \|\| 0\) >= 6\)\); \};[\s\S]{0,400}'x-triboon-subsync': 'failed'/,
+  assert.match(server, /const syncTerminal = \(\) => \{ const f = vf\._subSyncFail\.get\(syncKey\); return !!\(f && \(f\.timedOut \|\| f\.tries >= 3 \|\| \(f\.total \|\| 0\) >= 6 \|\| \(f\.disagree \|\| 0\) >= 2\)\); \};[\s\S]{0,400}'x-triboon-subsync': 'failed'/,
     'a terminal sync failure short-circuits BEFORE spawning alass and reports failed');
-  assert.match(server, /vf\._subSyncFail\.set\(syncKey, \{ tries: prev\.tries \+ 1, total: \(prev\.total \|\| 0\) \+ 1, failedWork: attempt,\s*timedOut: prev\.timedOut \|\| \/timed out\|took too long\/i\.test\(msg\), at: Date\.now\(\), atSec \}\);/,
+  assert.match(server, /vf\._subSyncFail\.set\(syncKey, \{ tries: prev\.tries \+ 1, total: \(prev\.total \|\| 0\) \+ 1, failedWork: attempt,\s*disagree: \(prev\.disagree \|\| 0\) \+ \(\/witnesses disagree\/i\.test\(msg\) \? 1 : 0\),\s*timedOut: prev\.timedOut \|\| \/timed out\|took too long\/i\.test\(msg\), at: Date\.now\(\), atSec \}\);/,
     'sync failures are recorded once per attempt with try count, a per-mount total, and a timeout flag that matches the real "took too long" error');
   assert.match(server, /if \(moved && !moved\.timedOut && Math\.abs\(\(moved\.atSec \|\| 0\) - atSec\) > 45\) vf\._subSyncFail\.set\(syncKey, \{ \.\.\.moved, tries: 0, atSec \}\);/,
     'a new minute resets only the short try count; a timeout and the total survive the playhead moving (Unraid looped every 30s)');
@@ -8502,8 +8502,11 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
     'a subtitle correction is per audio track, and a sample from another minute must not answer this one');
   assert.match(ui, /function resyncSubtitleAfterSkip\(p\) \{[\s\S]+autoSyncSubtitle\(p, p\.subTrack, p\._subSyncBase\)/,
     'a skip of more than 20s asks subtitle sync for the minute now on screen');
-  assert.match(server, /const syncHdr = looksSynced \? 'synced'\s*: \(_sf && \(_sf\.timedOut \|\| _sf\.tries >= 3 \|\| \(_sf\.total \|\| 0\) >= 6\)\) \? 'failed'/,
+  assert.match(server, /const syncHdr = looksSynced \? 'synced'\s*: \(_sf && \(_sf\.timedOut \|\| _sf\.tries >= 3 \|\| \(_sf\.total \|\| 0\) >= 6 \|\| \(_sf\.disagree \|\| 0\) >= 2\)\) \? 'failed'/,
     'the advertised sync status reports failed so clients stop queueing background syncs');
+  // Kill Jackie S01E08: slices disagreed at 6 minutes in a row, each pulling audio beside 3 viewers.
+  assert.match(server, /Slices that disagree at two different minutes mean this subtitle does not fit this cut/,
+    'two witness disagreements end sync for that subtitle; the minute moving does not reset them');
 
   // (6) Wyzie + OpenSubtitles searches run CONCURRENTLY (they were serial despite the comment,
   // doubling cold CC latency) — now gated per the admin's subtitleSource policy, with the

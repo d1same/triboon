@@ -2115,6 +2115,52 @@ test('nntp: the picture never waits while a line on its account sits idle', asyn
   }
 });
 
+test('nntp: an idle line is lent to another viewer\'s read-ahead that has waited, never while its owner\'s picture waits', async () => {
+  // Unraid 20:01:49: "news-us 0/4 busy (10 waiting, 4 idle beside waiting work)" — viewer A's lines
+  // sat idle while viewer B's read-ahead waited, and B's stream timed out.
+  const pool = new NntpPool([{ host: '127.0.0.1', port: 1, tls: false }], 4);
+  const [acct] = pool.providers;
+  const fake = (owner) => ({ alive: true, owner, hold: true, close() { this.alive = false; } });
+  const prevLend = process.env.TRIBOON_NNTP_LEND;
+  try {
+    pool._viewerShares = new Map([['a', 4], ['b', 4]]);
+    acct.conns = [fake('a'), fake('a'), fake('a')];
+    const old = Date.now() - 1000;
+    let ran = null;
+    const bAhead = { viewer: 'b', priority: 'readAhead', at: old, fn: (c) => { ran = c; return Promise.resolve('ra'); }, resolve() {}, reject() {} };
+    assert.strictEqual(pool.viewerTaskMayUse(acct, acct.conns[0], bAhead), false, 'precondition: the share rule refuses A\'s line to B\'s read-ahead');
+
+    // A has a picture piece waiting somewhere: nothing is lent.
+    const aPicture = { viewer: 'a', priority: 'playback', at: Date.now(), fn: () => new Promise(() => {}), resolve() {}, reject() {} };
+    const other = pool.providers[0];
+    acct.queue = [bAhead];
+    other.queue.push(aPicture);
+    acct._lendIdle();
+    assert.strictEqual(ran, null, 'no lending while the owner\'s picture waits');
+    other.queue.splice(other.queue.indexOf(aPicture), 1);
+
+    process.env.TRIBOON_NNTP_LEND = '0';
+    acct._lendIdle();
+    assert.strictEqual(ran, null, 'TRIBOON_NNTP_LEND=0 keeps lines strictly per viewer');
+    delete process.env.TRIBOON_NNTP_LEND;
+
+    const fresh = { viewer: 'b', priority: 'readAhead', at: Date.now(), fn: () => Promise.resolve('x'), resolve() {}, reject() {} };
+    acct.queue = [fresh];
+    acct._lendIdle();
+    assert.ok(acct.queue.includes(fresh), 'work that just arrived waits for the normal share rules');
+
+    acct.queue = [bAhead];
+    acct._lendIdle();
+    assert.ok(acct.conns.includes(ran), 'B\'s read-ahead that waited 1s ran on one of A\'s idle lines');
+    const idleLeft = acct.conns.filter((c) => !acct.busy.has(c)).length;
+    assert.ok(idleLeft >= 1, `A keeps at least one idle line for its next picture piece (${idleLeft} idle)`);
+  } finally {
+    if (prevLend === undefined) delete process.env.TRIBOON_NNTP_LEND; else process.env.TRIBOON_NNTP_LEND = prevLend;
+    acct.queue = [];
+    pool.close();
+  }
+});
+
 test('nntp: a picture piece waiting beside an idle line is handed to it without any other event', async () => {
   // Unraid 2026-10-07 18:22: "eweka 0/1 busy (2 waiting)" — a line open and idle, work queued, and
   // the player gave up after 30s. Nothing re-runs the dispatcher in that state (the parked watcher
@@ -2283,6 +2329,14 @@ test('nntp: routing prefers an account that can start the piece now over the big
     big.conns = [{ alive: true, close() {} }]; big.busy.add(big.conns[0]);                        // one line, busy
     small.conns = [{ alive: true, close() {} }, { alive: true, close() {} }]; small.queue = [];               // two idle lines
     assert.strictEqual(pool._ordered()[0], small, 'the small account has a free line right now');
+    // Unraid 20:01: news-us (a 6-line plan, lines open and idle) lost a 4K startup piece to an
+    // account with no open line whose 100-line plan "fit" 18.
+    const cold = big.conns; big.conns = []; big.busy.clear();
+    small.size = 6;
+    assert.strictEqual(pool._ordered(18)[0], small,
+      'a 4K startup piece goes to the open idle line, not to a cold plan that would have to log in first');
+    assert.strictEqual(pool._ordered(10)[0], small, 'and a 1080p one');
+    big.conns = cold; big.busy.add(big.conns[0]); small.size = 20;
     small.busy.add(small.conns[0]); small.busy.add(small.conns[1]);
     assert.strictEqual(pool._ordered()[0], big, 'with no free line anywhere the plan-size rule applies again');
   } finally {

@@ -128,6 +128,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-08, v3.3.21 — Startup pieces go to open idle lines, an idle line is lent to another viewer's waiting read-ahead, and subtitle sync stops after two disagreements:
+
+- Unraid 3.3.20 log, 2-3 viewers: 20:01:35 The Good Doctor 4K buffered 8s then 24s with
+  "news-us 0/6 busy; secure-us 0/4 busy; newshosting 0/0 busy (3 waiting, 2 dialing); eweka 0/0
+  busy (1 waiting, 4 dialing)"; 20:01:49 another viewer's remux stream timed out with "news-us 0/4
+  busy (10 waiting, 4 idle beside waiting work)".
+- Routing (nntp _ordered): the "open idle line first" rule skipped startup/seek pieces (needSlots
+  10/18), so the fit rule sent them to accounts with NO open line whose plan counted as headroom.
+  Now it applies to every piece. Test: a 6-line account with idle lines beats a cold 100-line plan
+  for _ordered(18) and _ordered(10) (fails on 3.3.20).
+- Lending (owner approved 2026-10-08): the watchdog lends an idle line to read-ahead/health that
+  has waited >= 500 ms when the line's owner has no picture piece waiting, never the account's last
+  idle line. Normal dispatch and the share rules are unchanged (existing share tests untouched and
+  passing). Kill switch: `TRIBOON_NNTP_LEND=0`.
+- Subtitle sync: Kill Jackie S01E08 measured 6 times in 6 minutes ("witnesses disagree"), each
+  pulling audio beside 3 viewers. Two disagreements now end sync for that subtitle (also reported
+  as `failed` to clients).
+- Gate: `npm.cmd test` 901/901. `verify:full` on the QA rig: whitespace, JS syntax, inline script,
+  IPTV/P9, fast VOD/P14, CC/P11, local next episode, full suite, isolated server smoke, household
+  VOD/seek/resume/CC, household IPTV first-byte + retune, household overlapping Play, Android
+  lint/unit/debug build all PASS. Android stress: only the known `playerAbout` + seek-loop
+  fixture-limit failures (as 3.3.15-3.3.20).
+- Version contract: `package.json` 3.3.21; Android `versionName` 3.3.21 / `versionCode` 424;
+  Windows client package/Tauri/Cargo(.lock) 3.3.21.
+
 2026-10-08, v3.3.20 — A release switch mid-stream (or a remount after a server restart) resumes where the viewer is, not a few seconds back:
 
 - Shield on the live server (3.3.18), 4K HEVC + E-AC3, ~11 min in: a ~1 s hiccup that jumped the

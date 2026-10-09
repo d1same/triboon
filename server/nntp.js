@@ -39,6 +39,10 @@ const STUCK_CHECK_MS = 500;
 function stealingEnabled() { return process.env.TRIBOON_NNTP_STEAL !== '0'; }
 const STUCK_PICTURE_MS = 1000;
 const STUCK_LOG_EVERY_MS = 10000;
+// An idle line may run another viewer's read-ahead/health once that work has waited this long
+// (see _lendIdle). TRIBOON_NNTP_LEND=0 restores strict per-viewer lines.
+const LEND_IDLE_MS = 500;
+function lendingEnabled() { return process.env.TRIBOON_NNTP_LEND !== '0'; }
 // While someone is watching, this many lines stay theirs. Other people's
 // read-ahead cannot sit on them. Auto-expand may add more lines above this.
 const VIEWER_LINE_RESERVE = 4;
@@ -928,6 +932,10 @@ class ProviderPool {
   _rescueStuck() {
     const now = Date.now();
     const d = this._queueDetail(now);
+    if (d.idle > 0 && (d.picture <= 0 || d.oldestPictureMs < STUCK_PICTURE_MS)) {
+      this._lendIdle(now);
+      return;
+    }
     if (d.idle <= 0 || d.picture <= 0 || d.oldestPictureMs < STUCK_PICTURE_MS) return;
     this.stuckRescues = (this.stuckRescues || 0) + 1;
     if (now - (this._stuckLoggedAt || 0) >= STUCK_LOG_EVERY_MS) {
@@ -938,6 +946,38 @@ class ProviderPool {
       debug.issue(`dispatch stuck — reason: ${why}`);
     }
     this._dispatchStarved();
+  }
+
+  // Lend an idle line. A viewer's lines are theirs for the picture, but a line that has sat idle
+  // beside another viewer's read-ahead for LEND_IDLE_MS helps nobody: Unraid 20:01:49 showed
+  // "news-us 0/4 busy (10 waiting, 4 idle beside waiting work)" and that viewer's stream timed out.
+  // Only when the line's owner has no picture piece waiting, and never the account's last idle
+  // line, so the owner's next piece still finds a line (a borrowed one frees in one article).
+  _lendIdle(now = Date.now()) {
+    const hh = this.household;
+    if (!lendingEnabled()) return;
+    if (!hh || typeof hh.viewerSharesActive !== 'function' || !hh.viewerSharesActive()) return;
+    const readAhead = this._priorityRank('readAhead');
+    let idle = this.conns.filter((c) => c.alive && !this.busy.has(c));
+    let lent = 0;
+    while (idle.length > 1 && this.queue.length) {
+      let best = -1;
+      for (let i = 0; i < this.queue.length; i++) {
+        const t = this.queue[i];
+        if (signalAborted(t.signal) || this._priorityRank(t.priority) > readAhead) continue;
+        if (now - (t.at || now) < LEND_IDLE_MS) continue;
+        if (best < 0 || this._priorityRank(t.priority) < this._priorityRank(this.queue[best].priority)) best = i;
+      }
+      if (best < 0) break;
+      const lineIdx = idle.findIndex((c) => !c.owner || typeof hh._ownerWaiting !== 'function' || !hh._ownerWaiting(c.owner));
+      if (lineIdx < 0) break;
+      const c = idle.splice(lineIdx, 1)[0];
+      const task = this.queue.splice(best, 1)[0];
+      if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
+      this._launch(c, task);
+      lent++;
+    }
+    if (lent) this.linesLent = (this.linesLent || 0) + lent;
   }
 
   // _pumpNow only runs on events: a task finishing, a socket connecting, the quiet-window
@@ -1707,7 +1747,11 @@ class NntpPool {
       const da = dark(a) || noRoom(a);
       const db = dark(b) || noRoom(b);
       if (da !== db) return da ? 1 : -1;
-      if (need <= 0 && stealingEnabled()) {
+      // Startup/seek pieces too (need = 10 for 1080p, 18 for 4K): the fit rule below sent them to
+      // an account with NO open line because its whole plan counted as headroom, so a resumed 4K
+      // paid connect+TLS+AUTH on a cold, slow account while two others sat on 10 idle lines
+      // (Unraid 20:01, "newshosting 0/0 busy (3 waiting, 2 dialing)", buffered 8s then 24s).
+      if (stealingEnabled()) {
         const ra = readyNow(a);
         const rb = readyNow(b);
         if ((ra > 0) !== (rb > 0)) return ra > 0 ? -1 : 1;
