@@ -301,10 +301,63 @@ function probeChapters(url, { timeoutMs = 30000 } = {}) {
 // Detect the best available H.264 encoder: hardware first (NVENC → QSV → AMF → VideoToolbox
 // → VAAPI), software libx264 as the universal fallback.
 let _encoder;
+let _encoderWarm = null;
+const ENCODER_PREFS = [
+  { name: 'h264_nvenc', kind: 'NVIDIA NVENC' },
+  { name: 'h264_qsv', kind: 'Intel QuickSync' },
+  { name: 'h264_amf', kind: 'AMD AMF' },
+  { name: 'h264_videotoolbox', kind: 'Apple VideoToolbox' },
+  { name: 'h264_vaapi', kind: 'VAAPI' },
+  { name: 'libx264', kind: 'software x264' },
+];
+function runFfmpegAsync(bin, args, timeoutMs) {
+  return new Promise((resolve) => {
+    let out = '';
+    let done = false;
+    let p;
+    try { p = spawn(bin, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }); } catch { resolve({ status: -1, out: '' }); return; }
+    const finish = (status) => { if (done) return; done = true; clearTimeout(t); resolve({ status, out }); };
+    const t = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} finish(-1); }, timeoutMs);
+    if (p.stdout) p.stdout.on('data', (d) => { if (out.length < 200000) out += d.toString(); });
+    p.on('error', () => finish(-1));
+    p.on('close', (code) => finish(code));
+  });
+}
+// The hardware probes used to run with spawnSync on the first Play after every restart: up to five
+// 15 s probes (no GPU in the container -> each waits out its timeout) with the whole server frozen,
+// so every stream and every usenet login stalled. Run them in the background at boot instead.
+function warmEncoder() {
+  if (_encoder !== undefined) return Promise.resolve(_encoder);
+  if (_encoderWarm) return _encoderWarm;
+  const ff = detectFfmpeg();
+  if (!ff) { _encoder = null; return Promise.resolve(null); }
+  _encoderWarm = (async () => {
+    const list = (await runFfmpegAsync(ff.path, ['-hide_banner', '-encoders'], 6000)).out;
+    for (const p of ENCODER_PREFS) {
+      if (!list.includes(' ' + p.name + ' ')) continue;
+      if (p.name !== 'libx264') {
+        const probeArgs = ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=128x128:rate=10:duration=0.2'];
+        if (p.name === 'h264_vaapi') probeArgs.push('-vaapi_device', '/dev/dri/renderD128', '-vf', 'format=nv12,hwupload');
+        const t = await runFfmpegAsync(ff.path, [...probeArgs, '-c:v', p.name, '-f', 'null', '-'], 15000);
+        if (t.status !== 0) continue;
+      }
+      _encoder = { ...p, hardware: p.name !== 'libx264' };
+      return _encoder;
+    }
+    _encoder = null;
+    return null;
+  })().catch(() => { _encoder = null; return null; });
+  return _encoderWarm;
+}
 function detectEncoder() {
   if (_encoder !== undefined) return _encoder;
   const ff = detectFfmpeg();
   if (!ff) { _encoder = null; return null; }
+  // Probe still running (or not started): answer software x264 for now, never block the server.
+  if (_encoderWarm || process.env.TRIBOON_ENCODER_SYNC_PROBE !== '1') {
+    warmEncoder();
+    return { name: 'libx264', kind: 'software x264', hardware: false, provisional: true };
+  }
   let list = '';
   try { list = String(spawnSync(ff.path, ['-hide_banner', '-encoders'], { timeout: 6000, windowsHide: true }).stdout || ''); } catch {}
   const prefs = [
@@ -735,4 +788,4 @@ function probeCacheKey(name, size) {
   return `${label}|${bytes}`;
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey };

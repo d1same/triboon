@@ -9798,3 +9798,38 @@ test('mid-stream release switch resumes at the live position, not the one read b
   assert.match(ui, /async function reMountAndResume[\s\S]+const now = Number\(currentTime\(\)\); if \(Number\.isFinite\(now\) && now > at\) at = now;/,
     'a remount after a server restart also resumes at the live position (forward only)');
 });
+
+test('encoder probing never freezes the server: detectEncoder answers at once, the GPU probes run async at boot', async () => {
+  // Unraid 2026-10-11: after a restart the first Play ran up to five 15 s spawnSync GPU probes (no
+  // GPU in the container), freezing every stream and usenet login; Docker's health check timed out.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'transcode.js'), 'utf8');
+  const a = src.indexOf('function detectEncoder()');
+  const body = src.slice(a, src.indexOf('\n}\n', a));
+  assert.match(body, /if \(_encoderWarm \|\| process\.env\.TRIBOON_ENCODER_SYNC_PROBE !== '1'\) \{\s*warmEncoder\(\);\s*return \{ name: 'libx264'/,
+    'the default path answers software x264 while the async probe runs');
+  assert.match(src, /function warmEncoder\(\) \{[\s\S]+runFfmpegAsync\(ff\.path, \['-hide_banner', '-encoders'\], 6000\)[\s\S]+runFfmpegAsync\(ff\.path, \[\.\.\.probeArgs/,
+    'the probes use async child processes');
+  const idx = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(idx, /server\.listen\(PORT, \(\) => \{[\s\S]{0,1500}warmEncoder\(\)\.then/, 'boot starts the probe');
+  const { detectEncoder } = require('../server/transcode');
+  const t0 = Date.now();
+  detectEncoder();
+  assert.ok(Date.now() - t0 < 3000, `detectEncoder returned in ${Date.now() - t0} ms`);
+});
+
+test('library scan gives the event loop turns, so a scan on a slow share never freezes playback', () => {
+  // Unraid 2026-10-11 10:36: the auto-scan (1 min after boot, then every 15 min) walked /media with
+  // sync readdir/stat over shfs in one go; the server froze ~1 min (Docker health checks timed out,
+  // all usenet lines stuck "dialing", the picture waited 27 s).
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const a = src.indexOf('async function performScan(');
+  const body = src.slice(a, src.indexOf('\nfunction ', a + 30));
+  assert.match(body, /const breathe = \(\) => new Promise\(\(resolve\) => setImmediate\(resolve\)\);/);
+  assert.match(body, /for \(const e of top\.slice\(0, MAX_TOP\)\) \{\s*if \(items\.length >= MAX_ITEMS\) break;\s*await breathe\(\);/,
+    'one turn per top-level library entry');
+  assert.match(body, /for \(const f of sub\.slice\(0, MAX_DIR\)\) \{\s*if \(f\.isDirectory\(\)\) await breathe\(\);/, 'and per show/season folder');
+  assert.match(body, /await maybeBreathe\(\);\s*const st = fs\.statSync/, 'and between file stats');
+  assert.match(body, /await maybeBreathe\(\);\s*const epNfo = nfoBeside/, 'and between episodes');
+  assert.doesNotMatch(body, /items\.filter\(\(it\) => it\.kind === 'episode' && it\.showIdx === show\.idx\)/,
+    'a show no longer scans every item to find its own episodes (quadratic on big libraries)');
+});

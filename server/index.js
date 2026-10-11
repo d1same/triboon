@@ -34,7 +34,7 @@ const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInW
 const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, audioHintFromName, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, audioHintFromName, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey } = require('./transcode');
 const { spawn: spawnResumePad } = require('child_process');
 let resumePadReady = null;
 function ensureResumePad() {
@@ -7726,6 +7726,13 @@ async function performScan(lib, state, mode = 'scan') {
     // Folder/file title+year parse lives in library-match.js (last year token, same as usenet).
     const parseName = parseLibraryName;
     const lsDir = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
+    // The walk is sync fs, and on an Unraid user share (shfs) every readdir/stat is slow. Run in one
+    // go it froze the whole server for a minute 1 min after boot and every 15 min after that: no
+    // stream bytes, no usenet logins, Docker health checks timing out (2026-10-11 10:36). Give the
+    // event loop a turn between disk calls so playback keeps flowing while the library scans.
+    let scanOps = 0;
+    const breathe = () => new Promise((resolve) => setImmediate(resolve));
+    const maybeBreathe = async () => { if ((++scanOps & 3) === 0) await breathe(); };
     // Display titles: NFO titles often embed the year ("High Copy (2025)") — strip it.
     const cleanTitle = (t) => String(t || '').replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').trim();
     const findArt = (dir) => findLibraryArt(dir);
@@ -7775,6 +7782,7 @@ async function performScan(lib, state, mode = 'scan') {
       let best = null;
       for (const f of lsDir(dir).slice(0, MAX_DIR)) {
         if (!f.isFile() || !MEDIA.test(f.name)) continue;
+        await maybeBreathe();
         const st = fs.statSync(path.join(dir, f.name));
         if (!best || st.size > best.size) best = { file: path.join(dir, f.name), size: st.size };
       }
@@ -7855,20 +7863,22 @@ async function performScan(lib, state, mode = 'scan') {
         }
       });
       epFiles.sort((a, b) => a.s - b.s || a.e - b.e);
+      const eps = [];
       for (const ep of epFiles.slice(0, MAX_EPS)) {
+        await maybeBreathe();
         const epNfo = nfoBeside(ep.file);
-        pushItem({
+        eps.push(pushItem({
           kind: 'episode', file: ep.file, artFile: show.artFile, showIdx: show.idx,
           title: `${show.title} · S${String(ep.s).padStart(2, '0')}E${String(ep.e).padStart(2, '0')}`,
           epTitle: (epNfo && epNfo.title) || null, s: ep.s, e: ep.e,
           year: show.year, overview: (epNfo && epNfo.plot) || '', rating: null,
           tmdbId: show.tmdbId, poster: show.poster, backdrop: show.backdrop, genres: show.genres,
           addedAt: addedAtOf(ep.file, ep.file),
-        });
+        }));
       }
       // A show's addedAt rides its NEWEST episode — a fresh S02E05 floats the whole show to
-      // the top of "Recently added" (Plex behavior).
-      const eps = items.filter((it) => it.kind === 'episode' && it.showIdx === show.idx);
+      // the top of "Recently added" (Plex behavior). (Collected above: filtering every item per
+      // show was quadratic on big libraries.)
       show.addedAt = eps.length ? Math.max(...eps.map((e2) => e2.addedAt || 0)) : ((prevBy.get(`show:${dir}`) || {}).addedAt || Date.now());
     };
 
@@ -7885,6 +7895,7 @@ async function performScan(lib, state, mode = 'scan') {
       }
       for (const e of top.slice(0, MAX_TOP)) {
         if (items.length >= MAX_ITEMS) break;
+        await breathe();
         const full = path.join(scanRoot, e.name);
         if (e.isFile() && MEDIA.test(e.name)) {
           const parsed = parseName(e.name);
@@ -7916,6 +7927,7 @@ async function performScan(lib, state, mode = 'scan') {
         const sub = lsDir(full);
         const epFiles = [];
         for (const f of sub.slice(0, MAX_DIR)) {
+          if (f.isDirectory()) await breathe();
           if (f.isFile() && MEDIA.test(f.name) && EP.test(f.name)) {
             const m = EP.exec(f.name);
             epFiles.push({ file: path.join(full, f.name), s: +m[1], e: +m[2] });
@@ -12212,6 +12224,9 @@ if (require.main === module) {
     } catch (e) { console.error('[boot] temp scrub failed:', e && e.message); }
     if (debug.enabled()) console.log(`[debug] server debug logging ON${debug.envForced() ? ' (TRIBOON_DEBUG)' : ' (Settings)'}`);
     try { getPool(); } catch { /* no provider configured yet — fine */ }
+    // Probe GPU encoders in the background now. Doing it on the first Play froze the whole server
+    // for up to ~75 s after every restart (spawnSync probes waiting out their timeouts).
+    warmEncoder().then((enc) => { if (enc) console.log(`[boot] transcode encoder: ${enc.kind}`); }).catch(() => {});
     // Startup should stay responsive first. Stale Live TV caches are served instantly on demand;
     // the heavy network refresh can begin after login/playback/TV navigation have settled.
     scheduleIptvWarmSoon('startup', IPTV_STARTUP_WARM_DELAY_MS, { skipGuide: true });

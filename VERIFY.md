@@ -128,6 +128,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-11, v3.4.0 — The library auto-scan and the encoder probe no longer freeze the whole server:
+
+- Unraid 3.3.24, 10:36-10:37: Docker health checks timed out 3x in a row ("Health check exceeded
+  timeout (4s)", recovered 10:37:43), the server logged nothing for ~2 min, every usenet account
+  showed lines stuck "dialing" with work waiting, and the 1080p picture waited 27 s. From the LAN the
+  server answered in 4 ms before and after: the event loop was blocked.
+- Cause 1: the library auto-scan (`lastAutoScanAt = 0` -> first run 1 min after boot, then every
+  15 min) walked /media with sync readdir/stat/readFile over Unraid shfs in one go. It now yields the
+  event loop per top-level entry, per subfolder, and every 4 file stats / episode NFO reads; a show
+  collects its own episodes instead of filtering every item (was quadratic).
+- Cause 2: `detectEncoder()` ran up to five 15 s spawnSync GPU probes on the first Play after every
+  restart. `warmEncoder()` now runs them with async child processes at boot; until it finishes,
+  `detectEncoder()` answers software x264 (provisional). Measured on the dev box: 80 ms answer,
+  real result (AMD AMF) 0.6 s later in the background. `TRIBOON_ENCODER_SYNC_PROBE=1` restores the
+  old sync probe.
+- Tests: contract tests pin the scan's event-loop turns, the removed quadratic filter, the async
+  encoder probe and the boot warm; detectEncoder returns in < 3 s.
+- Gate: `npm.cmd test` 906/906. `verify:full` on the QA rig: whitespace, JS syntax, inline script,
+  IPTV/P9, fast VOD/P14, CC/P11, local next episode, full suite, isolated server smoke, household
+  VOD/seek/resume/CC, household IPTV first-byte + retune, household overlapping Play, Android
+  lint/unit/debug build all PASS. Android stress: only the known `playerAbout` + seek-loop
+  fixture-limit failures (as 3.3.15-3.3.24).
+- Version contract: `package.json` 3.4.0; Android `versionName` 3.4.0 / `versionCode` 428;
+  Windows client package/Tauri/Cargo(.lock) 3.4.0.
+
 2026-10-11, v3.3.24 — The server no longer sends bytes from the wrong offset when read-ahead caches a piece during a tail fetch, and every stream starts on 6 usenet lines, not 4:
 
 - Shield 10:01-10:02 (3.3.23): "audio output failed — Unexpected audio track timestamp
