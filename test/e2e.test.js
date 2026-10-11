@@ -1864,6 +1864,40 @@ test('vfs: a stray cancel on a live reader\'s piece is fetched again, not ended 
   assert.strictEqual(strayLeft, 0, 'the stray cancel really happened');
 });
 
+test('vfs: a tail fetch that lands after the whole piece was cached still returns the right bytes', async () => {
+  // Shield 10:02: the player got bytes from the wrong offset (MKV element size 335 MB,
+  // ArrayIndexOutOfBounds, PARSING_CONTAINER_MALFORMED). read() chose its slice start by "is the
+  // piece in the cache now?" after awaiting a TAIL fetch; read-ahead had cached the WHOLE piece
+  // meanwhile, so the head was skipped twice.
+  const part = 64 * 1024;
+  const rel = makeRelease('TailRace.Test.mkv', 6 * part, part);
+  let calls = 0;
+  const fakePool = {
+    body(msgId) {
+      const id = String(msgId).replace(/[<>]/g, '');
+      const raw = rel.articles.get(id);
+      if (!raw) return Promise.reject(Object.assign(new Error('430'), { code: '430' }));
+      if (id !== 'seg3@triboon.test') return Promise.resolve(raw);
+      calls++;
+      // first request (the tail) is slow, the second (the whole piece) lands first
+      return new Promise((r) => setTimeout(() => r(raw), calls === 1 ? 120 : 10));
+    },
+  };
+  const vf = new VirtualFile(fakePool, rel.nzb, { readAhead: 0 });
+  await vf.mount();
+  const from = 2 * part + 1000;
+  const a = vf.read(from, from + 4096, { priority: 'seek' });
+  const aFirst = a.next();
+  await new Promise((r) => setTimeout(r, 5));
+  const b = vf.read(2 * part, 2 * part + 10, { priority: 'playback' });
+  await b.next(); // the whole piece is now in the cache
+  const got = (await aFirst).value;
+  assert.ok(got && got.length > 0, 'the tail reader got bytes');
+  assert.ok(Buffer.from(got).equals(rel.data.subarray(from, from + got.length)),
+    'they are the bytes at the requested offset, not 1000 bytes further on');
+  assert.strictEqual(calls, 2, 'precondition: a tail fetch and a whole-piece fetch both ran');
+});
+
 test('nntp: a requeued piece that the player then cancels leaves the queue and settles', async () => {
   // A line dropped mid-article; _launch puts the piece back but had already removed its cancel
   // listener. The seek then cancelled it: with viewer shares on, the pickers skip aborted entries

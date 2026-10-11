@@ -323,6 +323,7 @@ class NzbFileStream {
   }
 
   _cachePut(i, buf, { persist = true, pin = false } = {}) {
+    markStart(buf, 0); // the RAM cache only ever holds whole pieces
     this.sliceCache.delete(i);
     const disk = getSegmentDisk();
     const msgId = this.segments[i] && this.segments[i].msgId;
@@ -409,6 +410,7 @@ class NzbFileStream {
         // Return the whole article. read() slices from `from` when the segment is in RAM.
         // Returning a tail here as well would skip those bytes twice.
         this._applyDiskMeta(hit);
+        markStart(hit.data, 0);
         this._cachePut(i, hit.data, { persist: false, pin });
         if (pin) disk.pin(msgId);
         this.playbackStats.diskHits = (this.playbackStats.diskHits || 0) + 1;
@@ -426,7 +428,7 @@ class NzbFileStream {
     if (skipDecoded > 0) {
       const sl = this.sliceCache.get(i);
       if (sl && sl.from <= skipDecoded) {
-        const sliced = sl.buf.subarray(skipDecoded - sl.from);
+        const sliced = markStart(sl.buf.subarray(skipDecoded - sl.from), skipDecoded);
         if (sliced.length) return Promise.resolve(sliced);
       }
     }
@@ -464,7 +466,7 @@ class NzbFileStream {
         if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
         if (dec.size !== null) this.size = dec.size;
         this._cachePut(i, dec.data);
-        return dec.data;
+        return markStart(dec.data, 0);
       }
       if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
       if (!dec.intact) throw new Error(`segment ${i} is cut off or its length does not match its own header`);
@@ -477,10 +479,10 @@ class NzbFileStream {
       }
       if (skip > 0) {
         this._rememberSlice(i, skip, dec.data);
-        return dec.data;
+        return markStart(dec.data, skip);
       }
       this._cachePut(i, dec.data);
-      return dec.data;
+      return markStart(dec.data, 0);
     };
     let rec = this.inflight.get(i);
     if (rec && priorityRank(priority) < priorityRank(rec.priority) && priorityRank(priority) <= priorityRank('playback')) {
@@ -548,7 +550,7 @@ class NzbFileStream {
     return rec.promise.then((data) => {
       if (this.cache.has(i)) return data;
       const startedAt = rec.skipDecoded || 0;
-      if (startedAt > 0 && skipDecoded > startedAt) return data.subarray(skipDecoded - startedAt);
+      if (startedAt > 0 && skipDecoded > startedAt) return markStart(data.subarray(skipDecoded - startedAt), skipDecoded);
       return data;
     }).catch((e) => {
       if (e && e.code === 'ABORT_ERR' && !signalAborted(signal)) {
@@ -679,11 +681,15 @@ class NzbFileStream {
       // a spinner until its watchdog reopened the stream (The Rookie, 28:05). The cancel already
       // stopped the stale prefetch; a reader that is still live and just got its piece resumes.
       if (readAheadEpoch !== this.readAheadEpoch) readAheadEpoch = this.readAheadEpoch;
-      const startInBuf = this.cache.has(segIdx) ? from : 0;
+      // Slice by where these bytes START in the piece. Deciding by "is the piece in the cache now?"
+      // skipped the head twice when read-ahead cached the whole piece while our tail fetch was out:
+      // the player got bytes from the wrong offset (Shield, 10:02: MKV element size 335 MB ->
+      // ArrayIndexOutOfBounds, PARSING_CONTAINER_MALFORMED, a 52 s audio jump).
+      const startInBuf = sliceStartFor(data, from, this.cache.has(segIdx));
       let want = Math.min(data.length - startInBuf, end - offset);
       if (want <= 0 && from > 0 && !this.cache.has(segIdx)) {
         data = await this._fetchSegment(segIdx, activePriority, { signal, skipDecoded: 0 });
-        const retryFrom = this.cache.has(segIdx) ? from : 0;
+        const retryFrom = sliceStartFor(data, from, this.cache.has(segIdx));
         want = Math.min(data.length - retryFrom, end - offset);
         if (want > 0) {
           this.playbackStats.segmentsServed++;
@@ -806,6 +812,19 @@ class NzbFileStream {
     if (dead > 0) { this.health.dead = dead; this.health.reason = this.deadPieceReason(); }
     return this.health;
   }
+}
+
+// Where in its segment a decoded buffer starts (0 = the whole piece, N = a tail from byte N).
+const BUF_START = new WeakMap();
+function markStart(buf, start) {
+  if (buf && typeof buf === 'object') BUF_START.set(buf, Math.max(0, Number(start) || 0));
+  return buf;
+}
+// Offset inside `data` of segment byte `from`. Untagged buffers keep the old rule.
+function sliceStartFor(data, from, inCache) {
+  const start = data && typeof data === 'object' ? BUF_START.get(data) : undefined;
+  if (start === undefined) return inCache ? from : 0;
+  return Math.max(0, from - start);
 }
 
 class VirtualFile extends NzbFileStream {

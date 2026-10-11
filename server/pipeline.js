@@ -945,7 +945,11 @@ const ALLOC_STEAL_STEP = 2;
 const ALLOC_STARTUP_MS = 8000;
 const ALLOC_HOLD_MS = 8000;
 const ALLOC_STEAL_COOLDOWN_MS = 5000;
-const AUTO_BASE_CONNS = 4;
+// Every stream's minimum. Two of a viewer's lines stay idle for their next picture piece
+// (nntp READ_AHEAD_PICTURE_SPARE), so a minimum of 4 left a 1080p show (Auto: "1 line is
+// enough" at 40 Mbps/line) fetching ahead on 2 lines, all on one account: Unraid 2026-10-11
+// "news-us 1/3 busy; others 0/0 [house 3 open of 4]" and a 67s freeze. The spare comes on top.
+const AUTO_BASE_CONNS = 6;
 const AUTO_HARD_MAX = 24;
 const DEFAULT_MBPS_PER_CONN = 8;
 // The saved speed-test number comes from a quiet test on one account; real lines under household
@@ -1205,7 +1209,7 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
   const caps = Array.isArray(opts.caps) ? opts.caps : null;
 
   const meta = list.map((vf, i) => {
-    const floor = 4;
+    const floor = custom ? 4 : AUTO_BASE_CONNS;
     const raw = custom ? 'ok' : classifyStreamNeed(vf, now);
     let kind = custom ? 'ok' : heldAllocKind(vf, raw, now, holdMs);
     // A nearly empty buffer past the startup grace cannot wait out the hold time.
@@ -1234,7 +1238,7 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
   if (downMbps > 0 && perConn > 0) {
     const pipeConns = Math.floor(downMbps / perConn);
     if (Number.isFinite(pipeConns) && pipeConns >= 0) {
-      assignable = Math.min(assignable, Math.max(n * 4, pipeConns));
+      assignable = Math.min(assignable, Math.max(n * (custom ? 4 : AUTO_BASE_CONNS), pipeConns));
     }
   }
   if (bandwidthBound && !custom) {
@@ -1242,7 +1246,8 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
   }
 
   const noBudget = !(usable > 0);
-  const evenFair = assignable > 0 ? Math.max(4, Math.floor(assignable / n)) : 4;
+  const minEach = custom ? 4 : AUTO_BASE_CONNS;
+  const evenFair = assignable > 0 ? Math.max(minEach, Math.floor(assignable / n)) : minEach;
   const assigned = meta.map((m) => {
     if (custom) {
       const start = noBudget ? m.cap : evenFair;
@@ -1256,7 +1261,7 @@ function allocateStreamConnections(mounts, perf = {}, opts = {}) {
     return start;
   });
   let packed = assigned.reduce((sum, v) => sum + v, 0);
-  while (packed > assignable && packed > n * 4) {
+  while (packed > assignable && packed > n * minEach) {
     let idx = -1;
     let extra = 0;
     assigned.forEach((v, i) => {

@@ -128,6 +128,38 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-11, v3.3.24 — The server no longer sends bytes from the wrong offset when read-ahead caches a piece during a tail fetch, and every stream starts on 6 usenet lines, not 4:
+
+- Shield 10:01-10:02 (3.3.23): "audio output failed — Unexpected audio track timestamp
+  discontinuity" (+52 s clock jump), then the stream died with `ArrayIndexOutOfBoundsException
+  srcPos=-335405246 length=335405246` inside the Matroska extractor and
+  ERROR_CODE_PARSING_CONTAINER_MALFORMED: the player was fed bytes from the wrong offset. vfs
+  read() chose its slice start AFTER awaiting a TAIL fetch by "is the piece cached now?"; when
+  read-ahead cached the WHOLE piece meanwhile, the head was skipped twice. Returned buffers now
+  carry where they start in their piece (WeakMap tag: 0 whole, N tail) and read() slices by that.
+  Pre-existing race, made likelier by this week's extra read-ahead (lending, 6-line floor, read-ahead
+  re-arming after skips). Test: a tail fetch that lands after the whole piece was cached returns
+  the bytes at the requested offset (fails on 3.3.23).
+
+- Unraid 3.3.23, one viewer, 1080p The Good Doctor: 09:55:20 "still waiting for bytes — news-us 1/3
+  busy (1 dialing); secure-us 0/0; newshosting 0/0; eweka 0/0 [house 3 open of 4]", then "native
+  rebuffer stalled", then "buffered 67s — news-us 2/4 busy (4 waiting, 2 idle beside waiting work)
+  [house 4 open of 4]". Auto sized the stream as `ceil(need ÷ up-to-40 Mbps/line)` → 1 → floor 4;
+  READ_AHEAD_PICTURE_SPARE keeps 2 of those idle for the picture, so read-ahead ran on 2 lines, all on
+  one account, and one slow article froze the show.
+- Owner approved (2026-10-11) raising `AUTO_BASE_CONNS` 4 -> 6 (Auto only; Custom keeps its typed
+  numbers and its old 4 floor). Bandwidth is still bounded by the buffer target; this only adds
+  parallel lines. `docs-streaming-performance.md` updated.
+- Capacity contract tests: 15 assertions in test/phase2.test.js that pinned the Auto floor (4) now
+  pin 6 with a note — same intent (start at the need/floor, grow only when behind, leave spare).
+- Gate: `npm.cmd test` 904/904. `verify:full` on the QA rig: whitespace, JS syntax, inline script,
+  IPTV/P9, fast VOD/P14, CC/P11, local next episode, full suite, isolated server smoke, household
+  VOD/seek/resume/CC, household IPTV first-byte + retune, household overlapping Play, Android
+  lint/unit/debug build all PASS. Android stress: only the known `playerAbout` + seek-loop
+  fixture-limit failures (as 3.3.15-3.3.23).
+- Version contract: `package.json` 3.3.24; Android `versionName` 3.3.24 / `versionCode` 427;
+  Windows client package/Tauri/Cargo(.lock) 3.3.24.
+
 2026-10-11, v3.3.23 — Pause/play no longer freezes the Shield for 20 s, work waiting on an account that is still logging in moves to idle lines elsewhere, and the 4K toggle no longer blocks warm-ups for titles with no 4K:
 
 - Unraid 3.3.22, one 4K viewer after an overnight `[SIGTERM] shutting down` (Unraid stopping the

@@ -33,7 +33,7 @@ Settings -> Streaming performance owns the capacity profile:
 | Stream mix | Mostly 1080p, mostly 4K, or mixed | Estimates bandwidth pressure and picks safer defaults. |
 | Server download Mbps | Server-to-usenet download budget | Used by the recommendation flow and the live allocator; 80% is treated as safe usable capacity. Extra sockets cannot create bandwidth past this pipe. |
 | Server upload Mbps | Server-to-remote-user upload budget | Used for remote streaming warnings. |
-| Connections Auto / Custom | How live sockets are shared | Auto opens `ceil(movie bitrate ÷ live Mbps/connection)`, floor 4, never past 24. Fast sockets mean fewer of them. Evening-slow sockets add more only while the home download pipe still has room (live house fill under 75% of the typed download × 0.8). A full home pipe freezes grow — more sockets would make congestion worse. 4K takes a larger share than 1080p. Custom keeps even fair-share using the typed 1080/4K numbers. A 502 still shrinks either mode. |
+| Connections Auto / Custom | How live sockets are shared | Auto opens `ceil(movie bitrate ÷ live Mbps/connection)`, floor 6 (owner-approved 2026-10-11: 2 of a viewer's lines stay idle for the next picture piece, so the old floor of 4 left a 1080p show fetching ahead on 2 lines and froze it 67s), never past 24. Fast sockets mean fewer of them. Evening-slow sockets add more only while the home download pipe still has room (live house fill under 75% of the typed download × 0.8). A full home pipe freezes grow — more sockets would make congestion worse. 4K takes a larger share than 1080p. Custom keeps even fair-share using the typed 1080/4K numbers. A 502 still shrinks either mode. |
 | 1080p / 4K read-ahead goals | Owner-facing server-side read-ahead goal | Saved as seconds, translated into bounded article windows by the engine. |
 | Per-stream 1080p / 4K connections | Maximum article window for one active stream | Used as the hard ceiling in Custom. Auto sizes from bandwidth + who is behind, but still honors these numbers as a ceiling when set. |
 | Startup reserve | Percentage of usable connections held back | Keeps new starts and seeks responsive. |
@@ -147,7 +147,7 @@ or when leftover Easynews slots cannot host that Play, instead of opening a
 failover/hedge still tries the next provider.
 
 A small movie that is already cached from the playhead to the end drips back
-to the 4-connection floor while still playing, so those sockets go to the next
+to the 6-connection floor while still playing, so those sockets go to the next
 user. A watching 4K that is only fat (minutes ahead, file not done) keeps
 filling. 10 connections per user can be enough once this balancer is on Auto;
 do not drop the typed caps just because the picker got smarter.
