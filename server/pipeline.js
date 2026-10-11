@@ -3734,6 +3734,17 @@ class Pipeline {
   async _runPrepare(params, policy = {}, mountOpts = {}) {
     let { candidates, errors: searchErrors } = await this.search(params, policy);
     let playable = this._playableCandidates(candidates, params);
+    // Same fallback as play(): the 4K toggle on a title with no 4K release disqualified every
+    // release, so the warm-up failed and was cached as failed ("House S04E06 — 33 disqualified by
+    // score") and every episode then started cold. Play itself already fell back to 1080p.
+    const userPicked = (params.pickKey || params.pick) && !params.pinnedResume;
+    if (!playable.length && policy.exactResolutionRank != null && !userPicked) {
+      const relaxed = { ...policy };
+      delete relaxed.exactResolutionRank;
+      const retry = await this.search(params, relaxed);
+      playable = this._playableCandidates(retry.candidates, params);
+      if (playable.length) candidates = retry.candidates;
+    }
     if (!playable.length) {
       const wide = await this._widenPlayable(params, policy, playable, candidates);
       playable = wide.playable;

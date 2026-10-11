@@ -128,6 +128,36 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-11, v3.3.23 — Pause/play no longer freezes the Shield for 20 s, work waiting on an account that is still logging in moves to idle lines elsewhere, and the 4K toggle no longer blocks warm-ups for titles with no 4K:
+
+- Unraid 3.3.22, one 4K viewer after an overnight `[SIGTERM] shutting down` (Unraid stopping the
+  container, not a crash; the Shield app's crash log was empty): 08:29:33 "buffered 8s ... news-us
+  0/4 busy; newshosting 0/0 busy (2 waiting, 1 dialing)". Stealing only ran when work was queued or
+  when the thief pumped, so work on a dialing account waited for the slow login beside idle lines.
+  Now `_watchDialing` nudges idle lines on other accounts every 500 ms while an account has queued
+  work, no open line and a login dialing (kill switch: `TRIBOON_NNTP_STEAL=0`, as for stealing).
+- "prepare failed House S04E06 — 33 disqualified by score": `_runPrepare` lacked play()'s
+  exact-resolution relax, so with the 4K toggle on a title with no 2160p release the warm-up
+  failed (and was cached as failed) and every episode started cold. Prepare now relaxes the same way.
+- Shield "pause/play freezes": logcat 08:49:08 resume (HDMI route reselected), then 20 s of
+  "Spurious audio timestamp (system clock mismatch): 8462647 ..." — the E-AC3 passthrough clock did
+  not move, the picture (synced to it) froze, and only the web's quiet remount at 08:49:28 recovered
+  ("Native quiet remount to 220633ms (player was at 220633ms)" — 3.3.20 log, no jump back).
+  (a) Reverted 3.3.18's 0.5 s passthrough AudioTrack buffer (the underruns it targeted were inaudible,
+  owner-confirmed). (b) New native check: READY + isPlaying with an unmoving position for 2 s and
+  >= 1 s buffered -> `seekTo(pos)` flushes the output (logged "Native clock stuck ...", max 1/10 s).
+  On-device confirmation (pause/play on the Shield after the APK update) is the owner's test.
+- Tests (each fails on 3.3.22): dialing account's picture piece runs on another account's idle line
+  within one 500 ms tick with no other event; prepare with exact 4K and only a 1080p release warms
+  the 1080p.
+- Gate: `npm.cmd test` 903/903. `verify:full` on the QA rig: whitespace, JS syntax, inline script,
+  IPTV/P9, fast VOD/P14, CC/P11, local next episode, full suite, isolated server smoke, household
+  VOD/seek/resume/CC, household IPTV first-byte + retune, household overlapping Play, Android
+  lint/unit/debug build all PASS. Android stress: only the known `playerAbout` + seek-loop
+  fixture-limit failures (as 3.3.15-3.3.21).
+- Version contract: `package.json` 3.3.23; Android `versionName` 3.3.23 / `versionCode` 426;
+  Windows client package/Tauri/Cargo(.lock) 3.3.23.
+
 2026-10-09, v3.3.22 — Roku title pages no longer close the Jellyfin channel:
 
 - Cause (read from the open-source Jellyfin Roku code, not seen on a device): MovieDetails.bs loops

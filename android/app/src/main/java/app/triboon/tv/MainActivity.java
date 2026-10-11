@@ -6145,26 +6145,10 @@ public class MainActivity extends Activity {
     }
 
     private DefaultRenderersFactory nativeRenderersFactory() {
-        return new DefaultRenderersFactory(this) {
-                    // Passthrough (AC3/E-AC3/DTS/TrueHD to the receiver) gets Media3's default ~250 ms
-                    // AudioTrack buffer. On a quick start the first seconds arrive just in time, and a
-                    // 0.3 s gap ran that dry: the Shield logged "disabled due to previous underrun" 2-7
-                    // times in the first 5 s while video kept going (crackles right after Resume).
-                    // Twice the room rides out those gaps; A/V sync accounts for the extra latency.
-                    @Override
-                    protected androidx.media3.exoplayer.audio.AudioSink buildAudioSink(
-                            android.content.Context context, boolean enableFloatOutput,
-                            boolean enableAudioOutputPlaybackParameters) {
-                        return new androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
-                                .setEnableFloatOutput(enableFloatOutput)
-                                .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParameters)
-                                .setAudioTrackBufferSizeProvider(
-                                        new androidx.media3.exoplayer.audio.DefaultAudioTrackBufferSizeProvider.Builder()
-                                                .setPassthroughBufferDurationUs(500_000)
-                                                .build())
-                                .build();
-                    }
-                }
+        // Stock audio sink. 3.3.18 doubled the passthrough AudioTrack buffer to silence underrun
+        // log lines the owner never heard; after it, pause/play on the Shield's E-AC3 passthrough
+        // froze the audio clock (and the picture) for 20 s. Back to Media3's default.
+        return new DefaultRenderersFactory(this)
                 .setEnableDecoderFallback(true)
                 .setEnableAudioOutputPlaybackParameters(true);
     }
@@ -8337,6 +8321,37 @@ public class MainActivity extends Activity {
         }
     }
 
+    // "Playing" with a clock that does not move. Shield, E-AC3 passthrough, after pause/play: the
+    // AudioTrack position froze ("Spurious audio timestamp ... 8462647" for 20 s), the picture is
+    // synced to that clock so it froze too, and only the 20 s web recovery remounted it. Data was
+    // buffered the whole time. A seek to the same spot flushes the audio output and restarts it.
+    private long nativeStuckClockPosMs = -1L;
+    private long nativeStuckClockSinceMs = 0L;
+    private long nativeStuckClockFixedAtMs = 0L;
+
+    private void checkNativeStuckClock() {
+        if (nativePlayer == null || !nativeVideoStarted || !nativePlayer.isPlaying()) {
+            nativeStuckClockSinceMs = 0L;
+            return;
+        }
+        long pos = nativePlayer.getCurrentPosition();
+        long now = SystemClock.elapsedRealtime();
+        if (pos != nativeStuckClockPosMs) {
+            nativeStuckClockPosMs = pos;
+            nativeStuckClockSinceMs = now;
+            return;
+        }
+        if (nativeStuckClockSinceMs <= 0L) { nativeStuckClockSinceMs = now; return; }
+        long stuckMs = now - nativeStuckClockSinceMs;
+        long aheadMs = nativePlayer.getBufferedPosition() - pos;
+        if (stuckMs < 2000L || aheadMs < 1000L || now - nativeStuckClockFixedAtMs < 10000L) return;
+        nativeStuckClockFixedAtMs = now;
+        nativeStuckClockSinceMs = now;
+        Log.w(TAG, "Native clock stuck " + stuckMs + "ms at " + pos + "ms with " + aheadMs
+                + "ms buffered; flushing the output with a seek in place");
+        nativePlayer.seekTo(pos);
+    }
+
     private void updateNativeVideoWatchdog() {
         if (!"video".equals(nativeMode) || nativePlayer == null) return;
         if (!nativePlayer.getPlayWhenReady()) {
@@ -8351,8 +8366,10 @@ public class MainActivity extends Activity {
             if (nativeVideoStarted) rememberNativeVideoPosition();
             nativeVideoUnhealthySinceMs = 0L;
             nativeVideoMemoryTrimmedDuringBuffer = false;
+            checkNativeStuckClock();
             return;
         }
+        nativeStuckClockSinceMs = 0L;
         if (nativeVideoStarted) {
             boolean waitingForData = state == Player.STATE_BUFFERING
                     || readyButNotPlaying;

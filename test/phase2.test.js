@@ -3323,6 +3323,35 @@ test('pipeline: 4K preferred — when every UHD source is dead, fall back to the
   pool.close(); await mock.close(); ix.server.close(); store.close();
 });
 
+test('pipeline: the 4K toggle on a title with NO 4K release still warms the best release (prepare falls back like play)', async () => {
+  // Unraid: "prepare failed House S04E06 — Found 33 releases, none playable (33 disqualified by
+  // score)". House has no 2160p; the exact-4K lock disqualified every release, the warm-up failed and
+  // was cached as failed, and every episode then started cold. play() already relaxed; prepare didn't.
+  const payload = seededPayload(120 * 1024, 0x40e);
+  const only1080 = nzbFor([{ name: 'House.S04E06.1080p.BluRay.mkv', data: payload }], 30000, 'house1080');
+  const mock = createMockNntp({ articles: new Map([...only1080.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 6);
+  const ix = makeMockIndexer([
+    { name: 'House.S04E06.1080p.BluRay.x264-ROVERS', size: 3e9, nzb: only1080.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const r = await pipeline.prepare({ q: 'House S04E06' }, { maxResolutionRank: 4, preferResolutionRank: 4, exactResolutionRank: 4 });
+    assert.ok(r, 'the warm-up succeeded instead of "no playable releases found"');
+    const name = (r.candidate && r.candidate.name) || r.name || (r.vf && r.vf.name) || '';
+    assert.match(name, /1080p/, 'it warmed the 1080p release, the best that exists');
+  } finally {
+    pool.close(); await mock.close(); ix.server.close(); store.close();
+  }
+});
+
 test('pipeline: playback warmup pre-fetches BOTH the head and the tail (container index) so remux/ExoPlayer parse hits warm cache', async () => {
   // Regression for "plays fine, then buffers after a minute": the remux/ExoPlayer parse the
   // container index (mkv Cues / mp4 moov, usually at the END for WEB-DL) before streaming. A cold

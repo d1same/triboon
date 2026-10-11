@@ -9752,7 +9752,7 @@ test('subtitles: a manual nudge is stored per release, so another copy does not 
   assert.match(k1, /^triboon\.subshift\.tmdb%3Atv%3A1%3As1e1\.ws%3Aen%3A1\.Show\.S01E01\.1080p\.WEB-DL-FLUX$/);
 });
 
-test('native player: CC while subtitles load says so and opens later; passthrough audio gets a deeper buffer', () => {
+test('native player: CC while subtitles load says so and opens later; a frozen clock is flushed, the audio sink is stock', () => {
   const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   const a = java.indexOf('private void showNativeTrackMenu(int trackType)');
   const head = java.slice(a, a + 900);
@@ -9760,8 +9760,13 @@ test('native player: CC while subtitles load says so and opens later; passthroug
     'OK on CC before the list loads must not silently do nothing (Shield: focus jumped to Play)');
   assert.match(java, /if \(nativeSubtitleHasOptions\(\)\) showNativeTrackMenu\(C\.TRACK_TYPE_TEXT\);\s*else Toast\.makeText\(this, "No subtitles found/,
     'an empty refresh tells the viewer instead of looping');
-  assert.match(java, /buildAudioSink\([\s\S]+DefaultAudioTrackBufferSizeProvider\.Builder\(\)\s*\.setPassthroughBufferDurationUs\(500_000\)/,
-    'receiver passthrough keeps a 0.5s AudioTrack buffer (quick starts underran the 0.25s default)');
+  // 3.3.18's 0.5s passthrough buffer was reverted in 3.3.23: the underruns it targeted were
+  // inaudible (owner), and pause/play then froze the E-AC3 clock for 20s on the Shield.
+  assert.doesNotMatch(java, /setPassthroughBufferDurationUs/, 'the passthrough AudioTrack keeps Media3\'s default size');
+  assert.match(java, /if \(state == Player\.STATE_READY && !readyButNotPlaying\) \{[\s\S]{0,300}checkNativeStuckClock\(\);/,
+    'the 1s watchdog checks a "playing" player whose clock does not move');
+  assert.match(java, /private void checkNativeStuckClock\(\) \{[\s\S]+stuckMs < 2000L \|\| aheadMs < 1000L \|\| now - nativeStuckClockFixedAtMs < 10000L[\s\S]+nativePlayer\.seekTo\(pos\);/,
+    'stuck 2s with 1s buffered -> seek in place to flush the output, at most once per 10s');
 });
 
 test('mid-stream release switch resumes at the live position, not the one read before the server call', async () => {

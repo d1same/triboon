@@ -987,6 +987,7 @@ class ProviderPool {
   // again, because the load-sort routes new work to the less-loaded peers. Re-pump on the
   // probe cadence until a line is open or the queue is empty.
   _watchParked() {
+    this._watchDialing();
     const parked = !this.closed && this.queue.length > 0 && this.conns.length === 0 && this.connecting === 0;
     if (!parked) {
       if (this._parkedWakeTimer) { clearTimeout(this._parkedWakeTimer); this._parkedWakeTimer = null; }
@@ -999,6 +1000,30 @@ class ProviderPool {
       if (!this.closed) { try { this._pump(); } catch {} }
     }, ms);
     if (this._parkedWakeTimer.unref) this._parkedWakeTimer.unref();
+  }
+
+  // Work queued here while NO line is open and logins are still dialing waits for those logins (a
+  // slow provider takes many seconds), and nothing told the idle lines on other accounts: stealing
+  // ran only when work was queued or when the THIEF pumped. Unraid 08:29: "news-us 0/4 busy;
+  // newshosting 0/0 busy (2 waiting, 1 dialing)" — the picture froze beside 4 idle lines. While
+  // that holds, ask the other accounts' idle lines to take it, on the stuck-check cadence.
+  _watchDialing() {
+    const dialing = !this.closed && this.queue.length > 0 && this.connecting > 0
+      && !this.conns.some((c) => c.alive);
+    if (!dialing) {
+      if (this._dialingTimer) { clearTimeout(this._dialingTimer); this._dialingTimer = null; }
+      return;
+    }
+    if (this._dialingTimer) return;
+    this._dialingTimer = setTimeout(() => {
+      this._dialingTimer = null;
+      if (this.closed) return;
+      try {
+        if (this.household && typeof this.household.nudgeIdle === 'function') this.household.nudgeIdle(this);
+      } catch {}
+      this._watchDialing();
+    }, STUCK_CHECK_MS);
+    if (this._dialingTimer.unref) this._dialingTimer.unref();
   }
 
   _pumpNow() {
@@ -1370,6 +1395,7 @@ class ProviderPool {
     this.closed = true;
     if (this._quietWakeTimer) { clearTimeout(this._quietWakeTimer); this._quietWakeTimer = null; }
     if (this._parkedWakeTimer) { clearTimeout(this._parkedWakeTimer); this._parkedWakeTimer = null; }
+    if (this._dialingTimer) { clearTimeout(this._dialingTimer); this._dialingTimer = null; }
     for (const c of this.conns) c.close();
     this.conns = [];
   }

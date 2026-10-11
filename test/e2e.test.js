@@ -2244,6 +2244,35 @@ test('nntp: an idle line takes waiting work from another account instead of sitt
   }
 });
 
+test('nntp: work queued on an account that is still logging in moves to an idle line elsewhere without any other event', async () => {
+  // Unraid 08:29 (3.3.22): "news-us 0/4 busy; newshosting 0/0 busy (2 waiting, 1 dialing)" — the
+  // picture froze beside 4 idle lines until newshosting's slow login finished.
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false },
+    { host: '127.0.0.2', port: 1, tls: false },
+  ], 4);
+  const [owner, thief] = pool.providers;
+  const idle = { alive: true, owner: null, hold: false, lastUsed: Date.now(), close() { this.alive = false; } };
+  try {
+    thief.conns = [idle];
+    owner.conns = [];
+    owner.connecting = 1; // a login is dialing, nothing is open
+    let ranOn = null;
+    const done = new Promise((resolve) => {
+      owner.queue.push({ viewer: 'me', priority: 'playback', stealable: true, at: Date.now(),
+        fn: (c) => { ranOn = c; return Promise.resolve('ok'); }, resolve, reject: resolve });
+    });
+    owner._watchDialing();
+    const got = await Promise.race([done, new Promise((r) => setTimeout(() => r('timeout'), 1500))]);
+    assert.strictEqual(got, 'ok', 'the waiting piece ran instead of waiting for the slow login');
+    assert.strictEqual(ranOn, idle, 'on the idle line of the other account');
+  } finally {
+    owner.connecting = 0;
+    owner.queue = [];
+    pool.close();
+  }
+});
+
 test('nntp: stolen work that fails on the thief goes back to its own account, and non-body work is never stolen', async () => {
   const pool = new NntpPool([
     { host: '127.0.0.1', port: 1, tls: false },
