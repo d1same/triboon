@@ -128,6 +128,38 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-11, v3.4.1 — An article sitting in the wrong slot (a gap or duplicate in the NZB's list) is never served as video; the release is marked dead and the player switches:
+
+- Shield on 3.4.0 (no freezes now: every health check passed), The Good Doctor S03E20 FLUX 1080p:
+  11:50:17 "Unexpected audio track timestamp discontinuity" (+95 s clock jump at 31:29), then
+  "Invalid integer size: 80/35 {contentIsMalformed}" at 34:00 on EVERY retry, including after a
+  quiet remount to the same position — deterministic wrong bytes at that offset. No RAR/par2 lines:
+  a plain file.
+- vfs maps offsets to articles by grid (`offset / partSize`, partSize from article 0) and never
+  checked the =ypart range each article states. One missing or duplicated `<segment>` in the NZB
+  shifts every later article by a whole piece: sequential reading resyncs (the jump), a seek lands
+  on wrong bytes every time. Now `checkPlaced` rejects a decoded article whose =ypart begin is half a
+  part or more from its slot (code MISPLACED, everyProviderDefinitive -> dead piece -> blocked ->
+  release switch) and logs it once. Normal posts (uniform parts, short last part) are unaffected.
+- The switch at 11:52:55 went to another release (1.7 GB) and it glitched the same way at 11:56:47
+  (+64 s): two releases -> systemic, consistent with a line out of step (the reply for article A
+  handed to the request for B: a valid article, good CRC, wrong content). Two guards: (1) NNTP BODY
+  checks that the "222 0 <id>" reply names the requested article; a mismatch drops the line
+  (NNTP_DESYNC) and the pool retries the piece on a fresh connection. (2) The pool's `verify` rejects
+  a copy whose =ypart range does not fit its slot, so the next account is tried; only when every
+  account returns the same misplaced article (a real NZB gap) does the piece go dead.
+- Tests: an NZB with article 5 removed reads the pieces before the gap correctly and rejects the slot
+  after it with MISPLACED, serving no bytes, and marks the release dead (on 3.4.0 it served the
+  shifted bytes); a BODY reply naming another article throws NNTP_DESYNC and closes the line, a
+  reply naming the right article (or no id) is returned as before.
+- Gate: `npm.cmd test` 908/908. `verify:full` on the QA rig: whitespace, JS syntax, inline script,
+  IPTV/P9, fast VOD/P14, CC/P11, local next episode, full suite, isolated server smoke, household
+  VOD/seek/resume/CC (real fixture releases: the placement/desync guards do not trip on normal
+  posts), household IPTV first-byte + retune, household overlapping Play, Android lint/unit/debug
+  build all PASS. Android stress: only the known `playerAbout` + seek-loop fixture-limit failures.
+- Version contract: `package.json` 3.4.1; Android `versionName` 3.4.1 / `versionCode` 429;
+  Windows client package/Tauri/Cargo(.lock) 3.4.1.
+
 2026-10-11, v3.4.0 — The library auto-scan and the encoder probe no longer freeze the whole server:
 
 - Unraid 3.3.24, 10:36-10:37: Docker health checks timed out 3x in a row ("Health check exceeded

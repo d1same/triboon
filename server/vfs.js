@@ -440,6 +440,11 @@ class NzbFileStream {
       try {
         const dec = decode(raw);
         if (!dec.crcOk || !dec.intact) return false;
+        // A valid article for the WRONG slot (a line out of step, or a gap in the NZB's list) is not
+        // this piece: reject this copy so the next account is tried. If every account hands back the
+        // same misplaced article, the NZB itself is off and the piece is dead for this release.
+        if (i > 0 && dec.part && Number.isFinite(dec.part.begin) && Number(this.partSize) > 0
+            && Math.abs(dec.part.begin - i * this.partSize) >= Math.floor(this.partSize / 2)) return false;
         verified = { raw, dec };
         return true;
       } catch { return false; }
@@ -456,8 +461,30 @@ class NzbFileStream {
       };
     };
     if (priority === 'playback' || priority === 'seek' || priority === 'startup') this._yieldReadAhead(i);
+    // Each article's own =ypart header says which file bytes it holds. Offsets map to articles by
+    // grid (offset / partSize), so one missing or duplicated entry in the NZB's article list shifts
+    // every later article by a whole piece: reading straight on mostly resyncs, but a seek lands on
+    // the wrong bytes every time (Shield, FLUX 1080p: +95 s audio jump at 31:29, then "Invalid
+    // integer size" at 34:00 on every retry). A piece more than half a part away from its slot is
+    // dead for this release, so the player switches release instead of being fed garbage.
+    const checkPlaced = (dec) => {
+      if (i === 0 || !dec || !dec.part || !Number.isFinite(dec.part.begin)) return;
+      const ps = Number(this.partSize) || 0;
+      if (!(ps > 0)) return;
+      const want = i * ps;
+      if (Math.abs(dec.part.begin - want) < Math.floor(ps / 2)) return;
+      const e = new Error(`piece ${i + 1} holds file bytes from ${dec.part.begin}, expected ${want} (the NZB's article list has a gap or a duplicate)`);
+      e.code = 'MISPLACED';
+      e.everyProviderDefinitive = true;
+      if (!this._misplacedLogged) {
+        this._misplacedLogged = true;
+        try { this._troubleLine(e.message); } catch {}
+      }
+      throw e;
+    };
     const decodeAndCache = (raw, skip) => {
       let dec = (skip <= 0 && verified && verified.raw === raw) ? verified.dec : decode(raw, skip > 0 ? { skipDecoded: skip } : undefined);
+      checkPlaced(dec);
       // A mid-segment skip past this article's real decoded size (short last/uneven
       // yEnc part, or a partSize grid that drifted) used to return 0 bytes. Remux
       // then threw "read out of range" and the player froze on Preparing.

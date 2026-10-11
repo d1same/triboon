@@ -551,6 +551,20 @@ class NntpConnection {
       throw err;
     }
     this.served = true;
+    // "222 0 <message-id>" names the article this reply belongs to. A reply for a DIFFERENT article
+    // means the connection is out of step with its command queue (an earlier reply was consumed by
+    // the wrong waiter): every later reply on it is shifted too. Its bytes are a valid article with a
+    // good CRC, just the wrong one — on screen that was blocky video and a jump ahead. Drop the line;
+    // the pool retries the piece once on a fresh connection.
+    const named = /<([^<>\s]+)>/.exec(r.status);
+    const want = String(msgId).replace(/[<>]/g, '');
+    if (named && named[1] !== want) {
+      this.alive = false;
+      try { this.sock.destroy(); } catch {}
+      const err = new Error(`BODY <${want}>: reply was for <${named[1]}> — connection out of step, dropped`);
+      err.code = 'NNTP_DESYNC';
+      throw err;
+    }
     return r.body;
   }
 

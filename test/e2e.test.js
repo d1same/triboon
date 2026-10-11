@@ -1864,6 +1864,52 @@ test('vfs: a stray cancel on a live reader\'s piece is fetched again, not ended 
   assert.strictEqual(strayLeft, 0, 'the stray cancel really happened');
 });
 
+test('nntp: a BODY reply that names a different article drops the out-of-step line instead of returning it', async () => {
+  // Shield on 3.4.0: blocky picture + a jump ahead on two different releases. A reply for article A
+  // handed to the request for article B is a valid article with a good CRC — just the wrong one.
+  const conn = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
+  let destroyed = false;
+  conn.sock = { destroy() { destroyed = true; }, end() {} };
+  conn.alive = true;
+  conn._cmd = async () => ({ status: '222 0 <seg9@triboon.test>', body: Buffer.from('x') });
+  await assert.rejects(() => conn.body('seg4@triboon.test'), (e) => e.code === 'NNTP_DESYNC');
+  assert.strictEqual(conn.alive, false, 'the line is no longer used');
+  assert.ok(destroyed, 'and its socket is closed');
+  const ok = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
+  ok._cmd = async () => ({ status: '222 0 <seg4@triboon.test>', body: Buffer.from('y') });
+  assert.strictEqual(String(await ok.body('<seg4@triboon.test>')), 'y', 'a reply that names the right article is returned');
+  const bare = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
+  bare._cmd = async () => ({ status: '222 body follows', body: Buffer.from('z') });
+  assert.strictEqual(String(await bare.body('seg4@triboon.test')), 'z', 'a server that does not echo the id is trusted as before');
+});
+
+test('vfs: an NZB missing one article entry never feeds the player shifted bytes; the release is marked dead', async () => {
+  // Shield, FLUX 1080p: +95 s audio jump at 31:29, then "Invalid integer size" at 34:00 on every
+  // retry. Offsets map to articles by grid; a gap in the NZB's list shifts every later article.
+  const part = 64 * 1024;
+  const rel = makeRelease('NzbGap.Test.mkv', 8 * part, part);
+  const gapNzb = rel.nzb.replace(/\s*<segment bytes="\d+" number="5">seg5@triboon\.test<\/segment>/, '');
+  assert.notStrictEqual(gapNzb, rel.nzb, 'precondition: article 5 removed from the NZB');
+  const fakePool = {
+    body(msgId) {
+      const raw = rel.articles.get(String(msgId).replace(/[<>]/g, ''));
+      return raw ? Promise.resolve(raw) : Promise.reject(Object.assign(new Error('430'), { code: '430' }));
+    },
+  };
+  const vf = new VirtualFile(fakePool, gapNzb, { readAhead: 0 });
+  await vf.mount();
+  const head = [];
+  for await (const c of vf.read(0, 4 * part, { priority: 'playback' })) head.push(c);
+  assert.ok(Buffer.concat(head).equals(rel.data.subarray(0, 4 * part)), 'the pieces before the gap read correctly');
+  // Slot 4 now holds article 6 (file bytes from 5*part). It must not be served as slot 4.
+  const got = [];
+  await assert.rejects(async () => {
+    for await (const c of vf.read(4 * part + 100, 5 * part, { priority: 'seek' })) got.push(c);
+  }, (e) => e && e.code === 'MISPLACED');
+  assert.strictEqual(got.length, 0, 'no shifted bytes were handed to the player');
+  assert.ok(vf.deadPieceCount() > 0, 'the release is marked dead so the player switches release');
+});
+
 test('vfs: a tail fetch that lands after the whole piece was cached still returns the right bytes', async () => {
   // Shield 10:02: the player got bytes from the wrong offset (MKV element size 335 MB,
   // ArrayIndexOutOfBounds, PARSING_CONTAINER_MALFORMED). read() chose its slice start by "is the
