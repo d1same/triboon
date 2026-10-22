@@ -11,10 +11,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$libMpvArchiveName = 'mpv-dev-lgpl-x86_64-20260916-git-0b7ed670f7.7z'
-$libMpvArchiveUrl = 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-09-16-0b7ed670f7/mpv-dev-lgpl-x86_64-20260916-git-0b7ed670f7.7z'
-$libMpvArchiveSha256 = 'cd369d2e502e140d442f9689bc312f8ec0a4d3d1b6bda7836834035085938e57'
-$libMpvDllSha256 = '5c6ac9a72fefdcd5de885e9f99528e1e9b2f5fc4682725291ff44f685750dbaf'
+$libMpvArchiveName = 'mpv-dev-lgpl-x86_64-20261022-git-00258e4d29.7z'
+$libMpvArchiveUrl = 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-10-22-00258e4d29/mpv-dev-lgpl-x86_64-20261022-git-00258e4d29.7z'
+$libMpvArchiveSha256 = 'fbdebb52f11935d9f18df6de0a34226c9e8409716191afb220b9662b24ef36fe'
+$libMpvDllSha256 = 'c3047da86af09cae91e3cecb0654872a41e3678b8fd9a2813fa8d2094d1cbbd8'
 $rustTarget = 'x86_64-pc-windows-msvc'
 
 $clientRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))

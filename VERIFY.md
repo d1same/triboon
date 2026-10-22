@@ -141,6 +141,15 @@ fails to produce a playable stream. Budgets default to feels-local targets
   and boots clean (`/api/server` ok, `ffmpeg:true`, `subSync:true`).
 - Windows client: Tauri 2.11.5 -> 2.11.6 (GHSA-w28w-mhc8-qvjv, channel-fetch IPC ACL bypass).
   Client Rust tests 35/35 (MSVC, without the player feature; libmpv links in CI).
+- First `v3.4.2` tag CI failed in `windows-client`: zhongfly dropped the Sep 16 LGPL archive
+  (rolling retention, same as v3.1.27). Lock now targets live `2026-10-22-00258e4d29` LGPL x86-64
+  (`fbdebb52f11935d9f18df6de0a34226c9e8409716191afb220b9662b24ef36fe` /
+  DLL `c3047da86af09cae91e3cecb0654872a41e3678b8fd9a2813fa8d2094d1cbbd8`, mpv
+  `00258e4d29ccc286b8f4aeed1e0e346f662d9f88`, builder run 39853671748). The archive hash matched the
+  GitHub asset digest. A local `build-package.ps1` (MSVC, player feature linked) produced the NSIS
+  installer, and its payload check passed (`libmpv-2.dll`, LGPL license, source, notices). Windows
+  GPU is not instrumented. No release or image was published, so the same `v3.4.2` tag is moved onto
+  this fix commit.
 - Checked, no change: yt-dlp 2026.07.04 already has every published advisory fixed; the Jellyfin web
   XSS (GHSA-mqq3-m779-w9qm) needs ExternalUrls, which the door never emits; GitHub Actions are
   SHA-pinned.
