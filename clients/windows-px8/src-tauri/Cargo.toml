@@ -1,6 +1,6 @@
 [package]
 name = "triboon-px8"
-version = "3.4.1"
+version = "3.4.2"
 description = "Triboon native Windows GPU client"
 edition = "2021"
 rust-version = "1.85"
@@ -9,7 +9,7 @@ rust-version = "1.85"
 tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
-tauri = { version = "=2.11.5", features = [] }
+tauri = { version = "=2.11.6", features = [] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 url = "2.5"

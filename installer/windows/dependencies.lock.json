@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "resolvedAt": "2026-07-13",
+  "resolvedAt": "2026-10-22",
   "artifacts": {
     "node": {
-      "version": "v24.18.0",
-      "fileName": "node-v24.18.0-win-x64.zip",
-      "url": "https://nodejs.org/dist/v24.18.0/node-v24.18.0-win-x64.zip",
-      "sha256": "0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821",
-      "checksumSource": "https://nodejs.org/dist/v24.18.0/SHASUMS256.txt"
+      "version": "v24.22.1",
+      "fileName": "node-v24.22.1-win-x64.zip",
+      "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip",
+      "sha256": "d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5",
+      "checksumSource": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt"
     },
     "winsw": {
       "version": "v2.12.0",
@@ -16,11 +16,11 @@
       "sha256": "05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da"
     },
     "ffmpeg": {
-      "version": "8.0.1",
-      "fileName": "ffmpeg-8.0.1-essentials_build.zip",
-      "url": "https://github.com/GyanD/codexffmpeg/releases/download/8.0.1/ffmpeg-8.0.1-essentials_build.zip",
-      "sha256": "e2aaeaa0fdbc397d4794828086424d4aaa2102cef1fb6874f6ffd29c0b88b673",
-      "checksumSource": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-essentials_build.zip.sha256"
+      "version": "8.1.2",
+      "fileName": "ffmpeg-8.1.2-essentials_build.zip",
+      "url": "https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-essentials_build.zip",
+      "sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec",
+      "checksumSource": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip.sha256"
     },
     "ytDlp": {
       "version": "2026.07.04",

@@ -128,6 +128,30 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-22, v3.4.2 — Security refresh of the bundled runtimes (no Triboon code change):
+
+- Owner asked for a security check after a PHP compromise elsewhere. Triboon has no PHP anywhere
+  (server, Windows installer, Docker). Every bundled third-party piece was compared with upstream.
+- Windows server installer: Node v24.18.0 -> v24.22.1. Two Node security releases were missed
+  (24.18.1, 24.22.1): HTTP/2 memory/RST handling, max HTTP header count, TLS identity/IP checks,
+  zlib/brotli, dns. ffmpeg 8.0.1 -> 8.1.2 (CVE-2026-8461, CVE-2026-30999, CVE-2025-67306 and the
+  8.1 fixes; ffmpeg parses untrusted usenet media). Both SHA-256 values were checked against the
+  publisher and the GitHub asset digest, downloaded, and run.
+- Docker/Unraid: `node:24-alpine` digest refreshed. The built image runs Node 24.22.1 + ffmpeg 8.1.2
+  and boots clean (`/api/server` ok, `ffmpeg:true`, `subSync:true`).
+- Windows client: Tauri 2.11.5 -> 2.11.6 (GHSA-w28w-mhc8-qvjv, channel-fetch IPC ACL bypass).
+  Client Rust tests 35/35 (MSVC, without the player feature; libmpv links in CI).
+- Checked, no change: yt-dlp 2026.07.04 already has every published advisory fixed; the Jellyfin web
+  XSS (GHSA-mqq3-m779-w9qm) needs ExternalUrls, which the door never emits; GitHub Actions are
+  SHA-pinned.
+- Gate: `npm.cmd test` 908/908. `verify:full` on the QA rig (fixture titles LOTR 2001 + Stuart Fails
+  to Save the Universe S01E01): whitespace, JS syntax, inline script, IPTV/P9, fast VOD/P14, CC/P11,
+  local next episode, full suite, isolated server smoke, household VOD/seek/resume/CC, household
+  IPTV first-byte + retune, household overlapping Play, Android lint/unit/debug build all PASS.
+  Android stress: only the known `playerAbout` + seek-loop fixture-limit failures.
+- Version contract: `package.json` 3.4.2; Android `versionName` 3.4.2 / `versionCode` 430;
+  Windows client package/Tauri/Cargo(.lock) 3.4.2.
+
 2026-10-11, v3.4.1 — An article sitting in the wrong slot (a gap or duplicate in the NZB's list) is never served as video; the release is marked dead and the player switches:
 
 - Shield on 3.4.0 (no freezes now: every health check passed), The Good Doctor S03E20 FLUX 1080p:
