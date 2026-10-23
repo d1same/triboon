@@ -89,7 +89,10 @@ Always follow the owner's method:
 - Windows client build:
   - Use Rust stable `x86_64-pc-windows-msvc` from a VS 2022 C++ developer shell.
   - Use only the immutable LGPL libmpv URL/SHA in the GitHub workflow; do not
-    resolve a mutable latest asset or substitute a GPL bundle.
+    resolve a mutable latest asset or substitute a GPL bundle. The build tries
+    the Triboon `libmpv-<upstream tag>` mirror prerelease first (zhongfly deletes
+    releases after ~5 weeks); after any repin, run
+    `clients/windows-px8/scripts/mirror-libmpv.ps1` before tagging.
   - Run the client Rust tests with `--features player`, build the NSIS installer,
     and verify the packaged DLL/notices plus the real GPU/live matrix in
     `VERIFY.md`. A requested hwdec mode is not proof of GPU decode.

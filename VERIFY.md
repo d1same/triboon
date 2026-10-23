@@ -128,6 +128,21 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-22, branch `libmpv-mirror` (unreleased) — libmpv pin survives upstream deletion:
+
+- Owner-approved mirror: prerelease `libmpv-2026-10-22-00258e4d29` on `d1same/triboon`, one asset,
+  byte-identical to the pin (SHA-256 `fbdebb52…ef36fe` of both the upstream download and the
+  re-downloaded mirror). `/releases/latest` stayed on v3.4.2.
+- `build-package.ps1` tries the mirror first, then zhongfly. Each download must match the pinned
+  SHA-256 or it is discarded. Proven locally: real mirror used first. With a dead mirror URL, it
+  fell back to upstream, both hashes verified, and the archive extracted.
+- `-CheckLibMpvSources` preflight (CI `test` job before `npm test`, and `verify:full`): passes with
+  both URLs live. With a dead mirror URL it exits 1 and names `mirror-libmpv.ps1`. Windows
+  PowerShell 5.1 only; the Linux pwsh 7 run is first proven by CI.
+- `mirror-libmpv.ps1` rerun against the existing mirror only re-verified it (no replace).
+- `node --test test/windows-px8-player.test.js test/release-contract.test.js` 29/29;
+  `npm.cmd test` 908/908. Full `verify:full` not run (build tooling only; playback unaffected).
+
 2026-10-22, v3.4.2 — Security refresh of the bundled runtimes (no Triboon code change):
 
 - Owner asked for a security check after a PHP compromise elsewhere. Triboon has no PHP anywhere

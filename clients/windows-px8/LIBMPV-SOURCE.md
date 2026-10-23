@@ -9,7 +9,8 @@ DLL with a compatible build.
 | Item | Locked value |
 | --- | --- |
 | Archive | `mpv-dev-lgpl-x86_64-20261022-git-00258e4d29.7z` |
-| Archive URL | `https://github.com/zhongfly/mpv-winbuild/releases/download/2026-10-22-00258e4d29/mpv-dev-lgpl-x86_64-20261022-git-00258e4d29.7z` |
+| Archive URL (Triboon mirror, used first) | `https://github.com/d1same/triboon/releases/download/libmpv-2026-10-22-00258e4d29/mpv-dev-lgpl-x86_64-20261022-git-00258e4d29.7z` |
+| Archive URL (upstream, fallback) | `https://github.com/zhongfly/mpv-winbuild/releases/download/2026-10-22-00258e4d29/mpv-dev-lgpl-x86_64-20261022-git-00258e4d29.7z` |
 | SHA-256 | `fbdebb52f11935d9f18df6de0a34226c9e8409716191afb220b9662b24ef36fe` |
 | `libmpv-2.dll` SHA-256 | `c3047da86af09cae91e3cecb0654872a41e3678b8fd9a2813fa8d2094d1cbbd8` |
 | Release | `https://github.com/zhongfly/mpv-winbuild/releases/tag/2026-10-22-00258e4d29` |
@@ -20,8 +21,21 @@ DLL with a compatible build.
 
 The selected archive is the baseline x86-64 LGPL variant, not the GPL or
 x86-64-v3 variant. Its release records Clang as the compiler. The Triboon
-workflow pins both its immutable URL and SHA-256 and verifies the digest before
+workflow pins both its immutable URLs and SHA-256 and verifies the digest before
 using any file from the archive.
+
+`zhongfly/mpv-winbuild` deletes its releases after about five weeks, so Triboon
+keeps a byte-identical copy of the same archive as the only asset of the
+prerelease `libmpv-2026-10-22-00258e4d29` in `d1same/triboon`. That prerelease
+is never marked latest and is not a Triboon release. The build tries the mirror
+first and the upstream URL second; every copy must match the SHA-256 above.
+
+When repinning: update the archive name, both URLs, and both hashes in
+`scripts/build-package.ps1` and this file, then run
+`scripts/mirror-libmpv.ps1` before tagging. It downloads the upstream archive,
+checks the pinned SHA-256, publishes the mirror prerelease, and re-verifies the
+published bytes. `build-package.ps1 -CheckLibMpvSources` (run by CI and
+`npm run verify:full`) fails in seconds when the mirror URL no longer resolves.
 
 The installer includes the verbatim license text as `LIBMPV-LICENSE.LGPL`.
 mpv's copyright notices and the same LGPL text are also available in the exact

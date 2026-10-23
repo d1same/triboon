@@ -69,6 +69,7 @@ test('release contract: every package verification/release entrypoint exists in 
     ['third-party notices', 'THIRD-PARTY-NOTICES.md'],
     ['Windows dependency lock', 'installer/windows/dependencies.lock.json'],
     ['Windows compiler bootstrap', 'installer/windows/install-inno.ps1'],
+    ['libmpv mirror publisher', 'clients/windows-px8/scripts/mirror-libmpv.ps1'],
   ];
   for (const [name, rel] of required) {
     assert.ok(fs.existsSync(path.join(root, rel)), `${name} entrypoint is tracked: ${rel}`);
@@ -305,8 +306,43 @@ test('release contract: tag artifacts publish only after provenance and native g
     assert.equal(match[1].replace(/['"]/g, ''), 'platform-tools',
       'Android SDK setup must not install the removed legacy tools package');
   }
-  assert.match(windowsPackage, /\$libMpvArchiveUrl = 'https:\/\/github\.com\/zhongfly\/mpv-winbuild\/releases\/download\/[^']+\/mpv-dev-lgpl-x86_64-[^']+\.7z'/,
-    'the production libmpv bundle uses an immutable LGPL release URL');
+  const archiveName = /\$libMpvArchiveName = '(mpv-dev-lgpl-x86_64-[^']+\.7z)'/.exec(windowsPackage);
+  assert.ok(archiveName, 'the production libmpv bundle pins one LGPL archive name');
+  const urlList = /\$libMpvArchiveUrls = @\(([^)]*)\)/.exec(windowsPackage);
+  assert.ok(urlList, 'the libmpv archive has an ordered list of immutable source URLs');
+  const libMpvUrls = [...urlList[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.equal(libMpvUrls.length, 2, 'libmpv sources are exactly the Triboon mirror and the upstream release');
+  const mirror = /^https:\/\/github\.com\/d1same\/triboon\/releases\/download\/libmpv-([^/]+)\/([^/]+)$/.exec(libMpvUrls[0]);
+  const upstream = /^https:\/\/github\.com\/zhongfly\/mpv-winbuild\/releases\/download\/([^/]+)\/([^/]+)$/.exec(libMpvUrls[1]);
+  assert.ok(mirror, 'the first libmpv source is the Triboon libmpv-<tag> mirror, which survives upstream deletion');
+  assert.ok(upstream, 'the fallback libmpv source is the immutable zhongfly LGPL release');
+  assert.equal(mirror[1], upstream[1], 'the mirror tag is libmpv-<upstream release tag>');
+  assert.equal(mirror[2], archiveName[1], 'the mirror serves the pinned archive name');
+  assert.equal(upstream[2], archiveName[1], 'the upstream URL serves the pinned archive name');
+  assert.match(windowsPackage, /foreach \(\$url in \$libMpvArchiveUrls\) \{\s+Write-Host "Downloading[^\n]+\s+try \{\s+Invoke-WebRequest -UseBasicParsing -Uri \$url -OutFile \$partialPath[\s\S]+?if \(Test-Sha256 -Path \$partialPath -Expected \$libMpvArchiveSha256\) \{\s+Move-Item -LiteralPath \$partialPath -Destination \$archivePath/,
+    'each libmpv source is downloaded to a partial file and kept only when it matches the pinned SHA-256');
+  assert.match(windowsPackage, /if \(\$CheckLibMpvSources\) \{[\s\S]+?-Method Head -Uri \$url[\s\S]+?\$reachable -notcontains \$libMpvArchiveUrls\[0\][\s\S]+?throw "The Triboon libmpv mirror is missing[^"]+mirror-libmpv\.ps1[^"]+"\s+\}\s+return\s+\}/,
+    'the libmpv preflight fails clearly when the mirror is gone and names the publish script');
+  assert.ok(windowsPackage.indexOf('if ($CheckLibMpvSources)') < windowsPackage.indexOf('$clientRoot ='),
+    'the preflight runs before any Windows-only path setup, so it works on the Linux test runner');
+  const testJob = workflow.slice(workflow.indexOf('\n  test:'), workflow.indexOf('\n  android:'));
+  assert.match(testJob, /shell: pwsh\s+run: \.\/clients\/windows-px8\/scripts\/build-package\.ps1 -CheckLibMpvSources[\s\S]+run: npm test/,
+    'CI checks the libmpv mirror in seconds, before the Node suite and every release job');
+  assert.match(read('bench/verify-before-update.ps1'), /Invoke-Gate "Windows libmpv pin sources resolve" \{\s+& powershell[^\n]+build-package\.ps1 -CheckLibMpvSources\s+Assert-ExitCode/,
+    'verify:full catches a deleted libmpv mirror before anyone tags');
+  const mirrorScript = read('clients/windows-px8/scripts/mirror-libmpv.ps1');
+  assert.match(mirrorScript, /Join-Path \$PSScriptRoot 'build-package\.ps1'/,
+    'the mirror publisher reads the pins from the build recipe instead of keeping a second copy');
+  assert.match(mirrorScript, /& \$gh release create \$mirrorTag \$archivePath --repo \$Repository --prerelease --latest=false/,
+    'the mirror is a prerelease that never becomes /releases/latest for the app updaters');
+  assert.match(mirrorScript, /\$mirrorTag -cne "libmpv-/,
+    'mirror tags start with libmpv-, so they never match the v* release trigger');
+  assert.ok(mirrorScript.indexOf('if (-not (Test-Archive $archivePath))') < mirrorScript.indexOf('release create'),
+    'the mirror publisher checks the pinned SHA-256 before uploading');
+  assert.match(mirrorScript, /Invoke-WebRequest -UseBasicParsing -Uri \$urls\[0\] -OutFile \$verifyPath\s+if \(-not \(Test-Archive \$verifyPath\)\)/,
+    'the mirror publisher re-downloads and hash-checks the published asset');
+  assert.doesNotMatch(mirrorScript, /--clobber|release delete|releases\/latest/,
+    'the mirror publisher never replaces or deletes an existing mirror');
   assert.match(windowsPackage, /\$libMpvArchiveSha256 = '[0-9a-f]{64}'/,
     'the production libmpv bundle pins a reviewed SHA-256');
   assert.match(windowsPackage, /\$libMpvDllSha256 = '[0-9a-f]{64}'/,

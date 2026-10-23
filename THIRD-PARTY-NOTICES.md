@@ -48,7 +48,8 @@ for Triboon.
 
 Triboon for Windows dynamically loads `libmpv-2.dll` from the unmodified
 `mpv-dev-lgpl-x86_64-20261022-git-00258e4d29` package published by
-`zhongfly/mpv-winbuild`. The archive URL and SHA-256 are locked in CI. The
+`zhongfly/mpv-winbuild`. The archive URLs (a byte-identical Triboon mirror
+first, then upstream) and SHA-256 are locked in CI. The
 selected package is the LGPL x86-64 build; Triboon does not statically link it
 or prevent replacement with an ABI-compatible DLL.
 

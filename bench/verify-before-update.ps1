@@ -136,6 +136,11 @@ Invoke-Gate "git diff whitespace" {
   Assert-ExitCode "git diff --check HEAD"
 }
 
+Invoke-Gate "Windows libmpv pin sources resolve" {
+  & powershell -NoProfile -ExecutionPolicy Bypass -File clients/windows-px8/scripts/build-package.ps1 -CheckLibMpvSources
+  Assert-ExitCode "build-package.ps1 -CheckLibMpvSources"
+}
+
 Invoke-Gate "tracked JavaScript syntax" {
   $files = & git ls-files | Where-Object { $_ -match "\.js$" -and $_ -notmatch "^graphify-out/" }
   foreach ($file in $files) {

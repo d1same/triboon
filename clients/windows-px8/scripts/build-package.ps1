@@ -4,7 +4,8 @@ param(
     [string]$ArtifactDirectory,
     [string]$Tag,
     [switch]$SkipTests,
-    [switch]$SkipNpmInstall
+    [switch]$SkipNpmInstall,
+    [switch]$CheckLibMpvSources
 )
 
 Set-StrictMode -Version Latest
@@ -12,10 +13,35 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $libMpvArchiveName = 'mpv-dev-lgpl-x86_64-20261022-git-00258e4d29.7z'
-$libMpvArchiveUrl = 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-10-22-00258e4d29/mpv-dev-lgpl-x86_64-20261022-git-00258e4d29.7z'
+# Tried in order; every copy must match the same archive SHA-256. The first URL is Triboon's own
+# immutable mirror (prerelease `libmpv-<upstream tag>`, never "latest") because zhongfly deletes its
+# releases after about five weeks. When repinning, run scripts/mirror-libmpv.ps1 before tagging.
+$libMpvArchiveUrls = @(
+    'https://github.com/d1same/triboon/releases/download/libmpv-2026-10-22-00258e4d29/mpv-dev-lgpl-x86_64-20261022-git-00258e4d29.7z',
+    'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-10-22-00258e4d29/mpv-dev-lgpl-x86_64-20261022-git-00258e4d29.7z'
+)
 $libMpvArchiveSha256 = 'fbdebb52f11935d9f18df6de0a34226c9e8409716191afb220b9662b24ef36fe'
 $libMpvDllSha256 = 'c3047da86af09cae91e3cecb0654872a41e3678b8fd9a2813fa8d2094d1cbbd8'
 $rustTarget = 'x86_64-pc-windows-msvc'
+
+if ($CheckLibMpvSources) {
+    # Seconds-long preflight for CI and verify:full: a deleted pin should fail here with the fix
+    # in the message, not 20 minutes into a release build.
+    $reachable = @()
+    foreach ($url in $libMpvArchiveUrls) {
+        try {
+            Invoke-WebRequest -UseBasicParsing -Method Head -Uri $url | Out-Null
+            Write-Host "libmpv source OK: $url"
+            $reachable += $url
+        } catch {
+            Write-Warning "libmpv source unreachable: $url ($($_.Exception.Message))"
+        }
+    }
+    if ($reachable -notcontains $libMpvArchiveUrls[0]) {
+        throw "The Triboon libmpv mirror is missing: $($libMpvArchiveUrls[0]). While the upstream archive still exists, run clients/windows-px8/scripts/mirror-libmpv.ps1 to publish it; otherwise repin to a live upstream build (see LIBMPV-SOURCE.md)."
+    }
+    return
+}
 
 $clientRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $clientRoot '..\..'))
@@ -181,8 +207,25 @@ function Get-LockedLibMpv {
             Write-Warning 'Discarding a cached libmpv archive whose SHA-256 does not match the lock.'
             Remove-Item -LiteralPath $archivePath -Force
         }
-        Write-Host "Downloading locked libmpv bundle from $libMpvArchiveUrl"
-        Invoke-WebRequest -UseBasicParsing -Uri $libMpvArchiveUrl -OutFile $archivePath
+        $partialPath = "$archivePath.partial"
+        foreach ($url in $libMpvArchiveUrls) {
+            Write-Host "Downloading locked libmpv bundle from $url"
+            try {
+                Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $partialPath
+            } catch {
+                Write-Warning "libmpv download failed from ${url}: $($_.Exception.Message)"
+                continue
+            }
+            if (Test-Sha256 -Path $partialPath -Expected $libMpvArchiveSha256) {
+                Move-Item -LiteralPath $partialPath -Destination $archivePath -Force
+                break
+            }
+            Write-Warning "Discarding libmpv archive from $url because its SHA-256 does not match the lock."
+        }
+        Remove-Item -LiteralPath $partialPath -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+            throw "No libmpv source served the locked archive (SHA-256 $libMpvArchiveSha256). Tried: $($libMpvArchiveUrls -join ', ')"
+        }
     }
     Assert-Sha256 -Path $archivePath -Expected $libMpvArchiveSha256 -Label 'libmpv archive'
 

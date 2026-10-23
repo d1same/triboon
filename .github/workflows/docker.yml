@@ -24,6 +24,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+      # Seconds-long preflight: the pinned LGPL libmpv mirror must still resolve, so a deleted pin fails
+      # here with the fix in the message instead of deep inside the windows-client build.
+      - name: Check the pinned libmpv sources
+        shell: pwsh
+        run: ./clients/windows-px8/scripts/build-package.ps1 -CheckLibMpvSources
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
