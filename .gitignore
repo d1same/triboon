@@ -38,6 +38,7 @@ bench/*
 !bench/windows-client-smoke-server.js
 !bench/android-qa-fixture-server.js
 !bench/soak-4k.mjs
+!bench/iptv-warm-stall.js
 docs-release-audit.md
 
 # Android: machine-local SDK path, build outputs, gradle caches, built APKs, signing keys.
