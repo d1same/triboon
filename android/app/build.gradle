@@ -79,7 +79,7 @@ dependencies {
     // absent (helps the server remux path), and a 100ms audio-underrun debounce that stops
     // spurious "buffering" flickers. No API breaks from 1.10.x for our usage.
     def media3Version = "1.11.0"
-    compileOnly "androidx.annotation:annotation:1.9.1"
+    compileOnly "androidx.annotation:annotation:1.11.0"
     implementation "androidx.core:core:1.13.1" // FileProvider for the in-app self-update installer
     implementation "androidx.media3:media3-exoplayer:$media3Version"
     implementation "androidx.media3:media3-exoplayer-hls:$media3Version"
