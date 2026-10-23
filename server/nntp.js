@@ -1366,7 +1366,16 @@ class ProviderPool {
       // Judge the bytes HERE, on the account that fetched them. A copy fetched by an idle line of
       // another account (a steal) that fails the check must go back to its owner and be tried there,
       // not be blamed on the owner and tip two accounts into "corrupt on every provider".
-      if (typeof opts.verify === 'function' && !opts.verify(buf, this)) throw corruptArticleError(this, msgId);
+      if (typeof opts.verify === 'function') {
+        const v = opts.verify(buf, this);
+        if (!v || v === 'misplaced') {
+          // 'misplaced' = a good article for ANOTHER slot. Providers whose 222 reply names no
+          // message-id slip past the NNTP_DESYNC check, so an out-of-step line kept handing out its
+          // neighbours' articles. Drop that line; a CRC-bad copy leaves the socket alone.
+          if (v === 'misplaced' && c) { c.alive = false; try { c.sock.destroy(); } catch {} }
+          throw corruptArticleError(this, msgId);
+        }
+      }
       return buf;
     }, priority, { ...opts, stealable: true, msgId });
   }
@@ -1945,21 +1954,21 @@ class NntpPool {
     // double-fetch): a 430/connection error advances immediately to the next provider.
     if (ordered.length === 1 || !HEDGE_PRIORITIES.has(priority)) {
       let lastErr;
-      let failures = 0, definitive = 0, corruptErr = null;
+      let failures = 0, definitive = 0, corrupt = 0, knownMisses = 0, corruptErr = null;
       const corruptHosts = new Set();
       for (const p of ordered) {
-        if (this.missCache.has(p, msgId)) continue;
+        if (this.missCache.has(p, msgId)) { knownMisses++; continue; }
         try { return await this._verifiedBody(p, msgId, priority, opts); }
         catch (e) {
           if (isAbortError(e)) throw e;
           if (isDefinitiveMiss(e)) this.missCache.mark(p, msgId);
-          if (isCorruptArticle(e)) { corruptHosts.add(providerHostKey(p)); corruptErr = e; }
+          if (isCorruptArticle(e)) { corruptHosts.add(providerHostKey(p)); corruptErr = e; corrupt++; }
           failures++;
           if (isDefinitiveFailure(e)) definitive++;
           lastErr = e;
         }
       }
-      throw this._finalBodyError(lastErr, failures, definitive, corruptHosts.size, corruptErr);
+      throw this._finalBodyError(lastErr, failures, definitive, corruptHosts.size, corruptErr, corrupt, knownMisses);
     }
     return this._hedgedBody(ordered, msgId, priority, opts);
   }
@@ -1977,9 +1986,17 @@ class NntpPool {
   // the next account may have the real bytes. Two different accounts that both returned a
   // corrupt copy means the article itself is bad (same message-id on Newshosting and Eweka).
   // A third account that only timed out must not keep that file on screen.
-  _finalBodyError(lastErr, failures, definitive, corruptProviders = 0, corruptErr = null) {
+  //
+  // One account's bad copy alone is not "every provider": the other accounts may only have been
+  // skipped because their lines were busy or logged out. That lone copy (a cut-off article, or an
+  // out-of-step line handing back a neighbour's article) used to mark the piece dead and switch a
+  // healthy release mid-episode (Unraid 2026-10-22, The Good Doctor: NTb at 3:40, then FLUX at 4:40,
+  // with every line busy). The read fails this once and the retry asks again on a fresh line.
+  _finalBodyError(lastErr, failures, definitive, corruptProviders = 0, corruptErr = null, corrupt = 0, knownMisses = 0) {
     const e = (corruptProviders >= 2 && corruptErr) ? corruptErr : (lastErr || new Error('no usenet provider could serve the article'));
-    if (failures > 0 && definitive === failures) e.everyProviderDefinitive = true;
+    const loneCorrupt = corrupt > 0 && corrupt === failures && corruptProviders < 2 && knownMisses === 0
+      && new Set(this.providers.map(providerHostKey)).size > 1;
+    if (failures > 0 && definitive === failures && !loneCorrupt) e.everyProviderDefinitive = true;
     if (corruptProviders >= 2) {
       e.everyProviderDefinitive = true;
       e.corruptProviders = corruptProviders;
@@ -1998,9 +2015,9 @@ class NntpPool {
     return new Promise((resolve, reject) => {
       if (signalAborted(external)) return reject(abortError());
       let idx = 0, pending = 0, settled = false, lastErr = null, hedgeTimer = null;
-      let failures = 0, definitive = 0, corruptErr = null;
+      let failures = 0, definitive = 0, corrupt = 0, knownMisses = 0, corruptErr = null;
       const corruptHosts = new Set();
-      const giveUp = () => settle(() => reject(this._finalBodyError(lastErr, failures, definitive, corruptHosts.size, corruptErr)));
+      const giveUp = () => settle(() => reject(this._finalBodyError(lastErr, failures, definitive, corruptHosts.size, corruptErr, corrupt, knownMisses)));
       const controllers = [];
       let extCleanup = () => {};
       const clearHedge = () => { if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; } };
@@ -2027,7 +2044,7 @@ class NntpPool {
         && !(typeof p.hasLiveSocket === 'function' && p.hasLiveSocket());
       const startNext = (allowNewLogin = true) => {
         if (settled) return;
-        while (idx < ordered.length && this.missCache.has(ordered[idx], msgId)) idx++;
+        while (idx < ordered.length && this.missCache.has(ordered[idx], msgId)) { idx++; knownMisses++; }
         while (idx < ordered.length && quietWithNoLine(ordered[idx])) idx++;
         if (!allowNewLogin) {
           while (idx < ordered.length && !(ordered[idx].conns || []).some((c) => c.alive)) idx++;
@@ -2048,7 +2065,7 @@ class NntpPool {
             if (ac.signal.aborted && isAbortError(e)) return; // a loser we aborted on success — ignore
             if (isAbortError(e) && signalAborted(external)) return settle(() => reject(e));
             if (isDefinitiveMiss(e)) this.missCache.mark(p, msgId);
-            if (isCorruptArticle(e)) { corruptHosts.add(providerHostKey(p)); corruptErr = e; }
+            if (isCorruptArticle(e)) { corruptHosts.add(providerHostKey(p)); corruptErr = e; corrupt++; }
             failures++;
             if (isDefinitiveFailure(e)) definitive++;
             lastErr = e;

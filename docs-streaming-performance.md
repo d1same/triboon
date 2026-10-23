@@ -260,6 +260,7 @@ Rules:
 - startup and seek work must beat queued read-ahead,
 - active playback bytes must beat health checks,
 - health checks must beat background read-ahead,
+- a background prepare (warm-up) mounting beside a viewer uses the background lane,
 - read-ahead may grow only when capacity exists,
 - cancelled readers must remove queued read-ahead immediately; a running BODY
   with no remaining reader is DRAINED, not killed (see below).
@@ -514,7 +515,13 @@ and background `/api/prepare` wait behind those Plays, and a lone Play still
 uses leftover slots to skip dead top picks. While anyone is watching, at most ONE
 background prepare holds a startup slot at a time (the rest queue and wake within 2 s of
 the last viewer stopping); a pressed Play still preempts it. Unraid 3.3.16 ran ~15 Continue
-Watching prepares back to back beside one stream with the event loop CPU-bound. Fast home/card focus still uses cheap `/api/search` warming only;
+Watching prepares back to back beside one stream with the event loop CPU-bound. That one
+prepare also stands aside on the wire: while someone else is watching and only background
+prepares hold the mount, its header/sidecar BODYs ride the `background` lane instead of
+`startup`/`playback` (`NzbFileStream` `startupLane`), so a guess never outranks a viewer's
+playback or read-ahead bytes (Unraid 3.4.1: six warm-ups after a restart, every line busy and five
+player reads waiting at 3:40). A Play that joins the prepare lifts later fetches back to
+`startup`; a yielded prepare that hits the mount deadline records no verdict. Fast home/card focus still uses cheap `/api/search` warming only;
 it does not mount every title the user scrolls past.
 
 TV playback applies the same rule late, not at episode start: once the exact

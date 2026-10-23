@@ -190,7 +190,7 @@ class Auth {
         }
       } else {
         const value = crypto.randomBytes(32).toString('hex');
-        store.write('secret', { value }); store.flush();
+        store.write('secret', { value }); store.flush(['secret']);
         this.secret = value;                           // fresh install
       }
     }
@@ -704,7 +704,7 @@ class SecureSettings {
   }
   set(settings) {
     this.store.write('settings', this._encrypt(settings));
-    this.store.flush();
+    this.store.flush(['settings']);
     return settings;
   }
   update(mutator) { return this.set(mutator(this.get())); }

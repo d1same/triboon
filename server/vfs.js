@@ -134,7 +134,7 @@ function priorityRank(priority) {
 class NzbFileStream {
   constructor(pool, fileEntry, {
     readAhead = 4, cacheSegments = 24, cacheBytes = DEFAULT_CACHE_BYTES, signal = null,
-    abortDrainMs = ABORT_DRAIN_MS, viewerId = null,
+    abortDrainMs = ABORT_DRAIN_MS, viewerId = null, startupLane = null,
   } = {}) {
     this.pool = pool;
     this.file = fileEntry;
@@ -163,6 +163,11 @@ class NzbFileStream {
     // stalled startup BODY cannot keep an NNTP connection at startup priority until the 30s mount
     // deadline. Normal playback reads deliberately do not inherit this signal.
     this.mountSignal = signal;
+    // A background warm-up (Continue Watching / details prepare) mounts while someone else watches.
+    // Its header reads asked for the startup lane, ahead of that viewer's playback bytes: on Unraid
+    // six warm-ups after a restart left every line busy and 5 player reads waiting (Good Doctor,
+    // 3:40). The owner decides per fetch which lane "startup" really means for this mount.
+    this.startupLane = typeof startupLane === 'function' ? startupLane : null;
     this.abortDrainMs = abortDrainMs;
     this.readAheadEpoch = 0;
     this.health = { verdict: 'unverified', checkedAt: null, missing: 0, sampled: 0 };
@@ -420,8 +425,18 @@ class NzbFileStream {
     return this._fetchSegmentNet(i, priority, opts);
   }
 
+  // Mount-time reads ask for startup (headers) or playback (a small par2/sidecar read whole). For a
+  // warm-up standing aside, both drop to the lane its owner names; anything lower is left alone.
+  _laneFor(priority) {
+    if ((priority !== 'startup' && priority !== 'playback') || !this.startupLane) return priority;
+    let lane = 'startup';
+    try { lane = this.startupLane() || 'startup'; } catch {}
+    return lane === 'startup' ? priority : lane;
+  }
+
   _fetchSegmentNet(i, priority = 'playback', opts = {}) {
     if (this.cache.has(i)) return Promise.resolve(this.cache.get(i));
+    priority = this._laneFor(priority);
     const signal = opts.signal || null;
     if (signalAborted(signal)) return Promise.reject(abortError());
     const skipDecoded = Math.max(0, Math.floor(Number(opts.skipDecoded) || 0));
@@ -444,7 +459,7 @@ class NzbFileStream {
         // this piece: reject this copy so the next account is tried. If every account hands back the
         // same misplaced article, the NZB itself is off and the piece is dead for this release.
         if (i > 0 && dec.part && Number.isFinite(dec.part.begin) && Number(this.partSize) > 0
-            && Math.abs(dec.part.begin - i * this.partSize) >= Math.floor(this.partSize / 2)) return false;
+            && Math.abs(dec.part.begin - i * this.partSize) >= Math.floor(this.partSize / 2)) return 'misplaced';
         verified = { raw, dec };
         return true;
       } catch { return false; }

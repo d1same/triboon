@@ -92,7 +92,7 @@ class Trakt {
       },
     }));
     this.store.write('trakt', {});
-    this.store.flush();
+    this.store.flush(['trakt']);
     return merged;
   }
   _outbox() { return this.store.read('traktOutbox', {}); }
@@ -102,7 +102,7 @@ class Trakt {
       this.updateSettings((s) => ({ ...s, traktTokens: next }));
     } else {
       this.store.write('trakt', next);
-      this.store.flush();
+      this.store.flush(['trakt']);
     }
   }
   _saveToken(uid, tok) {

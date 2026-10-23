@@ -128,6 +128,42 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-23, v3.4.3 — Buffering on Unraid (owner log 2026-10-22/23, server v3.4.1): one bad copy no longer switches a healthy release, warm-ups stand aside for a viewer, and a settings save no longer writes the big guide tables on the video thread:
+
+- The Good Doctor S05E03: NTb "source health blocked" at 3:40 (lines: news-us 3/3 busy, 5 waiting;
+  secure-us/newshosting/eweka 1/1 busy), then FLUX at 4:40. The owner's paste only had issue/play
+  lines (no "holds file bytes", "unreadable on every provider", 430 or DESYNC lines), so the exact
+  dead-piece reason is UNVERIFIED. From the code: `_finalBodyError` marked a piece dead when every
+  provider *asked* failed definitively, so ONE account's corrupt/misplaced copy with the others only
+  skipped (no free line / refusing logins) counted as "every provider" and blocked the release. Now a
+  lone corrupt copy from one host is a retry unless another host is known to 430 it, or two hosts both
+  return bad copies (unchanged). The uneven-=ypart theory was not confirmed and the grid is unchanged.
+- A valid article for another slot ('misplaced' from `verify`) now drops that line: providers whose
+  222 reply names no message-id slipped past the 3.4.1 NNTP_DESYNC check.
+- Warm-ups: after the 16:53 restart six Continue Watching prepares ran beside the play. Their mount
+  BODYs asked for the `startup` lane, above the viewer's `playback`/read-ahead. While someone else
+  watches and only prepares hold the mount, its header/sidecar reads now ride `background`
+  (`NzbFileStream` `startupLane`). A Play joining a yielded warm-up cancels it and mounts on
+  `startup` (found by the existing pickKey test: a queued background BODY otherwise held the joined
+  Play for the 30 s mount deadline). A yielded warm-up that times out records no verdict.
+- Event loop (07:47 "max 4504 ms" with one stream; 11:05 two Jellyfin requests at 3.9 s just before
+  `[iptv] warmed 9004 channels + XMLTV`): every settings save (Trakt `markSynced`, YTM issue clear,
+  token refresh) called a synchronous `store.flush()` of EVERY dirty table, and the guide/lineup
+  tables sit dirty for up to 30 s after a warm. Settings/secret/trakt saves now flush only their own
+  table. `bench/iptv-warm-stall.js` (9,004 channels, 128 MB-cap XMLTV, 50 programmes/channel) on the
+  dev PC: warm's longest loop block 83-89 ms; the old full flush of 14.5 MB of cache tables 60-61 ms
+  vs 0.1 ms scoped. The full 3.9-4.5 s on Unraid is NOT reproduced here (slower CPU/disk unproven).
+  New: a busy window during playback samples the main thread for 20 s with the built-in inspector
+  (once per 15 min, `TRIBOON_BUSY_PROFILE=0` off) and logs "server busy: busiest code over 20s — …".
+- Tests (each fails on 3.4.2): lone bad copy with the other account skipped is not definitive (and
+  is with a known 430 elsewhere); the mount stays unblocked and the retry reads the piece; a misplaced
+  copy drops the line and the next account serves; warm-up mount reads use the owner's lane; a CW
+  prepare beside a viewer issues no startup/playback/seek BODY; scoped settings flush; CPU profile
+  summary.
+- Gate: GATE_PENDING
+- Version contract: `package.json` 3.4.3; Android `versionName` 3.4.3 / `versionCode` 431;
+  Windows client package/Tauri/Cargo(.lock) 3.4.3.
+
 2026-10-22, branch `libmpv-mirror` (unreleased) — libmpv pin survives upstream deletion:
 
 - Owner-approved mirror: prerelease `libmpv-2026-10-22-00258e4d29` on `d1same/triboon`, one asset,

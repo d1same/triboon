@@ -3019,6 +3019,14 @@ class Pipeline {
       if (this.prepareInflight.get(identity) === record) this.prepareInflight.delete(identity);
       record = null;
     }
+    // A warm-up that stood aside for a viewer has BODYs parked on the background lane, and the
+    // pool never re-ranks a queued request: a Play joining it waited out the 30 s mount deadline.
+    // Cancel the guess (queued work leaves the queue, on-wire articles drain) and mount on startup.
+    if (record && !record.settled && record.preemptible && record.yielded && mountOpts.startupPriority !== 'prepare') {
+      try { record.controller.abort(); } catch {}
+      if (this.prepareInflight.get(identity) === record) this.prepareInflight.delete(identity);
+      record = null;
+    }
     if (!record) {
       const controller = new AbortController();
       record = { controller, consumers: 0, settled: false, promise: null, preemptible: mountOpts.startupPriority === 'prepare' };
@@ -3028,6 +3036,15 @@ class Pipeline {
         ...mountOpts,
         signal: controller.signal,
         preempt: () => { if (record.preemptible && !record.settled) controller.abort(); },
+        // While only background prepares hold this mount and someone else is watching, its BODYs
+        // ride the background lane: a guess must never outrank a viewer's playback or read-ahead.
+        // A Play that joins (preemptible goes false) lifts every later fetch back to startup.
+        startupLane: () => {
+          if (!record.preemptible || record.settled || !this._hasActiveForeignPlayback()) return 'startup';
+          record.yielded = true;
+          return 'background';
+        },
+        yieldedToViewer: () => record.yielded === true,
       };
       record.promise = Promise.resolve()
         .then(() => this._tryCandidateFresh(candidate, runOpts))
@@ -3232,6 +3249,11 @@ class Pipeline {
       // Losing a hedge is scheduling, not source health or a mount failure. The caller already
       // detached this consumer; do not demote a healthy-but-slower release or skew failure metrics.
       if (cancelled) return { fail: 'cancelled: source race loser' };
+      // A warm-up that stood aside for a viewer and ran out of time says nothing about the release.
+      if (/mount timeout/i.test(String(e && e.message || ''))
+          && typeof mountOpts.yieldedToViewer === 'function' && mountOpts.yieldedToViewer()) {
+        return { fail: 'mount: warm-up waited behind a playing stream' };
+      }
       this.metrics.mountFailures++;
       this.metrics.mountMs += mountMs;
       this.metrics.mountMaxMs = Math.max(this.metrics.mountMaxMs, mountMs);

@@ -71,4 +71,28 @@ function fail(scope, msg) {
   try { console.error(`[fail:${tag}] ${clock()} ${text}${extra}`); } catch {}
 }
 
-module.exports = { bindSettings, envForced, enabled, log, issue, fail, redact };
+// A V8 CPU profile (inspector Profiler.stop) reduced to the few functions that held the thread,
+// by self time: "fn file:line pct". (idle), (program) and (root) are not code and are skipped.
+function summarizeCpuProfile(profile, top = 4) {
+  const nodes = (profile && Array.isArray(profile.nodes)) ? profile.nodes : [];
+  const samples = (profile && Array.isArray(profile.samples)) ? profile.samples.length : 0;
+  if (!nodes.length || !samples) return [];
+  const byFn = new Map();
+  let total = 0;
+  for (const n of nodes) {
+    const hits = Number(n.hitCount) || 0;
+    total += hits;
+    const cf = n.callFrame || {};
+    const fn = cf.functionName || '(anonymous)';
+    if (fn === '(idle)' || fn === '(program)' || fn === '(root)') continue;
+    const file = String(cf.url || '').replace(/^file:\/\//, '').split(/[\\/]/).slice(-2).join('/');
+    const key = file ? `${fn} ${file}:${(Number(cf.lineNumber) || 0) + 1}` : fn;
+    byFn.set(key, (byFn.get(key) || 0) + hits);
+  }
+  if (!total) return [];
+  return [...byFn.entries()].sort((a, b) => b[1] - a[1]).slice(0, top)
+    .map(([key, hits]) => ({ fn: key, pct: Math.round((hits / total) * 100) }))
+    .filter((t) => t.pct > 0);
+}
+
+module.exports = { bindSettings, envForced, enabled, log, issue, fail, redact, summarizeCpuProfile };

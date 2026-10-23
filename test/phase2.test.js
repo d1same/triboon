@@ -6954,3 +6954,207 @@ test('startup gate: a prepare parked by the cap wakes up on its own when the vie
   assert.ok(got, 'the drain timer admitted it without any other event');
   got.release();
 });
+
+// v3.4.3 (Unraid 2026-10-22, The Good Doctor S05E03): NTb went "source health blocked" at 3:40 and
+// FLUX at 4:40 while every line was busy. One account's bad copy, with the other account only
+// skipped (no free line / not logged in), counted as "every provider said no" and killed the piece.
+function quietAccount(pool) {
+  const quiet = pool.providers[1];
+  quiet.refusingNewLogins = () => true;
+  quiet.hasLiveSocket = () => false;
+  pool._ordered = () => [pool.providers[0], quiet];
+  return quiet;
+}
+
+test('nntp: one account\'s bad copy while the other account was only skipped does not kill the piece', async () => {
+  const payload = seededPayload(24 * 1024, 0x343);
+  const r = nzbFor(writeRar4Store([{ name: 'lone.mkv', data: payload }], { base: 'lone' }), 30000, 'lone');
+  const id = [...r.articles.keys()][0];
+  const good = r.articles.get(id);
+  const bad = Buffer.from(good); bad[Math.floor(bad.length / 2)] ^= 0x01;
+  const p0 = createMockNntp({ articles: new Map([[id, bad]]) });
+  const p1 = createMockNntp({ articles: r.articles });
+  const port0 = await p0.listen();
+  const port1 = await p1.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: port0, tls: false },
+    { host: 'localhost', port: port1, tls: false },
+  ], 2);
+  try {
+    const verify = (raw) => raw.equals(good);
+    const quiet = quietAccount(pool); // account 2 has no line and refuses new logins right now
+    await assert.rejects(() => pool.body(id, 'playback', { verify }),
+      (e) => e.code === 'CORRUPT_ARTICLE' && !e.everyProviderDefinitive,
+      'a lone bad copy is a retry, not a dead piece');
+    // Once account 2 is known to 430 the article, nobody has a good copy: dead for real.
+    pool.missCache.mark(quiet, id);
+    await assert.rejects(() => pool.body(id, 'playback', { verify }),
+      (e) => e.code === 'CORRUPT_ARTICLE' && e.everyProviderDefinitive === true,
+      'bad copy + a known 430 elsewhere is still definitive');
+  } finally { pool.close(); await p0.close(); await p1.close(); }
+});
+
+test('vfs: a lone bad copy under a busy second account leaves the mount healthy (no release switch)', async () => {
+  const { parseNzb } = require('../server/nzb');
+  const payload = seededPayload(90 * 1024, 0x344);
+  const r = nzbFor(writeRar4Store([{ name: 'Busy.mkv', data: payload }], { base: 'busy' }), 30000, 'busy');
+  const parsed = parseNzb(r.nzb);
+  const file = parsed.files.find((f) => f.segments.length >= 2);
+  const victim = file.segments[1].msgId;
+  const bad = new Map(r.articles);
+  const b = Buffer.from(r.articles.get(victim)); b[Math.floor(b.length / 2)] ^= 0x01; bad.set(victim, b);
+  const p0 = createMockNntp({ articles: bad });
+  const p1 = createMockNntp({ articles: r.articles });
+  const port0 = await p0.listen();
+  const port1 = await p1.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: port0, tls: false },
+    { host: 'localhost', port: port1, tls: false },
+  ], 2);
+  try {
+    const quiet = quietAccount(pool);
+    const vf = new NzbFileStream(pool, file, { readAhead: 0 });
+    await vf.mount();
+    await assert.rejects(() => vf._fetchSegment(1, 'playback'), /corrupt article/);
+    assert.strictEqual(vf.deadPieceCount(), 0, 'the piece is not remembered as dead');
+    assert.notStrictEqual(vf.health.verdict, 'blocked', 'health stays unblocked, so the player keeps this release');
+    // The second account frees up: the retry is served.
+    delete quiet.refusingNewLogins; delete quiet.hasLiveSocket;
+    pool._ordered = () => [quiet, pool.providers[0]];
+    const data = await vf._fetchSegment(1, 'playback');
+    assert.ok(data.length > 0, 'the retry on a free line reads the piece');
+  } finally { pool.close(); await p0.close(); await p1.close(); }
+});
+
+test('vfs: a warm-up mount asks the lane its owner names for startup and playback reads, never lower lanes', async () => {
+  const payload = seededPayload(3 * 20000, 0x345);
+  const parts = [0, 1, 2].map((k) => encodePart(payload, {
+    name: 'w.mkv', partNum: k + 1, totalParts: 3, begin: k * 20000, end: (k + 1) * 20000, totalSize: payload.length,
+  }));
+  const seen = [];
+  const fakePool = {
+    body: (msgId, priority, opts) => {
+      seen.push(priority);
+      const raw = parts[Number(msgId.slice(1))];
+      if (opts && typeof opts.verify === 'function' && !opts.verify(raw)) return Promise.reject(new Error('verify'));
+      return Promise.resolve(raw);
+    },
+    stats: () => null,
+  };
+  let lane = 'background';
+  const file = { subject: '"w.mkv" yEnc', segments: [0, 1, 2].map((k) => ({ msgId: `s${k}`, number: k + 1, bytes: 20000 })) };
+  const vf = new NzbFileStream(fakePool, file, { readAhead: 0, startupLane: () => lane });
+  await vf.mount('startup');
+  await vf._fetchSegment(1, 'playback');
+  await vf._fetchSegment(2, 'readAhead');
+  assert.deepStrictEqual(seen, ['background', 'background', 'readAhead'],
+    'a warm-up standing aside reads its headers on the background lane; read-ahead is untouched');
+  lane = 'startup'; // a Play joined: back to the top lane
+  vf._cacheDrop(2);
+  await vf._fetchSegment(2, 'startup');
+  assert.strictEqual(seen[seen.length - 1], 'startup', 'a joined Play gets the startup lane again');
+});
+
+test('pipeline: a Continue Watching warm-up mounts on the background lane while someone else watches', async () => {
+  const payload = seededPayload(90 * 1024, 0x346);
+  const good = nzbFor(writeRar4Store([{ name: 'Movie.mkv', data: payload }], { base: 'cw' }), 30000, 'cw');
+  const mock = createMockNntp({ articles: new Map([...good.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const lanes = [];
+  const realBody = pool.body.bind(pool);
+  pool.body = (id, priority, opts) => { lanes.push(priority); return realBody(id, priority, opts); };
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/api') {
+      const port = server.address().port;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      return res.end(rssFor([{ name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', url: `http://127.0.0.1:${port}/nzb/0`, size: 5e9 }]));
+    }
+    if (u.pathname === '/nzb/0') { res.writeHead(200); return res.end(good.nzb); }
+    res.writeHead(404); res.end();
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    pipeline._hasActiveForeignPlayback = () => true; // another title is playing
+    const prepared = await pipeline.prepare({ q: 'Movie 2024' });
+    assert.strictEqual(prepared.prepared, true, 'the warm-up still mounts');
+    assert.ok(lanes.length > 0, 'the warm-up read articles');
+    assert.ok(!lanes.includes('startup') && !lanes.includes('playback') && !lanes.includes('seek'),
+      `no warm-up BODY outranks the viewer (saw ${[...new Set(lanes)].join(',')})`);
+  } finally { pool.close(); await mock.close(); server.close(); store.close(); }
+});
+
+test('store: a settings save writes only settings synchronously; big cache tables stay on the async path', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  try {
+    store.write('iptvcaches', { big: 'x'.repeat(1000) });
+    store.write('settings', { a: 1 });
+    store.flush(['settings']);
+    assert.ok(fs.existsSync(path.join(dir, 'settings.json')), 'settings is on disk at once');
+    assert.ok(!fs.existsSync(path.join(dir, 'iptvcaches.json')), 'the lineup was not written on the caller\'s turn');
+    assert.ok(store.dirty.has('iptvcaches'), 'the lineup stays queued');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(fs.existsSync(path.join(dir, 'iptvcaches.json')), 'the async flush writes it shortly after');
+    store.write('watch', { w: 1 });
+    store.flush(); // shutdown / explicit full flush still writes everything
+    assert.ok(fs.existsSync(path.join(dir, 'watch.json')));
+  } finally { store.close(); }
+});
+
+test('debug: a CPU profile is reduced to the functions that held the thread', () => {
+  const { summarizeCpuProfile } = require('../server/debug');
+  const profile = {
+    nodes: [
+      { id: 1, callFrame: { functionName: '(root)', url: '' }, hitCount: 0 },
+      { id: 2, callFrame: { functionName: '(idle)', url: '' }, hitCount: 50 },
+      { id: 3, callFrame: { functionName: 'stringify', url: 'file:///app/server/store.js', lineNumber: 150 }, hitCount: 30 },
+      { id: 4, callFrame: { functionName: 'decode', url: 'file:///app/server/yenc.js', lineNumber: 9 }, hitCount: 20 },
+    ],
+    samples: new Array(100).fill(3),
+  };
+  const top = summarizeCpuProfile(profile);
+  assert.deepStrictEqual(top.map((t) => t.fn), ['stringify server/store.js:151', 'decode server/yenc.js:10']);
+  assert.strictEqual(top[0].pct, 30);
+  assert.deepStrictEqual(summarizeCpuProfile(null), []);
+});
+
+test('vfs: a valid article for another slot drops that line and the piece is read from the next account', async () => {
+  const { parseNzb } = require('../server/nzb');
+  const payload = seededPayload(90 * 1024, 0x347);
+  const r = nzbFor(writeRar4Store([{ name: 'Step.mkv', data: payload }], { base: 'step' }), 30000, 'step');
+  const file = parseNzb(r.nzb).files.find((f) => f.segments.length >= 3);
+  const slot1 = file.segments[1].msgId;
+  const shifted = new Map(r.articles);
+  shifted.set(slot1, r.articles.get(file.segments[2].msgId)); // the neighbour's article, good CRC
+  const p0 = createMockNntp({ articles: shifted });
+  const p1 = createMockNntp({ articles: r.articles });
+  const port0 = await p0.listen();
+  const port1 = await p1.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: port0, tls: false },
+    { host: 'localhost', port: port1, tls: false },
+  ], 2);
+  try {
+    pool._ordered = () => [pool.providers[0], pool.providers[1]];
+    const vf = new NzbFileStream(pool, file, { readAhead: 0 });
+    await vf.mount();
+    const before = p0.connCount();
+    const data = await vf._fetchSegment(1, 'playback');
+    const { decode } = require('../server/yenc');
+    assert.ok(data.equals(decode(r.articles.get(slot1)).data), 'the right article came from the second account');
+    assert.ok(p0.bodyCount(slot1) >= 1, 'the first account was asked and handed back the wrong slot');
+    assert.strictEqual(vf.deadPieceCount(), 0);
+    // The out-of-step line is gone: the next request on account 1 needs a fresh login.
+    pool._ordered = () => [pool.providers[0]];
+    await vf._fetchSegment(2, 'playback');
+    assert.ok(p0.connCount() > before, 'account 1 dialed a new line after the misplaced copy');
+  } finally { pool.close(); await p0.close(); await p1.close(); }
+});

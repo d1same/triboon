@@ -4781,7 +4781,45 @@ const loopHealthTimer = setInterval(() => {
   const watching = [...mounts.values()].filter((m) => mountHasActivePlayback(m, now)).length;
   if (!watching) return;
   debug.fail('buffer', `server busy: event-loop p99 ${h.p99Ms}ms (max ${h.maxMs}ms), CPU ${Math.round(h.utilization * 100)}% while ${watching} stream(s) play — video bytes wait behind decoding`);
+  profileBusyLoop();
 }, LOOP_WINDOW_MS);
+// "Server busy" said THAT the thread was held, never by WHAT (Unraid 2026-10-22: max 4.5 s with one
+// stream, cause unknown). On a busy window, sample the main thread for 20 s with the built-in
+// inspector (at most once per 15 min) and log the functions that held it, so the next report names
+// the culprit. TRIBOON_BUSY_PROFILE=0 turns it off.
+const BUSY_PROFILE_MS = 20000;
+const BUSY_PROFILE_GAP_MS = 15 * 60000;
+let busyProfileAt = 0;
+let busyProfiling = false;
+function profileBusyLoop() {
+  if (process.env.TRIBOON_BUSY_PROFILE === '0' || busyProfiling) return;
+  const now = Date.now();
+  if (now - busyProfileAt < BUSY_PROFILE_GAP_MS) return;
+  busyProfileAt = now;
+  let session;
+  try {
+    const inspector = require('inspector');
+    session = new inspector.Session();
+    session.connect();
+  } catch { return; }
+  busyProfiling = true;
+  const done = () => { busyProfiling = false; try { session.disconnect(); } catch {} };
+  session.post('Profiler.enable', () => session.post('Profiler.setSamplingInterval', { interval: 2000 }, () => {
+    session.post('Profiler.start', (err) => {
+      if (err) { done(); return; }
+      const t = setTimeout(() => {
+        session.post('Profiler.stop', (e2, res) => {
+          try {
+            const top = e2 ? [] : debug.summarizeCpuProfile(res && res.profile);
+            if (top.length) debug.fail('buffer', `server busy: busiest code over ${BUSY_PROFILE_MS / 1000}s — ${top.map((t) => `${t.fn} ${t.pct}%`).join(', ')}`);
+          } catch {}
+          done();
+        });
+      }, BUSY_PROFILE_MS);
+      if (t.unref) t.unref();
+    });
+  }));
+}
 if (loopHealthTimer.unref) loopHealthTimer.unref();
 
 function playbackRuntimeStats(now = Date.now()) {

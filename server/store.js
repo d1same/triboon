@@ -192,37 +192,60 @@ class Store {
   // take the server down: renames can transiently fail on Windows (file briefly locked by AV/
   // another reader) — fall back to an in-place write (loses atomicity for that one write only),
   // and keep the table dirty for a retry if even that fails. In-memory state stays authoritative.
-  flush() {
+  //
+  // flush(['settings']) writes only the named tables. A settings save (every Trakt sync stamps its
+  // token) used to stringify and write EVERY dirty table here, on the thread serving video: the
+  // 8,000-channel lineup and the multi-MB guide caches went out synchronously with it, and Unraid
+  // logged a 4.5 s event-loop stall with one stream playing. The rest stay on the async path.
+  flush(only = null) {
+    const pick = only ? new Set(Array.isArray(only) ? only : [only]) : null;
+    if (pick) {
+      const failed = new Set();
+      for (const table of pick) {
+        if (!this.dirty.has(table)) continue;
+        this.dirty.delete(table);
+        if (!this._writeTableSync(table)) failed.add(table);
+      }
+      for (const table of failed) this.dirty.add(table);
+      if (failed.size) this._noteFlushFailure(failed);
+      if (this.dirty.size) this._flushSoon(failed.size ? 1000 : 50);
+      return;
+    }
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     const failed = new Set();
     for (const table of this.dirty) {
-      const json = JSON.stringify(this.cache.get(table), null, 0);
-      const file = this._file(table);
-      try {
-        const tmp = this._tmpFile(file);
-        fs.writeFileSync(tmp, json, { mode: 0o600 });
-        try {
-          fs.renameSync(tmp, file);
-        } catch (renameErr) {
-          this._unlinkTmp(tmp);
-          throw renameErr;
-        }
-        try { fs.chmodSync(file, 0o600); } catch {}
-        this._lastFlushAt.set(table, Date.now());
-      } catch {
-        try {
-          fs.writeFileSync(file, json, { mode: 0o600 });
-          try { fs.chmodSync(file, 0o600); } catch {}
-          this._lastFlushAt.set(table, Date.now());
-        }
-        catch (e2) { failed.add(table); this.lastFlushError = e2; }
-      }
+      if (!this._writeTableSync(table)) failed.add(table);
     }
     this.dirty = failed;
     if (failed.size) {
       this._noteFlushFailure(failed);
       this._flushSoon(1000);
     } else this._noteFlushRecovered();
+  }
+
+  _writeTableSync(table) {
+    const json = JSON.stringify(this.cache.get(table), null, 0);
+    const file = this._file(table);
+    try {
+      const tmp = this._tmpFile(file);
+      fs.writeFileSync(tmp, json, { mode: 0o600 });
+      try {
+        fs.renameSync(tmp, file);
+      } catch (renameErr) {
+        this._unlinkTmp(tmp);
+        throw renameErr;
+      }
+      try { fs.chmodSync(file, 0o600); } catch {}
+      this._lastFlushAt.set(table, Date.now());
+    } catch {
+      try {
+        fs.writeFileSync(file, json, { mode: 0o600 });
+        try { fs.chmodSync(file, 0o600); } catch {}
+        this._lastFlushAt.set(table, Date.now());
+      }
+      catch (e2) { this.lastFlushError = e2; return false; }
+    }
+    return true;
   }
 
   close() { this.flush(); }
