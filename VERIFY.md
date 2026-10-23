@@ -160,7 +160,13 @@ fails to produce a playable stream. Budgets default to feels-local targets
   copy drops the line and the next account serves; warm-up mount reads use the owner's lane; a CW
   prepare beside a viewer issues no startup/playback/seek BODY; scoped settings flush; CPU profile
   summary.
-- Gate: GATE_PENDING
+- Gate: `npm.cmd test` 915/915. `verify:full` on the QA rig (fixture NNTP moved 53159 -> 61119:
+  53159 now falls inside a Windows excluded port range; titles LOTR 2001 + Stuart Fails to Save the
+  Universe S01E01): whitespace, libmpv sources, JS syntax, inline script, IPTV/P9, fast VOD/P14,
+  CC/P11, local next episode, full suite, isolated server smoke, household VOD/seek/resume/CC,
+  household IPTV first-byte + retune, household overlapping Play, Android lint/unit/debug build all
+  PASS. Android stress: only the known `playerAbout` + seek-loop fixture-limit failures (same as
+  v3.4.1/v3.4.2). Owner acceptance = Unraid redeploy, then a long play beside Continue Watching.
 - Version contract: `package.json` 3.4.3; Android `versionName` 3.4.3 / `versionCode` 431;
   Windows client package/Tauri/Cargo(.lock) 3.4.3.
 
