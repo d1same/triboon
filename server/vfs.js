@@ -568,7 +568,7 @@ class NzbFileStream {
       rec.promise = this.pool.body(this.segments[i].msgId, priority, bodyOpts(controller.signal)).then((raw) => {
         if (this.inflight.get(i) === own) this.inflight.delete(i);
         return decodeAndCache(raw, skipDecoded);
-      }).catch((e) => { if (this.inflight.get(i) === own) this.inflight.delete(i); this._noteDeadPiece(i, e); throw e; });
+      }).catch((e) => { if (this.inflight.get(i) === own) this.inflight.delete(i); this._noteDeadPiece(i, e, priority); throw e; });
       this.inflight.set(i, rec);
     }
     rec.consumers++;
@@ -607,11 +607,17 @@ class NzbFileStream {
   // triage alone kept this mount "verified" while the player died at the same second on every
   // remount. Remember the piece; triage reports the mount blocked and the health poll moves the
   // player to the next release. One timeout mixed with a single corrupt copy never lands here.
-  _noteDeadPiece(i, e) {
+  _noteDeadPiece(i, e, lane = '') {
     if (!e || !e.everyProviderDefinitive) return;
     this._deadPieces = this._deadPieces || new Map();
     if (this._deadPieces.has(i)) return;
     this._deadPieces.set(i, String(e.message || e.code || 'unreadable'));
+    // This used to be silent. A read-ahead fetch can kill a piece the player never asked for, and
+    // the cached health then switches the release with nothing in the log (Unraid 3.4.3, The Good
+    // Doctor S05E15 at 10:11). Say which piece, which lane, and what every account answered.
+    const total = Array.isArray(this.segments) ? this.segments.length : 0;
+    const asked = Array.isArray(e.asked) && e.asked.length ? ` — ${e.asked.join(', ')}` : '';
+    this._troubleLine(`health blocked: piece ${i + 1}${total ? `/${total}` : ''} marked dead on the ${lane || 'unknown'} lane (${e.code || 'unreadable'})${asked}`);
     if (this.health && this.health.verdict !== 'blocked') this.health = { ...this.health, verdict: 'blocked', dead: this._deadPieces.size };
   }
   deadPieceCount() {
@@ -817,41 +823,21 @@ class NzbFileStream {
       for (const [i] of byAge) { if (idxs.size >= want) break; idxs.add(i); }
     }
     const list = [...idxs];
-    const results = await Promise.all(
-      list.map((i) => this.pool.stat(this.segments[i].msgId, 'health', { throwIfUnreachable: true })
-        .then((ok) => ({ ok: !!ok, unreachable: false }))
-        .catch((e) => {
-          if (e && e.code === 'NO_PROVIDER') return { ok: false, unreachable: true };
-          return { ok: false, unreachable: false };
-        }))
-    );
-    if (results.length && results.every((r) => r.unreachable)) {
-      // VPN/port/cap — not a missing article. Do not accumulate _statMissing or cache blocked.
-      this.health = {
-        verdict: (this.health && this.health.verdict) || 'unverified',
-        missing: 0,
-        sampled: 0,
-        unreachable: true,
-        checkedAt: new Date().toISOString(),
-      };
-      return this.health;
-    }
-    results.forEach((r, k) => {
-      if (r.unreachable) return;
-      if (r.ok) { this._statOkAt.set(list[k], now); this._statMissing.delete(list[k]); }
-      else { this._statMissing.add(list[k]); this._statOkAt.delete(list[k]); }
+    const samples = await Promise.all(list.map((i) => statSample(this.pool, this.segments[i].msgId)));
+    samples.forEach((r, k) => {
+      // Only a real answer moves a piece between proven and missing. An inconclusive check (an
+      // account threw while another said 430) leaves the piece where it was.
+      if (r.state === 'ok') { this._statOkAt.set(list[k], now); this._statMissing.delete(list[k]); }
+      else if (r.state === 'missing') { this._statMissing.add(list[k]); this._statOkAt.delete(list[k]); }
     });
-    const reached = results.filter((r) => !r.unreachable);
-    const missing = reached.filter((r) => !r.ok).length;
+    const prev = this.health;
     const dead = this.deadPieceCount();
-    this.health = {
-      verdict: dead > 0 ? 'blocked' : missing === 0 ? 'verified' : ((reached.length >= 2 || reached.length === results.length) && missing >= reached.length / 2) ? 'blocked' : 'degraded',
-      missing,
-      sampled: reached.length,
-      checkedAt: new Date().toISOString(),
-    };
+    this.health = healthFromSamples(prev, samples, dead);
     // A piece that decodes wrong on every provider still STATs fine. That is not "degraded".
     if (dead > 0) { this.health.dead = dead; this.health.reason = this.deadPieceReason(); }
+    if (this.health.verdict === 'blocked' && !(prev && prev.verdict === 'blocked')) {
+      this._troubleLine(blockedLine(this.health, samples, list, this.segments.length));
+    }
     return this.health;
   }
 }
@@ -869,6 +855,49 @@ function sliceStartFor(data, from, inCache) {
   return Math.max(0, from - start);
 }
 
+// One health STAT for triage: 'ok', 'missing' (every account asked said 430, or is remembered
+// to), 'unreachable' (no account answered at all) or 'inconclusive' (an account could not say yes
+// or no). Only ok/missing count toward a verdict.
+function statSample(pool, msgId) {
+  const trace = [];
+  return pool.stat(msgId, 'health', { throwIfUnreachable: true, trace })
+    .then((ok) => ({ state: ok ? 'ok' : 'missing', trace }))
+    .catch((e) => ({ state: e && e.code === 'NO_PROVIDER' ? 'unreachable' : 'inconclusive', trace, code: (e && (e.code || e.message)) || 'error' }));
+}
+
+// The verdict rule, shared by flat and archive mounts. With no conclusive sample the previous
+// verdict stands: "nothing answered" is neither proof of health nor proof of rot.
+function healthFromSamples(prev, samples, dead = 0) {
+  const checkedAt = new Date().toISOString();
+  const reached = samples.filter((r) => r.state === 'ok' || r.state === 'missing');
+  const missing = reached.filter((r) => r.state === 'missing').length;
+  const inconclusive = samples.filter((r) => r.state === 'inconclusive').length;
+  if (!dead && samples.length && !reached.length) {
+    const out = { verdict: (prev && prev.verdict) || 'unverified', missing: 0, sampled: 0, checkedAt };
+    if (inconclusive) out.inconclusive = inconclusive; else out.unreachable = true;
+    return out;
+  }
+  const out = {
+    verdict: dead > 0 ? 'blocked' : missing === 0 ? 'verified' : ((reached.length >= 2 || reached.length === samples.length) && missing >= reached.length / 2) ? 'blocked' : 'degraded',
+    missing,
+    sampled: reached.length,
+    checkedAt,
+  };
+  if (inconclusive) out.inconclusive = inconclusive;
+  return out;
+}
+
+// One log line when a mount turns blocked: which rule fired and what each account said for the
+// pieces that were not proven present. debug.fail keeps 400 characters, so it stays compact.
+function blockedLine(health, samples, idxs, total) {
+  const branch = health.dead > 0
+    ? `dead piece (${health.reason || 'unreadable on every provider'})`
+    : `${health.missing}/${health.sampled} sampled pieces missing${health.inconclusive ? `, ${health.inconclusive} inconclusive` : ''}`;
+  const bad = samples.map((r, k) => ({ r, i: idxs[k] })).filter(({ r }) => r.state !== 'ok').slice(0, 4)
+    .map(({ r, i }) => `piece ${i + 1}${total ? `/${total}` : ''} ${r.state}: ${(r.trace || []).join(', ') || r.code || '-'}`);
+  return `health blocked: ${branch}${bad.length ? ` — ${bad.join('; ')}` : ''}`;
+}
+
 class VirtualFile extends NzbFileStream {
   constructor(pool, nzbXml, opts) {
     const nzb = parseNzb(nzbXml);
@@ -876,4 +905,4 @@ class VirtualFile extends NzbFileStream {
   }
 }
 
-module.exports = { VirtualFile, NzbFileStream, SharedCacheBudget };
+module.exports = { VirtualFile, NzbFileStream, SharedCacheBudget, statSample, healthFromSamples, blockedLine };

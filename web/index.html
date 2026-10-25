@@ -13467,6 +13467,13 @@ function notePlaybackTrace(detail) {
 // The picture already waited. If the server already knows this file's chunk is
 // rotten, switch to the next release now. cached=1 does not open new usenet
 // lines — a slow picture with a healthy file stays on that file.
+// Why the server called a mount blocked, short: a dead piece, or sampled pieces missing.
+function healthBlockedWhy(h) {
+  if (!h) return 'no detail';
+  if (h.dead) return `dead piece: ${String(h.reason || 'unreadable on every provider').slice(0, 80)}`;
+  if (Number(h.sampled) > 0) return `${h.missing || 0}/${h.sampled} sampled pieces missing`;
+  return 'no detail';
+}
 function maybeAdvanceBlockedMount(p) {
   if (!p || !p.mountId || p._sourceAdvancePending || (p.item && p.item.type === 'live')) return;
   const now = appMs();
@@ -13480,7 +13487,8 @@ function maybeAdvanceBlockedMount(p) {
     S.healthTimer = null;
     S._healthKickT = null;
     saveWatch(true);
-    autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: 'source health blocked' });
+    // Two different paths reach "blocked"; the log line says which one fired.
+    autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: `source health blocked (picture waited; ${healthBlockedWhy(h)})` });
   }).catch(() => {});
 }
 function markPictureWait(p, why) {
@@ -15711,6 +15719,8 @@ async function autoAdvance(opts = {}) {
       body: {
         ...(at > 0 && advDur > 0 ? { resumeFrac: Math.max(0, Math.min(0.98, at / advDur)) } : {}),
         ...(opts.cause === 'stall-repeat' ? { cause: 'stall-repeat' } : {}),
+        // Log-only on the server: the "file died" line then says what the player saw.
+        ...(opts.reason ? { reason: String(opts.reason).slice(0, 120) } : {}),
       },
     });
     if (S.playing !== p || S.view !== 'player') return;
@@ -17374,7 +17384,7 @@ function startHealthPoll(id) {
         if (S._healthKickT) clearTimeout(S._healthKickT);
         S.healthTimer = null; S._healthKickT = null;
         saveWatch(true);
-        autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: 'source health blocked' });
+        autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: `source health blocked (health check; ${healthBlockedWhy(h)})` });
       }
     } catch {
       // A transient health-route failure must never interrupt otherwise-progressing playback.

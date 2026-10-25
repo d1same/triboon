@@ -1617,6 +1617,19 @@ function firstProbeMsgId(nzbXml, mountOpts = {}, candidateName = '') {
 
 // null = nothing to remember. A provider that is down, refusing logins, or out of
 // lines says nothing about this post; caching it hid good releases for 6 hours.
+// A mount's health for one log line: "blocked (dead piece: …)", "degraded 1/6 missing", "gone".
+function describeHealth(vf) {
+  if (!vf) return 'mount already gone';
+  const h = vf.health || {};
+  const parts = [h.verdict || 'unverified'];
+  if (Number.isFinite(h.sampled) && h.sampled > 0) parts.push(`${h.missing || 0}/${h.sampled} missing`);
+  if (h.inconclusive) parts.push(`${h.inconclusive} inconclusive`);
+  if (h.unreachable) parts.push('no provider answered');
+  if (h.dead) parts.push(`dead pieces ${h.dead}: ${String(h.reason || '').slice(0, 120)}`);
+  if (h.checkedAt) parts.push(`checked ${String(h.checkedAt).slice(11, 19)}`);
+  return parts.join(', ');
+}
+
 function mountVerdictForError(e) {
   const msg = String((e && e.message) || e || '');
   const code = String((e && e.code) || '');
@@ -4072,7 +4085,7 @@ class Pipeline {
     // press-play resume point: a source dying at minute 70 used to warm the file HEAD while the
     // player seeked deep — re-introducing the exact cold-resume stall the resume warm was built
     // to kill. resumeFrac rides session.query, which _commitMount already feeds the warmup.
-    const { resumeFrac, cause, ...rest } = mountOpts;
+    const { resumeFrac, cause, reason, ...rest } = mountOpts;
     const frac = Number(resumeFrac);
     if (Number.isFinite(frac) && frac > 0 && frac < 1) {
       session.query = { ...(session.query || {}), resumeFrac: frac };
@@ -4093,6 +4106,11 @@ class Pipeline {
       // move on for this session, but leave the release's reputation alone for everyone else.
       const stallOnly = cause === 'stall-repeat';
       debug.issue(`file died — "${session.activeCandidate.name || ''}" — reason: ${stallOnly ? 'repeated stalls at one spot, trying another copy (not demoted)' : 'playback failed, trying another copy'}`);
+      // Always written: what the player said and what the server's own health check held for the
+      // dying mount. "source health blocked" alone left no way to tell a dead piece from a
+      // sampled-missing verdict from a player error (Unraid 3.4.3, The Good Doctor S05E15, 10:11).
+      debug.fail('play', `file died — "${String(session.activeCandidate.name || '').slice(0, 90)}" — player: ${String(reason || cause || 'no reason given').replace(/\s+/g, ' ').slice(0, 120)}`
+        + ` — server health: ${describeHealth(this.mounts.get(session.currentMountId))}`);
       if (!stallOnly) this._recordPlaybackFailed(session.activeCandidate, { episodeScoped: !!_we });
       this._clearTitleStandby(session.query || {}, session.policy || {}, session.activeCandidate.pickKey);
       session.activeCandidate = null;

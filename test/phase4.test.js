@@ -3505,9 +3505,12 @@ test('Continue Watching: a blocked live source health check advances the same pl
   const fakeSetTimeout = (fn, ms) => { const rec = { id: nextTimer++, fn, ms, kind: 'timeout' }; scheduled.push(rec); return rec.id; };
   const fakeSetInterval = (fn, ms) => { const rec = { id: nextTimer++, fn, ms, kind: 'interval' }; scheduled.push(rec); return rec.id; };
   const clearTimer = (id) => cleared.push(id);
+  const whyStart = ui.indexOf('function healthBlockedWhy(h)');
+  const whyEnd = ui.indexOf('function maybeAdvanceBlockedMount', whyStart);
+  assert.ok(whyStart >= 0 && whyEnd > whyStart, 'the blocked-reason helper should be present');
   const startHealth = new Function('S', 'api', '$', 'saveWatch', 'toast', 'autoAdvance',
     'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
-    `${ui.slice(start, end)}\nreturn startHealthPoll;`)(
+    `${ui.slice(whyStart, whyEnd)}\n${ui.slice(start, end)}\nreturn startHealthPoll;`)(
     S,
     async (url) => {
       assert.strictEqual(url, '/api/health/dead-resume-mount');
@@ -3531,7 +3534,7 @@ test('Continue Watching: a blocked live source health check advances the same pl
   assert.deepStrictEqual(advances, [{
     allowMidstreamAdvance: true,
     nativePreferred: true,
-    reason: 'source health blocked',
+    reason: 'source health blocked (health check; no detail)',
   }], 'confirmed source rot advances releases while retaining native playback preference');
   assert.strictEqual(S.healthTimer, null);
   assert.strictEqual(S._healthKickT, null);
@@ -4449,9 +4452,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'web-only probes and subtitle prefetch should stay in the web playback branch and carry catalog ids; the video error handler still fails over');
   assert.match(ui, /function startNativePlayerHousekeeping\(it\) \{[\s\S]+startHealthPoll\(S\.playing && S\.playing\.mountId\);/,
     'native Continue Watching must run the same live source-health recheck as web playback');
-  assert.match(ui, /function startHealthPoll\(id\) \{[\s\S]+const poll = async \(\) => \{[\s\S]+p\.mountId !== id[\s\S]+h\.verdict === 'blocked'[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason: 'source health blocked' \}\)[\s\S]+S\._healthKickT = setTimeout\(poll, 1200\);[\s\S]+S\.healthTimer = setInterval\(poll, 20000\);/,
+  assert.match(ui, /function startHealthPoll\(id\) \{[\s\S]+const poll = async \(\) => \{[\s\S]+p\.mountId !== id[\s\S]+h\.verdict === 'blocked'[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason: `source health blocked \(health check; \$\{healthBlockedWhy\(h\)\}\)` \}\)[\s\S]+S\._healthKickT = setTimeout\(poll, 1200\);[\s\S]+S\.healthTimer = setInterval\(poll, 20000\);/,
     'blocked resume sources should advance promptly on both web and native without waiting for a media timeout');
-  assert.match(ui, /function maybeAdvanceBlockedMount\(p\) \{[\s\S]+\/api\/health\/' \+ p\.mountId \+ '\?cached=1'[\s\S]+h\.verdict !== 'blocked'[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason: 'source health blocked' \}\)/,
+  assert.match(ui, /function maybeAdvanceBlockedMount\(p\) \{[\s\S]+\/api\/health\/' \+ p\.mountId \+ '\?cached=1'[\s\S]+h\.verdict !== 'blocked'[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason: `source health blocked \(picture waited; \$\{healthBlockedWhy\(h\)\}\)` \}\)/,
     'a picture that already waited should switch releases immediately when the cached verdict is blocked');
   assert.match(ui, /function markPictureMoving\(p\) \{[\s\S]+if \(waited >= 2\) \{[\s\S]+maybeAdvanceBlockedMount\(p\);/,
     'the two-second stall note is what kicks the cached health check');

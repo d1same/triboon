@@ -6487,6 +6487,8 @@ const H = {
       const { session, vf, candidate, attempts } = await pipeline.advance(ctx.m[1], {
         resumeFrac: b && b.resumeFrac,
         cause: b && b.cause === 'stall-repeat' ? 'stall-repeat' : undefined,
+        // Log-only: what the player saw (e.g. "source health blocked (dead piece)"). Capped and redacted.
+        reason: b && typeof b.reason === 'string' ? debug.redact(b.reason).slice(0, 120) : undefined,
       });
       vf._q = session.query && session.query.q;
       vf._subQuery = episodeSubtitleQuery(vf._q, session.query && session.query.season, session.query && session.query.ep);

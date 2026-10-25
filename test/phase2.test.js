@@ -7158,3 +7158,151 @@ test('vfs: a valid article for another slot drops that line and the piece is rea
     assert.ok(p0.connCount() > before, 'account 1 dialed a new line after the misplaced copy');
   } finally { pool.close(); await p0.close(); await p1.close(); }
 });
+
+// v3.4.4 (Unraid 3.4.3, The Good Doctor S05E15 NTb: "source health blocked" at 10:11 with every
+// line busy, and nothing in the log said why). A health STAT where one account THREW (stalled or
+// forgotten line, a 5xx) and the next said 430 was counted as missing, and retry-only-missing asked
+// about that same piece first on every triage.
+function twoAccountStatPool(answers) {
+  // answers: [fn(msgId) for account 1, fn for account 2]; each returns true/false or throws.
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: 1, tls: false, label: 'acct-a' },
+    { host: 'localhost', port: 1, tls: false, label: 'acct-b' },
+  ], 1);
+  pool._ordered = () => [pool.providers[0], pool.providers[1]];
+  pool.providers.forEach((p, k) => { p.stat = async (msgId) => answers[k](msgId); });
+  return pool;
+}
+const threw = (code) => () => { const e = new Error(`STAT: ${code}`); e.code = code; throw e; };
+
+test('nntp: a health STAT where one account threw and the other said 430 is inconclusive, not missing', async () => {
+  const pool = twoAccountStatPool([threw('NNTP_STALL'), () => false]);
+  try {
+    const trace = [];
+    await assert.rejects(() => pool.stat('a@x', 'health', { throwIfUnreachable: true, trace }),
+      (e) => e.code === 'PROBE_INCONCLUSIVE', 'one account could not say yes or no');
+    assert.deepStrictEqual(trace, ['acct-a threw NNTP_STALL', 'acct-b 430']);
+    assert.strictEqual(await pool.stat('a@x', 'health'), false, 'callers without throwIfUnreachable keep the old answer');
+  } finally { pool.close(); }
+  const both = twoAccountStatPool([() => false, () => false]);
+  try {
+    assert.strictEqual(await both.stat('b@x', 'health', { throwIfUnreachable: true }), false, 'two 430s are still missing');
+  } finally { both.close(); }
+  const remembered = twoAccountStatPool([threw('should not be asked'), threw('should not be asked')]);
+  try {
+    remembered.providers.forEach((p) => remembered.missCache.mark(p, 'c@x'));
+    const trace = [];
+    assert.strictEqual(await remembered.stat('c@x', 'health', { throwIfUnreachable: true, trace }), false,
+      'every account remembered as 430 is missing, not "unreachable"');
+    assert.deepStrictEqual(trace, ['acct-a 430 (remembered)', 'acct-b 430 (remembered)']);
+  } finally { remembered.close(); }
+  const dark = twoAccountStatPool([threw('ECONNREFUSED'), threw('ECONNREFUSED')]);
+  try {
+    await assert.rejects(() => dark.stat('d@x', 'health', { throwIfUnreachable: true }), (e) => e.code === 'NO_PROVIDER',
+      'nobody answering at all is still "unreachable"');
+  } finally { dark.close(); }
+});
+
+test('vfs: triage ignores inconclusive samples, keeps the last verdict when nothing answered, and logs a block once', async () => {
+  const segments = Array.from({ length: 10 }, (_, k) => ({ msgId: `seg${k}@x`, number: k + 1, bytes: 1000 }));
+  const answer = new Map(); // msgId -> 'ok' | 'missing' | 'inconclusive'
+  const fakePool = {
+    stat: async (msgId, priority, opts) => {
+      const a = answer.get(msgId) || 'ok';
+      if (opts && Array.isArray(opts.trace)) opts.trace.push(`acct-a ${a === 'ok' ? '223' : a === 'missing' ? '430' : 'threw NNTP_STALL'}`);
+      if (a === 'ok') return true;
+      if (a === 'missing') return false;
+      const e = new Error('inconclusive'); e.code = 'PROBE_INCONCLUSIVE'; throw e;
+    },
+    stats: () => null,
+  };
+  const vf = new NzbFileStream(fakePool, { subject: '"T.mkv" yEnc', segments }, { readAhead: 0 });
+  const lines = [];
+  vf.onTrouble = (t) => lines.push(t);
+  // Every piece inconclusive (lines busy): nothing proves rot, the earlier verdict stands.
+  vf.health = { verdict: 'verified', missing: 0, sampled: 6 };
+  for (const s of segments) answer.set(s.msgId, 'inconclusive');
+  let h = await vf.triage(6);
+  assert.strictEqual(h.verdict, 'verified', 'an all-inconclusive pass keeps the last verdict');
+  assert.strictEqual(h.inconclusive, 6);
+  assert.strictEqual(vf._statMissing.size, 0, 'no inconclusive piece is queued as missing');
+  // Mixed: 1 real 430 among inconclusive checks is not "half the sample missing".
+  answer.set('seg0@x', 'missing');
+  h = await vf.triage(6);
+  assert.notStrictEqual(h.verdict, 'blocked', `one real miss among inconclusive checks does not block (got ${JSON.stringify(h)})`);
+  assert.deepStrictEqual([...vf._statMissing], [0], 'only the piece every account said 430 for is remembered missing');
+  assert.strictEqual(lines.length, 0, 'nothing to log while the mount is not blocked');
+  // Real rot: every piece 430 on every account -> blocked, and the log names the rule and answers.
+  for (const s of segments) answer.set(s.msgId, 'missing');
+  h = await vf.triage(6);
+  assert.strictEqual(h.verdict, 'blocked');
+  assert.strictEqual(lines.length, 1, 'the block is logged once');
+  assert.match(lines[0], /^health blocked: 6\/6 sampled pieces missing — piece \d+\/10 missing: acct-a 430/);
+  await vf.triage(6);
+  assert.strictEqual(lines.length, 1, 'staying blocked does not log again');
+});
+
+test('vfs: a piece killed by read-ahead says so in the log, with every account\'s answer', async () => {
+  const payload = seededPayload(90 * 1024, 0x348);
+  const { parseNzb } = require('../server/nzb');
+  const r = nzbFor(writeRar4Store([{ name: 'Rot.mkv', data: payload }], { base: 'rot' }), 30000, 'rot');
+  const file = parseNzb(r.nzb).files.find((f) => f.segments.length >= 3);
+  const gone = file.segments[2].msgId;
+  const m0 = createMockNntp({ articles: r.articles });
+  const m1 = createMockNntp({ articles: r.articles });
+  m0.markMissing(gone); m1.markMissing(gone);
+  const port0 = await m0.listen();
+  const port1 = await m1.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: port0, tls: false, label: 'news-a' },
+    { host: 'localhost', port: port1, tls: false, label: 'news-b' },
+  ], 2);
+  try {
+    const vf = new NzbFileStream(pool, file, { readAhead: 0 });
+    const lines = [];
+    vf.onTrouble = (t) => lines.push(t);
+    await vf.mount();
+    await assert.rejects(() => vf._fetchSegment(2, 'readAhead'));
+    assert.strictEqual(vf.deadPieceCount(), 1);
+    assert.strictEqual(vf.health.verdict, 'blocked');
+    const line = lines.find((l) => /marked dead/.test(l)) || '';
+    assert.match(line, /health blocked: piece 3\/\d+ marked dead on the readAhead lane \(430\)/);
+    assert.match(line, /news-a 430/);
+    assert.match(line, /news-b 430/);
+  } finally { pool.close(); await m0.close(); await m1.close(); }
+});
+
+test('vfs: the shared verdict rule treats unreachable and inconclusive samples the same way for archives', () => {
+  const { healthFromSamples } = require('../server/vfs');
+  const prev = { verdict: 'degraded', missing: 1, sampled: 6 };
+  assert.strictEqual(healthFromSamples(prev, [{ state: 'unreachable' }, { state: 'unreachable' }]).verdict, 'degraded');
+  assert.strictEqual(healthFromSamples(prev, [{ state: 'unreachable' }]).unreachable, true);
+  assert.strictEqual(healthFromSamples(null, [{ state: 'inconclusive' }, { state: 'missing' }, { state: 'ok' }]).verdict, 'blocked',
+    'two real answers with one miss still meet the half-missing rule');
+  assert.strictEqual(healthFromSamples(null, [{ state: 'ok' }], 1).verdict, 'blocked', 'a dead piece always blocks');
+});
+
+test('pipeline: "file died" always logs what the player said and the dying mount\'s server health', async () => {
+  const mounts = new Map();
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts });
+  pipeline._tryCandidate = (candidate) => Promise.resolve({ vf: { id: `${candidate.name}-vf`, streamable: true, size: 0 } });
+  mounts.set('dying-vf', { id: 'dying-vf', health: { verdict: 'blocked', missing: 0, sampled: 6, dead: 1, reason: 'piece 812/1400 unreadable on every provider: BODY: 430' } });
+  const session = {
+    id: 'died-log', query: {}, cursor: 1, history: [], currentMountId: 'dying-vf',
+    activeCandidate: { name: 'Show.S05E15.1080p.WEB-DL-NTb', nzbUrl: 'https://indexer.test/dying.nzb' },
+    candidates: [
+      { name: 'Show.S05E15.1080p.WEB-DL-NTb', nzbUrl: 'https://indexer.test/dying.nzb' },
+      { name: 'Show.S05E15.1080p.WEB-DL-FLUX', nzbUrl: 'https://indexer.test/next.nzb' },
+    ],
+  };
+  pipeline.sessions.set(session.id, session);
+  const logged = [];
+  const orig = console.error;
+  console.error = (...a) => { logged.push(a.join(' ')); };
+  try {
+    await pipeline.advance(session.id, { reason: 'source health blocked (picture waited; dead piece: piece 812/1400)' });
+  } finally { console.error = orig; }
+  const line = logged.find((l) => /\[fail:play\].*file died/.test(l)) || '';
+  assert.match(line, /player: source health blocked \(picture waited; dead piece: piece 812\/1400\)/);
+  assert.match(line, /server health: blocked, 0\/6 missing, dead pieces 1: piece 812\/1400 unreadable on every provider/);
+});

@@ -189,6 +189,11 @@ function corruptArticleError(provider, msgId) {
 function isCorruptArticle(e) {
   return !!(e && e.code === 'CORRUPT_ARTICLE');
 }
+// One account's answer for a log line: "430", "corrupt", "NNTP_STALL"...
+function bodyOutcome(e) {
+  if (isCorruptArticle(e)) return 'corrupt copy';
+  return String((e && (e.code || e.message)) || 'error').slice(0, 24);
+}
 // "Every provider we could ask said no for good" (430/451 or a corrupt copy). Timeouts, resets,
 // and refused logins are NOT definitive — those can heal on the next socket or the next minute.
 function isDefinitiveFailure(e) {
@@ -1846,26 +1851,47 @@ class NntpPool {
   async stat(msgId, priority = 'health', opts = {}) {
     if (opts.parallel && this.providers.length > 1) return this._parallelStat(msgId, priority, opts);
     const ordered = this._ordered(opts.needSlots);
+    // opts.trace (an array) collects one short line per account: what it answered, or why it was
+    // not asked. Health triage logs it when a release goes blocked; nothing is logged here.
+    const trace = Array.isArray(opts.trace) ? opts.trace : null;
+    const note = (p, what) => { if (trace && trace.length < 8) trace.push(`${providerLabel(p)} ${what}`); };
+    if (trace) for (const p of this.providers) if (!ordered.includes(p)) note(p, 'not asked');
     // Both accounts refused. That is not "this file is missing".
     if (!ordered.length && this.providers.length) throw this._nobodyCanAnswer();
     let reachedAny = false; // did at least one provider actually ANSWER (vs. all connections failing)?
+    let knownMiss = 0;
+    let errored = 0;
     for (const p of ordered) {
-      if (this.missCache.has(p, msgId)) continue;
+      if (this.missCache.has(p, msgId)) { knownMiss++; note(p, '430 (remembered)'); continue; }
       try {
         const ok = await p.stat(msgId, priority, opts);
         reachedAny = true;            // a real answer (present, or a 430 not-found) came back
+        note(p, ok ? '223' : '430');
         if (ok) return true;
       } catch (e) {
         if (isAbortError(e)) throw e;
+        errored++;
+        note(p, `threw ${String((e && (e.code || e.message)) || 'error').slice(0, 24)}`);
         /* provider down -> try next */
       }
     }
     // Distinguish "no provider HAS it" (genuine missing) from "no provider was REACHABLE" (a
     // connection / auth / VPN / port problem). Without this, both collapse to `false` and the caller
     // mislabels an unreachable server as a removed article ("18 removed/missing — add indexers").
-    if (!reachedAny && opts.throwIfUnreachable) {
+    // An account already known to 430 this article IS an answer: every account remembered as
+    // missing it means "missing", not "unreachable".
+    if (!reachedAny && !knownMiss && opts.throwIfUnreachable) {
       const e = new Error('no usenet provider reachable');
       e.code = 'NO_PROVIDER';
+      throw e;
+    }
+    // One account could not say yes or no (a stalled or forgotten line, a 5xx while every line was
+    // busy) and the next one said 430. That counted as missing, and triage's retry-only-missing
+    // asked about the same piece first on every pass, keeping the false miss alive while the lines
+    // stayed busy (Unraid 3.4.3, The Good Doctor S05E15: blocked at 10:11 with every line busy).
+    if (errored > 0 && opts.throwIfUnreachable) {
+      const e = new Error('article check was inconclusive');
+      e.code = 'PROBE_INCONCLUSIVE';
       throw e;
     }
     return false;
@@ -1956,11 +1982,13 @@ class NntpPool {
       let lastErr;
       let failures = 0, definitive = 0, corrupt = 0, knownMisses = 0, corruptErr = null;
       const corruptHosts = new Set();
+      const asked = new Map();
       for (const p of ordered) {
-        if (this.missCache.has(p, msgId)) { knownMisses++; continue; }
+        if (this.missCache.has(p, msgId)) { knownMisses++; asked.set(p, '430 (remembered)'); continue; }
         try { return await this._verifiedBody(p, msgId, priority, opts); }
         catch (e) {
           if (isAbortError(e)) throw e;
+          asked.set(p, bodyOutcome(e));
           if (isDefinitiveMiss(e)) this.missCache.mark(p, msgId);
           if (isCorruptArticle(e)) { corruptHosts.add(providerHostKey(p)); corruptErr = e; corrupt++; }
           failures++;
@@ -1968,7 +1996,7 @@ class NntpPool {
           lastErr = e;
         }
       }
-      throw this._finalBodyError(lastErr, failures, definitive, corruptHosts.size, corruptErr, corrupt, knownMisses);
+      throw this._finalBodyError(lastErr, failures, definitive, corruptHosts.size, corruptErr, corrupt, knownMisses, asked);
     }
     return this._hedgedBody(ordered, msgId, priority, opts);
   }
@@ -1992,8 +2020,10 @@ class NntpPool {
   // out-of-step line handing back a neighbour's article) used to mark the piece dead and switch a
   // healthy release mid-episode (Unraid 2026-10-22, The Good Doctor: NTb at 3:40, then FLUX at 4:40,
   // with every line busy). The read fails this once and the retry asks again on a fresh line.
-  _finalBodyError(lastErr, failures, definitive, corruptProviders = 0, corruptErr = null, corrupt = 0, knownMisses = 0) {
+  _finalBodyError(lastErr, failures, definitive, corruptProviders = 0, corruptErr = null, corrupt = 0, knownMisses = 0, asked = null) {
     const e = (corruptProviders >= 2 && corruptErr) ? corruptErr : (lastErr || new Error('no usenet provider could serve the article'));
+    // What each account said (or that it was never asked), for the dead-piece log line.
+    if (asked) e.asked = this.providers.slice(0, 8).map((p) => `${providerLabel(p)} ${asked.get(p) || 'not asked'}`);
     const loneCorrupt = corrupt > 0 && corrupt === failures && corruptProviders < 2 && knownMisses === 0
       && new Set(this.providers.map(providerHostKey)).size > 1;
     if (failures > 0 && definitive === failures && !loneCorrupt) e.everyProviderDefinitive = true;
@@ -2017,7 +2047,8 @@ class NntpPool {
       let idx = 0, pending = 0, settled = false, lastErr = null, hedgeTimer = null;
       let failures = 0, definitive = 0, corrupt = 0, knownMisses = 0, corruptErr = null;
       const corruptHosts = new Set();
-      const giveUp = () => settle(() => reject(this._finalBodyError(lastErr, failures, definitive, corruptHosts.size, corruptErr, corrupt, knownMisses)));
+      const asked = new Map();
+      const giveUp = () => settle(() => reject(this._finalBodyError(lastErr, failures, definitive, corruptHosts.size, corruptErr, corrupt, knownMisses, asked)));
       const controllers = [];
       let extCleanup = () => {};
       const clearHedge = () => { if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; } };
@@ -2044,7 +2075,7 @@ class NntpPool {
         && !(typeof p.hasLiveSocket === 'function' && p.hasLiveSocket());
       const startNext = (allowNewLogin = true) => {
         if (settled) return;
-        while (idx < ordered.length && this.missCache.has(ordered[idx], msgId)) { idx++; knownMisses++; }
+        while (idx < ordered.length && this.missCache.has(ordered[idx], msgId)) { asked.set(ordered[idx], '430 (remembered)'); idx++; knownMisses++; }
         while (idx < ordered.length && quietWithNoLine(ordered[idx])) idx++;
         if (!allowNewLogin) {
           while (idx < ordered.length && !(ordered[idx].conns || []).some((c) => c.alive)) idx++;
@@ -2064,6 +2095,7 @@ class NntpPool {
             if (settled) return;
             if (ac.signal.aborted && isAbortError(e)) return; // a loser we aborted on success — ignore
             if (isAbortError(e) && signalAborted(external)) return settle(() => reject(e));
+            asked.set(p, bodyOutcome(e));
             if (isDefinitiveMiss(e)) this.missCache.mark(p, msgId);
             if (isCorruptArticle(e)) { corruptHosts.add(providerHostKey(p)); corruptErr = e; corrupt++; }
             failures++;

@@ -10,7 +10,8 @@ const {
   episodeInName, episodeLikeName, episodeSelectionError,
   releaseNamesExactEpisode, looksLikeSplitParts,
 } = require('./nzb');
-const { NzbFileStream, SharedCacheBudget } = require('./vfs');
+const { NzbFileStream, SharedCacheBudget, statSample, healthFromSamples, blockedLine } = require('./vfs');
+const debug = require('./debug');
 const { parseRarVolumes, rar5VolumeInfo, RAR4_SIG, RAR5_SIG } = require('./rar');
 const { parseZip } = require('./zip');
 const { parseFileDescs, headHash, HEAD_HASH_BYTES } = require('./par2');
@@ -438,32 +439,17 @@ class ArchiveVirtualFile {
       idxs.add(Math.floor(Math.random() * all.length));
     }
     // A provider that is down, full, or refusing logins says nothing about the
-    // article. Counting that as "missing" blacklisted good releases for hours.
-    const results = await Promise.all(
-      [...idxs].map((i) => this.vols[0].pool.stat(all[i].msgId, 'health', { throwIfUnreachable: true })
-        .then((ok) => ({ ok: !!ok, unreachable: false }))
-        .catch((e) => ({ ok: false, unreachable: !!(e && e.code === 'NO_PROVIDER') })))
-    );
-    if (results.length && results.every((r) => r.unreachable)) {
-      this.health = {
-        verdict: (this.health && this.health.verdict) || 'unverified',
-        missing: 0,
-        sampled: 0,
-        unreachable: true,
-        checkedAt: new Date().toISOString(),
-      };
-      return this.health;
-    }
-    const reached = results.filter((r) => !r.unreachable);
-    const missing = reached.filter((r) => !r.ok).length;
+    // article. Counting that as "missing" blacklisted good releases for hours. Same rule as a flat
+    // mount: an account that threw while another said 430 is inconclusive, not missing.
+    const list = [...idxs];
+    const samples = await Promise.all(list.map((i) => statSample(this.vols[0].pool, all[i].msgId)));
+    const prev = this.health;
     const dead = this.deadPieceCount();
-    this.health = {
-      verdict: dead > 0 ? 'blocked' : missing === 0 ? 'verified' : ((reached.length >= 2 || reached.length === results.length) && missing >= reached.length / 2) ? 'blocked' : 'degraded',
-      missing,
-      sampled: reached.length,
-      checkedAt: new Date().toISOString(),
-    };
+    this.health = healthFromSamples(prev, samples, dead);
     if (dead > 0) { this.health.dead = dead; this.health.reason = this.deadPieceReason(); }
+    if (this.health.verdict === 'blocked' && !(prev && prev.verdict === 'blocked')) {
+      debug.fail('buffer', `${String(this.name || 'archive').slice(0, 80)}: ${blockedLine(this.health, samples, list, all.length)}`);
+    }
     return this.health;
   }
 

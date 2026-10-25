@@ -128,6 +128,42 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-25, v3.4.4 — Every "blocked" switch now says why in the always-on log, and a health check where one account could not answer is no longer a missing piece:
+
+- Owner on 3.4.3: The Good Doctor S05E15 NTb "file died … playback failed" then "switched release
+  mid-stream: source health blocked" at 10:11 (news-us 4/4, secure-us 3/3, newshosting 2/2 + 1
+  waiting, eweka 1/1 busy). The unfiltered container log had nothing else: debug logging was on,
+  yet no `[fail:buffer] piece … failed` line, so no player read failed. The block came from one of
+  two silent paths: a read-ahead/health fetch marking a piece dead (`_noteDeadPiece` never logged),
+  or the triage missing-ratio rule (never logged). Cause still UNVERIFIED until the new lines appear.
+- Logging (always written via `debug.fail`, 400-char lines, once per change): `_noteDeadPiece`
+  names the piece, the lane that killed it and what every account answered (`e.asked` from
+  `_finalBodyError`: 430 / corrupt copy / NNTP_STALL / 430 (remembered) / not asked); triage logs the
+  switch to `blocked` with the rule that fired and each account's STAT answer for the unproven pieces
+  (pool `stat()` `opts.trace`, bounded to 8 entries); flat and archive mounts alike; `file died` adds
+  the player's reason (now sent in the advance body, capped/redacted) and the dying mount's health.
+  Web: the two blocked paths read `source health blocked (picture waited; …)` (cached verdict) and
+  `(health check; …)` (fresh triage) with dead-piece vs sampled-missing detail. The empty-reason
+  fallback at the generic recovery path cannot fire (`sourceDead` needs a matching reason).
+- Likely bug, fixed (UNVERIFIED as the cause): pool `stat()` skipped an account that threw and
+  returned false on the next account's 430, so triage counted the sample missing and
+  retry-only-missing re-asked it first every pass. Reachable: with a second provider a health STAT
+  on a stalled line is rejected at once (`NNTP_STALL` + preferPeerFailover), as are 480/auth-lost and
+  non-430 replies; connect failures alone leave queued work waiting. Now (only with
+  `throwIfUnreachable`) any throw without a 223 is `PROBE_INCONCLUSIVE`; triage also stopped counting
+  every non-NO_PROVIDER error as missing; an all-inconclusive pass keeps the previous verdict; all
+  accounts remembered as 430 is missing, not unreachable. The 10-22 16:58 FLUX drop happened with
+  idle lines, so this is not claimed as THE cause. The eac3-conversion theory is dropped (the
+  10-22 remux line says audio=copy).
+- Tests (each fails on 3.4.3): throw + 430 is inconclusive with the trace, two 430s missing, all
+  remembered missing, nobody answering unreachable; triage ignores inconclusive samples, keeps the
+  last verdict, logs the block once; a read-ahead-killed piece logs lane + both accounts' 430; the
+  shared verdict rule; `file died` logs player reason + server health. The phase4 health-poll
+  contract regexes/sandbox follow the new labels.
+- Gate: GATE_PENDING
+- Version contract: `package.json` 3.4.4; Android `versionName` 3.4.4 / `versionCode` 432;
+  Windows client package/Tauri/Cargo(.lock) 3.4.4.
+
 2026-10-23, v3.4.3 — Buffering on Unraid (owner log 2026-10-22/23, server v3.4.1): one bad copy no longer switches a healthy release, warm-ups stand aside for a viewer, and a settings save no longer writes the big guide tables on the video thread:
 
 - The Good Doctor S05E03: NTb "source health blocked" at 3:40 (lines: news-us 3/3 busy, 5 waiting;

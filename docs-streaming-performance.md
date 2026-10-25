@@ -592,6 +592,18 @@ A piece the player already tried and found corrupt on every provider (see
 "Corrupt copies fail over too") overrides the sample: `triage()` reports
 `blocked` with `dead` and `reason` fields even when every STAT answers 223.
 
+A sample counts as **missing** only when every account asked answered 430/423 or is
+remembered (miss cache) to lack it. If any account threw (stalled or forgotten line, a 5xx,
+a refused login) and none answered 223, the pool raises `PROBE_INCONCLUSIVE`: triage leaves
+that piece out of the verdict and out of retry-only-missing, and a pass where nothing was
+conclusive keeps the previous verdict. All accounts remembered as missing is "missing", not
+"unreachable". Flat and archive mounts share this rule (`statSample` / `healthFromSamples`).
+Unraid 3.4.3: The Good Doctor S05E15 went blocked at 10:11 with every line busy.
+
+Every switch to `blocked` is logged, always (not only with debug on): the triage rule that fired
+with each account's answer for the unproven pieces, or the dead piece with its lane and every
+account's answer. The `file died` line carries the player's reason and the dying mount's health.
+
 ### Cold Candidate Hedge
 
 Cold Play begins with the top-ranked candidate. If that candidate remains
