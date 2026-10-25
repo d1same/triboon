@@ -160,7 +160,13 @@ fails to produce a playable stream. Budgets default to feels-local targets
   last verdict, logs the block once; a read-ahead-killed piece logs lane + both accounts' 430; the
   shared verdict rule; `file died` logs player reason + server health. The phase4 health-poll
   contract regexes/sandbox follow the new labels.
-- Gate: GATE_PENDING
+- Gate: `npm.cmd test` 920/920. `verify:full` on the QA rig (fixture NNTP 61119; titles LOTR 2001 +
+  Stuart Fails to Save the Universe S01E01): whitespace, libmpv sources, JS syntax, inline script,
+  IPTV/P9, fast VOD/P14, CC/P11, local next episode, full suite, isolated server smoke, household
+  VOD/seek/resume/CC, household IPTV first-byte + retune, household overlapping Play, Android
+  lint/unit/debug build all PASS. Android stress: only the known `playerAbout` + seek-loop
+  fixture-limit failures (same as v3.4.1-v3.4.3). Owner acceptance = Unraid redeploy, then the
+  next blocked switch shows its reason in the container log.
 - Version contract: `package.json` 3.4.4; Android `versionName` 3.4.4 / `versionCode` 432;
   Windows client package/Tauri/Cargo(.lock) 3.4.4.
 
