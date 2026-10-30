@@ -9700,7 +9700,9 @@ Object.assign(H, {
     // probe upgrades the unknown-codec guess for seek-restarts.
     const aud = (vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack]) || (audioTrack === 0 ? audioHintFromName(vf._releaseName || vf.name) : undefined);
     const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
-    const transcodeAudio = forceAudioSafe || !audioCopyOk(aud, vf._caps);
+    // A native player that could not play the copied audio asks for AAC outright. It stays 5.1.
+    const forceAudioAac = ctx.url.searchParams.get('audioAac') === '1';
+    const transcodeAudio = forceAudioSafe || forceAudioAac || !audioCopyOk(aud, vf._caps);
     if (!vf._tracks && detectFfprobe() && !vf._probing) {
       const remembered = recallProbe(probeCacheKey(vf.name, vf.size));
       if (remembered) vf._tracks = { available: true, ...remembered };

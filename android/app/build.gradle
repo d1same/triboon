@@ -27,8 +27,8 @@ android {
         applicationId = "app.triboon.tv"
         minSdk = 23          // Media3 1.10.x requires API 23+; Shield/onn/Chromecast TV targets clear this
         targetSdk = 36
-        versionCode = 432
-        versionName = "3.4.4"
+        versionCode = 433
+        versionName = "3.4.5"
     }
 
     signingConfigs {
@@ -60,6 +60,11 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        // Media3's real Tracks/Format run in plain JVM tests only with Android stubs returning defaults.
+        unitTests.returnDefaultValues = true
     }
 }
 

@@ -550,6 +550,35 @@ them when the table is reorganized:
   Play only. Coming back to the movie from the Live TV guide
   (`returnToSavedVod`) drops the flag and lands on the minute you left.
   Verification: the resume/subtitle/search contract in `test/phase4.test.js`.
+- **Native audio - one path on every box.** ExoPlayer follows the current output by
+  itself, so Android plays Dolby direct whenever a decoder or the output takes it
+  (`nativeDolbyPlaysDirect`). HDMI Dolby support is read on every box; DTS and lossless
+  stay Shield-only on Auto because Onn-class boxes report them and cannot pass them.
+  Surround sound on this device: Auto, Decode here (`DEFAULT_AUDIO_CAPABILITIES` sink,
+  PCM only, so the box's volume works) and Always send. Stored per device in the shell.
+  Verification: the "Dolby plays direct" contract in `test/phase4.test.js`.
+- **P6 - a damaged spot cannot hold a viewer.** A stream that drops is reported to web
+  (`__tvNativeStreamDropped`) and counted per release in `S._sourceFailLedger` for 10
+  minutes, so leaving the player does not clear it. The 3rd failure within 20s of the
+  same spot switches release (`cause: 'stall-repeat'`, no house-wide demotion).
+  `positionBeforeRepeatFailure` keeps saved progress and the switch at the spot where
+  trouble began, because keyframe-forward reconnects walk the clock across the damage.
+  A reconnect after the viewer's own pause never counts. Verification: the "damaged
+  spot" contract in `test/phase4.test.js`.
+- **Native audio - sound never goes missing without a recovery.** ExoPlayer drops audio it
+  cannot play and keeps the picture, with no error. `onTracksChanged` now checks
+  for audio with no playable track. VOD asks web for one rescue per source: a
+  remux of the same second with `audioAac=1` (5.1 AAC, never the stereo
+  `audioSafe`). IPTV moves down the fallback list, ending on the server stream,
+  which is always AAC. An audio sink or decoder failure takes the same VOD rescue
+  before the normal error path. A page older than the APK gets that normal error.
+  Output changes clear both capability caches (`nativePlaybackCapsCache`,
+  `S._nativeCaps`/`S._caps`), and `setAllowInvalidateSelectionsOnRendererCapabilitiesChange`
+  re-picks audio mid-title. Each play logs whether the box decoded or passed
+  through. Code: `NativeAudioRescue.java`, `MainActivity.java`
+  `onNativeNoPlayableAudio`/`requestNativeAudioRescue`, `web/index.html`
+  `__tvNativeAudioUnplayable`. Verification: `NativeAudioRescueTest.java` and the
+  "unplayable audio" contract in `test/phase4.test.js`.
 - **P14 - the first-article probe asks every account at once.** The 800ms
   press-play STAT used to walk providers one 430 at a time (~4 round trips on a
   four-account box), so most dead copies timed out the probe and fell through to

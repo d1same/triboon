@@ -4728,6 +4728,13 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <button data-submode="manual">Choose per title</button><button data-submode="always">Always show subtitles</button>
       </div>
       <div class="hint">Choose per title never starts captions automatically. Always uses the selected subtitle language, or English when no subtitle language is selected.</div>
+      <div id="prefPassthroughWrap" hidden>
+        <p style="margin-top:14px">Surround sound on this device.</p>
+        <div class="sizePick" id="prefPassthrough">
+          <button data-pass="auto">Auto</button><button data-pass="off">Decode here</button><button data-pass="on">Always send</button>
+        </div>
+        <div class="hint">Auto sends Dolby to your TV or receiver when they accept it. Decode here lets this device's own volume work, but plays stereo with no Atmos. Always send also tries DTS and lossless audio, which many devices cannot pass.</div>
+      </div>
       <p style="margin-top:14px">Caption style.</p>
       <div class="sizePick" id="prefCcStyle">
         <button data-ccstyle="dialogue">Dialogue only</button><button data-ccstyle="sdh">Sound descriptions (SDH)</button>
@@ -14435,7 +14442,9 @@ function remuxPlaybackUrl(p, seekStart = 0, opts = {}) {
   // commonly plays SILENT through their MediaCodec). The native ExoPlayer surface decodes 5.1 fine,
   // so it OMITS audioSafe (opts.native) and gets the server's default 5.1 re-encode → full surround
   // instead of a needless stereo downmix on a capable TV/AVR.
-  const safe = (p && p.forceAacRemux && !opts.native) ? '&audioSafe=1' : '';
+  // audioAac is the native rescue: ExoPlayer could not play this audio, so ask for 5.1 AAC outright.
+  const rescue = (p && p.nativeAacAudio && opts.native) ? '&audioAac=1' : '';
+  const safe = (p && p.forceAacRemux && !opts.native) ? '&audioSafe=1' : rescue;
   return `${p.remuxUrl}&start=${Math.max(0, Math.round((seekStart || 0) * 1000) / 1000)}&audio=${audio}${safe}`;
 }
 // iOS Safari <video> plays HLS natively (application/vnd.apple.mpegurl); each fMP4 segment is a rangeable
@@ -14484,6 +14493,11 @@ function audioDescriptorForClient(codecOrTrack) {
   }
   return String(codecOrTrack || '').toLowerCase();
 }
+// ExoPlayer follows the current output by itself: passthrough when the output takes it, its decoder
+// when not, and the AAC rescue if neither works. So Dolby needs no server remux on Android.
+function nativeDolbyPlaysDirect(caps) {
+  return !!(caps && caps.native && (caps.passthrough || String(caps.source || '').startsWith('exo-mediacodec')));
+}
 function nativeDirectAudioNeedsSafeRemux(track, caps = clientCaps()) {
   const c = audioDescriptorForClient(track);
   const primary = c.split(/\s+/)[0] || c;
@@ -14492,19 +14506,20 @@ function nativeDirectAudioNeedsSafeRemux(track, caps = clientCaps()) {
   const passthrough = !!(caps && caps.native && caps.passthrough);
   if (/\b(true[ ._-]?hd|mlp)\b/.test(c)) return !(passthrough && caps.truehd);
   if (/\b(dts[ ._-]?hd|dts[ ._-]?x|dtsma|dts[ ._-]?ma)\b/.test(c)) return !(passthrough && caps.dtsHd);
-  if (primary === 'ac3') return !(passthrough && caps.ac3);
-  if (primary === 'eac3' || primary === 'eac3-joc' || c.includes('e-ac-3')) return !(passthrough && (caps.eac3 || caps.eac3Joc));
+  if (primary === 'ac3') return !(nativeDolbyPlaysDirect(caps) && caps.ac3);
+  if (primary === 'eac3' || primary === 'eac3-joc' || c.includes('e-ac-3')) return !(nativeDolbyPlaysDirect(caps) && (caps.eac3 || caps.eac3Joc));
   if (primary.startsWith('dts')) return !(passthrough && caps.dts);
   return true;
 }
-function nativeDirectAudioNameRisk(p) {
+function nativeDirectAudioNameRisk(p, caps = clientCaps()) {
   const bits = [
     p && p.name,
     p && p.fileName,
     p && p.item && p.item.q,
     p && p.sourceAttributes && p.sourceAttributes.audio,
   ].filter(Boolean).join(' ');
-  return /\b(ddp|dd\+|eac3|e-ac-3|ac3|dts|true[ ._-]?hd|atmos|5[ ._-]?1|6ch|7[ ._-]?1|8ch)\b/i.test(bits);
+  if (nativeDolbyPlaysDirect(caps) && caps.ac3 && caps.eac3) return /\b(dts|true[ ._-]?hd)\b/i.test(bits);
+  return /\b(ddp\d?|dd\+|eac3|e-ac-3|ac3|dts|true[ ._-]?hd|atmos|5[ ._-]?1|6ch|7[ ._-]?1|8ch)\b/i.test(bits);
 }
 async function fetchPlayerTracks(p, timeoutMs = 0) {
   if (!p || !p.tracksUrl) return null;
@@ -15006,9 +15021,23 @@ function withRemuxStart(p, seconds, go) {
   const seq = p._remuxStartSeq;
   start.then((s) => { if (S.playing === p && p._remuxStartSeq === seq) go(s); });
 }
+// The stream dropped and the shell is about to reopen it. These cycles never reached the failure
+// count, so a damaged spot looped quietly. A slow provider does not land here: only a read that
+// failed or a stream that ended early does, and a pause never does.
+window.__tvNativeStreamDropped = (pos, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
+  const at = Math.max(0, +pos || 0);
+  if (!noteSourceFailure(p, at, appMs()) || p._sourceAdvancePending) return;
+  autoAdvance({
+    allowMidstreamAdvance: true, nativePreferred: true, keepSourceIfNone: true, failedAt: at,
+    reason: `stream kept dropping at ${Math.floor(at)}s`, cause: 'stall-repeat',
+  });
+};
 window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   const p = S.playing;
   if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
+  if (resume && p._sourceAdvancePending) return;
   p._nativeResuming = true;
   p._nativeSeekGen = (p._nativeSeekGen || 0) + 1;
   const seekGen = p._nativeSeekGen;
@@ -15118,6 +15147,30 @@ window.__tvNativeVideoError = (msg, pos, dur, token) => {
   toast(msg ? `Native player failed (${msg})` : 'Native player failed');
   closePlayer();
 };
+// ExoPlayer found audio that nothing on this box can play, or its audio output failed. Picture with
+// no sound raises no player error, so the shell tells us. One rescue per source: the same second as
+// a remux with 5.1 AAC, which every Android box decodes. Other audio paths stay exactly as they were.
+window.__tvNativeAudioUnplayable = (detail, pos, dur, token, fatal) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  applyNativeVideoProgress(pos, dur, { preserveOnZero: true });
+  const giveUp = () => {
+    notePlaybackIssue('audio', 'no sound and no AAC rescue left: ' + detail, 0);
+    if (fatal) window.__tvNativeVideoError(detail, pos, dur, token);
+  };
+  if (p.nativeAacAudio || currentPlayerKind(p) === 'transcode' || !p.remuxUrl) { giveUp(); return; }
+  const at = currentTime();
+  p.nativeAacAudio = true;
+  p.usingNative = false;
+  notePlaybackIssue('audio', detail + ' — switching this title to AAC audio', 0);
+  if (!tryNativeVideoPlayer('remux', at, { quietSeek: true })) {
+    p.usingNative = true;
+    p.nativeAacAudio = false;
+    giveUp();
+  }
+};
+// The shell saw the audio output change (receiver, headphones, HDMI). Ask it again on the next play.
+window.__tvAudioOutputChanged = () => { S._nativeCaps = undefined; S._caps = null; };
 window.__tvNativeVideoNext = (pos, dur, token) => {
   const p = S.playing;
   if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
@@ -15428,14 +15481,34 @@ function playbackServerGone(reason) {
 // Pure; the ledger lives on the playing object.
 const REPEAT_FAIL_SPOT_SEC = 20;
 const REPEAT_FAIL_WINDOW_MS = 120000;
-function playbackRepeatFailure(p, atSec, nowMs, contentError = false) {
+const REPEAT_FAIL_RETURN_WINDOW_MS = 600000;
+function playbackRepeatFailure(p, atSec, nowMs, contentError = false, windowMs = REPEAT_FAIL_WINDOW_MS) {
   const src = String(p.sourcePickKey || p.mountId || '');
-  const ledger = (p._failLedger || []).filter((f) => nowMs - f.t < REPEAT_FAIL_WINDOW_MS && f.src === src);
+  const ledger = (p._failLedger || []).filter((f) => nowMs - f.t < windowMs && f.src === src);
   const pos = Math.max(0, Math.floor(Number(atSec) || 0));
   const sameSpot = ledger.filter((f) => Math.abs(f.pos - pos) <= REPEAT_FAIL_SPOT_SEC).length;
   ledger.push({ pos, t: nowMs, src });
   p._failLedger = ledger;
   return contentError ? sameSpot >= 1 : sameSpot >= 2;
+}
+// Where trouble at this spot began. Each reconnect restarts on the NEXT keyframe, so the clock walks
+// across a damaged stretch without showing it; saving or resuming that clock skipped the story.
+function positionBeforeRepeatFailure(p, pos) {
+  const src = String(p.sourcePickKey || p.mountId || '');
+  const spot = (S._sourceFailLedger || [])
+    .filter((f) => f.src === src && Math.abs(f.pos - pos) <= REPEAT_FAIL_SPOT_SEC)
+    .map((f) => f.pos);
+  return spot.length ? Math.min(pos, ...spot) : pos;
+}
+// The count outlives the player. Leaving and pressing Play on a damaged release used to start from
+// zero, so the same spot failed forever and only a manual source pick got past it.
+function noteSourceFailure(p, atSec, nowMs, contentError = false) {
+  p._failLedger = S._sourceFailLedger || [];
+  const repeated = playbackRepeatFailure(p, atSec, nowMs, contentError, REPEAT_FAIL_RETURN_WINDOW_MS);
+  S._sourceFailLedger = p._failLedger;
+  if (!repeated || p._noAlternateRelease) return false; // nothing left to switch to: keep playing
+  if (p.usingNative) p.nativePos = positionBeforeRepeatFailure(p, Number(atSec) || 0);
+  return true;
 }
 // ExoPlayer 3xxx parsing errors only. 2xxx (including IO_UNSPECIFIED) are network/IO errors.
 const PLAYBACK_CONTENT_ERROR_RE = /PARSING_|MALFORMED|varint|extractor|invalid (data|media)/i;
@@ -15480,7 +15553,7 @@ function recoverSamePlaybackSource(reason = '') {
   p._sameSourceRecoveryKey = key;
   p._sameSourceRecoveryAt = now;
   const contentError = PLAYBACK_CONTENT_ERROR_RE.test(String(reason || ''));
-  const repeatedHere = !sourceDead && !decoderFailure && playbackRepeatFailure(p, at, now, contentError);
+  const repeatedHere = !sourceDead && !decoderFailure && noteSourceFailure(p, at, now, contentError);
   if (sourceDead || repeatedHere) {
     if (!p._sourceAdvancePending) {
       autoAdvance({
@@ -15488,6 +15561,7 @@ function recoverSamePlaybackSource(reason = '') {
         reason: repeatedHere ? `failed again at ${Math.floor(at)}s: ${reason || 'playback interrupted'}` : (reason || 'source health blocked'),
         // Repeated stalls may be this viewer's line: move on, but do not demote the release house-wide.
         ...(repeatedHere && !contentError ? { cause: 'stall-repeat' } : {}),
+        ...(repeatedHere && !contentError ? { keepSourceIfNone: true, failedAt: at } : {}),
       });
     }
     return true;
@@ -15749,6 +15823,7 @@ async function autoAdvance(opts = {}) {
     p.nativeStartKind = playbackStartKind(r); p.nativeTried = {};
     p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0;
     p.tracks = null; p._tracksJob = null; p.subTrack = null; p.audioTrack = 0; p.forceAacRemux = false;
+    p.nativeAacAudio = false;
     if (!opts.allowMidstreamAdvance) {
       $('pSrc').textContent = r.candidate ? r.candidate.name : r.name;
     }
@@ -15781,6 +15856,18 @@ async function autoAdvance(opts = {}) {
       // A rolling server restart/sweep loses the session as well as the mount. Re-create the same
       // title session; do not misreport that infrastructure case as exhausted alternate releases.
       reMountAndResume(opts.reason || 'playback session expired');
+      return;
+    }
+    // A rough patch on the only release must not end the movie. Stay on it and stop hunting: the
+    // reconnect steps past the damage, which beats an error screen when nothing else exists.
+    if (opts.keepSourceIfNone && p.usingNative) {
+      p._noAlternateRelease = true;
+      notePlaybackIssue('source', 'no other release to switch to — staying on this one', 0);
+      const kind = currentPlayerKind(p);
+      forwardRemuxResumeSec(p, opts.failedAt).then((next) => {
+        if (S.playing !== p || S.view !== 'player') return;
+        if (!tryNativeVideoPlayer(kind, next, { quietSeek: true })) showPlaybackInterrupted(opts.reason);
+      });
       return;
     }
     if (opts.allowMidstreamAdvance) {
@@ -17073,6 +17160,7 @@ async function saveWatch(final, opts = {}) {
   // watched mark, no Trakt scrobble — the knock-off "The Odyssey" used to save itself as Nolan's.
   if (p._runtimeMismatchShown || (p.tracks && p.tracks.runtimeMismatch)) return;
   let pos = currentTime();
+  if (typeof positionBeforeRepeatFailure === 'function') pos = positionBeforeRepeatFailure(p, pos);
   const playedSeconds = takePlayedSeconds(p);
   if (!final && Math.abs(pos - p.lastSaved) < 5 && playedSeconds < 1) return;
   p.lastSaved = pos;
@@ -26082,6 +26170,12 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   syncChoiceButtons('#prefAutoplay button', (b) => b.dataset.ap === (prefAutoplay() ? '1' : '0'));
   syncChoiceButtons('#prefSubtitleMode button', (b) => b.dataset.submode === prefSubtitleMode());
   syncChoiceButtons('#prefCcStyle button', (b) => b.dataset.ccstyle === prefCcStyle());
+  const passthroughBridge = window.TriboonTV && window.TriboonTV.audioPassthroughMode ? window.TriboonTV : null;
+  $('prefPassthroughWrap').hidden = !passthroughBridge;
+  if (passthroughBridge) {
+    const passthroughMode = passthroughBridge.audioPassthroughMode();
+    syncChoiceButtons('#prefPassthrough button', (b) => b.dataset.pass === passthroughMode);
+  }
   const ss = applySubSize();
   syncChoiceButtons('#prefSubSize button', (b) => b.dataset.ss === ss);
   syncChoiceButtons('#prefScreensaverDelay button', (b) => +b.dataset.ssv === prefScreensaverDelaySeconds());
@@ -26857,6 +26951,12 @@ document.querySelectorAll('#prefSubtitleMode button').forEach((b) => b.addEventL
   savePrefSubtitleMode(b.dataset.submode);
   syncChoiceButtons('#prefSubtitleMode button', (x) => x === b);
   toast(b.dataset.submode === 'always' ? 'Subtitles will start automatically' : 'Subtitles will stay manual');
+}));
+document.querySelectorAll('#prefPassthrough button').forEach((b) => b.addEventListener('click', () => {
+  if (!window.TriboonTV || !window.TriboonTV.setAudioPassthroughMode) return;
+  window.TriboonTV.setAudioPassthroughMode(b.dataset.pass);
+  syncChoiceButtons('#prefPassthrough button', (x) => x === b);
+  toast('Surround sound changes on the next play');
 }));
 document.querySelectorAll('#prefSubSize button').forEach((b) => b.addEventListener('click', () => {
   try { localStorage.setItem('triboon.subsize', b.dataset.ss); } catch {}

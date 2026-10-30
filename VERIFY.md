@@ -128,6 +128,16 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-30, unreleased on top of v3.4.4 — One audio path on every Android box, and a damaged spot no longer holds a viewer:
+- Sound: audio ExoPlayer cannot play (no error, picture only) now rescues once to 5.1 AAC with `audioAac=1`; IPTV moves down its fallback list to the always-AAC server stream. Output changes clear the capability caches and re-pick audio mid-title (`setAllowInvalidateSelectionsOnRendererCapabilitiesChange`, same as Jellyfin). Each play logs decoded vs passthrough.
+- Dolby plays direct on any Android box with a decoder or a Dolby HDMI output; DTS and lossless stay Shield-only on Auto. New per-device setting: Auto / Decode here / Always send.
+- Freeze: drops are reported to web and counted per release for 10 minutes across leaving the player; the 3rd failure at one spot switches release and resumes where trouble began; saved progress cannot walk past the spot; with no other release the file keeps playing. Found and fixed on the way: a pause/resume remount uses the same reconnect signal (excluded), and `DDP5.1` names never matched the name-risk regex.
+- Gate: `npm.cmd test` 923/923. `verify:full` on the QA rig (fixture NNTP 61119; LOTR 2001 + Stuart Fails to Save the Universe S01E01): every step PASS including Android stress. An earlier run hit the known load flakes (EPIPE boot, IPTV restart 401); both passed on rerun.
+- Device proof on the QA TV emulator (no Dolby decoder): real AC3 stream rescued to AAC 6ch in about 1s; AC3 IPTV channel moved to the server stream and played AAC; mid-title rescue and a later seek stayed on AAC; three drops triggered the switch; no alternate kept playing; Surround setting checked on screen. Skip time on one 1080p file, 5 samples each: median 4.1s direct, 8.4s remux.
+- Real Onn 4K Pro (Android 14, real providers, Dune Part Two 1080p): Amlogic AC3 and E-AC3 decoders present, no DTS. Direct played DDP 7.1 as passthrough E-AC3 8ch; remux of the same file gave 6ch. Real AC3 IPTV channel played passthrough. Pause then play recovered in 0.7s on both routes. Decode here reported decoded 2ch after the sink fix (a sink built with a context ignores setAudioCapabilities). `getEncodings()` came back empty on this box, so HDMI support now also asks Media3 `AudioCapabilities`.
+- Measured on that Onn with an optimized (R8, non-debuggable) build, press to first rendered frame: resume 1.4 to 1.5s direct vs 2.0 to 2.3s remux; from the start 0.9 to 1.5s direct vs 0.7s remux; cold player-to-tracks 1.0 to 1.4s direct vs 0.3s remux; 8 skips median 1.4s, worst 3.5s, no stalls or fallback. Debug builds parse MKV Cues far slower (0.3MB took 2.5s), so never judge direct start speed on one: an earlier 3s gap and the first-play watchdog fallbacks were that plus a once-a-second position metric. Keyframe-only resume did not help and was reverted.
+- NOT verified: the Shield, a Google TV Streamer, a receiver, and a mid-title Bluetooth change. The damaged-spot path was driven by injected drops, not a truly damaged release.
+
 2026-10-25, v3.4.4 — Every "blocked" switch now says why in the always-on log, and a health check where one account could not answer is no longer a missing piece:
 
 - Owner on 3.4.3: The Good Doctor S05E15 NTb "file died … playback failed" then "switched release

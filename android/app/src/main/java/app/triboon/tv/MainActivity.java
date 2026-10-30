@@ -32,6 +32,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
+import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
 import android.media.AudioManager;
@@ -93,6 +94,9 @@ import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.analytics.AnalyticsListener;
+import androidx.media3.exoplayer.audio.AudioCapabilities;
+import androidx.media3.exoplayer.audio.AudioSink;
+import androidx.media3.exoplayer.audio.DefaultAudioSink;
 import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
@@ -132,6 +136,7 @@ public class MainActivity extends Activity {
     private static final String TAG = "TriboonTV";
     private static final String PREFS = "triboon";
     private static final String KEY_SERVER = "server";
+    private static final String KEY_AUDIO_PASSTHROUGH = "audioPassthrough";
     // Exact server URL the user has explicitly approved for unencrypted (plain-HTTP) remote access.
     // Empty unless they confirmed the insecure-connection prompt; lets a self-hoster use HTTP without
     // re-confirming on every cold start, while a fresh/edited address still requires the deliberate tap.
@@ -448,7 +453,12 @@ public class MainActivity extends Activity {
     private int webRendererGoneCount;
     private final java.util.ArrayList<String> pendingTvKeys = new java.util.ArrayList<>();
     private final java.util.HashMap<String, PersonalIptvHostPin> personalIptvHostSafetyCache = new java.util.HashMap<>();
-    private String nativePlaybackCapsCache;
+    private volatile String nativePlaybackCapsCache; // written on main, read on the JS bridge thread
+    private String nativeAudioRescueUrl = ""; // the stream we already raised a sound problem for
+    private final AudioDeviceCallback nativeAudioOutputCallback = new AudioDeviceCallback() {
+        @Override public void onAudioDevicesAdded(AudioDeviceInfo[] added) { onNativeAudioOutputChanged(); }
+        @Override public void onAudioDevicesRemoved(AudioDeviceInfo[] removed) { onNativeAudioOutputChanged(); }
+    };
     private MediaCodecInfo[] nativeDecoderInfoCache;
     private boolean nativeVoiceDucked;
 
@@ -458,6 +468,8 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         active = this; // MusicService forwards lock-screen transport back to this Activity
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager != null) audioManager.registerAudioDeviceCallback(nativeAudioOutputCallback, new Handler(Looper.getMainLooper()));
 
         root = new FrameLayout(this);
         root.setBackgroundColor(0xFF0B0812); // --ink
@@ -526,6 +538,7 @@ public class MainActivity extends Activity {
         super.onResume();
         webPauseEpoch++;
         applySystemUiPolicy();
+        onNativeAudioOutputChanged(); // a receiver can wake or change while the app is in the background
         if (web != null) {
             web.onResume();
             web.resumeTimers();
@@ -1456,6 +1469,19 @@ public class MainActivity extends Activity {
             public String nativePlaybackCaps() {
                 if (!trustedBridgeOrigin()) return "{}";
                 return buildNativePlaybackCaps();
+            }
+
+            @android.webkit.JavascriptInterface
+            public String audioPassthroughMode() {
+                if (!trustedBridgeOrigin()) return "auto";
+                return nativeAudioPassthroughMode();
+            }
+
+            @android.webkit.JavascriptInterface
+            public void setAudioPassthroughMode(String mode) {
+                if (!trustedBridgeOrigin()) return;
+                prefs().edit().putString(KEY_AUDIO_PASSTHROUGH, NativeAudioRescue.cleanPassthroughMode(mode)).apply();
+                runOnUiThread(() -> onNativeAudioOutputChanged());
             }
 
             @android.webkit.JavascriptInterface
@@ -2874,7 +2900,11 @@ public class MainActivity extends Activity {
         try {
             org.json.JSONObject j = new org.json.JSONObject();
             boolean conservative = nativeConservativePlaybackDevice();
-            org.json.JSONObject sink = nativeAudioSinkCaps(conservative);
+            String passthroughMode = nativeAudioPassthroughMode();
+            // Dolby passthrough belongs to the HDMI output, so every box reads it. DTS and lossless
+            // stay Shield-only on Auto: Onn-class boxes report them and then cannot pass them.
+            boolean trustHdAudio = !conservative || "on".equals(passthroughMode);
+            org.json.JSONObject sink = nativeAudioSinkCaps(trustHdAudio, passthroughMode);
             boolean sinkAc3 = sink.optBoolean("ac3");
             boolean sinkEac3 = sink.optBoolean("eac3");
             boolean sinkEac3Joc = sink.optBoolean("eac3Joc");
@@ -2908,13 +2938,13 @@ public class MainActivity extends Activity {
             j.put("aac", nativeDecoderAvailable("audio/mp4a-latm"));
             j.put("ac3", nativeDecoderAvailable("audio/ac3") || sinkAc3);
             j.put("eac3", nativeDecoderAvailable("audio/eac3") || nativeDecoderAvailable("audio/eac3-joc") || sinkEac3 || sinkEac3Joc);
-            j.put("eac3Joc", !conservative && (nativeDecoderAvailable("audio/eac3-joc") || sinkEac3Joc));
+            j.put("eac3Joc", sinkEac3Joc || (!conservative && nativeDecoderAvailable("audio/eac3-joc")));
             // Budget TV boxes often expose DTS decoders that still fail in fMP4/remux paths or
             // burn CPU. Force AAC audio remux there; Shield-class devices can still copy DTS.
-            j.put("dts", !conservative && (nativeDecoderAvailable("audio/vnd.dts") || nativeDecoderAvailable("audio/vnd.dts.hd") || sinkDts || sinkDtsHd));
-            j.put("dtsHd", !conservative && sinkDtsHd);
-            j.put("truehd", !conservative && sinkTrueHd);
-            j.put("passthrough", !conservative && passthrough);
+            j.put("dts", trustHdAudio && (nativeDecoderAvailable("audio/vnd.dts") || nativeDecoderAvailable("audio/vnd.dts.hd") || sinkDts || sinkDtsHd));
+            j.put("dtsHd", trustHdAudio && sinkDtsHd);
+            j.put("truehd", trustHdAudio && sinkTrueHd);
+            j.put("passthrough", passthrough);
             j.put("audioOutput", sink.optString("output", ""));
             j.put("source", "exo-mediacodec+audio-output");
             nativePlaybackCapsCache = j.toString();
@@ -2971,7 +3001,7 @@ public class MainActivity extends Activity {
     }
 
     @SuppressLint("InlinedApi")
-    private org.json.JSONObject nativeAudioSinkCaps(boolean conservative) {
+    private org.json.JSONObject nativeAudioSinkCaps(boolean trustHdAudio, String passthroughMode) {
         org.json.JSONObject out = new org.json.JSONObject();
         try {
             out.put("ac3", false);
@@ -2982,7 +3012,7 @@ public class MainActivity extends Activity {
             out.put("truehd", false);
             out.put("passthrough", false);
             out.put("output", "");
-            if (conservative) return out;
+            if ("off".equals(passthroughMode)) return out;
             AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             if (am == null) return out;
             AudioDeviceInfo[] devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
@@ -3005,12 +3035,31 @@ public class MainActivity extends Activity {
                 out.put("dts", out.optBoolean("dts") || dts || dtsHd);
                 out.put("dtsHd", out.optBoolean("dtsHd") || dtsHd);
                 out.put("truehd", out.optBoolean("truehd") || truehd);
-                any = any || ac3 || eac3 || eac3Joc || dts || dtsHd || truehd;
+                any = any || ac3 || eac3 || eac3Joc || (trustHdAudio && (dts || dtsHd || truehd));
             }
+            // Android 13+ boxes can leave getEncodings() empty while the output takes Dolby (Onn 4K
+            // Pro). Ask the check ExoPlayer itself uses, so this report and the player agree.
+            AudioCapabilities player = AudioCapabilities.getCapabilities(this, AudioAttributes.DEFAULT, null);
+            boolean playerAc3 = nativePlayerPassesThrough(player, MimeTypes.AUDIO_AC3);
+            boolean playerEac3 = nativePlayerPassesThrough(player, MimeTypes.AUDIO_E_AC3);
+            boolean playerJoc = nativePlayerPassesThrough(player, MimeTypes.AUDIO_E_AC3_JOC);
+            out.put("ac3", out.optBoolean("ac3") || playerAc3);
+            out.put("eac3", out.optBoolean("eac3") || playerEac3 || playerJoc);
+            out.put("eac3Joc", out.optBoolean("eac3Joc") || playerJoc);
+            any = any || playerAc3 || playerEac3 || playerJoc;
             out.put("passthrough", any);
             out.put("output", output);
         } catch (Exception ignored) {}
         return out;
+    }
+
+    private boolean nativePlayerPassesThrough(AudioCapabilities capabilities, String mime) {
+        return capabilities.isPassthroughPlaybackSupported(new Format.Builder()
+                .setSampleMimeType(mime).setChannelCount(6).setSampleRate(48000).build(), AudioAttributes.DEFAULT);
+    }
+
+    private String nativeAudioPassthroughMode() {
+        return NativeAudioRescue.cleanPassthroughMode(prefs().getString(KEY_AUDIO_PASSTHROUGH, "auto"));
     }
 
     @SuppressLint("InlinedApi")
@@ -4528,6 +4577,7 @@ public class MainActivity extends Activity {
             // A fresh playback adopts the saved preference; a quiet-seek respawn of the SAME
             // playback keeps the manual in-player pick (it used to silently reset to English).
             if (!quietSeek) nativeManualAudioLang = "";
+            if (!quietSeek) nativeAudioRescueUrl = "";
             applyNativeAudioChoices(audioChoices);
             String previousSubtitleUrl = nativeSubtitleUrl == null ? "" : nativeSubtitleUrl;
             boolean keepSubtitleCues = reuseQuietVideo && !nativeSubtitleCues.isEmpty();
@@ -4593,6 +4643,10 @@ public class MainActivity extends Activity {
                         reportNativePlaybackIssue("audio", "audio decoder error — "
                                 + (audioCodecError == null ? "codec error" : String.valueOf(audioCodecError.getMessage())), 0L);
                     }
+                    @Override public void onAudioTrackInitialized(EventTime eventTime, AudioSink.AudioTrackConfig config) {
+                        if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken || config == null) return;
+                        reportNativePlaybackIssue("trace", "audio output " + NativeAudioRescue.describeOutput(config.encoding, config.channelConfig), 0L);
+                    }
                     @Override public void onAudioInputFormatChanged(EventTime eventTime, Format format, androidx.media3.exoplayer.DecoderReuseEvaluation reuse) {
                         if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken || format == null) return;
                         reportNativePlaybackIssue("trace", "audio track " + String.valueOf(format.sampleMimeType)
@@ -4619,6 +4673,8 @@ public class MainActivity extends Activity {
                     long dur = nativeDurSeconds();
                     String m = nativeMode;
                     if ("video".equals(m)) {
+                        if (NativeAudioRescue.audioPipelineFailed(error)
+                                && requestNativeAudioRescue("audio output failed — " + msg, true)) return;
                         boolean userPaused = nativePlayer != null && !nativePlayer.getPlayWhenReady();
                         if (userPaused && isNativeRecoverableIoError(error)) {
                             Log.w(TAG, "Native VOD IO while paused (code " + error.errorCode
@@ -4657,6 +4713,7 @@ public class MainActivity extends Activity {
                                     + (cause.isEmpty() ? "" : ", " + cause)
                                     + ") — resuming at " + (resumeAt / 1000L) + "s via "
                                     + (nativeServerSeekMode() ? "a fresh server seek" : "the same direct stream"), 0L);
+                            reportNativeStreamDrop(resumeAt);
                             if (nativeServerSeekMode()) {
                                 Log.w(TAG, "Native VOD remux stream dropped (code " + error.errorCode + ", " + msg
                                         + "); resuming at " + resumeAt + "ms (no replay)");
@@ -4737,6 +4794,7 @@ public class MainActivity extends Activity {
                                     + "s; remounting the same source at " + resumeAt + "ms");
                             nativeLastAutoResumeSeekMs = SystemClock.elapsedRealtime();
                             nativeBackwardTicks = 0;
+                            reportNativeStreamDrop(resumeAt);
                             requestNativeVideoSeek(resumeAt, true);
                             return;
                         }
@@ -4767,6 +4825,9 @@ public class MainActivity extends Activity {
                 @Override public void onTracksChanged(Tracks tracks) {
                     if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
                     updateNativeChrome();
+                    if (NativeAudioRescue.noPlayableAudio(tracks)) {
+                        onNativeNoPlayableAudio(listenerPlayer, listenerPlaybackToken, NativeAudioRescue.unplayableAudioNames(tracks));
+                    }
                 }
 
                 @Override public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
@@ -5400,6 +5461,15 @@ public class MainActivity extends Activity {
         if (!nativePlayer.getPlayWhenReady()) return;
         if (nativePlayer.isPlaying()) return;
         remountNativeRemuxAtResume();
+    }
+
+    // Counted by web toward switching release. A reconnect after the viewer's own pause is not a
+    // failure of this file, so it never gets here.
+    private void reportNativeStreamDrop(long displayMs) {
+        if (web == null || !AutoResume.mayReconnectWhilePaused(nativeUserPausedAtMs)) return;
+        String pos = String.format(java.util.Locale.US, "%.3f", Math.max(0L, displayMs) / 1000.0);
+        web.evaluateJavascript("window.__tvNativeStreamDropped && __tvNativeStreamDropped("
+                + pos + "," + nativePlaybackToken + ")", null);
     }
 
     private void retryNativeDirectInPlace(long displayMs) {
@@ -6148,7 +6218,21 @@ public class MainActivity extends Activity {
         // Stock audio sink. 3.3.18 doubled the passthrough AudioTrack buffer to silence underrun
         // log lines the owner never heard; after it, pause/play on the Shield's E-AC3 passthrough
         // froze the audio clock (and the picture) for 20 s. Back to Media3's default.
-        return new DefaultRenderersFactory(this)
+        boolean decodeOnThisBox = "off".equals(nativeAudioPassthroughMode());
+        return new DefaultRenderersFactory(this) {
+            // Still the stock sink, told the output takes PCM only, so the box decodes and its
+            // own volume works. Only the owner's Decode setting reaches this.
+            @Override
+            protected AudioSink buildAudioSink(Context context, boolean enableFloatOutput, boolean enableOutputParameters) {
+                if (!decodeOnThisBox) return super.buildAudioSink(context, enableFloatOutput, enableOutputParameters);
+                // No context here: given one, the sink reads the real output and ignores the capabilities.
+                return new DefaultAudioSink.Builder()
+                        .setAudioCapabilities(AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES)
+                        .setEnableFloatOutput(enableFloatOutput)
+                        .setEnableAudioOutputPlaybackParameters(enableOutputParameters)
+                        .build();
+            }
+        }
                 .setEnableDecoderFallback(true)
                 .setEnableAudioOutputPlaybackParameters(true);
     }
@@ -6191,6 +6275,15 @@ public class MainActivity extends Activity {
                             .build());
         }
         nativePlayer.setTrackSelectionParameters(params.build());
+        // Off by default in Media3. Without it a receiver or headphones changing mid-title keeps the
+        // old audio pick, and a pick the new output cannot play is silent. Jellyfin sets this too.
+        androidx.media3.exoplayer.trackselection.TrackSelector selector = nativePlayer.getTrackSelector();
+        if (selector instanceof androidx.media3.exoplayer.trackselection.DefaultTrackSelector) {
+            androidx.media3.exoplayer.trackselection.DefaultTrackSelector audioSelector =
+                    (androidx.media3.exoplayer.trackselection.DefaultTrackSelector) selector;
+            audioSelector.setParameters(audioSelector.buildUponParameters()
+                    .setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true));
+        }
     }
 
     private MediaItem buildNativeMediaItem() {
@@ -6549,6 +6642,43 @@ public class MainActivity extends Activity {
                 + org.json.JSONObject.quote(kind) + ","
                 + org.json.JSONObject.quote(detail == null ? "" : detail) + ","
                 + Math.max(0L, sec) + ")", null);
+    }
+
+    private void onNativeAudioOutputChanged() {
+        nativePlaybackCapsCache = null;
+        if (web != null) web.evaluateJavascript("window.__tvAudioOutputChanged && __tvAudioOutputChanged()", null);
+    }
+
+    // Picture with no sound is not a player error, so nothing else recovers it. Runs after the
+    // listener callback: both recoveries below stop this player.
+    private void onNativeNoPlayableAudio(ExoPlayer player, long playbackToken, String names) {
+        new Handler(Looper.getMainLooper()).post(() -> {
+            if (player != nativePlayer || playbackToken != nativePlaybackToken) return;
+            String detail = "this device cannot play the audio (" + names + ")";
+            if ("video".equals(nativeMode)) {
+                requestNativeAudioRescue(detail, false);
+            } else if ("live".equals(nativeMode) && !nativeUrl.equals(nativeAudioRescueUrl)) {
+                nativeAudioRescueUrl = nativeUrl;
+                reportNativePlaybackIssue("audio", detail, 0L);
+                tryNativeLiveFallback(); // the last fallback is the server stream, always AAC
+            }
+        });
+    }
+
+    // Web owns the rescue (it builds the URL and allows one per source). fatal means the player has
+    // already stopped: a page without the handler (server older than this APK) gets the normal error.
+    private boolean requestNativeAudioRescue(String detail, boolean fatal) {
+        if (web == null || !"video".equals(nativeMode) || nativeUrl == null) return false;
+        if (nativeUrl.equals(nativeAudioRescueUrl)) return false;
+        nativeAudioRescueUrl = nativeUrl;
+        long pos = nativePosSeconds();
+        long dur = nativeDurSeconds();
+        web.evaluateJavascript("!!(window.__tvNativeAudioUnplayable && (__tvNativeAudioUnplayable("
+                + org.json.JSONObject.quote(detail) + "," + nativeSafePosPrecise() + "," + dur + ","
+                + nativePlaybackToken + "," + fatal + "),true))", handled -> {
+            if (fatal && !"true".equals(handled)) notifyNativeVideoError(detail, pos, dur);
+        });
+        return true;
     }
 
     private void notifyNativeVideoError(String msg, long pos, long dur) {
@@ -9509,6 +9639,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         focusRecoveryEpoch++; // neutralize any pending postDelayed focus-recovery so it can't touch a dead Activity
+        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager != null) audioManager.unregisterAudioDeviceCallback(nativeAudioOutputCallback);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backInvokedCallback != null) {
             try { getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backInvokedCallback); } catch (Exception ignored) {}
             backInvokedCallback = null;

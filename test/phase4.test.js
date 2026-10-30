@@ -4383,7 +4383,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'home should render a hidden focus target before the watch-state request can freeze Android TV D-pad input');
   assert.match(ui, /function perfMark\(name, extra = \{\}\) \{[\s\S]+S\.perfMarks[\s\S]+function signalTvReady\(reason\) \{[\s\S]+TriboonTV\.appReady[\s\S]+function signalTvReadyOnce\(reason\)/,
     'web boot should expose timing marks and notify Android when the TV focus model is ready');
-  assert.match(android, /public String nativePlaybackCaps\(\) \{[\s\S]+return buildNativePlaybackCaps\(\);[\s\S]+private String buildNativePlaybackCaps\(\) \{[\s\S]+nativeAudioSinkCaps\(conservative\)[\s\S]+j\.put\("deviceClass", conservative \? "budget-android-tv" : "android-tv"\)[\s\S]+j\.put\("truehd", !conservative && sinkTrueHd\)[\s\S]+j\.put\("passthrough", !conservative && passthrough\)[\s\S]+j\.put\("source", "exo-mediacodec\+audio-output"\)/,
+  assert.match(android, /public String nativePlaybackCaps\(\) \{[\s\S]+return buildNativePlaybackCaps\(\);[\s\S]+private String buildNativePlaybackCaps\(\) \{[\s\S]+nativeAudioSinkCaps\(trustHdAudio, passthroughMode\)[\s\S]+j\.put\("deviceClass", conservative \? "budget-android-tv" : "android-tv"\)[\s\S]+j\.put\("truehd", trustHdAudio && sinkTrueHd\)[\s\S]+j\.put\("passthrough", passthrough\)[\s\S]+j\.put\("source", "exo-mediacodec\+audio-output"\)/,
     'Android should report Exo/MediaCodec plus HDMI/eARC audio-output capabilities and conservative device class instead of relying only on WebView canPlayType');
   assert.match(ui, /function nativePlaybackCaps\(\) \{[\s\S]+TriboonTV\.nativePlaybackCaps[\s\S]+JSON\.parse\(TriboonTV\.nativePlaybackCaps\(\)[\s\S]+function clientCaps\(\) \{[\s\S]+const nativeCaps = nativePlaybackCaps\(\);[\s\S]+S\._caps = nativeCaps \? \{ \.\.\.webCaps, \.\.\.nativeCaps, web: webCaps \} : webCaps;/,
     'web play requests should merge native Exo capabilities into the caps sent to the server');
@@ -9667,7 +9667,8 @@ return { playbackRepeatFailure, re: PLAYBACK_CONTENT_ERROR_RE };`)();
   assert.ok(re.test('ERROR_CODE_PARSING_CONTAINER_MALFORMED') && re.test('IllegalStateException: No valid varint length mask found'), 'parse errors are content errors');
   assert.ok(!re.test('ERROR_CODE_TIMEOUT') && !re.test('native rebuffer stalled') && !re.test('ERROR_CODE_IO_UNSPECIFIED'),
     'timeouts, stalls and Exo 2xxx IO errors are not');
-  assert.match(ui, /const repeatedHere = !sourceDead && !decoderFailure && playbackRepeatFailure\(p, at, now, contentError\);/);
+  assert.match(ui, /const repeatedHere = !sourceDead && !decoderFailure && noteSourceFailure\(p, at, now, contentError\);/);
+  assert.match(ui, /function noteSourceFailure\(p, atSec, nowMs, contentError = false\) \{[\s\S]{0,120}const repeated = playbackRepeatFailure\(p, atSec, nowMs, contentError, REPEAT_FAIL_RETURN_WINDOW_MS\);/);
   assert.match(ui, /repeatedHere && !contentError \? \{ cause: 'stall-repeat' \}/, 'a stall-caused switch tells the server not to demote');
   assert.match(ui, /opts\.cause === 'stall-repeat' \? \{ cause: 'stall-repeat' \}/, 'autoAdvance forwards the cause');
 });
@@ -9835,4 +9836,112 @@ test('library scan gives the event loop turns, so a scan on a slow share never f
   assert.match(body, /await maybeBreathe\(\);\s*const epNfo = nfoBeside/, 'and between episodes');
   assert.doesNotMatch(body, /items\.filter\(\(it\) => it\.kind === 'episode' && it\.showIdx === show\.idx\)/,
     'a show no longer scans every item to find its own episodes (quadratic on big libraries)');
+});
+
+test('Android: unplayable audio is rescued once with 5.1 AAC, and the shell reports it', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  const ui = fs.readFileSync(path.join(root, 'web', 'index.html'), 'utf8');
+  const server = fs.readFileSync(path.join(root, 'server', 'index.js'), 'utf8');
+  const android = fs.readFileSync(path.join(root, 'android/app/src/main/java/app/triboon/tv/MainActivity.java'), 'utf8');
+  assert.match(server, /const forceAudioAac = ctx\.url\.searchParams\.get\('audioAac'\) === '1';\s+const transcodeAudio = forceAudioSafe \|\| forceAudioAac \|\| !audioCopyOk\(aud, vf\._caps\);[\s\S]+safeStereo: forceAudioSafe/,
+    'audioAac forces AAC on the remux and leaves it 5.1: only audioSafe drops to stereo');
+  assert.match(ui, /const rescue = \(p && p\.nativeAacAudio && opts\.native\) \? '&audioAac=1' : '';/,
+    'only the native surface asks for the 5.1 rescue');
+  assert.match(ui, /__tvNativeAudioUnplayable = \(detail, pos, dur, token, fatal\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+if \(p\.nativeAacAudio \|\| currentPlayerKind\(p\) === 'transcode' \|\| !p\.remuxUrl\) \{ giveUp\(\); return; \}[\s\S]+tryNativeVideoPlayer\('remux', at, \{ quietSeek: true \}\)/,
+    'the rescue runs once per source, resumes the same second, and is token guarded');
+  assert.match(ui, /p\.forceAacRemux = false;\s+p\.nativeAacAudio = false;/, 'a new release starts with its own rescue');
+  assert.match(ui, /__tvAudioOutputChanged = \(\) => \{ S\._nativeCaps = undefined; S\._caps = null; \}/,
+    'both web caches of device audio support clear when the output changes');
+  assert.match(android, /onTracksChanged\(Tracks tracks\) \{[\s\S]{0,300}NativeAudioRescue\.noPlayableAudio\(tracks\)/,
+    'silence raises no player error, so the track list has to be checked');
+  assert.match(android, /"live"\.equals\(nativeMode\) && !nativeUrl\.equals\(nativeAudioRescueUrl\)[\s\S]{0,200}tryNativeLiveFallback\(\)/,
+    'a silent IPTV channel moves down the fallback list, one try per stream');
+  assert.match(android, /if \(fatal && !"true"\.equals\(handled\)\) notifyNativeVideoError/,
+    'a page older than the APK still gets the normal error');
+  assert.match(android, /private void onNativeAudioOutputChanged\(\) \{\s+nativePlaybackCapsCache = null;/,
+    'the output change drops the frozen capability cache');
+  assert.match(android, /setAllowInvalidateSelectionsOnRendererCapabilitiesChange\(true\)/,
+    'a mid-title output change must re-pick audio, or the safety net never sees it');
+});
+
+test('Android: Dolby plays direct on any box that can take it, DTS and lossless stay guarded', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  const ui = fs.readFileSync(path.join(root, 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(root, 'android/app/src/main/java/app/triboon/tv/MainActivity.java'), 'utf8');
+  const from = ui.indexOf('function nativeDolbyPlaysDirect(caps)');
+  const to = ui.indexOf('async function fetchPlayerTracks(p, timeoutMs = 0)');
+  assert.ok(from > 0 && to > from, 'audio routing helpers should be in one block');
+  const helpers = new Function('audioDescriptorForClient', 'clientCaps',
+    ui.slice(from, to) + '\nreturn { nativeDirectAudioNeedsSafeRemux, nativeDirectAudioNameRisk };')((x) => x, () => ({}));
+  const needs = helpers.nativeDirectAudioNeedsSafeRemux;
+  const onn = { native: true, source: 'exo-mediacodec+audio-output', ac3: true, eac3: true, dts: false, passthrough: false };
+  const noDolby = { native: true, source: 'exo-mediacodec+audio-output', ac3: false, eac3: false, passthrough: false };
+  const windows = { native: true, source: 'windows-mpv', ac3: true, eac3: true, passthrough: false };
+  assert.strictEqual(needs('ac3', onn), false, 'a decoder is enough: no server remux');
+  assert.strictEqual(needs('eac3', onn), false);
+  assert.strictEqual(needs('ac3', noDolby), true, 'no Dolby anywhere still gets the AAC remux');
+  assert.strictEqual(needs('eac3', noDolby), true);
+  assert.strictEqual(needs('dts', onn), true, 'DTS stays guarded');
+  assert.strictEqual(needs('truehd', onn), true, 'lossless stays guarded');
+  assert.strictEqual(needs('ac3', windows), true, 'other native clients keep their path');
+  assert.strictEqual(needs('aac', noDolby), false);
+  const risk = helpers.nativeDirectAudioNameRisk;
+  assert.strictEqual(risk({ name: 'Show.S01E01.1080p.WEB-DL.DDP5.1.H.264' }, onn), false, 'a DDP name is no risk on a Dolby box');
+  assert.strictEqual(risk({ name: 'Show.S01E01.1080p.WEB-DL.DDP5.1.H.264' }, noDolby), true);
+  assert.strictEqual(risk({ name: 'Show.S01E01.1080p.BluRay.DTS-HD.MA.5.1' }, onn), true);
+  assert.match(android, /if \("off"\.equals\(passthroughMode\)\) return out;/, 'Decode here reports no passthrough');
+  assert.match(android, /protected AudioSink buildAudioSink\([\s\S]{0,260}if \(!decodeOnThisBox\) return super\.buildAudioSink/,
+    'Auto keeps the stock audio sink untouched');
+  assert.match(android, /boolean trustHdAudio = !conservative \|\| "on"\.equals\(passthroughMode\);/,
+    'DTS and lossless stay Shield-only on Auto');
+  assert.match(ui, /\$\('prefPassthroughWrap'\)\.hidden = !passthroughBridge;/, 'the setting only shows where the shell supports it');
+});
+
+test('a damaged spot: the count survives leaving the player, the 3rd failure switches, nothing is skipped', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  const ui = fs.readFileSync(path.join(root, 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(root, 'android/app/src/main/java/app/triboon/tv/MainActivity.java'), 'utf8');
+  const from = ui.indexOf('const REPEAT_FAIL_SPOT_SEC');
+  const to = ui.indexOf('const PLAYBACK_CONTENT_ERROR_RE');
+  assert.ok(from > 0 && to > from);
+  const S = {};
+  const { noteSourceFailure, positionBeforeRepeatFailure } = new Function('S',
+    ui.slice(from, to) + '\nreturn { noteSourceFailure, positionBeforeRepeatFailure };')(S);
+  const min = 60000;
+  const first = { sourcePickKey: 'A', usingNative: true };
+  assert.strictEqual(noteSourceFailure(first, 1000, 0), false, 'the first drop retries the same file');
+  // Reconnects restart one keyframe later, so the clock creeps forward across the damage.
+  assert.strictEqual(noteSourceFailure(first, 1005, 20000), false);
+  assert.strictEqual(positionBeforeRepeatFailure(first, 1009), 1000, 'leaving now saves the spot, not the walked-forward clock');
+  const replay = { sourcePickKey: 'A', usingNative: true }; // left the player, pressed Play: a brand new object
+  assert.strictEqual(noteSourceFailure(replay, 1006, 4 * min), true, 'the 3rd failure at that spot switches, even after leaving');
+  assert.strictEqual(replay.nativePos, 1000, 'the next release resumes where trouble began, so nothing is skipped');
+  const healthy = { sourcePickKey: 'B', usingNative: true };
+  for (let i = 0; i < 6; i++) {
+    assert.strictEqual(noteSourceFailure(healthy, 100 + i * 500, 30 * min + i * 1000), false, 'drops at different spots never switch');
+  }
+  assert.strictEqual(positionBeforeRepeatFailure(healthy, 2000), 2000, 'a clean stretch keeps the real clock');
+  const old = { sourcePickKey: 'C', usingNative: true };
+  noteSourceFailure(old, 50, 0);
+  noteSourceFailure(old, 52, 1000);
+  assert.strictEqual(noteSourceFailure(old, 54, 11 * min), false, 'failures from long ago do not count');
+  assert.match(android, /Native VOD ENDED mid-title[\s\S]{0,300}reportNativeStreamDrop\(resumeAt\);\s+requestNativeVideoSeek\(resumeAt, true\);/,
+    'a stream that ended early counts');
+  assert.match(android, /private void reportNativeStreamDrop\(long displayMs\) \{\s+if \(web == null \|\| !AutoResume\.mayReconnectWhilePaused\(nativeUserPausedAtMs\)\) return;/,
+    'a reconnect after a pause does not count');
+  assert.match(android, /private void remountNativeRemuxAtResume\(\) \{(?:(?!reportNativeStreamDrop)[\s\S])*?requestNativeVideoSeek\(nativeResumePositionMs\(\), true\);/,
+    'the pause/resume remount never reports a drop');
+  assert.match(ui, /let pos = currentTime\(\);\s+if \(typeof positionBeforeRepeatFailure === 'function'\) pos = positionBeforeRepeatFailure\(p, pos\);/, 'saved progress never walks past a damaged spot');
+  assert.match(ui, /if \(opts\.keepSourceIfNone && p\.usingNative\) \{\s+p\._noAlternateRelease = true;[\s\S]{0,420}tryNativeVideoPlayer\(kind, next, \{ quietSeek: true \}\)/,
+    'a damaged spot on the only release keeps playing instead of ending the movie');
+  const lone = { sourcePickKey: 'D', usingNative: true, _noAlternateRelease: true };
+  noteSourceFailure(lone, 10, 40 * min);
+  noteSourceFailure(lone, 12, 40 * min + 1000);
+  assert.strictEqual(noteSourceFailure(lone, 14, 40 * min + 2000), false, 'once nothing else exists, drops stop searching for a release');
 });
