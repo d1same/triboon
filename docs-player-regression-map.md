@@ -570,7 +570,11 @@ them when the table is reorganized:
   a release clear that mark, because `playbackToken` survives a switch and a stale mark
   would demote the healthy replacement. A `PARSING_` error takes
   the same first-failure switch in `recoverSamePlaybackSource`, and a quiet remount in
-  flight must never swallow it: that return froze a viewer 148s at one spot.
+  flight must never swallow it: that return froze a viewer 148s at one spot. With no
+  other release, `skipPastUnreadable` steps a direct file forward 5, 15, 30, then 60s and
+  then shows the error, because reopening the same second parses the same bytes forever.
+  The ledger key is release plus title (`failLedgerSource`): episodes of one season pack
+  share a pick key and must not count toward each other.
   `__tvNativeStreamDropped` returns true while a switch runs, and the shell
   then stops reopening that file so the replacement gets the provider lines.
   `positionBeforeRepeatFailure` keeps saved progress and the switch at the spot where

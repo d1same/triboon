@@ -128,6 +128,14 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-10-30, v3.4.7 — Three findings from a Fable audit of v3.4.5 and v3.4.6:
+- A direct file with unreadable bytes and no other release reopened the same second forever. `skipPastUnreadable` now steps forward 5, 15, 30, then 60s and then shows the error. This corrects the v3.4.6 note that the only release keeps playing, which had only been tried with simulated drops.
+- A silent non-fatal audio case on a page older than the APK had no recovery. It now raises the normal error, worded as a decoder fault so the old page's low-power path can move to a remux. Contract test only; a non-low-power box on an old page still stays on the same stream.
+- The failure ledger key is release plus title (`failLedgerSource`), so episodes of a season pack no longer count toward each other or rewind each other's saved progress.
+- Device proof on the real Onn 4K Pro (debug build, local fixture, the only release has one zeroed Cluster ID): first failure at 27.97s, `/api/advance` found nothing, the player skipped forward and the picture returned about 2.5s later and played on to the end of the clip at 59.9s, with no reopen of the bad second. The clip's padded end then drove the 15, 30 and 60s skips and reached the cap.
+- Gate: `npm.cmd test` 925/925. `verify:full` on the QA rig (fixture NNTP 61119; LOTR 2001 + Stuart Fails to Save the Universe S01E01): every step PASS on the final code, with the Android stress on the real Onn 4K Pro (`isEmulator: false`, 0 failures, 0 warnings).
+- Version contract: `package.json` 3.4.7; Android `versionName` 3.4.7 / `versionCode` 435; Windows client package/Tauri/Cargo(.lock) 3.4.7.
+
 2026-10-30, v3.4.6 — Unreadable bytes switch release at once instead of freezing the viewer:
 - Found in Unraid logs: The Good Doctor S07E05 at 34:15 (`No valid varint length mask found`, six reopens, about 6s frozen, switched, not demoted) and S07E06 at 8:34 (`ERROR_CODE_PARSING_CONTAINER_MALFORMED`, then `ERROR_CODE_TIMEOUT`, 148s frozen with no switch until the viewer left and picked again).
 - Fixes: a parser crash under an IO code counts as bad data (`NativeStreamDrop.badData`) and switches on the first failure; the release is demoted; `__tvNativeStreamDropped` returns true during a switch and the shell stops reopening the file; the load policy records the crash so a clock stopped 2s with no load running counts instead of waiting for Media3's 10s stuck-player timeout; a `PARSING_` error is no longer swallowed by the quiet-remount guard in `recoverSamePlaybackSource`; the only release keeps playing. A Fable review of the diff found the bad-data mark surviving a release switch (the token does not change), so a new source, seek and release now clear it; `ParserException` also counts as bad data; the next-episode quiet window no longer swallows an unreadable direct file.

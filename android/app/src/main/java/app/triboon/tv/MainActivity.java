@@ -6687,8 +6687,9 @@ public class MainActivity extends Activity {
         });
     }
 
-    // Web owns the rescue (it builds the URL and allows one per source). fatal means the player has
-    // already stopped: a page without the handler (server older than this APK) gets the normal error.
+    // Web owns the rescue (it builds the URL and allows one per source). A page without the handler
+    // (server older than this APK) gets the normal error, worded as a decoder fault so its own
+    // low-power path can move to a remux. Without it a non-fatal case stayed silent with no recovery.
     private boolean requestNativeAudioRescue(String detail, boolean fatal) {
         if (web == null || !"video".equals(nativeMode) || nativeUrl == null) return false;
         if (nativeUrl.equals(nativeAudioRescueUrl)) return false;
@@ -6698,7 +6699,7 @@ public class MainActivity extends Activity {
         web.evaluateJavascript("!!(window.__tvNativeAudioUnplayable && (__tvNativeAudioUnplayable("
                 + org.json.JSONObject.quote(detail) + "," + nativeSafePosPrecise() + "," + dur + ","
                 + nativePlaybackToken + "," + fatal + "),true))", handled -> {
-            if (fatal && !"true".equals(handled)) notifyNativeVideoError(detail, pos, dur);
+            if (!"true".equals(handled)) notifyNativeVideoError(fatal ? detail : "no audio decoder: " + detail, pos, dur);
         });
         return true;
     }

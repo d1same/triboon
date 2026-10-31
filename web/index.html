@@ -15033,11 +15033,16 @@ window.__tvNativeStreamDropped = (pos, token, badData) => {
   if (p._sourceAdvancePending) return true;
   const at = Math.max(0, +pos || 0);
   const repeated = noteSourceFailure(p, at, appMs());
-  if (!repeated && (!badData || p._noAlternateRelease)) return false;
+  const reason = `${badData ? 'unreadable data' : 'stream kept dropping'} at ${Math.floor(at)}s`;
+  if (badData && p._noAlternateRelease && currentPlayerKind(p) === 'direct') {
+    skipPastUnreadable(p, at, reason);
+    return true;
+  }
+  if (!repeated && !badData) return false;
+  if (p._noAlternateRelease) return false;
   autoAdvance({
-    allowMidstreamAdvance: true, nativePreferred: true, keepSourceIfNone: true, failedAt: at,
-    reason: `${badData ? 'unreadable data' : 'stream kept dropping'} at ${Math.floor(at)}s`,
-    ...(badData ? {} : { cause: 'stall-repeat' }),
+    allowMidstreamAdvance: true, nativePreferred: true, keepSourceIfNone: true, failedAt: at, reason,
+    ...(badData ? { unreadable: true } : { cause: 'stall-repeat' }),
   });
   return !!p._sourceAdvancePending;
 };
@@ -15489,8 +15494,13 @@ function playbackServerGone(reason) {
 const REPEAT_FAIL_SPOT_SEC = 20;
 const REPEAT_FAIL_WINDOW_MS = 120000;
 const REPEAT_FAIL_RETURN_WINDOW_MS = 600000;
+// Per release AND per title: every episode of a season pack shares one pick key, and a drop in E05
+// must not count toward the same timestamp in E06.
+function failLedgerSource(p) {
+  return `${p.sourcePickKey || p.mountId || ''}|${(p.item && p.item.key) || ''}`;
+}
 function playbackRepeatFailure(p, atSec, nowMs, contentError = false, windowMs = REPEAT_FAIL_WINDOW_MS) {
-  const src = String(p.sourcePickKey || p.mountId || '');
+  const src = failLedgerSource(p);
   const ledger = (p._failLedger || []).filter((f) => nowMs - f.t < windowMs && f.src === src);
   const pos = Math.max(0, Math.floor(Number(atSec) || 0));
   const sameSpot = ledger.filter((f) => Math.abs(f.pos - pos) <= REPEAT_FAIL_SPOT_SEC).length;
@@ -15501,7 +15511,7 @@ function playbackRepeatFailure(p, atSec, nowMs, contentError = false, windowMs =
 // Where trouble at this spot began. Each reconnect restarts on the NEXT keyframe, so the clock walks
 // across a damaged stretch without showing it; saving or resuming that clock skipped the story.
 function positionBeforeRepeatFailure(p, pos) {
-  const src = String(p.sourcePickKey || p.mountId || '');
+  const src = failLedgerSource(p);
   const spot = (S._sourceFailLedger || [])
     .filter((f) => f.src === src && Math.abs(f.pos - pos) <= REPEAT_FAIL_SPOT_SEC)
     .map((f) => f.pos);
@@ -15516,6 +15526,26 @@ function noteSourceFailure(p, atSec, nowMs, contentError = false) {
   if (!repeated || p._noAlternateRelease) return false; // nothing left to switch to: keep playing
   if (p.usingNative) p.nativePos = positionBeforeRepeatFailure(p, Number(atSec) || 0);
   return true;
+}
+// The only release has unreadable bytes. Reopening the same second parses them again forever, so step
+// past them in growing jumps, and show the error if the damage is wider than the last jump.
+const UNREADABLE_SKIP_SEC = [5, 15, 30, 60];
+function skipPastUnreadable(p, atSec, reason) {
+  const at = Math.max(0, Number(atSec) || 0);
+  if (at > (p._unreadableAt || 0) + 120) p._unreadableSkips = 0; // a new damaged stretch
+  const n = p._unreadableSkips || 0;
+  if (n >= UNREADABLE_SKIP_SEC.length) {
+    try { if (window.TriboonTV && window.TriboonTV.closeVideo) window.TriboonTV.closeVideo(); } catch {}
+    p.usingNative = false;
+    revealWebPlayerShell(p.item);
+    showPlaybackInterrupted(reason);
+    return;
+  }
+  p._unreadableSkips = n + 1;
+  p._unreadableAt = at;
+  const next = at + UNREADABLE_SKIP_SEC[n];
+  notePlaybackIssue('source', `unreadable data on the only release: skipped from ${Math.floor(at)}s to ${Math.floor(next)}s`, 0);
+  if (!tryNativeVideoPlayer(currentPlayerKind(p), next, { quietSeek: true })) showPlaybackInterrupted(reason);
 }
 // ExoPlayer 3xxx parsing errors only. 2xxx (including IO_UNSPECIFIED) are network/IO errors.
 const PLAYBACK_CONTENT_ERROR_RE = /PARSING_|MALFORMED|varint|extractor|invalid (data|media)/i;
@@ -15563,6 +15593,10 @@ function recoverSamePlaybackSource(reason = '') {
   p._sameSourceRecoveryKey = key;
   p._sameSourceRecoveryAt = now;
   const repeatedHere = !sourceDead && !decoderFailure && noteSourceFailure(p, at, now, contentError);
+  if (contentError && !decoderFailure && !sourceDead && p._noAlternateRelease && p.usingNative && kind === 'direct') {
+    skipPastUnreadable(p, at, reason);
+    return true;
+  }
   // Bad bytes do not change on a retry, so they switch on the first failure too.
   const unreadable = contentError && !decoderFailure && !sourceDead && !p._noAlternateRelease;
   if (sourceDead || repeatedHere || unreadable) {
@@ -15573,6 +15607,7 @@ function recoverSamePlaybackSource(reason = '') {
         // Repeated stalls may be this viewer's line: move on, but do not demote the release house-wide.
         ...(repeatedHere && !contentError ? { cause: 'stall-repeat' } : {}),
         ...(repeatedHere || unreadable ? { keepSourceIfNone: true, failedAt: at } : {}),
+        ...(unreadable ? { unreadable: true } : {}),
       });
     }
     return true;
@@ -15875,6 +15910,7 @@ async function autoAdvance(opts = {}) {
       p._noAlternateRelease = true;
       notePlaybackIssue('source', 'no other release to switch to — staying on this one', 0);
       const kind = currentPlayerKind(p);
+      if (opts.unreadable && kind === 'direct') return skipPastUnreadable(p, opts.failedAt, opts.reason);
       forwardRemuxResumeSec(p, opts.failedAt).then((next) => {
         if (S.playing !== p || S.view !== 'player') return;
         if (!tryNativeVideoPlayer(kind, next, { quietSeek: true })) showPlaybackInterrupted(opts.reason);

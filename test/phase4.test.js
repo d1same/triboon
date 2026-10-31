@@ -9858,8 +9858,8 @@ test('Android: unplayable audio is rescued once with 5.1 AAC, and the shell repo
     'silence raises no player error, so the track list has to be checked');
   assert.match(android, /"live"\.equals\(nativeMode\) && !nativeUrl\.equals\(nativeAudioRescueUrl\)[\s\S]{0,200}tryNativeLiveFallback\(\)/,
     'a silent IPTV channel moves down the fallback list, one try per stream');
-  assert.match(android, /if \(fatal && !"true"\.equals\(handled\)\) notifyNativeVideoError/,
-    'a page older than the APK still gets the normal error');
+  assert.match(android, /if \(!"true"\.equals\(handled\)\) notifyNativeVideoError\(fatal \? detail : "no audio decoder: " \+ detail, pos, dur\);/,
+    'a page older than the APK gets the normal error, fatal or not, worded so its decoder path can run');
   assert.match(android, /private void onNativeAudioOutputChanged\(\) \{\s+nativePlaybackCapsCache = null;/,
     'the output change drops the frozen capability cache');
   assert.match(android, /setAllowInvalidateSelectionsOnRendererCapabilitiesChange\(true\)/,
@@ -9946,6 +9946,45 @@ test('a damaged spot: the count survives leaving the player, the 3rd failure swi
   assert.strictEqual(noteSourceFailure(lone, 14, 40 * min + 2000), false, 'once nothing else exists, drops stop searching for a release');
 });
 
+test('a damaged spot: the only release steps past bad bytes and gives up visibly; episodes of a pack count apart', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const from = ui.indexOf('const UNREADABLE_SKIP_SEC');
+  const to = ui.indexOf('// ExoPlayer 3xxx parsing errors only');
+  assert.ok(from > 0 && to > from);
+  const opened = [];
+  let interrupted = 0;
+  let closed = 0;
+  const window = { TriboonTV: { closeVideo: () => { closed++; } } };
+  const skipPastUnreadable = new Function('window', 'notePlaybackIssue', 'tryNativeVideoPlayer', 'currentPlayerKind', 'revealWebPlayerShell', 'showPlaybackInterrupted',
+    ui.slice(from, to) + '\nreturn skipPastUnreadable;')(window, () => {}, (_k, at) => { opened.push(at); return true; }, () => 'direct', () => {}, () => { interrupted++; });
+  const p = { usingNative: true, item: {} };
+  skipPastUnreadable(p, 100, 'bad');
+  skipPastUnreadable(p, 105, 'bad');
+  skipPastUnreadable(p, 120, 'bad');
+  skipPastUnreadable(p, 150, 'bad');
+  assert.deepStrictEqual(opened, [105, 120, 150, 210], 'every reopen lands further on; the same second is never reopened');
+  skipPastUnreadable(p, 210, 'bad');
+  assert.strictEqual(interrupted, 1, 'wider damage than the last jump shows the error instead of looping');
+  assert.strictEqual(closed, 1);
+  assert.strictEqual(p.usingNative, false);
+  const later = { usingNative: true, item: {}, _unreadableSkips: 4, _unreadableAt: 100 };
+  skipPastUnreadable(later, 900, 'bad');
+  assert.strictEqual(opened[opened.length - 1], 905, 'a new damaged stretch much later starts small again');
+
+  const ledgerFrom = ui.indexOf('const REPEAT_FAIL_SPOT_SEC');
+  const ledgerTo = ui.indexOf('const UNREADABLE_SKIP_SEC');
+  const { noteSourceFailure, positionBeforeRepeatFailure } = new Function('S',
+    ui.slice(ledgerFrom, ledgerTo) + '\nreturn { noteSourceFailure, positionBeforeRepeatFailure };')({});
+  const e5 = { sourcePickKey: 'pack', usingNative: true, item: { key: 'tv:1:s1e5' } };
+  const e6 = { sourcePickKey: 'pack', usingNative: true, item: { key: 'tv:1:s1e6' } };
+  noteSourceFailure(e5, 1200, 0);
+  noteSourceFailure(e5, 1202, 1000);
+  assert.strictEqual(noteSourceFailure(e6, 1204, 2000), false, 'E06 does not inherit E05 failures at the same timestamp');
+  assert.strictEqual(positionBeforeRepeatFailure(e6, 1204), 1204, 'and its saved progress is not rewound by them');
+});
+
 test('a damaged spot: unreadable bytes switch at once and demote, and the shell stops retrying during a switch', () => {
   const fs = require('fs');
   const path = require('path');
@@ -9962,8 +10001,9 @@ test('a damaged spot: unreadable bytes switch at once and demote, and the shell 
   let failures = 0;
   const noteSourceFailure = () => ++failures >= 3;
   const autoAdvance = (opts) => { advances.push(opts); if (!S.noSession) p._sourceAdvancePending = true; };
-  new Function('window', 'S', 'noteSourceFailure', 'autoAdvance', 'nativePlaybackCallbackMatches', 'appMs', ui.slice(from, to))(
-    window, S, noteSourceFailure, autoAdvance, () => true, () => 0);
+  const skips = [];
+  new Function('window', 'S', 'noteSourceFailure', 'autoAdvance', 'nativePlaybackCallbackMatches', 'appMs', 'currentPlayerKind', 'skipPastUnreadable', ui.slice(from, to))(
+    window, S, noteSourceFailure, autoAdvance, () => true, () => 0, () => 'direct', (_p, at) => skips.push(at));
   const drop = window.__tvNativeStreamDropped;
   assert.strictEqual(drop(2055, 1, true), true, 'the first failure switches and tells the shell not to retry');
   assert.strictEqual(failures, 1, 'and is still in the ledger, so saved progress stays before the damage');
@@ -9980,7 +10020,9 @@ test('a damaged spot: unreadable bytes switch at once and demote, and the shell 
   p._sourceAdvancePending = false;
   failures = 0;
   p._noAlternateRelease = true;
-  assert.strictEqual(drop(70, 1, true), false, 'with nothing to switch to, the shell keeps playing past bad bytes');
+  assert.strictEqual(drop(70, 1, true), true, 'with nothing to switch to, bad bytes step forward and the shell does not reopen them');
+  assert.deepStrictEqual(skips, [70]);
+  assert.strictEqual(drop(70, 1, false), false, 'a plain drop on the only release still retries in place');
   p._noAlternateRelease = false;
   S.noSession = true;
   failures = 2;
