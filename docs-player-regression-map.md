@@ -560,7 +560,19 @@ them when the table is reorganized:
 - **P6 - a damaged spot cannot hold a viewer.** A stream that drops is reported to web
   (`__tvNativeStreamDropped`) and counted per release in `S._sourceFailLedger` for 10
   minutes, so leaving the player does not clear it. The 3rd failure within 20s of the
-  same spot switches release (`cause: 'stall-repeat'`, no house-wide demotion).
+  same spot switches release (`cause: 'stall-repeat'`, no house-wide demotion). A crash
+  inside ExoPlayer's parser arrives under an IO code but means unreadable bytes
+  (`NativeStreamDrop.badData`), so it switches on the first failure and demotes the
+  release: a retry onto those bytes can sit 10s in Media3's stuck-player timeout first.
+  The load policy records the crash (`nativeBadDataToken`), because ExoPlayer stays
+  silent until the buffer drains, so a clock stopped for 2s with no load running counts
+  as that failure instead of waiting for `ERROR_CODE_TIMEOUT`. A new source, a seek and
+  a release clear that mark, because `playbackToken` survives a switch and a stale mark
+  would demote the healthy replacement. A `PARSING_` error takes
+  the same first-failure switch in `recoverSamePlaybackSource`, and a quiet remount in
+  flight must never swallow it: that return froze a viewer 148s at one spot.
+  `__tvNativeStreamDropped` returns true while a switch runs, and the shell
+  then stops reopening that file so the replacement gets the provider lines.
   `positionBeforeRepeatFailure` keeps saved progress and the switch at the spot where
   trouble began, because keyframe-forward reconnects walk the clock across the damage.
   A reconnect after the viewer's own pause never counts. Verification: the "damaged

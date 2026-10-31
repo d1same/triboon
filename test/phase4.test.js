@@ -3217,8 +3217,8 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'the keyframe fetch must pin _nativeResuming before recoverSamePlaybackSource can stack');
   assert.match(ui, /if \(opts\.quietSeek && p\) \{\s+p\._webResuming = true;/,
     'web remux pause/resume marks _webResuming so the stall watchdog cannot spawn a second ffmpeg');
-  assert.match(ui, /if \(p\._webResuming && !sourceDead && !decoderFailure\) return false;/,
-    'web recovery must not stack on top of a remux remount already in flight');
+  assert.match(ui, /if \(p\._webResuming && !sourceDead && !decoderFailure && !contentError\) return false;/,
+    'web recovery must not stack on top of a remux remount already in flight, unless that remount hit unreadable bytes');
   assert.match(ui, /tryNativeVideoPlayer\('transcode', at, \{ quietSeek: true \}\)/,
     'native quality 1080↔4K must reuse ExoPlayer instead of Release+Init');
   assert.match(android, /nativeSeekHoldDisplayMs = Math\.max\(nativeStartOffsetMs \+ nativeRawPositionMs\(\), startOffsetMs\)/,
@@ -3229,8 +3229,8 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'rapid remux FF must ignore stale keyframe remounts');
   assert.match(android, /remountNativeRemuxAtResume\(\) \{[\s\S]+setPlayWhenReady\(false\);[\s\S]+requestNativeVideoSeek\(nativeResumePositionMs\(\), true\)/,
     'dead remux leftover remounts the same file and must not play the empty pipe while the new start= URL is mounting');
-  assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+p\._nativeResuming && !sourceDead && !decoderFailure\) return false;/,
-    'web recovery must not stack a second remount on top of user Play');
+  assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+p\._nativeResuming && !sourceDead && !decoderFailure && !contentError\) return false;/,
+    'web recovery must not stack a second remount on top of user Play, unless that remount hit unreadable bytes');
   assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+forwardRemuxResumeSec\(p, at\)[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)/,
     'a buffer stall restarts a copied movie on the next piece, not the one just before the drop');
   assert.match(ui, /function forwardRemuxResumeSec\(p, at\) \{[\s\S]+\/api\/keyframe\/[\s\S]+kf > t \+ 0\.05/,
@@ -3257,8 +3257,8 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
     'a restart holds the last frame only after the on-device leftover is under 8s');
   assert.match(ui, /maybeHoldPlaybackAcrossRestart\(p\);[\s\S]+const at = currentTime\(\);/,
     'remount resumes at the second they reached while leftover kept playing, not the second the server died');
-  assert.match(ui, /if \(sourceDead \|\| repeatedHere\) \{[\s\S]+autoAdvance\(\{[\s\S]{0,40}allowMidstreamAdvance: true/,
-    'a new NZB is only when health says the release is dead, or the same spot failed again');
+  assert.match(ui, /if \(sourceDead \|\| repeatedHere \|\| unreadable\) \{[\s\S]+autoAdvance\(\{[\s\S]{0,40}allowMidstreamAdvance: true/,
+    'a new NZB is only when health says the release is dead, the same spot failed again, or the bytes are unreadable');
 });
 
 test('async page loaders ignore stale shared-grid results and finish on a usable surface', () => {
@@ -4471,8 +4471,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // When same-source resume fails because the mount is gone (server restarted/updated/swept), re-mount
   // the SAME title on a fresh mount and resume at the current position, with backoff to ride out the
   // restart — instead of giving up. Failure-path only, so healthy playback is untouched.
-  assert.match(ui, /if \(sourceDead \|\| repeatedHere\) \{[\s\S]+autoAdvance\(\{[\s\S]{0,40}allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative,[\s\S]{0,40}reason/,
-    'a single buffer/wifi stall stays on the same file; only a dead-source reason or a repeat at the same spot may change NZB');
+  assert.match(ui, /if \(sourceDead \|\| repeatedHere \|\| unreadable\) \{[\s\S]+autoAdvance\(\{[\s\S]{0,40}allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative,[\s\S]{0,40}reason/,
+    'a single buffer/wifi stall stays on the same file; only a dead-source reason, a repeat at the same spot, or unreadable bytes may change NZB');
   assert.doesNotMatch(ui, /recoveryCount >= 3/,
     'stall retries must not count toward a new source hunt');
   const sourceRecoveryBlock = ui.slice(ui.indexOf('function recoverSamePlaybackSource'), ui.indexOf('function resetVlcPanel'));
@@ -9931,10 +9931,10 @@ test('a damaged spot: the count survives leaving the player, the 3rd failure swi
   noteSourceFailure(old, 50, 0);
   noteSourceFailure(old, 52, 1000);
   assert.strictEqual(noteSourceFailure(old, 54, 11 * min), false, 'failures from long ago do not count');
-  assert.match(android, /Native VOD ENDED mid-title[\s\S]{0,300}reportNativeStreamDrop\(resumeAt\);\s+requestNativeVideoSeek\(resumeAt, true\);/,
+  assert.match(android, /Native VOD ENDED mid-title[\s\S]{0,300}reportNativeStreamDrop\(resumeAt, false, null\);\s+requestNativeVideoSeek\(resumeAt, true\);/,
     'a stream that ended early counts');
-  assert.match(android, /private void reportNativeStreamDrop\(long displayMs\) \{\s+if \(web == null \|\| !AutoResume\.mayReconnectWhilePaused\(nativeUserPausedAtMs\)\) return;/,
-    'a reconnect after a pause does not count');
+  assert.match(android, /private void reportNativeStreamDrop\(long displayMs, boolean badData, Runnable retry\) \{\s+if \(web == null \|\| !AutoResume\.mayReconnectWhilePaused\(nativeUserPausedAtMs\)\) \{\s+if \(retry != null\) retry\.run\(\);\s+return;/,
+    'a reconnect after a pause does not count, and still reconnects');
   assert.match(android, /private void remountNativeRemuxAtResume\(\) \{(?:(?!reportNativeStreamDrop)[\s\S])*?requestNativeVideoSeek\(nativeResumePositionMs\(\), true\);/,
     'the pause/resume remount never reports a drop');
   assert.match(ui, /let pos = currentTime\(\);\s+if \(typeof positionBeforeRepeatFailure === 'function'\) pos = positionBeforeRepeatFailure\(p, pos\);/, 'saved progress never walks past a damaged spot');
@@ -9944,4 +9944,58 @@ test('a damaged spot: the count survives leaving the player, the 3rd failure swi
   noteSourceFailure(lone, 10, 40 * min);
   noteSourceFailure(lone, 12, 40 * min + 1000);
   assert.strictEqual(noteSourceFailure(lone, 14, 40 * min + 2000), false, 'once nothing else exists, drops stop searching for a release');
+});
+
+test('a damaged spot: unreadable bytes switch at once and demote, and the shell stops retrying during a switch', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  const ui = fs.readFileSync(path.join(root, 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(root, 'android/app/src/main/java/app/triboon/tv/MainActivity.java'), 'utf8');
+  const from = ui.indexOf('window.__tvNativeStreamDropped = ');
+  const to = ui.indexOf('window.__tvNativeVideoSeek = ');
+  assert.ok(from > 0 && to > from);
+  const window = {};
+  const p = { usingNative: true, item: { type: 'movie' } };
+  const S = { playing: p };
+  const advances = [];
+  let failures = 0;
+  const noteSourceFailure = () => ++failures >= 3;
+  const autoAdvance = (opts) => { advances.push(opts); if (!S.noSession) p._sourceAdvancePending = true; };
+  new Function('window', 'S', 'noteSourceFailure', 'autoAdvance', 'nativePlaybackCallbackMatches', 'appMs', ui.slice(from, to))(
+    window, S, noteSourceFailure, autoAdvance, () => true, () => 0);
+  const drop = window.__tvNativeStreamDropped;
+  assert.strictEqual(drop(2055, 1, true), true, 'the first failure switches and tells the shell not to retry');
+  assert.strictEqual(failures, 1, 'and is still in the ledger, so saved progress stays before the damage');
+  assert.strictEqual(advances[0].cause, undefined, 'no stall-repeat cause, so the server demotes the release');
+  assert.strictEqual(advances[0].keepSourceIfNone, true, 'the only release still keeps playing');
+  assert.strictEqual(drop(2055, 1, true), true, 'further drops during the switch keep the shell quiet');
+  assert.strictEqual(advances.length, 1, 'and never start a second switch');
+  p._sourceAdvancePending = false;
+  failures = 0;
+  assert.strictEqual(drop(70, 1, false), false);
+  assert.strictEqual(drop(70, 1, false), false, 'a dropped line still gets its three tries');
+  assert.strictEqual(drop(70, 1, false), true);
+  assert.strictEqual(advances[1].cause, 'stall-repeat', 'and leaves the release reputation alone');
+  p._sourceAdvancePending = false;
+  failures = 0;
+  p._noAlternateRelease = true;
+  assert.strictEqual(drop(70, 1, true), false, 'with nothing to switch to, the shell keeps playing past bad bytes');
+  p._noAlternateRelease = false;
+  S.noSession = true;
+  failures = 2;
+  assert.strictEqual(drop(70, 1, false), false, 'when no switch actually started, the shell keeps retrying');
+  assert.match(android, /boolean badData = NativeStreamDrop\.badData\(error\);/);
+  assert.match(android, /reportNativeStreamDrop\(resumeAt, badData, \(\) -> retryNativeDirectInPlace\(resumeAt\)\);/, 'a direct retry waits for the answer');
+  assert.match(android, /if \(retry != null\) web\.postDelayed\(\(\) -> carryOn\.onReceiveValue\(null\), 750L\);/, 'a stuck page cannot end the retries');
+  assert.match(android, /NativeStreamDrop\.badData\(info\.exception\)\) \{\s+nativeBadDataToken = nativePlaybackToken;/, 'the loader remembers a parser crash');
+  assert.match(android, /nativeMode = "video";\s+nativePlaybackToken = playbackToken;\s+nativeBadDataToken = -1L;/, 'a new source starts clean: the token alone survives a switch and would condemn a healthy replacement');
+  assert.match(android, /private void nativeSeekToDisplayPosition\(long displayMs\) \{\s+if \(nativePlayer == null\) return;\s+nativeBadDataToken = -1L;/, 'a seek away from the damage clears the mark');
+  assert.match(ui, /if \(!sourceDead && !\(contentError && kind === 'direct'\) && S\._handoffQuietUntil/, 'the next-episode quiet window cannot swallow an unreadable direct file, and a remux wobble stays quiet');
+  assert.match(ui, /const contentError = PLAYBACK_CONTENT_ERROR_RE\.test\(String\(reason \|\| ''\)\);\s+\/\/ Next-episode startup/, 'the error kind is known before any early return');
+  assert.match(ui, /p\._nativeResuming && !sourceDead && !decoderFailure && !contentError\) return false;/, 'a remount in flight cannot swallow a parsing crash (148s freeze at 8:34)');
+  assert.match(ui, /const unreadable = contentError && !decoderFailure && !sourceDead && !p\._noAlternateRelease;\s+if \(sourceDead \|\| repeatedHere \|\| unreadable\) \{/, 'a parsing crash switches on the first failure');
+  assert.match(ui, /\.\.\.\(repeatedHere \|\| unreadable \? \{ keepSourceIfNone: true, failedAt: at \} : \{\}\),/, 'the only release keeps playing');
+  assert.match(android, /stuckMs >= 2000L && nativeBadDataToken == nativePlaybackToken && !nativePlayer\.isLoading\(\)\) \{[\s\S]{0,320}reportNativeStreamDrop\(resumeAt, true, null\);/,
+    'a clock stopped by bad bytes switches after 2s, not after the 10s stuck-player timeout');
 });

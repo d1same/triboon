@@ -15024,15 +15024,22 @@ function withRemuxStart(p, seconds, go) {
 // The stream dropped and the shell is about to reopen it. These cycles never reached the failure
 // count, so a damaged spot looped quietly. A slow provider does not land here: only a read that
 // failed or a stream that ended early does, and a pause never does.
-window.__tvNativeStreamDropped = (pos, token) => {
+// Bad bytes are the same bytes on every retry, and a retry onto them can sit 10s before it fails, so
+// they switch at once and count against the release. Returns true while a switch runs, so the shell
+// stops reopening the file it is leaving.
+window.__tvNativeStreamDropped = (pos, token, badData) => {
   const p = S.playing;
-  if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
+  if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return false;
+  if (p._sourceAdvancePending) return true;
   const at = Math.max(0, +pos || 0);
-  if (!noteSourceFailure(p, at, appMs()) || p._sourceAdvancePending) return;
+  const repeated = noteSourceFailure(p, at, appMs());
+  if (!repeated && (!badData || p._noAlternateRelease)) return false;
   autoAdvance({
     allowMidstreamAdvance: true, nativePreferred: true, keepSourceIfNone: true, failedAt: at,
-    reason: `stream kept dropping at ${Math.floor(at)}s`, cause: 'stall-repeat',
+    reason: `${badData ? 'unreadable data' : 'stream kept dropping'} at ${Math.floor(at)}s`,
+    ...(badData ? {} : { cause: 'stall-repeat' }),
   });
+  return !!p._sourceAdvancePending;
 };
 window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   const p = S.playing;
@@ -15520,17 +15527,20 @@ function recoverSamePlaybackSource(reason = '') {
   const now = appMs();
   const decoderFailure = /decode|decoder|codec|renderer|format/i.test(String(reason || ''));
   const sourceDead = /blocked|health|missing|no such article/i.test(String(reason || ''));
+  const contentError = PLAYBACK_CONTENT_ERROR_RE.test(String(reason || ''));
   // Next-episode startup often wobbles once (new remux, new Exo). Remounting that
-  // replayed the opening. Stay put unless the source is actually dead.
-  if (!sourceDead && S._handoffQuietUntil && now < S._handoffQuietUntil) return false;
+  // replayed the opening. Stay put unless the source is actually dead, or a direct file is unreadable.
+  if (!sourceDead && !(contentError && kind === 'direct') && S._handoffQuietUntil && now < S._handoffQuietUntil) return false;
   // A user pause is not a dead source. Remounting here rebuilds 4K from scratch (~30s).
   if (p.usingNative && p.nativePaused && !sourceDead && !decoderFailure) return false;
   // A desktop pause is not a dead movie. Reopening it here is what pressed Play
   // by itself a couple of minutes later.
   if (!p.usingNative && $('video') && $('video').paused && !sourceDead && !decoderFailure) return false;
-  // Play already asked for a quiet remount. A second recovery on top freezes the picture.
-  if (p.usingNative && p._nativeResuming && !sourceDead && !decoderFailure) return false;
-  if (p._webResuming && !sourceDead && !decoderFailure) return false;
+  // Play already asked for a quiet remount. A second recovery on top freezes the picture. Unreadable
+  // bytes are the exception: that remount is what just failed, and returning here froze the viewer
+  // for 148s with no switch (The Good Doctor S07E06, 8:34).
+  if (p.usingNative && p._nativeResuming && !sourceDead && !decoderFailure && !contentError) return false;
+  if (p._webResuming && !sourceDead && !decoderFailure && !contentError) return false;
   // Server restart / swept mount: do not replay the dead URL (that flickers Preparing).
   // Wait, remount the same title, resume. Decoder failures stay on the codec path.
   const mountGone = playbackServerGone(reason) && !decoderFailure;
@@ -15552,16 +15562,17 @@ function recoverSamePlaybackSource(reason = '') {
   // stalls toward a hunt made a bad pipe look like "Finding source."
   p._sameSourceRecoveryKey = key;
   p._sameSourceRecoveryAt = now;
-  const contentError = PLAYBACK_CONTENT_ERROR_RE.test(String(reason || ''));
   const repeatedHere = !sourceDead && !decoderFailure && noteSourceFailure(p, at, now, contentError);
-  if (sourceDead || repeatedHere) {
+  // Bad bytes do not change on a retry, so they switch on the first failure too.
+  const unreadable = contentError && !decoderFailure && !sourceDead && !p._noAlternateRelease;
+  if (sourceDead || repeatedHere || unreadable) {
     if (!p._sourceAdvancePending) {
       autoAdvance({
         allowMidstreamAdvance: true, nativePreferred: !!p.usingNative,
-        reason: repeatedHere ? `failed again at ${Math.floor(at)}s: ${reason || 'playback interrupted'}` : (reason || 'source health blocked'),
+        reason: repeatedHere || unreadable ? `failed at ${Math.floor(at)}s: ${reason || 'playback interrupted'}` : (reason || 'source health blocked'),
         // Repeated stalls may be this viewer's line: move on, but do not demote the release house-wide.
         ...(repeatedHere && !contentError ? { cause: 'stall-repeat' } : {}),
-        ...(repeatedHere && !contentError ? { keepSourceIfNone: true, failedAt: at } : {}),
+        ...(repeatedHere || unreadable ? { keepSourceIfNone: true, failedAt: at } : {}),
       });
     }
     return true;

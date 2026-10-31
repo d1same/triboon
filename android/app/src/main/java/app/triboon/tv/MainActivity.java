@@ -59,6 +59,7 @@ import android.view.ViewOutlineProvider;
 import android.view.animation.LinearInterpolator;
 import android.view.WindowManager;
 import android.window.OnBackInvokedDispatcher;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceError;
@@ -4397,6 +4398,7 @@ public class MainActivity extends Activity {
             buildNativePlayerLayer();
             nativeMode = "video";
             nativePlaybackToken = playbackToken;
+            nativeBadDataToken = -1L; // the token survives a release switch, the bad bytes do not
             enterNativeFullscreenMode();
             silenceNativeVideoForHandoff();
             nativeLoadingStatuses = local ? localLoadingStatuses : usenetLoadingStatuses;
@@ -4713,13 +4715,14 @@ public class MainActivity extends Activity {
                                     + (cause.isEmpty() ? "" : ", " + cause)
                                     + ") — resuming at " + (resumeAt / 1000L) + "s via "
                                     + (nativeServerSeekMode() ? "a fresh server seek" : "the same direct stream"), 0L);
-                            reportNativeStreamDrop(resumeAt);
+                            boolean badData = NativeStreamDrop.badData(error);
                             if (nativeServerSeekMode()) {
+                                reportNativeStreamDrop(resumeAt, badData, null);
                                 Log.w(TAG, "Native VOD remux stream dropped (code " + error.errorCode + ", " + msg
                                         + "); resuming at " + resumeAt + "ms (no replay)");
                                 requestNativeVideoSeek(resumeAt, true);
                             } else {
-                                retryNativeDirectInPlace(resumeAt);
+                                reportNativeStreamDrop(resumeAt, badData, () -> retryNativeDirectInPlace(resumeAt));
                             }
                             return;
                         }
@@ -4794,7 +4797,7 @@ public class MainActivity extends Activity {
                                     + "s; remounting the same source at " + resumeAt + "ms");
                             nativeLastAutoResumeSeekMs = SystemClock.elapsedRealtime();
                             nativeBackwardTicks = 0;
-                            reportNativeStreamDrop(resumeAt);
+                            reportNativeStreamDrop(resumeAt, false, null);
                             requestNativeVideoSeek(resumeAt, true);
                             return;
                         }
@@ -5265,6 +5268,7 @@ public class MainActivity extends Activity {
 
     private void nativeSeekToDisplayPosition(long displayMs) {
         if (nativePlayer == null) return;
+        nativeBadDataToken = -1L; // a seek clears the loader's error; it reports again if it lands on them
         long target = Math.max(0L, displayMs);
         long d = nativeDurationMs();
         if (d > 0 && d != C.TIME_UNSET) target = Math.min(d, target);
@@ -5465,17 +5469,32 @@ public class MainActivity extends Activity {
 
     // Counted by web toward switching release. A reconnect after the viewer's own pause is not a
     // failure of this file, so it never gets here.
-    private void reportNativeStreamDrop(long displayMs) {
-        if (web == null || !AutoResume.mayReconnectWhilePaused(nativeUserPausedAtMs)) return;
+    // retry runs unless web answers that a switch is under way: reopening the file then only took the
+    // lines the replacement release needed. No answer in time means retry, as a stuck page always did.
+    private void reportNativeStreamDrop(long displayMs, boolean badData, Runnable retry) {
+        if (web == null || !AutoResume.mayReconnectWhilePaused(nativeUserPausedAtMs)) {
+            if (retry != null) retry.run();
+            return;
+        }
         String pos = String.format(java.util.Locale.US, "%.3f", Math.max(0L, displayMs) / 1000.0);
+        long token = nativePlaybackToken;
+        boolean[] answered = { false };
+        ValueCallback<String> carryOn = (value) -> {
+            if (answered[0]) return;
+            answered[0] = true;
+            if (retry == null || "true".equals(value) || token != nativePlaybackToken) return;
+            retry.run();
+        };
         web.evaluateJavascript("window.__tvNativeStreamDropped && __tvNativeStreamDropped("
-                + pos + "," + nativePlaybackToken + ")", null);
+                + pos + "," + token + "," + badData + ")", carryOn);
+        if (retry != null) web.postDelayed(() -> carryOn.onReceiveValue(null), 750L);
     }
 
     private void retryNativeDirectInPlace(long displayMs) {
         if (nativePlayer == null || !"video".equals(nativeMode)) return;
         hideNativeLoading();
         nativeVideoUnhealthySinceMs = 0L;
+        nativeBadDataToken = -1L;
         nativeResumeGraceUntilMs = SystemClock.elapsedRealtime() + NATIVE_VIDEO_RESUME_GRACE_MS;
         Log.w(TAG, "Native VOD direct stream dropped; retrying in place at " + displayMs + "ms");
         androidx.media3.common.MediaItem item = nativePlayer.getCurrentMediaItem();
@@ -6373,6 +6392,9 @@ public class MainActivity extends Activity {
     private LoadErrorHandlingPolicy nativeRemuxLoadErrorPolicy() {
         return new DefaultLoadErrorHandlingPolicy() {
             @Override public long getRetryDelayMsFor(LoadErrorHandlingPolicy.LoadErrorInfo info) {
+                if ("video".equals(nativeMode) && info != null && NativeStreamDrop.badData(info.exception)) {
+                    nativeBadDataToken = nativePlaybackToken;
+                }
                 if ("video".equals(nativeMode) && nativeServerSeekMode()) {
                     Throwable e = info != null ? info.exception : null;
                     Log.w(TAG, "Native VOD remux load error #" + (info != null ? info.errorCount : 0) + " ("
@@ -8458,6 +8480,9 @@ public class MainActivity extends Activity {
     private long nativeStuckClockPosMs = -1L;
     private long nativeStuckClockSinceMs = 0L;
     private long nativeStuckClockFixedAtMs = 0L;
+    // A parser crash stops the loader at once, but ExoPlayer stays silent until the buffer drains and
+    // then can sit "playing" 10s before it times out. Knowing why the clock stopped saves that wait.
+    private volatile long nativeBadDataToken = -1L;
 
     private void checkNativeStuckClock() {
         if (nativePlayer == null || !nativeVideoStarted || !nativePlayer.isPlaying()) {
@@ -8473,6 +8498,14 @@ public class MainActivity extends Activity {
         }
         if (nativeStuckClockSinceMs <= 0L) { nativeStuckClockSinceMs = now; return; }
         long stuckMs = now - nativeStuckClockSinceMs;
+        if (stuckMs >= 2000L && nativeBadDataToken == nativePlaybackToken && !nativePlayer.isLoading()) {
+            nativeBadDataToken = -1L;
+            nativeStuckClockSinceMs = now;
+            long resumeAt = nativeResumePositionMs();
+            reportNativePlaybackIssue("drop", "unreadable data stopped the picture at " + (resumeAt / 1000L) + "s", 0L);
+            reportNativeStreamDrop(resumeAt, true, null);
+            return;
+        }
         long aheadMs = nativePlayer.getBufferedPosition() - pos;
         if (stuckMs < 2000L || aheadMs < 1000L || now - nativeStuckClockFixedAtMs < 10000L) return;
         nativeStuckClockFixedAtMs = now;
@@ -8570,6 +8603,7 @@ public class MainActivity extends Activity {
         nativePendingServerSeekMs = -1L;
         bumpNativeSubtitleLoadToken();
         nativeSeekAccel.reset(); // a new playback must start at the base seek step
+        nativeBadDataToken = -1L;
         if (!keepLoading) hideNativeLoading();
         hideNativeGuidePipReveal();
         if (nativeSheet != null) {
