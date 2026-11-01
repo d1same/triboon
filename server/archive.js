@@ -404,6 +404,24 @@ class ArchiveVirtualFile {
     }
   }
 
+  // The byte check's view of the same range: fresh articles through the same extent map, plus the
+  // inner offsets where one volume hands over to the next.
+  async freshBytes(start, end, opts = {}) {
+    const parts = [];
+    const pieces = [];
+    const edges = [];
+    for (const e of this.extents) {
+      const from = Math.max(start, e.innerStart);
+      const to = Math.min(end, e.innerStart + e.length);
+      if (e.innerStart > start && e.innerStart < end) edges.push(e.innerStart);
+      if (to <= from) continue;
+      const got = await this.vols[e.vol].freshBytes(e.offset + (from - e.innerStart), e.offset + (to - e.innerStart), opts);
+      parts.push(got.buf);
+      pieces.push(...got.pieces);
+    }
+    return { buf: Buffer.concat(parts), pieces, edges };
+  }
+
   // The player polls THIS object's health. A volume that lost a piece on every
   // provider only marks itself, so the same release kept remounting and dying at
   // the same minute instead of moving to the next copy.

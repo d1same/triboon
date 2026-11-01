@@ -2313,13 +2313,13 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
     'vodPlaybackStarted', 'recoverSamePlaybackSource', 'currentTime', 'canUseNativeVideoPlayer', 'toast',
     'api', '$', 'updatePlayerMeta', 'playbackStartKind', 'prepareNativeStartKindForAudio',
     'tryNativePlaybackLadder', 'startNativePlayerHousekeeping', 'closePlayer', 'revealWebPlayerShell',
-    'startWebPlayerHousekeeping', 'startSource', 'markPlaybackSourceSwap', 'carrySubtitleAcrossSourceSwap',
+    'startWebPlayerHousekeeping', 'startSource', 'markPlaybackSourceSwap', 'carrySubtitleAcrossSourceSwap', 'appMs',
     `${advanceSource}\nreturn autoAdvance;`)(
       state, () => events.push('panel'), () => false, () => events.push('recover'), () => 42,
       () => false, () => {}, apiFn, () => ({ textContent: '' }), () => events.push('meta'),
       () => 'direct', prepareFn, () => (events.push('ladder'), false), () => events.push('native-housekeeping'),
       () => events.push('close'), () => events.push('reveal'), () => events.push('web-housekeeping'),
-      () => events.push('start'), () => {}, () => null);
+      () => events.push('start'), () => {}, () => null, () => 0);
   const advanceReply = {
     streamUrl: '/new', remuxUrl: '/new-remux', transcodeUrl: '/new-transcode', id: 'new-mount',
     tracksUrl: '/tracks', subtitleBase: '/sub', streamToken: 'stream-token', name: 'new release',
@@ -2451,7 +2451,7 @@ test('near-end next-episode prepare fires once at the 2-minute boundary', () => 
   assert.strictEqual(calls.length, 1, 'progress ticks inside the warm window must share one prepare');
   assert.deepStrictEqual(calls[0], {
     url: '/api/prepare',
-    opts: { method: 'POST', body: { key: item.key, season: 2, episode: 4, pick: null, rank: 3 } },
+    opts: { method: 'POST', body: { key: item.key, season: 2, episode: 4, pick: null, rank: 3, nextUp: true } },
   }, 'prepare targets the exact next episode and inherited quality');
   assert.ok(item._preparedAt, 'the same next-episode object stays marked warm for autoplay and Play Next');
   S.nextEpPrepared = false;
@@ -2494,7 +2494,7 @@ test('next-episode prepare: 4K usenet warms, local library skips the usenet moun
   const usenet = compile(usenetS, false, 4);
   usenet.fn(80, 200);
   assert.strictEqual(usenet.calls.length, 1, '4K usenet next-episode still warms /api/prepare');
-  assert.deepStrictEqual(usenet.calls[0].opts.body, { key: usenet4k.key, pick: null, rank: 4 });
+  assert.deepStrictEqual(usenet.calls[0].opts.body, { key: usenet4k.key, pick: null, rank: 4, nextUp: true });
   assert.ok(usenet4k._preparedAt, '4K next-episode stays marked warm for the quiet handoff');
 
   const localItem = { key: 'tmdb:tv:77:s2e6', qualityRank: 3, _local: { streamUrl: '/local/s2e6' } };
@@ -6564,7 +6564,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // hand the offer over; the bridge call is guarded; the shell re-validates origin AND path.
   assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(it, null, qRank\), signal: ctrl\.signal \}\)\.then\(\(r\) => \{[\s\S]{0,500}maybeNativePrefetch\(r\);/,
     'detail/CW focus prepare hands its prefetch offer to the native shell');
-  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(item, null, qRank\) \}\)\.then\(\(r\) => \{[\s\S]{0,120}return maybeNativePrefetch\(r\);/,
+  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: \{ \.\.\.playbackRequestBody\(item, null, qRank\), nextUp: true \} \}\)\.then\(\(r\) => \{[\s\S]{0,120}return maybeNativePrefetch\(r\);/,
     'the near-end Up Next prepare hands its prefetch offer to the native shell');
   assert.match(ui, /function maybeNativePrefetch\(r\) \{[\s\S]{0,500}TriboonTV\.prefetchStream\(JSON\.stringify\(/,
     'the prefetch bridge call is shell-guarded and JSON-typed');
@@ -9787,12 +9787,12 @@ test('mid-stream release switch resumes at the live position, not the one read b
     const fn = new Function('S', 'showVlcPanel', 'vodPlaybackStarted', 'recoverSamePlaybackSource', 'currentTime',
       'canUseNativeVideoPlayer', 'toast', 'api', '$', 'updatePlayerMeta', 'playbackStartKind', 'prepareNativeStartKindForAudio',
       'tryNativePlaybackLadder', 'startNativePlayerHousekeeping', 'closePlayer', 'revealWebPlayerShell',
-      'startWebPlayerHousekeeping', 'startSource', 'markPlaybackSourceSwap', 'carrySubtitleAcrossSourceSwap',
+      'startWebPlayerHousekeeping', 'startSource', 'markPlaybackSourceSwap', 'carrySubtitleAcrossSourceSwap', 'appMs',
       `${ui.slice(a, b)}\nreturn autoAdvance;`)(
       state, () => {}, () => true, () => {}, () => clock, () => true, () => {},
       async () => { clock += 4; return { streamUrl: '/new', id: 'm2', name: 'new' }; },
       () => ({ textContent: '' }), () => {}, () => 'direct', async (k) => { clock += 2; return k; },
-      (at) => { ladderAt.push(at); return true; }, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => null);
+      (at) => { ladderAt.push(at); return true; }, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => null, () => 0);
     return { fn, state };
   };
   const mid = make(true);
@@ -9985,6 +9985,26 @@ test('a damaged spot: the only release steps past bad bytes and gives up visibly
   assert.strictEqual(positionBeforeRepeatFailure(e6, 1204), 1204, 'and its saved progress is not rewound by them');
 });
 
+test('a release switch logs how long the picture stopped, so a freeze cannot read as a clean log', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const from = ui.indexOf('function noteSwitchInterruption');
+  const to = ui.indexOf('function vodPlaybackStarted');
+  assert.ok(from > 0 && to > from);
+  const notes = [];
+  const note = new Function('notePlaybackIssue', ui.slice(from, to) + '\nreturn noteSwitchInterruption;')((k, d, s) => notes.push({ k, d, s }));
+  const died = { _switchTiming: { t0: 1000, swapAt: 14000, stopped: true } };
+  note(died, 18000);
+  assert.deepStrictEqual(notes[0], { k: 'buffer', d: 'release switch stopped the picture: finding the next copy 13s, starting it 4s', s: 17 });
+  assert.strictEqual(died._switchTiming, null, 'one line per switch');
+  note({ _switchTiming: { t0: 1000, swapAt: 7000, stopped: false } }, 8500);
+  assert.deepStrictEqual(notes[1], { k: 'buffer', d: 'release switch stopped the picture: starting the next copy 1.5s', s: 1.5 },
+    'a health switch ran the old picture until the swap, so the search is not counted');
+  assert.match(ui, /if \(p\._switchTiming\) noteSwitchInterruption\(p, appMs\(\)\);/);
+  assert.match(ui, /p\._switchTiming = \{ t0: switchT0, swapAt: appMs\(\), stopped: opts\.failedAt != null \};/);
+});
+
 test('a damaged spot: unreadable bytes switch at once and demote, and the shell stops retrying during a switch', () => {
   const fs = require('fs');
   const path = require('path');
@@ -10029,7 +10049,7 @@ test('a damaged spot: unreadable bytes switch at once and demote, and the shell 
   assert.strictEqual(drop(70, 1, false), false, 'when no switch actually started, the shell keeps retrying');
   assert.match(android, /boolean badData = NativeStreamDrop\.badData\(error\);/);
   assert.match(android, /reportNativeStreamDrop\(resumeAt, badData, \(\) -> retryNativeDirectInPlace\(resumeAt\)\);/, 'a direct retry waits for the answer');
-  assert.match(android, /if \(retry != null\) web\.postDelayed\(\(\) -> carryOn\.onReceiveValue\(null\), 750L\);/, 'a stuck page cannot end the retries');
+  assert.match(android, /if \(retry != null\) web\.postDelayed\(\(\) -> \{[\s\S]{0,160}carryOn\.onReceiveValue\(null\);\s+\}, 2500L\);/, 'a stuck page cannot end the retries, and a busy one gets time to answer');
   assert.match(android, /NativeStreamDrop\.badData\(info\.exception\)\) \{\s+nativeBadDataToken = nativePlaybackToken;/, 'the loader remembers a parser crash');
   assert.match(android, /nativeMode = "video";\s+nativePlaybackToken = playbackToken;\s+nativeBadDataToken = -1L;/, 'a new source starts clean: the token alone survives a switch and would condemn a healthy replacement');
   assert.match(android, /private void nativeSeekToDisplayPosition\(long displayMs\) \{\s+if \(nativePlayer == null\) return;\s+nativeBadDataToken = -1L;/, 'a seek away from the damage clears the mark');

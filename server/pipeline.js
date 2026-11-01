@@ -15,6 +15,7 @@ const { fanout, fetchUrl, normTitle, stripSubjectWrapper } = require('./newznab'
 const { CAP_HIT_COOLDOWN_MS } = require('./nntp');
 const { getNzbStore } = require('./nzb-store');
 const { getSegmentDisk } = require('./segment-cache');
+const { runByteCheck } = require('./byte-check');
 
 // ---- title verification ----
 // Catalog titles carry accents (Shōgun, Amélie, Léon); scene names never do (Shogun, Amelie). The
@@ -1357,6 +1358,13 @@ const STARTUP_SLOTS = 3;
 // when that replacement stalls. This avoids another full 30-second mount wait after the player has
 // already declared its active release unhealthy.
 const RECOVERY_RACE_WIDTH = 2;
+const UNREADABLE_REASON_RE = /unreadable data|PARSING_|MALFORMED|varint/i;
+// A warm-up beside a playing stream rides below read-ahead, because it is usually a guess. The next
+// episode is not a guess, and the stream it waits behind is its own show: on the background lane a
+// steady read-ahead left it no line, so it hit the 30s mount deadline and next episodes started cold.
+function warmUpLane(mountOpts = {}) {
+  return mountOpts.nextUp === true ? 'readAhead' : 'background';
+}
 // Hedge delay before speculatively mounting the next candidate in parallel. A healthy/fast top
 // pick (usually prefetched → NZB cached → mounts in well under this) commits before the hedge
 // fires, so the common case costs ZERO extra indexer grabs; only a STALLING top pick gets a
@@ -3055,7 +3063,7 @@ class Pipeline {
         startupLane: () => {
           if (!record.preemptible || record.settled || !this._hasActiveForeignPlayback()) return 'startup';
           record.yielded = true;
-          return 'background';
+          return warmUpLane(mountOpts);
         },
         yieldedToViewer: () => record.yielded === true,
       };
@@ -4111,13 +4119,20 @@ class Pipeline {
       // sampled-missing verdict from a player error (Unraid 3.4.3, The Good Doctor S05E15, 10:11).
       debug.fail('play', `file died — "${String(session.activeCandidate.name || '').slice(0, 90)}" — player: ${String(reason || cause || 'no reason given').replace(/\s+/g, ' ').slice(0, 120)}`
         + ` — server health: ${describeHealth(this.mounts.get(session.currentMountId))}`);
+      if (UNREADABLE_REASON_RE.test(String(reason || ''))) {
+        runByteCheck(this.mounts.get(session.currentMountId), { name: session.activeCandidate.name }).catch(() => {});
+      }
       if (!stallOnly) this._recordPlaybackFailed(session.activeCandidate, { episodeScoped: !!_we });
       this._clearTitleStandby(session.query || {}, session.policy || {}, session.activeCandidate.pickKey);
       session.activeCandidate = null;
     }
     const nextOpts = _we ? { ...rest, wantedEpisode: _we } : rest;
     const standby = session.standby && session.standby.vf && this.mounts.get(session.standby.vf.id);
-    if (standby && standby.streamable && session.standby.candidate) {
+    // The standby was warmed before anyone asked about the screen. A switch that lands on Dolby
+    // Vision a TV cannot show turns the picture green, so it walks the screen-ordered list instead.
+    const greenStandby = standby && session.standby.candidate && (session.policy || {}).dolbyVision === false
+      && this._isDolbyVisionRelease(session.standby.candidate);
+    if (standby && standby.streamable && session.standby.candidate && !greenStandby) {
       const committed = this._commitMount(session, session.standby.candidate, standby, [], nextOpts);
       session.standby = null;
       return committed;
@@ -4127,7 +4142,7 @@ class Pipeline {
 }
 
 module.exports = {
-  Pipeline, GATE_MS, STARTUP_SLOTS, PLAY_RACE_WIDTH, StartupGate,
+  Pipeline, GATE_MS, STARTUP_SLOTS, PLAY_RACE_WIDTH, StartupGate, warmUpLane,
   parseWantedTitle, releaseMatches, catalogIdentityMatches, releaseQualifies, shortTitleQuery, foldDiacritics,
   articleFlipQuery, collectArticleSiblings,
   aliasSearchQueries, yearlessSearchQuery, qualitySearchQuery, seasonPackSearchQuery, widenSearchQueries, widenSearchJobs,

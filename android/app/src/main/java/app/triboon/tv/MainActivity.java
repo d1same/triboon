@@ -2932,7 +2932,9 @@ public class MainActivity extends Activity {
                     ? nativeHardwareDecoderAvailable("video/hevc")
                     : nativeDecoderAvailable("video/hevc"));
             j.put("hevc", hevc);
-            j.put("dovi", nativeDecoderAvailable("video/dolby-vision"));
+            // A decoder only proves the box can read it. A Shield has one on any TV, and Profile 5
+            // on a screen without Dolby Vision comes up green, so the screen has to say yes too.
+            j.put("dovi", nativeDecoderAvailable("video/dolby-vision") && nativeDisplayShowsDolbyVision());
             j.put("av1", nativeHardwareDecoderAvailable("video/av01")); // HW-only: software AV1 can't do 4K on budget boxes
             j.put("vp9", nativeDecoderAvailable("video/x-vnd.on2.vp9"));
             j.put("mpeg2", nativeDecoderAvailable("video/mpeg2"));
@@ -5471,6 +5473,7 @@ public class MainActivity extends Activity {
     // failure of this file, so it never gets here.
     // retry runs unless web answers that a switch is under way: reopening the file then only took the
     // lines the replacement release needed. No answer in time means retry, as a stuck page always did.
+    // 750ms was too short for a busy box: S08E17 reopened the bad file and the switch took 17s.
     private void reportNativeStreamDrop(long displayMs, boolean badData, Runnable retry) {
         if (web == null || !AutoResume.mayReconnectWhilePaused(nativeUserPausedAtMs)) {
             if (retry != null) retry.run();
@@ -5487,7 +5490,10 @@ public class MainActivity extends Activity {
         };
         web.evaluateJavascript("window.__tvNativeStreamDropped && __tvNativeStreamDropped("
                 + pos + "," + token + "," + badData + ")", carryOn);
-        if (retry != null) web.postDelayed(() -> carryOn.onReceiveValue(null), 750L);
+        if (retry != null) web.postDelayed(() -> {
+            if (!answered[0]) reportNativePlaybackIssue("drop", "the page gave no answer for 2.5s; reopening this file", 0L);
+            carryOn.onReceiveValue(null);
+        }, 2500L);
     }
 
     private void retryNativeDirectInPlace(long displayMs) {
@@ -6685,6 +6691,21 @@ public class MainActivity extends Activity {
                 tryNativeLiveFallback(); // the last fallback is the server stream, always AAC
             }
         });
+    }
+
+    // No answer counts as no: a plain HDR copy looks right on every screen, Dolby Vision only on some.
+    private boolean nativeDisplayShowsDolbyVision() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
+        try {
+            android.view.Display.HdrCapabilities hdr = getWindowManager().getDefaultDisplay().getHdrCapabilities();
+            if (hdr == null) return false;
+            for (int type : hdr.getSupportedHdrTypes()) {
+                if (type == android.view.Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION) return true;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "HDR capabilities unavailable: " + e.getMessage());
+        }
+        return false;
     }
 
     // Web owns the rescue (it builds the URL and allows one per source). A page without the handler

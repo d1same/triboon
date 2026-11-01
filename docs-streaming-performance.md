@@ -9,6 +9,9 @@ Related summaries live in `docs-architecture.md` and contract `P14` in
 `docs-player-regression-map.md`. Those files should point back here instead of
 redefining a different model.
 
+
+Next-episode warm-up: warm-ups beside a viewer ride the background lane, except the near-end next-episode prepare (`nextUp`), which rides the readAhead lane (`warmUpLane`). On the background lane the viewer's own read-ahead left it no line and it hit the 30s mount deadline, so next episodes started cold. Player lanes still outrank it.
+
 ## Product Goal
 
 Triboon should feel fast even when several people press Play or seek at the

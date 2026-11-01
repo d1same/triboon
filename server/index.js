@@ -6434,7 +6434,8 @@ const H = {
           pinnedResume: !!body.pinnedResume,
           resumeFrac: resumeFracFromBody(body),
         },
-        policy
+        policy,
+        { nextUp: body.nextUp === true }
       );
       if (vf) {
         vf._q = body.q;
@@ -9580,6 +9581,7 @@ Object.assign(H, {
     try {
       for await (const chunk of vf.read(start, end, { priority: readPriority, signal: readSignal })) {
         sentBytes += chunk.length;
+        if (playerRead) vf._lastServedEnd = start + sentBytes; // where a byte check should look
         if (suFirstChunk) {
           suFirstChunk = false;
           if (vf._su && (readPriority === 'startup' || readPriority === 'seek')) {

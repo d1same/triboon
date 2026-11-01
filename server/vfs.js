@@ -774,6 +774,40 @@ class NzbFileStream {
     }
   }
 
+  // The same byte range rebuilt straight from the articles, past every cache and placed by each
+  // article's own =ypart header instead of the slot grid. Only the byte check uses this.
+  async freshBytes(start, end, { signal = null } = {}) {
+    if (this.partSize === null) await this.mount('background');
+    end = Math.min(end, this.size);
+    const first = this._segForOffset(start);
+    const last = this._segForOffset(end - 1);
+    const out = Buffer.alloc(Math.max(0, end - start));
+    const pieces = [];
+    const fetchOne = async (i) => {
+      const piece = { i, slot: i * this.partSize, crcOk: false, intact: false, offGrid: false };
+      pieces.push(piece);
+      try {
+        const raw = await this.pool.body(this.segments[i].msgId, 'background', { signal, viewer: this.viewerId || this.id });
+        const dec = decode(raw);
+        piece.crcOk = dec.crcOk;
+        piece.intact = dec.intact;
+        const begin = dec.part && Number.isFinite(dec.part.begin) ? dec.part.begin : piece.slot;
+        piece.offGrid = begin !== piece.slot;
+        const from = Math.max(begin, start);
+        const to = Math.min(begin + dec.data.length, end);
+        if (to > from) dec.data.copy(out, from - start, from - begin, to - begin);
+      } catch (e) {
+        piece.error = String((e && e.message) || e).slice(0, 100);
+      }
+    };
+    const queue = [];
+    for (let i = first; i <= last; i++) queue.push(i);
+    await Promise.all(Array.from({ length: 4 }, async () => {
+      while (queue.length) await fetchOne(queue.shift());
+    }));
+    return { buf: out, pieces, edges: [] };
+  }
+
   // Random-access for header parsing: fetches ONLY the segments covering [start, start+len),
   // in parallel, with no read-ahead — header peeks must not flood the pool with prefetch.
   async readAt(start, len, opts = {}) {

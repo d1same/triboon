@@ -2571,8 +2571,10 @@ test('iptv: empty Xtream guide misses are not persisted across restart', async (
 
 test('iptv: Xtream guide falls back to simple data table when short EPG is empty', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-simple-guide-'));
-  const t0 = new Date(Date.now() - 10 * 60000).toISOString().slice(0, 19).replace('T', ' ');
-  const t1 = new Date(Date.now() + 50 * 60000).toISOString().slice(0, 19).replace('T', ' ');
+  // A zone-less Xtream stamp parses as local time, so write local time, not UTC.
+  const localStamp = (ms) => new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 19).replace('T', ' ');
+  const t0 = localStamp(Date.now() - 10 * 60000);
+  const t1 = localStamp(Date.now() + 50 * 60000);
   let shortHits = 0;
   let simpleHits = 0;
   const upstream = http.createServer((req, res) => {

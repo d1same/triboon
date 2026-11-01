@@ -574,7 +574,15 @@ them when the table is reorganized:
   other release, `skipPastUnreadable` steps a direct file forward 5, 15, 30, then 60s and
   then shows the error, because reopening the same second parses the same bytes forever.
   The ledger key is release plus title (`failLedgerSource`): episodes of one season pack
-  share a pick key and must not count toward each other.
+  share a pick key and must not count toward each other. The shell waits 2.5s for web's
+  answer before reopening: 750ms lost that race on a busy box, the bad file was reopened
+  and took the replacement's lines. Every switch logs how long the picture stopped
+  (`noteSwitchInterruption`), because a switch otherwise logs no buffering. A client
+  report of unreadable bytes starts `server/byte-check.js`, which compares served bytes
+  with fresh articles, walks the MKV and names the file or Triboon in `[fail:play]`.
+- **Dolby Vision asks the screen.** `dovi` is decoder AND `nativeDisplayShowsDolbyVision`:
+  a box can hold a decoder on a TV without Dolby Vision, and Profile 5 then comes up green.
+  No answer counts as no. A switch skips a warmed DV standby on such a screen.
   `__tvNativeStreamDropped` returns true while a switch runs, and the shell
   then stops reopening that file so the replacement gets the provider lines.
   `positionBeforeRepeatFailure` keeps saved progress and the switch at the spot where

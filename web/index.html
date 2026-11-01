@@ -15330,6 +15330,19 @@ function markVodPlaybackStarted(p) {
   if (S.playing === p) clearPlayStartWatchdog();
   p.started = true;
   if (!p.startedAt) p.startedAt = appMs();
+  if (p._switchTiming) noteSwitchInterruption(p, appMs());
+}
+// A switch logged no buffering at all, so a 17s freeze read as a clean log. The picture stopped when
+// the failure hit if the file died under it; otherwise it ran until the new source took over.
+function noteSwitchInterruption(p, now) {
+  const { t0, swapAt, stopped } = p._switchTiming;
+  p._switchTiming = null;
+  const secs = (ms) => Math.max(0, Math.round(ms / 100) / 10);
+  const total = secs(now - (stopped ? t0 : swapAt));
+  const parts = stopped
+    ? `finding the next copy ${secs(swapAt - t0)}s, starting it ${secs(now - swapAt)}s`
+    : `starting the next copy ${secs(now - swapAt)}s`;
+  notePlaybackIssue('buffer', `release switch stopped the picture: ${parts}`, total);
 }
 function vodPlaybackStarted(p) {
   return !!(p && p.item && p.item.type !== 'live' && (p.started || p.startedAt));
@@ -15825,6 +15838,7 @@ async function autoAdvance(opts = {}) {
   }
   if (p._sourceAdvancePending) return;
   p._sourceAdvancePending = true;
+  const switchT0 = appMs();
   const reportedAt = Number(currentTime());
   const at = Math.max(0, Number.isFinite(reportedAt) && (reportedAt > 0 || vodPlaybackStarted(p))
     ? reportedAt
@@ -15864,6 +15878,7 @@ async function autoAdvance(opts = {}) {
     p.name = r.candidate ? r.candidate.name : r.name;
     p.sourcePickKey = (r.candidate && r.candidate.pickKey) || null; // resume must pin the REPLACEMENT, not the dead source
     p._resumeSourceOk = false; // the replacement re-earns its 30s before it is pinned for resume
+    p._switchTiming = { t0: switchT0, swapAt: appMs(), stopped: opts.failedAt != null };
     markPlaybackSourceSwap(p);
     p.duration = 0; p.nativePos = resumeAt; p.nativeDuration = 0; p.started = false; p.startedAt = 0;
     p.nativeStartKind = playbackStartKind(r); p.nativeTried = {};
@@ -16626,7 +16641,7 @@ function maybePrepareNextEpisode(t, d) {
     ne._prepRetried = true;
     setTimeout(() => { if (S.nextEp === ne) S.nextEpPrepared = false; }, NEXT_EP_PREP_RETRY_MS);
   };
-  api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).then((r) => {
+  api('/api/prepare', { method: 'POST', body: { ...playbackRequestBody(item, null, qRank), nextUp: true } }).then((r) => {
     if (!r || r.prepared === false) retryLater();
     return maybeNativePrefetch(r);
   }).catch(retryLater);

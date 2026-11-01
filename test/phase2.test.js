@@ -5409,6 +5409,59 @@ test('pipeline: a screen that cannot do Dolby Vision starts the normal copy', ()
     'a title that only exists in Dolby Vision still plays');
 });
 
+test('pipeline: a switch never lands on a warmed Dolby Vision standby the screen cannot show', async () => {
+  const build = () => {
+    const mounts = new Map([['warm', { id: 'warm', streamable: true }]]);
+    const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set() {} }, mounts, indexers: () => [], performance: () => ({}) });
+    pipeline._clearTitleStandby = () => {};
+    const seen = [];
+    pipeline._commitMount = () => { seen.push('standby'); return { ok: true }; };
+    pipeline._advance = async () => { seen.push('walk'); return { ok: true }; };
+    return { pipeline, seen };
+  };
+  const session = (candidateName, dolbyVision) => ({
+    id: 's', query: {}, policy: { dolbyVision }, activeCandidate: null,
+    standby: { vf: { id: 'warm' }, candidate: { pickKey: 'b', name: candidateName } },
+  });
+  const dvName = 'Show.S01E01.DV.2160p.WEB.h265-ETHEL';
+  const hdrName = 'Show.S01E01.HDR.2160p.WEB.h265-ETHEL';
+  const noScreen = build();
+  noScreen.pipeline.sessions.set('s', session(dvName, false));
+  await noScreen.pipeline.advance('s', {});
+  assert.deepStrictEqual(noScreen.seen, ['walk'], 'the green copy is skipped and the screen-ordered list decides');
+  const hdr = build();
+  hdr.pipeline.sessions.set('s', session(hdrName, false));
+  await hdr.pipeline.advance('s', {});
+  assert.deepStrictEqual(hdr.seen, ['standby'], 'a plain standby stays the instant switch');
+  const dvScreen = build();
+  dvScreen.pipeline.sessions.set('s', session(dvName, true));
+  await dvScreen.pipeline.advance('s', {});
+  assert.deepStrictEqual(dvScreen.seen, ['standby'], 'a Dolby Vision TV keeps its warmed copy');
+});
+
+test('pipeline: the next-episode warm-up shares a line with read-ahead instead of waiting out the mount deadline', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const { warmUpLane } = require('../server/pipeline');
+  assert.equal(warmUpLane({ nextUp: true }), 'readAhead', 'the next episode is not a guess');
+  assert.equal(warmUpLane({}), 'background', 'a focus or home-row warm-up still stands behind a viewer');
+  assert.equal(warmUpLane(), 'background');
+  const root = path.join(__dirname, '..');
+  const ui = fs.readFileSync(path.join(root, 'web', 'index.html'), 'utf8');
+  const index = fs.readFileSync(path.join(root, 'server', 'index.js'), 'utf8');
+  assert.match(ui, /function maybePrepareNextEpisode[\s\S]{0,1600}body: \{ \.\.\.playbackRequestBody\(item, null, qRank\), nextUp: true \}/, 'only the next-episode warm-up asks for it');
+  assert.match(index, /policy,\s+\{ nextUp: body\.nextUp === true \}\s+\);/);
+  assert.match(fs.readFileSync(path.join(root, 'server', 'nntp.js'), 'utf8'), /startup: 0, seek: 0, playback: 1, health: 2, readAhead: 3, background: 4/, 'the player still outranks it');
+});
+
+test('android: Dolby Vision support needs the screen as well as the decoder', () => {
+  const android = require('fs').readFileSync(require('path').join(__dirname, '..', 'android/app/src/main/java/app/triboon/tv/MainActivity.java'), 'utf8');
+  assert.match(android, /j\.put\("dovi", nativeDecoderAvailable\("video\/dolby-vision"\) && nativeDisplayShowsDolbyVision\(\)\);/,
+    'a decoder alone says yes on any TV, and Profile 5 then comes up green');
+  assert.match(android, /private boolean nativeDisplayShowsDolbyVision\(\) \{\s+if \(Build\.VERSION\.SDK_INT < Build\.VERSION_CODES\.N\) return false;/, 'minSdk 23 has no HDR capability call');
+  assert.match(android, /type == android\.view\.Display\.HdrCapabilities\.HDR_TYPE_DOLBY_VISION\) return true;[\s\S]{0,160}return false;/, 'no answer counts as no');
+});
+
 test('pipeline: a fat file yields to a lighter copy the connection can feed', () => {
   const pipeline = new Pipeline({
     pool: () => ({ providers: [{ size: 4, authCapped: true, busy: { size: 0 } }] }),
