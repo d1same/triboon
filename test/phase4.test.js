@@ -9985,6 +9985,25 @@ test('a damaged spot: the only release steps past bad bytes and gives up visibly
   assert.strictEqual(positionBeforeRepeatFailure(e6, 1204), 1204, 'and its saved progress is not rewound by them');
 });
 
+test('a release name that proves playable audio skips the start wait; anything unclear still waits', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const from = ui.indexOf('function nativeNameProvesDirectAudio');
+  const to = ui.indexOf('async function fetchPlayerTracks');
+  assert.ok(from > 0 && to > from);
+  const proves = new Function('clientCaps', 'nativeDolbyPlaysDirect', ui.slice(from, to) + '\nreturn nativeNameProvesDirectAudio;')(() => ({ ac3: true, eac3: true }), (c) => c.dolby !== false);
+  const named = (name) => ({ name });
+  const dolbyBox = { ac3: true, eac3: true };
+  assert.strictEqual(proves(named('Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb'), dolbyBox), true);
+  assert.strictEqual(proves(named('Show.S01E01.1080p.WEB-DL.AAC2.0.H.264-GRP'), dolbyBox), true);
+  assert.strictEqual(proves(named('Show.S01E01.1080p.WEB-DL.DDP5.1.H.264-GRP'), { ...dolbyBox, dolby: false }), false, 'a box that cannot play Dolby still waits');
+  assert.strictEqual(proves(named('Show.S01E01.1080p.BluRay.DTS-HD.MA.5.1.x264-GRP'), dolbyBox), false, 'DTS still waits');
+  assert.strictEqual(proves(named('Movie.2160p.BluRay.TrueHD.7.1.Atmos.DDP5.1-GRP'), dolbyBox), false, 'a risky track beside a safe one still waits');
+  assert.strictEqual(proves(named('Show.S01E01.1080p.WEB-DL.H.264-GRP'), dolbyBox), false, 'no audio in the name still waits');
+  assert.match(ui, /if \(!needsTracksForSubtitle && nativeNameProvesDirectAudio\(p\)\) \{\s+fetchPlayerTracks\(p\)\.catch\(\(\) => \{\}\);/, 'the track menu still fills in');
+});
+
 test('a release switch logs how long the picture stopped, so a freeze cannot read as a clean log', () => {
   const fs = require('fs');
   const path = require('path');

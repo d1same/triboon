@@ -12,6 +12,9 @@ redefining a different model.
 
 Next-episode warm-up: warm-ups beside a viewer ride the background lane, except the near-end next-episode prepare (`nextUp`), which rides the readAhead lane (`warmUpLane`). On the background lane the viewer's own read-ahead left it no line and it hit the 30s mount deadline, so next episodes started cold. Player lanes still outrank it.
 
+
+Start lines: an idle house keeps one open line, and no stream counts active until commit. `_advance` floors the open cap at `oneViewerOpenCap` while a Play is starting (`_startingPlays`), because a RAR mount reads both ends of every volume. The backup copy rides the same readAhead lane as the next-episode warm-up and retries after the opening buffer fill.
+
 ## Product Goal
 
 Triboon should feel fast even when several people press Play or seek at the

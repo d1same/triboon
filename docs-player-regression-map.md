@@ -580,6 +580,7 @@ them when the table is reorganized:
   (`noteSwitchInterruption`), because a switch otherwise logs no buffering. A client
   report of unreadable bytes starts `server/byte-check.js`, which compares served bytes
   with fresh articles, walks the MKV and names the file or Triboon in `[fail:play]`.
+- **Start and switch timing.** Judge starts by the `first frame` trace (`onRenderedFirstFrame`), not `nativePos`, which ticks once a second. A direct start skips the track wait only when `nativeNameProvesDirectAudio` holds; the track fetch still runs behind it, and the audio rescue covers a wrong name. A switch uses the title-list backup through `_findTitleStandby`, and `_armStandby` retries after standing aside.
 - **Dolby Vision asks the screen.** `dovi` is decoder AND `nativeDisplayShowsDolbyVision`:
   a box can hold a decoder on a TV without Dolby Vision, and Profile 5 then comes up green.
   No answer counts as no. A switch skips a warmed DV standby on such a screen.

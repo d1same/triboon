@@ -5331,6 +5331,78 @@ test('pipeline: prepare warms a standby and advance commits it without a cold wa
   pool.close(); await mock.close(); ix.server.close(); store.close();
 });
 
+test('pipeline: a standby warmed after Play is the one a switch uses, with no cold walk', async () => {
+  const pay1 = seededPayload(90 * 1024, 61);
+  const pay2 = seededPayload(90 * 1024, 62);
+  const r1 = nzbFor(writeRar4Store([{ name: 'A.mkv', data: pay1 }], { base: 'lat1' }), 30000, 'lat1');
+  const r2 = nzbFor(writeRar4Store([{ name: 'B.mkv', data: pay2 }], { base: 'lat2' }), 30000, 'lat2');
+  const mock = createMockNntp({ articles: new Map([...r1.articles, ...r2.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-FLUX', size: 7e9, nzb: r1.nzb },
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', size: 7e9, nzb: r2.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  const first = await pipeline.play({ q: 'movie' }, {});
+  let warm = null;
+  for (let i = 0; i < 400 && !warm; i++) { await new Promise((r) => setTimeout(r, 50)); warm = pipeline._findTitleStandby(first.session.query || {}, first.session.policy || {}); }
+  assert.ok(warm, 'Play armed a backup copy');
+  assert.equal(first.session.standby || null, null, 'it landed in the title list, after commit');
+  pipeline._advance = async () => { throw new Error('cold walk'); };
+  const next = await pipeline.advance(first.session.id, {});
+  assert.equal(next.vf.id, warm.vf.id, 'the switch took the warmed copy');
+  pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
+test('pipeline: a backup that stood aside for the opening buffer tries again, and stops when the title stops', async () => {
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set() {} }, mounts: new Map(), indexers: () => [], performance: () => ({}) });
+  pipeline.standbyRetryMs = 5;
+  const next = { pickKey: 'b', score: 100, name: 'Movie.2024.1080p.WEB-DL.H.264-NTb' };
+  const primary = { pickKey: 'a', score: 200, name: 'Movie.2024.1080p.WEB-DL.H.264-FLUX' };
+  let tries = 0;
+  pipeline._tryCandidate = async () => { tries++; return { fail: 'mount: warm-up waited behind a playing stream' }; };
+  const session = { id: 's', activeCandidate: primary, released: false };
+  pipeline.sessions.set('s', session);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  pipeline._armStandby({ q: 'movie' }, {}, {}, [primary, next], 'a', 0, primary);
+  await wait(250);
+  assert.equal(tries, 4, 'one try plus three retries, then it gives up');
+  tries = 0;
+  pipeline._armStandby({ q: 'movie' }, {}, {}, [primary, next], 'a', 0, primary);
+  await wait(1);
+  session.released = true;
+  await wait(150);
+  assert.equal(tries, 1, 'no retries for a title nobody is watching any more');
+  tries = 0;
+  session.released = false;
+  pipeline._tryCandidate = async () => { tries++; return { fail: 'first article missing' }; };
+  pipeline._armStandby({ q: 'movie' }, {}, {}, [primary, next], 'a', 0, primary);
+  await wait(150);
+  assert.equal(tries, 1, 'a real failure is not retried');
+});
+
+test('pipeline: Play opens a viewer share of lines before it mounts, and an idle house falls back to one', async () => {
+  const caps = [];
+  const pool = { setPlaybackOpenCap: (n) => caps.push(n) };
+  const pipeline = new Pipeline({ pool: () => pool, verdicts: { get: () => null, set() {} }, mounts: new Map(), indexers: () => [], performance: () => ({}) });
+  let during = null;
+  pipeline._advanceBody = async () => { during = caps[caps.length - 1]; return { ok: true }; };
+  await pipeline._advance({ id: 's' }, {}, { width: 1 });
+  assert.ok(during >= 4, 'the mount gets a viewer share, not the one warm line');
+  assert.equal(caps[caps.length - 1], 1, 'with nothing playing the house drops back to one line');
+  pipeline._advanceBody = async () => { throw new Error('all candidates failed'); };
+  await assert.rejects(pipeline._advance({ id: 's' }, {}, { width: 1 }));
+  assert.equal(caps[caps.length - 1], 1, 'a failed start does not leave lines open');
+  assert.equal(pipeline._startingPlays, 0);
+});
+
 test('pipeline: with the segment cache on, details save the start instead of only the header', async () => {
   const { configureSegmentDisk, getSegmentDisk } = require('../server/segment-cache');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-segprep-'));

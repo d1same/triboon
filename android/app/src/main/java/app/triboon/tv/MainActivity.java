@@ -4401,6 +4401,7 @@ public class MainActivity extends Activity {
             nativeMode = "video";
             nativePlaybackToken = playbackToken;
             nativeBadDataToken = -1L; // the token survives a release switch, the bad bytes do not
+            nativeHandoffAtMs = SystemClock.elapsedRealtime();
             enterNativeFullscreenMode();
             silenceNativeVideoForHandoff();
             nativeLoadingStatuses = local ? localLoadingStatuses : usenetLoadingStatuses;
@@ -4842,6 +4843,13 @@ public class MainActivity extends Activity {
                         nativeVideoUnhealthySinceMs = 0L;
                         nativeResumeGraceUntilMs = SystemClock.elapsedRealtime() + NATIVE_VIDEO_RESUME_GRACE_MS;
                     }
+                }
+
+                // "Playing" only means READY. This is the moment the viewer sees a picture.
+                @Override public void onRenderedFirstFrame() {
+                    if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
+                    if (!"video".equals(nativeMode)) return;
+                    reportNativePlaybackIssue("trace", "first frame " + (SystemClock.elapsedRealtime() - nativeHandoffAtMs) + "ms after handoff", 0L);
                 }
 
                 @Override public void onIsPlayingChanged(boolean isPlaying) {
@@ -8505,6 +8513,7 @@ public class MainActivity extends Activity {
     // A parser crash stops the loader at once, but ExoPlayer stays silent until the buffer drains and
     // then can sit "playing" 10s before it times out. Knowing why the clock stopped saves that wait.
     private volatile long nativeBadDataToken = -1L;
+    private long nativeHandoffAtMs = 0L;
 
     private void checkNativeStuckClock() {
         if (nativePlayer == null || !nativeVideoStarted || !nativePlayer.isPlaying()) {

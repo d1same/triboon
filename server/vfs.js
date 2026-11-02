@@ -674,9 +674,12 @@ class NzbFileStream {
       const from = offset - segStart;
       // Kick read-ahead (fire and forget).
       if (priority !== 'background' && priority !== 'health' && readAheadEpoch === this.readAheadEpoch && !aborted()) {
+        // A RAR volume ends in pieces no extent needs. Fetching one anyway could mark it dead and
+        // block a release whose video bytes are all there.
+        const aheadEnd = Math.min(this.segments.length, Number.isFinite(opts.aheadEnd) ? opts.aheadEnd : Infinity);
         for (let a = 1; a <= this.readAhead; a++) {
           const n = segIdx + a;
-          if (n < this.segments.length && !this.cache.has(n) && !this.inflight.has(n)) {
+          if (n < aheadEnd && !this.cache.has(n) && !this.inflight.has(n)) {
             this._fetchSegment(n, 'readAhead', { signal }).catch(() => {});
           }
         }

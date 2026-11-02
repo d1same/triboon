@@ -1358,6 +1358,8 @@ const STARTUP_SLOTS = 3;
 // when that replacement stalls. This avoids another full 30-second mount wait after the player has
 // already declared its active release unhealthy.
 const RECOVERY_RACE_WIDTH = 2;
+const STANDBY_RETRIES = 3;
+const STANDBY_RETRY_MS = 15000;
 const UNREADABLE_REASON_RE = /unreadable data|PARSING_|MALFORMED|varint/i;
 // A warm-up beside a playing stream rides below read-ahead, because it is usually a guess. The next
 // episode is not a guess, and the stream it waits behind is its own show: on the background lane a
@@ -1721,6 +1723,7 @@ class Pipeline {
     this.performance = performance; // admin streaming profile: connection fairness + buffers
     // Constructor override exists for deterministic timeout regression tests; production keeps the
     // canonical bounded deadline above.
+    this.standbyRetryMs = STANDBY_RETRY_MS;
     this.mountDeadlineMs = Number.isFinite(mountDeadlineMs) && mountDeadlineMs > 0
       ? mountDeadlineMs : MOUNT_DEADLINE_MS;
     this.totalMemMb = Number.isFinite(totalMemMb) && totalMemMb > 0 ? totalMemMb : TOTAL_MEM_MB;
@@ -2023,7 +2026,7 @@ class Pipeline {
     return rest[0];
   }
 
-  _armStandby(params, policy = {}, mountOpts = {}, playable = [], primaryPickKey, resumeFrac = 0, primary = null) {
+  _armStandby(params, policy = {}, mountOpts = {}, playable = [], primaryPickKey, resumeFrac = 0, primary = null, attempt = 0) {
     const next = this._pickStandbyCandidate(playable, primaryPickKey, primary);
     if (!next) return;
     const existing = this._findTitleStandby(params, policy);
@@ -2033,10 +2036,25 @@ class Pipeline {
       });
       return;
     }
-    this._tryCandidate(next, { ...mountOpts, startupPriority: 'prepare' }).then((res) => {
-      if (!res || !res.vf || res.fail) return;
-      const primary = this._findTitlePreparedReady(params, policy);
-      if (primary && primary.candidate && primary.candidate.pickKey === next.pickKey) return;
+    // Same as the next episode: this copy exists for this viewer, so it cannot wait behind their stream.
+    debug.log('play', `backup warming "${String(next.name || '').slice(0, 80)}"`);
+    this._tryCandidate(next, { ...mountOpts, startupPriority: 'prepare', nextUp: true }).then((res) => {
+      debug.log('play', `backup ${res && res.vf && !res.fail ? 'ready' : `failed: ${String((res && res.fail) || 'no mount').slice(0, 100)}`}`);
+      if (!res || !res.vf || res.fail) {
+        // The player's opening buffer fill leaves no line for 30s. It settles after that, so one
+        // failed try right after Play must not leave the whole title with no backup.
+        const stoodAside = /waited behind a playing stream/.test(String((res && res.fail) || ''));
+        if (stoodAside && attempt < STANDBY_RETRIES) {
+          const again = setTimeout(() => {
+            const stillPlaying = [...this.sessions.values()].some((s) => !s.released && s.activeCandidate && s.activeCandidate.pickKey === primaryPickKey);
+            if (stillPlaying) this._armStandby(params, policy, mountOpts, playable, primaryPickKey, resumeFrac, primary, attempt + 1);
+          }, this.standbyRetryMs);
+          if (again.unref) again.unref();
+        }
+        return;
+      }
+      const prepared = this._findTitlePreparedReady(params, policy);
+      if (prepared && prepared.candidate && prepared.candidate.pickKey === next.pickKey) return;
       res.vf._touched = Date.now();
       if (!mountHasActivePlayback(res.vf)) res.vf._preparedOnly = true;
       if (next.name) res.vf._releaseName = next.name;
@@ -2599,6 +2617,7 @@ class Pipeline {
     // check. The admin handful (8–12) starts when someone actually presses Play.
     // 0 used to mean "open the whole plan".
     if (!(openCap > 0)) openCap = 1;
+    if (this._startingPlays > 0) openCap = Math.max(openCap, oneViewerOpenCap(perf));
     // Local library mounts are already left out of `active`. They play from disk.
     const shareRows = [];
     for (const vf of active) {
@@ -3868,6 +3887,10 @@ class Pipeline {
   // recovery hedge); width 1 is the original one-at-a-time walk used by explicit Sources picks.
   async _advance(session, mountOpts = {}, { width = 1 } = {}) {
     this._inflightAdvances++;
+    // No stream counts as active until this commits, so an idle house would mount on its one warm
+    // line. A RAR set reads both ends of every volume: 30 volumes took 3.7s on one line, 0.4s on 12.
+    this._startingPlays = (this._startingPlays || 0) + 1;
+    this.rebalancePlaybackWindows();
     try {
       if (width > 1) {
         if (this._inflightAdvances >= 3) width = 1;
@@ -3876,6 +3899,8 @@ class Pipeline {
       return await this._advanceBody(session, mountOpts, { width });
     } finally {
       this._inflightAdvances = Math.max(0, this._inflightAdvances - 1);
+      this._startingPlays = Math.max(0, this._startingPlays - 1);
+      this.rebalancePlaybackWindows();
     }
   }
 
@@ -4127,13 +4152,17 @@ class Pipeline {
       session.activeCandidate = null;
     }
     const nextOpts = _we ? { ...rest, wantedEpisode: _we } : rest;
-    const standby = session.standby && session.standby.vf && this.mounts.get(session.standby.vf.id);
+    // session.standby only holds a copy warmed before this Play. One armed after it sits in the title
+    // list, and missing it sent every switch through a cold search and mount.
+    const warm = session.standby || this._findTitleStandby(session.query || {}, session.policy || {});
+    const standby = warm && warm.vf && this.mounts.get(warm.vf.id);
+    debug.log('play', `switch backup: ${standby ? `ready "${String(warm.candidate && warm.candidate.name || '').slice(0, 80)}"` : `none, ${(session.candidates || []).length} candidates`}`);
     // The standby was warmed before anyone asked about the screen. A switch that lands on Dolby
     // Vision a TV cannot show turns the picture green, so it walks the screen-ordered list instead.
-    const greenStandby = standby && session.standby.candidate && (session.policy || {}).dolbyVision === false
-      && this._isDolbyVisionRelease(session.standby.candidate);
-    if (standby && standby.streamable && session.standby.candidate && !greenStandby) {
-      const committed = this._commitMount(session, session.standby.candidate, standby, [], nextOpts);
+    const greenStandby = standby && warm.candidate && (session.policy || {}).dolbyVision === false
+      && this._isDolbyVisionRelease(warm.candidate);
+    if (standby && standby.streamable && warm.candidate && standby.id !== session.currentMountId && !greenStandby) {
+      const committed = this._commitMount(session, warm.candidate, standby, [], nextOpts);
       session.standby = null;
       return committed;
     }

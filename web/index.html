@@ -14521,6 +14521,14 @@ function nativeDirectAudioNameRisk(p, caps = clientCaps()) {
   if (nativeDolbyPlaysDirect(caps) && caps.ac3 && caps.eac3) return /\b(dts|true[ ._-]?hd)\b/i.test(bits);
   return /\b(ddp\d?|dd\+|eac3|e-ac-3|ac3|dts|true[ ._-]?hd|atmos|5[ ._-]?1|6ch|7[ ._-]?1|8ch)\b/i.test(bits);
 }
+// The release name already says this box plays the audio direct, so the track check need not hold up
+// the start. If the name lies, the v3.4.5 rescue moves it to AAC about a second later.
+function nativeNameProvesDirectAudio(p, caps = clientCaps()) {
+  const bits = [p && p.name, p && p.fileName, p && p.sourceAttributes && p.sourceAttributes.audio].filter(Boolean).join(' ');
+  if (/\b(dts|true[ ._-]?hd|flac|opus)\b/i.test(bits)) return false;
+  if (/\baac\d?\b/i.test(bits)) return true;
+  return /\b(ddp\d?|dd\+|eac3|e-ac-3|ac3|dd\d)\b/i.test(bits) && nativeDolbyPlaysDirect(caps) && !!caps.ac3 && !!caps.eac3;
+}
 async function fetchPlayerTracks(p, timeoutMs = 0) {
   if (!p || !p.tracksUrl) return null;
   if (p.tracks) {
@@ -14562,6 +14570,10 @@ async function prepareNativeStartKindForAudio(startKind) {
   const needsTracksForSubtitle = prefSubtitleMode() === 'always' || String(loadSubChoice() || '').startsWith('rs:');
   const needsTracksForAudio = startKind === 'direct' && !!p.remuxUrl;
   if (!needsTracksForAudio && !needsTracksForSubtitle) return startKind;
+  if (!needsTracksForSubtitle && nativeNameProvesDirectAudio(p)) {
+    fetchPlayerTracks(p).catch(() => {}); // still fills the track menu and audio preference
+    return startKind;
+  }
   const tracks = await fetchPlayerTracks(p, 1400).catch(() => null);
   if (!S.playing || S.playing !== p) return startKind;
   if (!needsTracksForAudio) return startKind;

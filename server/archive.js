@@ -393,8 +393,10 @@ class ArchiveVirtualFile {
       const e = this.extents[idx];
       const from = e.offset + (offset - e.innerStart);
       const take = Math.min(e.innerStart + e.length, end) - offset;
+      const vol = this.vols[e.vol];
+      const volOpts = vol.partSize ? { ...opts, aheadEnd: vol._segForOffset(e.offset + e.length - 1) + 1 } : opts;
       try {
-        yield* this.vols[e.vol].read(from, from + take, opts);
+        yield* vol.read(from, from + take, volOpts);
       } catch (err) {
         this._flagDeadPieces();
         throw err;
@@ -425,14 +427,29 @@ class ArchiveVirtualFile {
   // The player polls THIS object's health. A volume that lost a piece on every
   // provider only marks itself, so the same release kept remounting and dying at
   // the same minute instead of moving to the next copy.
+  // Only a piece holding bytes of this file counts: a dead RAR trailer loses no picture.
+  _deadPieceMatters(volIndex, i) {
+    const v = this.vols[volIndex];
+    if (!this.extents.length || !(v.partSize > 0)) return true;
+    const start = i * v.partSize;
+    const end = start + v.partSize;
+    return this.extents.some((e) => e.vol === volIndex && e.offset < end && e.offset + e.length > start);
+  }
   deadPieceCount() {
     let n = 0;
-    for (const v of this.vols) if (v && typeof v.deadPieceCount === 'function') n += v.deadPieceCount();
+    this.vols.forEach((v, volIndex) => {
+      if (!v || !v._deadPieces) return;
+      for (const i of v._deadPieces.keys()) if (this._deadPieceMatters(volIndex, i)) n++;
+    });
     return n;
   }
   deadPieceReason() {
-    for (const v of this.vols) {
-      if (v && typeof v.deadPieceCount === 'function' && v.deadPieceCount() > 0) return v.deadPieceReason();
+    for (let volIndex = 0; volIndex < this.vols.length; volIndex++) {
+      const v = this.vols[volIndex];
+      if (!v || !v._deadPieces) continue;
+      for (const [i, why] of v._deadPieces) {
+        if (this._deadPieceMatters(volIndex, i)) return `piece ${i + 1}/${v.segments.length} unreadable on every provider: ${why}`;
+      }
     }
     return '';
   }

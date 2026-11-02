@@ -128,6 +128,17 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-11-01, v3.4.9 — Faster switches and cold starts, measured on the Onn TV box:
+- Switch: a backup armed after Play never reached `session.standby`, and it failed after 30s behind the viewer's opening buffer fill (`warm-up waited behind a playing stream`), so every switch was cold. `advance` now reads the title list, `_armStandby` uses the read-ahead lane and retries up to 3 times, 15s apart. Forced switch with the backup ready: 2.2s picture stop (0.1s finding, 2.2s starting), against 6.5s and 7.3s with none. One good run, capped at 6 lines per provider, idle server. The retry is covered by a test only: the backup was ready on its first try on the TV.
+- Cold start: on an idle house, a mount ran on the one warm line. `_advance` now floors the open cap at a viewer's share. Local bench, 30 volumes at 60ms: 3748ms on 1 line, 425ms on 12. TV: S08E17 RAR mount 7874ms before, 5515ms and 4567ms after, far short of the bench, and the remaining time is not explained.
+- Track wait: a direct start awaited a track probe of up to 1.4s before requesting video. `nativeNameProvesDirectAudio` skips the wait when the name proves playable audio; DTS, TrueHD, unclear names and subtitle needs still wait. S08E15 first frame 7218ms before, 5739ms after, one run each, optimized build.
+- Read-ahead stops at the extent end and a dead piece with no extent overlap no longer blocks a release (fixture only). `onRenderedFirstFrame` adds a real first-frame trace.
+- Measured: a logging relay showed video bytes arriving in milliseconds and READY about 0.15s after first frame, so the earlier 3.6-5.1s gap was the once-a-second `nativePos` tick, not a real wait.
+- Dead pieces: three providers answered 430 to both STAT and BODY for the four logged message ids, so those switches were correct. Eweka was not checked: this PC has no login for it.
+- NOT verified: real household load with the backup's extra lines, Shield, Google TV Streamer, a receiver, the Good Doctor files, and why dead pieces land on the last piece. Search still costs about 2.5s on a first play.
+- Gate: `npm.cmd test` 938/938. `verify:full` on the QA rig (fixture NNTP 61119; LOTR 2001 + Stuart Fails to Save the Universe S01E01): every step PASS on the final code, with the Android stress on the real Onn 4K Pro (`isEmulator: false`, 0 failures, 0 warnings).
+- Version contract: `package.json` 3.4.9; Android `versionName` 3.4.9 / `versionCode` 437; Windows client package/Tauri/Cargo(.lock) 3.4.9.
+
 2026-11-01, v3.4.8 — Next episodes warm up again, Dolby Vision asks the screen, and a byte check names the file or Triboon:
 - Found in Unraid logs: The Rookie S08E17 froze 17s at 2:07 with `No valid varint length mask found`, and no line recorded it because a release switch logged no buffering. All four NTb RAR copies across S08E16 and S08E17 lost the last piece of `part07` on all four providers.
 - `server/byte-check.js`: a client report of unreadable bytes compares what the stream path serves with fresh articles over the last 12 MB read, walks the MKV, and logs `byte check` with FILE or TRIBOON in `[fail:play]`. It runs beside the switch on the background lane, once per mount.

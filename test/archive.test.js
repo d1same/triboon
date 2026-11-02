@@ -948,3 +948,60 @@ test('speed budget: cold seek inside a multi-volume archive < 250ms (20ms RTT mo
     assert.ok(ms < 250, `first byte after cold archive seek took ${ms.toFixed(1)}ms`);
   }, { partSize: 96 * 1024, latencyMs: 20 });
 });
+
+test('archive: a dead RAR trailer piece is never fetched and never blocks a release with all its video', async () => {
+  const { createMockNntp } = require('./mock-nntp');
+  const { NntpPool } = require('../server/nntp');
+  const { mountNzb } = require('../server/archive');
+  const { seededPayload, writeRar4Store } = require('./archive-fixtures');
+  const partSize = 71750; // volume 2's last article holds only the RAR end block
+  const payload = seededPayload(200000, 0x5eed);
+  const vols = writeRar4Store([{ name: 'Show.S01E01.mkv', data: payload }], { volSize: 70 * 1024, naming: 'part', base: 'show' });
+  const articles = new Map();
+  const ids = [];
+  const files = vols.map(({ name, data }, f) => {
+    const totalParts = Math.ceil(data.length / partSize) || 1;
+    const segs = [];
+    ids.push([]);
+    for (let p = 0; p < totalParts; p++) {
+      const begin = p * partSize;
+      const end = Math.min(data.length, begin + partSize);
+      const body = encodePart(data, { name, partNum: p + 1, totalParts, begin, end, totalSize: data.length });
+      const id = `f${f}s${p + 1}@t`;
+      articles.set(id, body);
+      ids[f].push(id);
+      segs.push(`<segment bytes="${body.length}" number="${p + 1}">${id}</segment>`);
+    }
+    return `<file poster="t" date="1700000000" subject="[r] &quot;${name}&quot; yEnc (1/${totalParts})"><groups><group>a.b.t</group></groups><segments>${segs.join('')}</segments></file>`;
+  });
+  const nzb = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">${files.join('')}</nzb>`;
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+  try {
+    const vf = await mountNzb(pool, nzb);
+    const vol = vf.vols[1];
+    const last = vol.segments.length - 1;
+    const needed = Math.max(...vf.extents.filter((e) => e.vol === 1).map((e) => e.offset + e.length));
+    assert.ok(needed <= last * vol.partSize, 'the fixture really has a trailer-only last piece');
+    const victim = ids[1][last];
+    articles.delete(victim);
+    vol.cache.delete(last);
+    if (vol.sliceCache) vol.sliceCache.delete(last);
+    const before = mock.bodyCount(victim);
+    const parts = [];
+    for await (const b of vf.read(0, vf.size, { priority: 'playback' })) parts.push(b);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.ok(Buffer.concat(parts).equals(payload), 'every video byte arrives');
+    assert.strictEqual(mock.bodyCount(victim), before, 'read-ahead stops at the end of the extent');
+    assert.strictEqual(vf.deadPieceCount(), 0);
+    vol._deadPieces = new Map([[last, '430 No Such Article']]);
+    assert.strictEqual(vf.deadPieceCount(), 0, 'even a dead trailer costs no picture, so it blocks nothing');
+    vol._deadPieces = new Map([[0, '430 No Such Article']]);
+    assert.strictEqual(vf.deadPieceCount(), 1, 'a dead piece with video bytes still blocks');
+    assert.match(vf.deadPieceReason(), /^piece 1\//);
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
