@@ -136,6 +136,7 @@ fails to produce a playable stream. Budgets default to feels-local targets
 - Log fixes held from v3.4.9: stale IPTV timer, stale boot id, one first-frame line per start, `why=` on a warm-up miss.
 - NOT verified: a real TV, Shield, Google TV Streamer, Unraid, a real Xtream provider, and the next-episode warm-up in production, which the `why=` line is there to diagnose. The Android stress step ran on the emulator only. The emulator crashed on two of five runs with a segfault, unrelated to the app code as far as the logs show.
 - Gate: `verify:full` passed on the QA emulator, Node suite 960 of 960, all household and Android steps PASS.
+- Release: the owner pushed the tag by hand. CI published every asset from d2df1fd on the first tag run. `triboon.apk` and `triboon-v3.4.10.apk` are byte-identical, versionCode 438, same signing certificate as v3.4.9; both Windows client names are byte-identical; `SHA256SUMS.txt` matches; `/releases/latest/download/triboon.apk` resolves to the new build. Public image: unauthenticated pulls work for `latest` and `3.4.10`, both carry `linux/amd64` and `linux/arm64`, and `latest` started in isolation and reported 3.4.10 on `/api/server`.
 - Version contract: `package.json` 3.4.10; Android `versionName` 3.4.10 / `versionCode` 438; Windows client package/Tauri/Cargo(.lock) 3.4.10.
 
 2026-11-01, v3.4.9 — Faster switches and cold starts, measured on the Onn TV box:
