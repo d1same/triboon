@@ -15,7 +15,7 @@ serde_json = "1.0"
 url = "2.5"
 # libmpv2 wraps the packaged libmpv-2.dll. GPU decode, HDR handling, and audio output live here.
 # The feature remains explicit so Rust-only security tests can still run on non-Windows hosts.
-libmpv2 = { version = "=6.0.0", default-features = false, optional = true }
+libmpv2 = { version = "=7.0.0", default-features = false, optional = true }
 # Schannel TLS for Chromecast V2. WebView2 cannot load Google's cast_sender.js.
 native-tls = { version = "0.2", optional = true }
 
