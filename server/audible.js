@@ -32,7 +32,7 @@ const ASIN_RE = /^[A-Z0-9]{10}$/;
 
 function normRegion(region) {
   const r = String(region || '').toLowerCase();
-  return REGIONS[r] ? r : DEFAULT_REGION;
+  return Object.hasOwn(REGIONS, r) ? r : DEFAULT_REGION;
 }
 
 // Pick the largest square cover from Audible's product_images map ({ "500": url, "1024": url }).

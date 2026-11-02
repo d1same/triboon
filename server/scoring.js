@@ -279,6 +279,7 @@ function scoreRelease(candidate, policy = {}) {
   if (a.resolution === 'unknown') add('res unknown', 0);
   else if (a.resolutionRank > cap) add(`over-cap ${a.resolution}`, -100000);
   else add(`res ${a.resolution}`, RES_LADDER[a.resolutionRank] ?? a.resolutionRank * 30); // higher allowed res preferred
+  if (Number.isInteger(policy.adminMaxResolutionRank) && a.resolutionRank > policy.adminMaxResolutionRank) reasons.push(`over-admin-cap ${a.resolution}`);
   if (Number.isInteger(policy.exactResolutionRank) && a.resolutionRank !== policy.exactResolutionRank) {
     add(`not-requested-resolution ${a.resolution}`, -100000);
   }

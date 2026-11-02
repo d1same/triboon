@@ -963,8 +963,8 @@ const MOVIE_GENRE_ALIAS = {
 function genreIdsFromNames(names, kind) {
   return (names || []).map((name) => {
     const key = String(name).toLowerCase();
-    if (kind === 'series' || kind === 'tv') return TV_GENRE_ALIAS[key] || GENRE_BY_NAME.get(key);
-    if (kind === 'movie') return MOVIE_GENRE_ALIAS[key] || GENRE_BY_NAME.get(key);
+    if (kind === 'series' || kind === 'tv') return (Object.hasOwn(TV_GENRE_ALIAS, key) && TV_GENRE_ALIAS[key]) || GENRE_BY_NAME.get(key);
+    if (kind === 'movie') return (Object.hasOwn(MOVIE_GENRE_ALIAS, key) && MOVIE_GENRE_ALIAS[key]) || GENRE_BY_NAME.get(key);
     return GENRE_BY_NAME.get(key);
   }).filter(Boolean);
 }
@@ -1178,8 +1178,9 @@ function codecProfilesAllow(profiles, kind, codec, container, facts) {
 
 // Android TV asks for the original file with no token and no session id;
 // real Jellyfin leaves that address open. Here it opens only for the device
-// address this server just told to play that movie's original file. Every
-// seek opens the address again, so each use keeps it open a while longer.
+// address this server just told to play that movie's original file. The grant
+// ends at a fixed time and with the viewer's sessions. Asking for playback
+// again renews it, and it can only reuse a mount: it never starts a play.
 const directGrants = new Map();
 const DIRECT_GRANT_MS = 6 * 3600 * 1000;
 
@@ -1187,14 +1188,14 @@ function grantKey(ip, itemId) {
   return `${String(ip || '')}|${internalItemId(String(itemId || '')).toLowerCase()}`;
 }
 
-function issueDirectGrant(ip, uid, itemId) {
+function issueDirectGrant(ip, uid, epoch, itemId) {
   if (!ip || !uid) return;
   const now = Date.now();
   for (const [key, g] of directGrants) if (g.until <= now) directGrants.delete(key);
   while (directGrants.size >= 1000) directGrants.delete(directGrants.keys().next().value);
   const key = grantKey(ip, itemId);
   directGrants.delete(key);
-  directGrants.set(key, { uid, until: now + DIRECT_GRANT_MS });
+  directGrants.set(key, { uid, epoch, until: now + DIRECT_GRANT_MS });
 }
 
 function directGrantUser(ip, url, itemId) {
@@ -1202,8 +1203,7 @@ function directGrantUser(ip, url, itemId) {
   if (!/^true$/i.test(String(queryField({ url }, null, 'static') || ''))) return null;
   const g = directGrants.get(grantKey(ip, itemId));
   if (!g || g.until <= Date.now()) return null;
-  g.until = Date.now() + DIRECT_GRANT_MS;
-  return g.uid;
+  return { uid: g.uid, epoch: g.epoch };
 }
 
 function jellyfinAppLabel(ctx) {
@@ -2638,6 +2638,7 @@ async function handleKind(kind, ctx) {
     const reused = reusableMount(uid, ctx.m[1], sentId);
     let rel = reused && reused.stream.streamUrl;
     if (!rel) {
+      if (ctx.directGrant) return send(ctx.res, 401, { error: 'authentication required' }, cors);
       const parsed = parseItemId(ctx.m[1]);
       let played = null;
       if (parsed && parsed.type === 'local' && typeof deps.jellyfinLocalPlay === 'function') {
@@ -2839,7 +2840,7 @@ async function handleKind(kind, ctx) {
       ?? (pq && (pq.get('SubtitleStreamIndex') ?? pq.get('subtitleStreamIndex')));
     source.DefaultSubtitleStreamIndex = chosenSubtitleIndex(streams, askedSub);
     if (runtimeTicks) source.RunTimeTicks = runtimeTicks;
-    if (direct) issueDirectGrant(typeof clientIp === 'function' ? clientIp(ctx) : '', uid, ctx.m[1]);
+    if (direct && typeof deps.directGrantAddress === 'function') issueDirectGrant(deps.directGrantAddress(ctx), uid, (ctx.user && ctx.user.sessionEpoch) || 0, ctx.m[1]);
     return send(ctx.res, 200, { PlaySessionId: playedBody.sessionId, MediaSources: [source] }, cors);
   }
   if (kind === 'segments') {
@@ -2935,11 +2936,12 @@ async function handleKind(kind, ctx) {
     const ip = clientIp(ctx);
     const key = `login:${uname}:${ip}`;
     const acctKey = `login-acct:${uname}`;
+    if (deps.loginIpLocked(ctx)) return;
     if (throttled(ctx, key, { max: 10, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
     if (uname && throttled(ctx, acctKey, { max: 40, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
     let result;
     try { result = auth.login(name, pass); }
-    catch { return send(ctx.res, 401, { error: 'invalid credentials' }, cors); }
+    catch { deps.noteLoginFailure(ctx); return send(ctx.res, 401, { error: 'invalid credentials' }, cors); }
     if (result.twoFactorRequired) {
       clearLoginThrottle(key);
       clearLoginThrottle(acctKey);

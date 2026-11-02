@@ -1879,6 +1879,7 @@ class Pipeline {
     return JSON.stringify([
       this._searchCacheKey(params, opts),
       policy.maxResolutionRank ?? null,
+      policy.adminMaxResolutionRank ?? null,
       policy.preferResolutionRank ?? null,
       policy.exactResolutionRank ?? null,
       policy.maxSizeGb4k ?? null,
@@ -3610,8 +3611,10 @@ class Pipeline {
   _playableCandidates(candidates, params = {}) {
     const autoPlayable = (candidates || []).filter((c) => c.score > -5000);
     if (!params.pickKey && !params.pick) return autoPlayable;
-    const picked = (candidates || []).find((c) => params.pickKey && c.pickKey === params.pickKey)
+    let picked = (candidates || []).find((c) => params.pickKey && c.pickKey === params.pickKey)
       || (candidates || []).find((c) => params.pick && c.name === params.pick);
+    // The Sources tap overrides a per-play limit, never the cap the admin set for this user.
+    if (this._overAdminCap(picked)) picked = null;
     // A pinned resume is the source we HAPPENED to be playing, not a choice the user is owed.
     // Front it only while the scorer still calls it playable — a pin that rotted since the last
     // session is skipped outright, and the ranked list plays without the manual-pick size-window
@@ -3649,8 +3652,12 @@ class Pipeline {
     return reasons.some((r) => /^(encrypted|missing|blocked|sample-or-stub|stub|not-the-movie|unstreamable-container)/i.test(r));
   }
 
+  _overAdminCap(c) {
+    return !!(c && (c.reasons || []).some((r) => /^over-admin-cap /.test(String(r))));
+  }
+
   _manualWalkable(c) {
-    if (this._hardDeadCandidate(c)) return false;
+    if (this._hardDeadCandidate(c) || this._overAdminCap(c)) return false;
     const reasons = (c.reasons || []).map((r) => String(r));
     // 1080p stays out of a 4K tap walk. Size-cap is Auto-only — the tap overrides it.
     if (reasons.some((r) => /^(over-cap |not-requested-resolution)/i.test(r))) return false;
@@ -3737,7 +3744,8 @@ class Pipeline {
     if (policy.noResolutionWiden) return { playable, candidates, widened: false };
     const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
     const cap = policy.maxResolutionRank;
-    if (playable.length || explicitPick || !Number.isInteger(cap) || cap >= 4) {
+    const ceiling = Number.isInteger(policy.adminMaxResolutionRank) ? policy.adminMaxResolutionRank : 4;
+    if (playable.length || explicitPick || !Number.isInteger(cap) || cap >= ceiling) {
       return { playable, candidates, widened: false };
     }
     const uhdPolicy = { ...policy, preferResolutionRank: 4 };
@@ -3748,8 +3756,7 @@ class Pipeline {
       console.log('[play] 1080 empty, reused 4K search');
       return { playable: next, candidates: uhd.candidates, widened: true };
     }
-    const relaxed = { ...uhdPolicy };
-    delete relaxed.maxResolutionRank;
+    const relaxed = { ...uhdPolicy, maxResolutionRank: ceiling };
     const fallback = await this.search(params, relaxed);
     next = this._playableCandidates(fallback.candidates, params);
     if (next.length) {

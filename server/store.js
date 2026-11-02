@@ -23,6 +23,7 @@ class Store {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(dir, 0o700); } catch {}
     this.cache = new Map();   // table -> object
+    this.unreadable = new Set(); // tables whose file is there but gave up on its last read
     this.dirty = new Set();
     this.timer = null;
     // Debounced-path flush throttle: table -> minimum ms between BACKGROUND flushes. High-frequency
@@ -34,6 +35,8 @@ class Store {
     this.flushIntervals = {};
     this._lastFlushAt = new Map();
     this._flushingAsync = false;
+    this._asyncFlush = null;
+    this._syncWrites = new Map(); // table -> sync writes so far, so a slower async write cannot land last
     this._tmpSeq = 0;
     this._scrubStaleTmps();
   }
@@ -75,14 +78,17 @@ class Store {
       let raw;
       try { raw = fs.readFileSync(file, 'utf8'); }
       catch (e) {
-        if (e && e.code === 'ENOENT') { this.cache.set(table, fallback); return fallback; } // truly absent
+        if (e && e.code === 'ENOENT') { this.unreadable.delete(table); this.cache.set(table, fallback); return fallback; } // truly absent
         if (attempt < 5) { sleepMs(120); continue; }                                          // exists but locked
+        this.unreadable.add(table);
         return fallback;                                                                       // give up (uncached)
       }
-      try { const val = JSON.parse(raw); this.cache.set(table, val); return val; }
-      catch { if (attempt < 5) { sleepMs(120); continue; } return fallback; }                 // corrupt/partial (uncached)
+      try { const val = JSON.parse(raw); this.unreadable.delete(table); this.cache.set(table, val); return val; }
+      catch { if (attempt < 5) { sleepMs(120); continue; } this.unreadable.add(table); return fallback; }                 // corrupt/partial (uncached)
     }
   }
+
+  readFailed(table) { return this.unreadable.has(table); }
 
   write(table, value) {
     // Safe mode: when the secret couldn't be read at boot (data is transiently unreadable), the server
@@ -113,7 +119,7 @@ class Store {
     // The timer path must NEVER throw — an EPERM here once crashed the whole server.
     this.timer = setTimeout(() => {
       this.timer = null;
-      this._flushAsync().catch(() => { /* per-table failures already handled inside */ });
+      this._asyncFlush = this._flushAsync().catch(() => { /* per-table failures already handled inside */ });
     }, delay);
     if (this.timer.unref) this.timer.unref();
   }
@@ -156,6 +162,7 @@ class Store {
         this.dirty.delete(table); // a write() during the awaits below re-marks it
         const json = JSON.stringify(this.cache.get(table), null, 0);
         const file = this._file(table);
+        const syncWrites = this._syncWrites.get(table) || 0;
         let ok = false;
         try {
           const tmp = this._tmpFile(file);
@@ -180,6 +187,8 @@ class Store {
           }
         }
         if (ok) { this._lastFlushAt.set(table, Date.now()); this._noteFlushRecovered(); }
+        // A sync flush ran during those awaits, so this older copy landed over its newer one.
+        if ((this._syncWrites.get(table) || 0) !== syncWrites) this._writeTableSync(table);
       }
       if (this.dirty.size) this._flushSoon(Math.max(retryIn, this._flushFails ? 1000 : 250));
     } finally {
@@ -224,6 +233,7 @@ class Store {
   }
 
   _writeTableSync(table) {
+    this._syncWrites.set(table, (this._syncWrites.get(table) || 0) + 1);
     const json = JSON.stringify(this.cache.get(table), null, 0);
     const file = this._file(table);
     try {
@@ -249,6 +259,9 @@ class Store {
   }
 
   close() { this.flush(); }
+
+  // Resolves when a background flush still on its way to disk has landed. For shutdown.
+  async settled() { await this._asyncFlush; }
 }
 
 // A TTL verdict/health cache keyed by sanitized NZB hash AND normalized title.

@@ -2854,3 +2854,357 @@ test('iptv: native HLS proxy rewrites relative playlist URIs against the upstrea
     upstream.close();
   }
 });
+
+test('iptv: only media types pass from an upstream', () => {
+  const { safeMediaType } = require('../server/media-type');
+  for (const ok of ['video/mp2t', 'video/mp4', 'audio/aac', 'application/vnd.apple.mpegurl', 'application/x-mpegURL', 'audio/mpegurl; charset=utf-8', 'application/octet-stream']) {
+    assert.strictEqual(safeMediaType(ok), ok);
+  }
+  for (const bad of ['text/html', 'TEXT/HTML; charset=utf-8', 'text/html; x=mpegurl', 'application/xhtml+xml', 'image/svg+xml', 'text/xml', 'application/javascript', 'video/mp4/../html', 'video/<script>', '']) {
+    assert.strictEqual(safeMediaType(bad), 'application/octet-stream', bad);
+  }
+});
+
+test('iptv: an upstream that answers HTML cannot become a page on the Triboon origin', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-html-'));
+  const page = '<script>document.title="RAN"</script>';
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'audio/x-mpegurl' });
+      return res.end(`#EXTM3U
+#EXTINF:-1 tvg-id="a",Plain HTML
+http://${req.headers.host}/page
+#EXTINF:-1 tvg-id="b",Disguised HTML
+http://${req.headers.host}/disguised
+#EXTINF:-1 tvg-id="c",Real TS
+http://${req.headers.host}/real.ts
+`);
+    }
+    if (req.url === '/page') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(page); }
+    if (req.url === '/disguised') { res.writeHead(200, { 'content-type': 'text/html; x=mpegurl' }); return res.end(page); }
+    if (req.url === '/real.ts') { res.writeHead(200, { 'content-type': 'video/mp2t' }); return res.end('ts-bytes'); }
+    res.writeHead(404);
+    return res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    const made = await httpJson(srv.port, 'POST', '/api/me/iptv/sources',
+      { name: 'Hostile', iptvMode: 'm3u', iptvUrl: `http://127.0.0.1:${upstream.address().port}/list.m3u` }, admin);
+    assert.strictEqual(made.status, 200);
+    const list = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    const byName = Object.fromEntries(list.json.channels.map((c) => [c.name, c]));
+    for (const name of ['Plain HTML', 'Disguised HTML']) {
+      const r = await httpRaw(srv.port, byName[name].nativeUrl);
+      assert.strictEqual(r.headers['content-type'], 'application/octet-stream', name + ' is not served as a page');
+      assert.match(String(r.headers['content-security-policy']), /^sandbox/, name + ' is sandboxed');
+      assert.strictEqual(r.headers['x-content-type-options'], 'nosniff');
+    }
+    const real = await httpRaw(srv.port, byName['Real TS'].nativeUrl);
+    assert.strictEqual(real.status, 200);
+    assert.strictEqual(real.headers['content-type'], 'video/mp2t', 'a real stream keeps its type');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: the DNS pin survives a full cache, and no pin means no request', async () => {
+  const net = require('net');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const from = src.indexOf('async function validateAndPinIptvUrl');
+  const to = src.indexOf('async function assertIptvUrlAllowed');
+  assert.ok(from > 0 && to > from);
+  const iptvUrlSafetyCache = new Map();
+  const pickCachedIptvAddress = (host) => { const hit = iptvUrlSafetyCache.get(host); return hit ? hit.addrs[0] : null; };
+  const validate = new Function('net', 'iptvUrlSafetyCache', 'pickCachedIptvAddress', 'resolveIptvHost', 'allowPrivateIptvTargets', 'cleanUrlHostForPolicy',
+    'isPrivateIptvHost', 'iptvPolicyError', 'pinnedIptvHref', 'iptvHostHeader', 'pinnedIptvLookup', 'markIptvPinnedAddressFailure', 'IPTV_PRIVATE_URL_CACHE_MS',
+    `${src.slice(from, to)}\nreturn validateAndPinIptvUrl;`)(net, iptvUrlSafetyCache, pickCachedIptvAddress,
+    async () => [{ address: '93.184.216.34', family: 4 }], () => false, (h) => h, () => false, (label, why) => new Error(why),
+    () => 'pinned', () => '', () => () => {}, () => {}, 60000);
+  for (let i = 0; i < 1500; i++) {
+    const pin = await validate(`http://h${i}.example/live.ts`);
+    assert.strictEqual(pin.address, '93.184.216.34', `host ${i} kept its pin`);
+    assert.strictEqual(typeof pin.lookup, 'function');
+  }
+  assert.ok(iptvUrlSafetyCache.size <= 1000);
+  assert.ok(iptvUrlSafetyCache.has('h1499.example'), 'the newest entry stays');
+  assert.ok(!iptvUrlSafetyCache.has('h0.example'), 'the oldest goes first');
+});
+
+test('iptv: ffmpeg opens only web addresses from a playlist', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'transcode.js'), 'utf8');
+  assert.match(src, /'-protocol_whitelist', 'http,https,tcp,tls,crypto',/);
+  assert.doesNotMatch(src, /protocol_whitelist', '[^']*(file|udp|rtp|httpproxy)/);
+});
+
+test('iptv: a non-admin gets opaque playlist items, the admin path is unchanged, and hidden groups stay hidden', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-media-'));
+  const seen = [];
+  const upstream = http.createServer((req, res) => {
+    seen.push(req.url);
+    const base = '/live/FIXUSER/FIXPASS';
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'audio/x-mpegurl' });
+      return res.end(`#EXTM3U
+#EXTINF:-1 tvg-id="a" group-title="News",Shared HLS
+http://${req.headers.host}${base}/chan.m3u8
+#EXTINF:-1 tvg-id="b" group-title="Adult",Hidden HLS
+http://${req.headers.host}${base}/hidden.m3u8
+`);
+    }
+    if (req.url.endsWith('/chan.m3u8') || req.url.endsWith('/hidden.m3u8')) {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end('#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n#EXTINF:2,\nseg_0.ts\n#EXTINF:2,\nmoved.ts\n');
+    }
+    if (req.url.endsWith('/moved.ts')) { res.writeHead(302, { location: `${base}/seg_0.ts` }); return res.end(); }
+    if (req.url.endsWith('/key.bin')) { res.writeHead(200, { 'content-type': 'text/html' }); return res.end('0123456789abcdef'); }
+    if (req.url.endsWith('/seg_0.ts')) { res.writeHead(200, { 'content-type': 'video/mp2t' }); return res.end('segment-bytes'); }
+    res.writeHead(404);
+    return res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvMode: 'm3u', iptvUrl: `http://127.0.0.1:${upstream.address().port}/list.m3u` }, admin);
+    const join = async (name) => {
+      const invite = await httpJson(srv.port, 'POST', '/api/invites', { policy: {} }, admin);
+      return (await httpJson(srv.port, 'POST', '/api/invite/accept', { token: invite.json.token, name, password: 'pass1234' })).json.token;
+    };
+    const alice = await join('alice');
+    const bob = await join('bob');
+    await httpJson(srv.port, 'GET', '/api/iptv/channels', null, alice);
+    const adminList = (await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin)).json.channels;
+    const shared = adminList.find((c) => c.name === 'Shared HLS');
+    const hidden = adminList.find((c) => c.name === 'Hidden HLS');
+    const playAs = async (token, c) => (await httpJson(srv.port, 'GET', `/api/iptv/play/${c.idx}?cid=${encodeURIComponent(c.id)}`, null, token)).json;
+
+    const adminPlay = await playAs(admin, shared);
+    const adminBody = (await httpRaw(srv.port, adminPlay.nativeUrl)).body.toString();
+    assert.match(adminBody, /FIXPASS\/seg_0\.ts/, 'an admin keeps the provider addresses');
+
+    const hiddenPlay = await playAs(alice, hidden);
+    const alicePlay = await playAs(alice, shared);
+    const body = (await httpRaw(srv.port, alicePlay.nativeUrl)).body.toString();
+    assert.doesNotMatch(body, /FIXUSER|FIXPASS|127\.0\.0\.1/, 'no provider address reaches a user');
+    const items = body.split('\n').filter((l) => l.startsWith('/api/iptv/media/'));
+    assert.strictEqual(items.length, 2);
+    assert.match(items[0], /\.ts\?cid=.*&t=/);
+    const keyUri = /URI="([^"]+)"/.exec(body)[1];
+    assert.match(keyUri, /^\/api\/iptv\/media\//, 'the key goes through the server too');
+
+    const seg = await httpRaw(srv.port, items[0]);
+    assert.strictEqual(seg.status, 200);
+    assert.strictEqual(seg.headers['content-type'], 'video/mp2t');
+    assert.strictEqual(seg.body.toString(), 'segment-bytes');
+    assert.strictEqual((await httpRaw(srv.port, items[1])).body.toString(), 'segment-bytes', 'a redirect is followed on the server');
+    const key = await httpRaw(srv.port, keyUri);
+    assert.strictEqual(key.headers['content-type'], 'application/octet-stream', 'an item cannot be served as a page');
+    assert.match(String(key.headers['content-security-policy']), /^sandbox/);
+
+    assert.strictEqual((await httpRaw(srv.port, items[0].replace(/[?].*$/, ''))).status, 401, 'no token, no item');
+    const bobPlay = await playAs(bob, shared);
+    const bobToken = new URL(bobPlay.nativeUrl, 'http://x').searchParams.get('t');
+    assert.strictEqual((await httpRaw(srv.port, items[0].replace(/([?&]t=)[^&]+/, `$1${bobToken}`))).status, 404, 'an item belongs to the viewer it was made for');
+
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvHiddenGroups: ['Adult'] }, admin);
+    assert.strictEqual((await httpRaw(srv.port, hiddenPlay.nativeUrl)).status, 404, 'native refuses a hidden group');
+    assert.strictEqual((await httpRaw(srv.port, hiddenPlay.streamUrl)).status, 404, 'remux refuses a hidden group');
+    assert.strictEqual((await httpRaw(srv.port, adminPlay.nativeUrl)).status, 200, 'a shared group still plays');
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvHiddenGroups: ['News'] }, admin);
+    assert.strictEqual((await httpRaw(srv.port, items[0])).status, 404, 'an item from a group hidden later stops too');
+
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvHiddenGroups: [] }, admin);
+    const own = await httpJson(srv.port, 'POST', '/api/me/iptv/sources', { name: 'Mine', iptvMode: 'm3u', iptvUrl: `http://127.0.0.1:${upstream.address().port}/list.m3u` }, alice);
+    assert.strictEqual(own.status, 200);
+    const mine = (await httpJson(srv.port, 'GET', '/api/iptv/channels', null, alice)).json.channels.find((c) => c.name === 'Shared HLS' && c.sourceId === own.json.source.id);
+    assert.ok(mine, 'the viewer has their own copy of the channel');
+    const minePlay = await playAs(alice, mine);
+    assert.match((await httpRaw(srv.port, minePlay.nativeUrl)).body.toString(), /FIXPASS\/seg_0\.ts/, 'their own playlist goes straight to its provider');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('setup: a held request cannot make a second admin, and an unreadable users file is not a fresh install', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-setup-'));
+  let srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    const held = await new Promise((resolve, reject) => {
+      const req = http.request({ port: srv.port, host: '127.0.0.1', method: 'POST', path: '/api/setup', headers: { 'content-type': 'application/json', 'content-length': 44 } }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      });
+      req.on('error', reject);
+      req.write('{"name":"latecomer",');
+      setTimeout(async () => {
+        try {
+          await setupAdmin(srv.port);
+          req.end(`"password":"pass1234"}`.padEnd(24, ' '));
+        } catch (e) { reject(e); }
+      }, 50);
+    });
+    assert.strictEqual(held, 403);
+    const real = fs.existsSync(path.join(dataDir, 'users.json')) ? null : 'missing';
+    assert.strictEqual(real, null);
+    await srv.shutdown();
+    srv = null;
+    const good = fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8');
+    assert.strictEqual(JSON.parse(good).list.length, 1, 'only the owner exists');
+    fs.writeFileSync(path.join(dataDir, 'users.json'), good.slice(0, 40));
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.needsSetup, false, 'not offered as a fresh install');
+    assert.strictEqual((await httpJson(srv.port, 'POST', '/api/setup', { name: 'intruder', password: 'pass1234' })).status, 503);
+    assert.strictEqual((await httpJson(srv.port, 'POST', '/api/invite/accept', { token: 'x', name: 'a', password: 'pass1234' })).status, 503);
+    fs.writeFileSync(path.join(dataDir, 'users.json'), good);
+    assert.strictEqual((await httpJson(srv.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' })).status, 200, 'the next good read recovers with no restart');
+    assert.strictEqual((await httpJson(srv.port, 'POST', '/api/setup', { name: 'intruder', password: 'pass1234' })).status, 403);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8')).list.length, 1);
+  } finally {
+    if (srv) await srv.shutdown();
+  }
+});
+
+test('profiles: leaving out or naming a profile cannot beat a PIN, and an account with no PIN is unchanged', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-profile-'));
+  const srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(srv.port);
+    const play = async (body, headers) => {
+      const r = await new Promise((resolve) => {
+        const data = JSON.stringify({ q: 'Some Title 2024', ...body });
+        const req = http.request({ port: srv.port, host: '127.0.0.1', method: 'POST', path: '/api/play', headers: { authorization: `Bearer ${admin}`, 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), ...headers } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+        req.end(data);
+      });
+      return r;
+    };
+    const restricted = (status) => status === 403;
+    const me = (await httpJson(srv.port, 'GET', '/api/me', null, admin)).json;
+    const main = me.profiles[0];
+    assert.ok(!restricted(await play({})), 'no id, no PIN: past the gate as before');
+    const kid = (await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'Kid', level: 0 }, admin)).json;
+    assert.ok(!restricted(await play({})), 'an open adult profile is one click away, so no id still passes');
+    assert.ok(restricted(await play({ profileId: kid.id })), 'the kid profile is held');
+
+    const pinned = (await httpJson(srv.port, 'POST', `/api/me/profiles/${main.id}/pin`, { password: 'hunter22', pin: '1234' }, admin)).json;
+    assert.ok(pinned.proof, 'setting a PIN gives this device its proof');
+    assert.ok(restricted(await play({})), 'once the adult profile has a PIN, leaving the id out is held');
+    assert.ok(restricted(await play({ profileId: main.id })), 'naming the PIN profile without proof is held');
+    assert.strictEqual((await httpJson(srv.port, 'POST', `/api/me/profiles/${main.id}/verify`, { pin: '9999' }, admin)).json.proof, undefined);
+    const proof = (await httpJson(srv.port, 'POST', `/api/me/profiles/${main.id}/verify`, { pin: '1234' }, admin)).json.proof;
+    assert.ok(!restricted(await play({ profileId: main.id }, { 'x-triboon-profile': proof })), 'the proof opens that profile');
+    assert.ok(restricted(await play({ profileId: main.id }, { 'x-triboon-profile': `${proof}x` })), 'a changed proof does not');
+    assert.ok(restricted(await play({ profileId: kid.id }, { 'x-triboon-profile': proof })), 'a proof never lifts another profile');
+    await httpJson(srv.port, 'POST', `/api/me/profiles/${main.id}/pin`, { password: 'hunter22', pin: '5678' }, admin);
+    assert.ok(restricted(await play({ profileId: main.id }, { 'x-triboon-profile': proof })), 'a new PIN ends the old proof');
+    assert.strictEqual((await httpJson(srv.port, 'GET', `/api/me`, null, proof)).status, 401, 'a proof is not a session');
+  } finally {
+    await srv.shutdown();
+  }
+});
+
+test('login: one address is stopped after its failure budget, a good login does not reset it', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-loginip-'));
+  const srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null, TRIBOON_LOGIN_IP_MAX: 20 });
+  try {
+    await setupAdmin(srv.port);
+    let stopped = 0;
+    for (let i = 0; i < 21 && !stopped; i++) {
+      if (i === 10) assert.strictEqual((await httpJson(srv.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' })).status, 200);
+      const r = await httpJson(srv.port, 'POST', '/api/login', { name: `junk${i}`, password: 'x' });
+      if (r.status === 429) stopped = i;
+    }
+    const after = await httpJson(srv.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' });
+    assert.strictEqual(after.status, 429, 'the budget ran out across names');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'jellyfin-api.js'), 'utf8');
+    assert.match(src, /if \(deps\.loginIpLocked\(ctx\)\) return;/, 'the Jellyfin login shares the budget');
+    assert.match(src, /deps\.noteLoginFailure\(ctx\); return send\(ctx\.res, 401/);
+  } finally {
+    await srv.shutdown();
+    delete process.env.TRIBOON_LOGIN_IP_MAX;
+  }
+});
+
+test('iptv: a real ffmpeg plays a non-admin HLS channel through the server, and a file: segment gives nothing', async (t) => {
+  const { detectFfmpeg } = require('../server/transcode');
+  const ff = detectFfmpeg();
+  if (!ff) return t.skip('ffmpeg not installed');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-ff-'));
+  const seg = path.join(dataDir, 'seg.ts');
+  require('child_process').execFileSync(ff.path, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=25:duration=2',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-f', 'mpegts', seg]);
+  const bytes = fs.readFileSync(seg);
+  const asked = [];
+  const upstream = http.createServer((req, res) => {
+    asked.push(req.url);
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'audio/x-mpegurl' });
+      return res.end(`#EXTM3U\n#EXTINF:-1 tvg-id="a",Good\nhttp://${req.headers.host}/live/U/P/good.m3u8\n#EXTINF:-1 tvg-id="b",Bad\nhttp://${req.headers.host}/live/U/P/bad.m3u8\n`);
+    }
+    if (req.url.endsWith('/good.m3u8')) {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end('#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\nseg.ts\n#EXT-X-ENDLIST\n');
+    }
+    if (req.url.endsWith('/bad.m3u8')) {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(`#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\nfile:${seg.replace(/\\/g, '/')}\n#EXT-X-ENDLIST\n`);
+    }
+    if (req.url.endsWith('/seg.ts')) { res.writeHead(200, { 'content-type': 'video/mp2t', 'content-length': bytes.length }); return res.end(bytes); }
+    res.writeHead(404);
+    return res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvMode: 'm3u', iptvUrl: `http://127.0.0.1:${upstream.address().port}/list.m3u` }, admin);
+    const invite = await httpJson(srv.port, 'POST', '/api/invites', { policy: {} }, admin);
+    const user = (await httpJson(srv.port, 'POST', '/api/invite/accept', { token: invite.json.token, name: 'viewer', password: 'pass1234' })).json.token;
+    const list = (await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin)).json.channels;
+    const playOf = async (name, token) => {
+      const c = list.find((x) => x.name === name);
+      return (await httpJson(srv.port, 'GET', `/api/iptv/play/${c.idx}?cid=${encodeURIComponent(c.id)}`, null, token)).json;
+    };
+    await httpJson(srv.port, 'GET', '/api/iptv/channels', null, user);
+    const good = await httpRaw(srv.port, (await playOf('Good', user)).streamUrl);
+    assert.strictEqual(good.status, 200);
+    assert.ok(good.body.length > 1000, `a non-admin gets a picture (${good.body.length} bytes)`);
+    assert.ok(good.body.includes(Buffer.from('ftyp')), 'it is fMP4');
+    for (const who of [admin, user]) {
+      const bad = await httpRaw(srv.port, (await playOf('Bad', who)).streamUrl);
+      assert.ok(bad.status >= 400 || !bad.body.includes(Buffer.from('mdat')), 'a playlist cannot make ffmpeg read a local file');
+    }
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('store: a background write that started first cannot land over a newer sync flush', async () => {
+  const { Store } = require('../server/store');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-store-'));
+  const store = new Store(dir);
+  const realRename = fs.promises.rename;
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  fs.promises.rename = async (...a) => { await gate; return realRename(...a); };
+  try {
+    store.write('users', { list: [] });
+    store._asyncFlush = store._flushAsync();
+    await new Promise((r) => setTimeout(r, 30));
+    store.write('users', { list: ['owner'] });
+    store.close();
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'users.json'), 'utf8')).list, ['owner']);
+    release();
+    await store.settled();
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'users.json'), 'utf8')).list, ['owner'], 'the newer copy is what stays on disk');
+  } finally {
+    fs.promises.rename = realRename;
+  }
+});

@@ -41,20 +41,46 @@ function deriveKey(secret, label) {
 // Per-key attempt throttle for brute-forceable endpoints (login, profile PIN, invites, QC).
 // Windowed counter + lockout — small, in-memory, self-cleaning. The map is bounded so a bot
 // flooding unique keys can't leak memory (clearing it only ever *loosens* limits briefly).
+const RATE_LIMIT_KEYS = 50000;
+
 class RateLimiter {
-  constructor() { this.hits = new Map(); } // key -> { n, resetAt, lockedUntil }
+  constructor(maxKeys = RATE_LIMIT_KEYS) { this.hits = new Map(); this.maxKeys = maxKeys; } // key -> { n, resetAt, lockedUntil }
   check(key, { max = 5, windowMs = 60000, lockMs = 60000 } = {}) {
     const now = Date.now();
-    if (this.hits.size > 50000) this.hits.clear();
     let e = this.hits.get(key);
     if (e && e.lockedUntil > now) return { ok: false, retryMs: e.lockedUntil - now };
-    if (!e || now > e.resetAt) { e = { n: 0, resetAt: now + windowMs, lockedUntil: 0 }; this.hits.set(key, e); }
+    if (!e || now > e.resetAt) {
+      this.hits.delete(key);
+      if (this.hits.size >= this.maxKeys) this._makeRoom(now);
+      e = { n: 0, resetAt: now + windowMs, lockedUntil: 0 };
+      this.hits.set(key, e);
+    }
     e.n++;
     if (e.n > max) { e.lockedUntil = now + lockMs; return { ok: false, retryMs: lockMs }; }
     return { ok: true };
   }
+  // The limiter is shared by every throttle, so a flood of junk keys must never free a real lock.
+  // Finished entries go first, then the oldest running counts. A lock stays until it runs out.
+  _makeRoom(now) {
+    const target = this.maxKeys - Math.max(1, Math.floor(this.maxKeys / 50));
+    for (const [key, e] of this.hits) {
+      if (this.hits.size <= target) return;
+      if (e.lockedUntil <= now && now > e.resetAt) this.hits.delete(key);
+    }
+    for (const [key, e] of this.hits) {
+      if (this.hits.size <= target) return;
+      if (e.lockedUntil <= now) this.hits.delete(key);
+    }
+  }
+  // Is this key locked? Unlike check, it counts nothing.
+  lockedMs(key) {
+    const e = this.hits.get(key);
+    return e && e.lockedUntil > Date.now() ? e.lockedUntil - Date.now() : 0;
+  }
   clear(key) { this.hits.delete(key); }
 }
+
+const MIN_PASSWORD_LENGTH = 4;
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -76,6 +102,12 @@ function verifyPassword(password, salt, hash) {
   const got = crypto.scryptSync(password, salt, SCRYPT.keylen, SCRYPT);
   const want = Buffer.from(hash, 'hex');
   return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+// An unknown name does the same work as a wrong password, so timing does not show which names exist.
+let unknownUserHash = null;
+function verifyAgainstNobody(password) {
+  if (!unknownUserHash) unknownUserHash = hashPassword(crypto.randomBytes(16).toString('hex'));
+  verifyPassword(password, unknownUserHash.salt, unknownUserHash.hash);
 }
 
 function base32Encode(buf) {
@@ -231,8 +263,13 @@ class Auth {
   _saveUsers(u) { this.store.write('users', u); }
 
   hasUsers() { return this._users().list.length > 0; }
+  // A users file that is there but unreadable reads as an empty list. That must never look like a
+  // fresh install: setup would make a new admin and overwrite the real accounts.
+  usersUnreadable() { this._users(); return this.store.readFailed('users'); }
 
   createUser({ name, password, role = 'user', policy = {} }) {
+    if (this.usersUnreadable()) throw new Error('user data could not be read');
+    if (String(password || '').length < MIN_PASSWORD_LENGTH) throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters`);
     const users = this._users();
     if (users.list.some((u) => u.name.toLowerCase() === name.toLowerCase())) {
       throw new Error('user already exists');
@@ -314,6 +351,20 @@ class Auth {
     return this.publicProfile(p);
   }
 
+  // Signed proof that this session passed a profile's PIN. A new PIN or a new password ends it.
+  profileProof(uid, profileId) {
+    const u = this.getUser(uid);
+    const p = u && (u.profiles || []).find((x) => x.id === profileId);
+    if (!p || !p.pinHash) return undefined;
+    return this.signToken({ uid, scope: 'profile', pid: p.id, pin: p.pinHash.salt.slice(0, 8), epoch: u.sessionEpoch || 0 }, TOKEN_TTL_MS);
+  }
+
+  profileProofValid(user, profile, proof) {
+    const c = this.verifyToken(proof, 'profile');
+    return !!(c && profile.pinHash && c.uid === user.id && c.pid === profile.id
+      && c.pin === profile.pinHash.salt.slice(0, 8) && (c.epoch || 0) === (user.sessionEpoch || 0));
+  }
+
   verifyProfilePin(uid, profileId, pin) {
     const u = this.getUser(uid);
     const p = u && (u.profiles || []).find((x) => x.id === profileId);
@@ -355,7 +406,7 @@ class Auth {
     const u = users.list.find((x) => x.id === targetUid);
     if (!u) throw new Error('user not found');
     if (u.role === 'admin') throw new Error('admin passwords can only be changed by the admin themselves');
-    if (String(newPassword || '').length < 4) throw new Error('new password too short');
+    if (String(newPassword || '').length < MIN_PASSWORD_LENGTH) throw new Error('new password too short');
     const { salt, hash } = hashPassword(String(newPassword));
     u.salt = salt; u.hash = hash;
     u.sessionEpoch = (u.sessionEpoch || 0) + 1;
@@ -378,7 +429,7 @@ class Auth {
     const users = this._users();
     const u = users.list.find((x) => x.id === uid);
     if (!u || !verifyPassword(String(oldPassword), u.salt, u.hash)) throw new Error('current password incorrect');
-    if (String(newPassword).length < 4) throw new Error('new password too short');
+    if (String(newPassword).length < MIN_PASSWORD_LENGTH) throw new Error('new password too short');
     const { salt, hash } = hashPassword(String(newPassword));
     u.salt = salt; u.hash = hash;
     u.sessionEpoch = (u.sessionEpoch || 0) + 1;
@@ -503,7 +554,8 @@ class Auth {
 
   login(name, password) {
     const u = this._users().list.find((x) => x.name.toLowerCase() === String(name).toLowerCase());
-    if (!u || !verifyPassword(String(password), u.salt, u.hash)) throw new Error('invalid credentials');
+    if (!u) { verifyAgainstNobody(String(password)); throw new Error('invalid credentials'); }
+    if (!verifyPassword(String(password), u.salt, u.hash)) throw new Error('invalid credentials');
     if (u.role === 'admin' && u.totp && u.totp.enabled) {
       return {
         twoFactorRequired: true,
@@ -539,8 +591,10 @@ class Auth {
   }
 
   verifyToken(token, scope = 'session') {
-    if (!token || typeof token !== 'string' || !token.includes('.')) return null;
-    const [payload, sig] = token.split('.');
+    if (!token || typeof token !== 'string') return null;
+    const parts = token.split('.');
+    if (parts.length !== 2) return null; // anything after a second dot would go unsigned
+    const [payload, sig] = parts;
     const sigBuf = Buffer.from(sig || '', 'utf8');
     const signatures = [crypto.createHmac('sha256', this.tokenKey).update(payload).digest('base64url')];
     // Legacy sessions were signed directly with TRIBOON_SECRET. Keep old browser logins
@@ -607,9 +661,12 @@ class Auth {
     // Claim the invite ATOMICALLY first (store.update runs synchronously — no interleaving),
     // so two concurrent accepts can't both consume one single-use invite. Roll back if the
     // account can't be created (e.g. name taken).
+    // Own keys only: the invite table is a plain object, and a name like a built-in property would
+    // otherwise find something that is not an invite.
+    const isInvite = (a) => typeof token === 'string' && Object.hasOwn(a, token);
     let policy;
     this.store.update('invites', {}, (a) => {
-      const inv = a[token];
+      const inv = isInvite(a) ? a[token] : null;
       if (!inv) throw new Error('invalid invite');
       if (inv.usedBy) throw new Error('invite already used');
       if (inv.expiresAt < Date.now()) throw new Error('invite expired');
@@ -620,10 +677,10 @@ class Auth {
     try {
       user = this.createUser({ name, password, role: 'user', policy });
     } catch (e) {
-      this.store.update('invites', {}, (a) => { if (a[token]) a[token].usedBy = null; return a; });
+      this.store.update('invites', {}, (a) => { if (isInvite(a)) a[token].usedBy = null; return a; });
       throw e;
     }
-    this.store.update('invites', {}, (a) => { a[token].usedBy = user.id; return a; });
+    this.store.update('invites', {}, (a) => { if (isInvite(a)) a[token].usedBy = user.id; return a; });
     return this.login(name, password);
   }
 

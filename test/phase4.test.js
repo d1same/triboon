@@ -3719,14 +3719,14 @@ test('Android native player: direct source and native chrome stay out of the web
   // Age-gate latency: play() runs the maturity cert lookup CONCURRENTLY with search+mount (awaited
   // before any playable payload is sent, denial discards the speculative mount) so a restricted
   // profile's TMDB round-trip overlaps the pipeline instead of serializing in front of it.
-  assert.match(idxSrc, /const maturityAllowed = maturityAllowsPlay\(profileLevelFor\(ctx\.user, body\.profileId\), body\.tmdbId, body\.mediaType\)\s*\n\s*\.catch\(\(\) => true\);/,
+  assert.match(idxSrc, /const maturityAllowed = maturityAllowsPlay\(profileLevelFor\(ctx\.user, body\.profileId, ctx\), body\.tmdbId, body\.mediaType\)\s*\n\s*\.catch\(\(\) => true\);/,
     'play() fires the age check in parallel with the pipeline (fail-open, non-rejecting)');
   assert.match(idxSrc, /if \(!\(await maturityAllowed\)\) \{ discardDeniedMount\(session, vf\); return maturityBlockedResponse\(ctx\); \}/,
     'a denied parallel age check discards the speculative mount and returns 403 before any payload');
   assert.match(idxSrc, /function discardDeniedMount\(session, vf\) \{[\s\S]+mounts\.delete\(vf\.id\)/,
     'the denied-mount teardown dereferences the mount so it frees immediately rather than at the sweep');
-  assert.match(idxSrc, /function profileLevelFor\(user, profileId\) \{[\s\S]+if \(!profileId\) return 4;[\s\S]+return p \? \(p\.level \?\? \(p\.kid \? 0 : 4\)\) : 0;/,
-    'no profile context → No limit (4); a provided-but-unknown profileId fails closed to the strictest tier 0 (no spoofed-id bypass)');
+  assert.match(idxSrc, /function profileLevelFor\(user, profileId, ctx\) \{[\s\S]+if \(!profileId\) return reachable;[\s\S]+if \(!p\) return 0;/,
+    'no profile context → the best level reachable without a PIN; a provided-but-unknown profileId fails closed to the strictest tier 0 (no spoofed-id bypass)');
   // Catalog maturity filter: a restricted profile must never SEE an over-cap title (not just be
   // blocked on click). The TMDB proxy filters list responses so the catalog matches the play gate.
   assert.match(idxSrc, /async function maturityFilterList\(level, data\) \{[\s\S]+if \(level >= 4 \|\| !data \|\| !Array\.isArray\(data\.results\)[\s\S]+mapLimit\(items, 8,/,
@@ -3737,7 +3737,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'the filter returns the original object untouched when nothing is dropped (fail-open, no needless allocation)');
   // The proxy resolves the active profile from _pf (stored level, unspoofable), strips it before the
   // upstream call (so the shared TMDB cache is not fragmented per profile), and filters when < Adult.
-  assert.match(idxSrc, /const pf = ctx\.url\.searchParams\.get\('_pf'\);[\s\S]+p\.delete\('_pf'\);[\s\S]+const data = await tmdbSearchWithCloseHint\(ctx\.m\[1\], search\);[\s\S]+const level = pf !== null \? profileLevelFor\(ctx\.user, pf\) : 4;[\s\S]+level < 4 \? await maturityFilterList\(level, data\) : data;/,
+  assert.match(idxSrc, /const pf = ctx\.url\.searchParams\.get\('_pf'\);[\s\S]+p\.delete\('_pf'\);[\s\S]+const data = await tmdbSearchWithCloseHint\(ctx\.m\[1\], search\);[\s\S]+const level = pf !== null \? profileLevelFor\(ctx\.user, pf, ctx\) : 4;[\s\S]+level < 4 \? await maturityFilterList\(level, data\) : data;/,
     'tmdbProxy strips _pf before upstream, retries close misspellings, and applies the maturity filter for restricted profiles only');
   // Client: only restricted profiles tag TMDB reads (the No-limit/owner path is byte-for-byte unchanged).
   assert.match(ui, /path\.startsWith\('\/api\/tmdb\/'\)\s*\n\s*&& \(S\.maxLevel \?\? 4\) < 4 && S\.profile && S\.profile\.id\) \{\s*\n\s*path \+= \(path\.includes\('\?'\) \? '&' : '\?'\) \+ '_pf=' \+ encodeURIComponent\(S\.profile\.id\);/,
@@ -3749,7 +3749,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(ui, /function levelAllows\(cert\) \{[\s\S]+if \(lvl >= 4 \|\| !cert\) return true;[\s\S]+return rank <= lvl;/, 'levelAllows: tier N allows cert rank ≤ N; No limit/unrated → allowed');
   assert.match(idxSrc, /const MATURITY_CERT_RANK = \{[^}]*'NC-17': 4, NR: 4 \};/, 'server MATURITY_CERT_RANK matches the web 5-rank scale');
   assert.match(idxSrc, /async function maturityAllowsPlay\(level, tmdbId, mediaType\) \{\s*\n\s*if \(level >= 4\) return true;[\s\S]+if \(!id\) return false;[\s\S]+return rank <= level;/, 'server play gate: No limit (4) fast-path; restricted profiles cannot omit tmdbId; tier N allows cert rank ≤ N');
-  assert.match(idxSrc, /search: async \(ctx\) => \{[\s\S]+maturityAllowsPlay\(\s*\n\s*profileLevelFor\(ctx\.user, ctx\.url\.searchParams\.get\('profileId'\)\),/,
+  assert.match(idxSrc, /search: async \(ctx\) => \{[\s\S]+maturityAllowsPlay\(\s*\n\s*profileLevelFor\(ctx\.user, ctx\.url\.searchParams\.get\('profileId'\), ctx\),/,
     'indexer search applies the same profile maturity gate as play, before any fan-out');
   // One-time v1→v2 tier migration must PRESERVE each profile's cert cap (never loosen): Teen→PG-13,
   // Family→PG-13, Adult→No limit; Kids stays 0 (now G). Guarded by a stored schema stamp (runs once).
@@ -8786,8 +8786,8 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
   // Local plays enforce the profile maturity bar: gate BEFORE the mount, identity from the
   // server-side scan record (never the client body), episode falls back to the show's id.
   const localPlay = server.slice(server.indexOf('localPlay: async'), server.indexOf('localThumb: async'));
-  assert.match(localPlay, /profileLevelFor\(ctx\.user, body\.profileId\)/, 'local play reads the profile level');
-  assert.match(localPlay, /const level = profileLevelFor\(ctx\.user, body\.profileId\);\s*\n\s*if \(level < 4\) \{/,
+  assert.match(localPlay, /profileLevelFor\(ctx\.user, body\.profileId, ctx\)/, 'local play reads the profile level');
+  assert.match(localPlay, /const level = profileLevelFor\(ctx\.user, body\.profileId, ctx\);\s*\n\s*if \(level < 4\) \{/,
     'local play age-gates EVERY tier below No limit (4) — not the old `< 3`, which let the new R tier (3) skip the gate');
   assert.match(localPlay, /maturityAllowsPlay\(level, tmdbId, mediaType\)[\s\S]{0,80}maturityBlockedResponse\(ctx\)/,
     'local play blocks over-level titles');
@@ -10002,6 +10002,20 @@ test('a release name that proves playable audio skips the start wait; anything u
   assert.strictEqual(proves(named('Movie.2160p.BluRay.TrueHD.7.1.Atmos.DDP5.1-GRP'), dolbyBox), false, 'a risky track beside a safe one still waits');
   assert.strictEqual(proves(named('Show.S01E01.1080p.WEB-DL.H.264-GRP'), dolbyBox), false, 'no audio in the name still waits');
   assert.match(ui, /if \(!needsTracksForSubtitle && nativeNameProvesDirectAudio\(p\)\) \{\s+fetchPlayerTracks\(p\)\.catch\(\(\) => \{\}\);/, 'the track menu still fills in');
+});
+
+test('log fixes: stale IPTV timer, stale boot id, one first-frame line, and a warm-up miss says why', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  const ui = fs.readFileSync(path.join(root, 'web', 'index.html'), 'utf8');
+  const index = fs.readFileSync(path.join(root, 'server', 'index.js'), 'utf8');
+  const android = fs.readFileSync(path.join(root, 'android/app/src/main/java/app/triboon/tv/MainActivity.java'), 'utf8');
+  assert.match(index, /const thisRequest = up;\s+thisRequest\.setTimeout\(IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS, \(\) => \{\s+if \(up !== thisRequest\) return;/, 'a late timer on a handed-off socket does nothing');
+  assert.doesNotMatch(index, /IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS, \(\) => \{[\s\S]{0,160}\bup\.destroy\(/, 'the timer never reads the shared variable');
+  assert.match(ui, /function startVodServerWatch\(\) \{[\s\S]{0,900}S\._serverBoot = '';\s+let misses = 0, held = false;/, 'each watch learns the boot id fresh');
+  assert.match(android, /nativeHandoffAtMs <= 0L\) return;[\s\S]{0,240}nativeHandoffAtMs = 0L;/, 'a skip does not log a first frame');
+  assert.match(index, /!prepared && attempts && attempts\.length \? ` why=/, 'a warm-up miss names its reason');
 });
 
 test('a release switch logs how long the picture stopped, so a freeze cannot read as a clean log', () => {

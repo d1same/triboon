@@ -652,7 +652,9 @@ function spawnLiveRemux(url, { hlsFriendly = true, headers = null, transcodeVide
     '-analyzeduration', '500000', '-probesize', '1000000',
     ...(headerLines ? ['-headers', headerLines] : []),
     ...(hlsFriendly ? ['-extension_picky', '0', '-allowed_extensions', 'ALL'] : []),
-    '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,udp,rtp,httpproxy',
+    // A playlist is the provider's text, and it names ffmpeg's next inputs. Only web addresses, so
+    // it cannot open a local file or a UDP/RTP socket.
+    '-protocol_whitelist', 'http,https,tcp,tls,crypto',
     '-i', url,
     '-map', '0:v:0?', '-map', '0:a:0?',
     ...liveVideoArgs(transcodeVideo),

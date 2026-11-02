@@ -10,6 +10,7 @@ const path = require('path');
 const { NntpPool, NntpConnection, providersReadyToDial, linesSummary } = require('./nntp');
 const { mountNzb } = require('./archive');
 const { configureSegmentDisk, getSegmentDisk } = require('./segment-cache');
+const { safeMediaType } = require('./media-type');
 const { configureNzbStore } = require('./nzb-store');
 const { configureMountMap } = require('./mount-map');
 const { Store, VerdictCache, scrubOrphanTempDirs } = require('./store');
@@ -1295,11 +1296,15 @@ async function validateAndPinIptvUrl(raw, label = 'IPTV URL') {
       if (!addrs.length) throw iptvPolicyError(label, 'host has no DNS addresses');
       const blocked = addrs.find((a) => isPrivateIptvHost(a && a.address));
       if (blocked) throw iptvPolicyError(label, 'DNS resolves to a private, loopback, or link-local address');
+      // Make room first: the entry stored here is the one this call pins from.
+      iptvUrlSafetyCache.delete(host);
+      while (iptvUrlSafetyCache.size >= 1000) iptvUrlSafetyCache.delete(iptvUrlSafetyCache.keys().next().value);
       iptvUrlSafetyCache.set(host, { expiresAt: Date.now() + IPTV_PRIVATE_URL_CACHE_MS, addrs });
-      if (iptvUrlSafetyCache.size > 1000) iptvUrlSafetyCache.clear();
     }
     safeHit = iptvUrlSafetyCache.get(host);
     picked = safeHit && Array.isArray(safeHit.addrs) ? pickCachedIptvAddress(host) : null;
+    // No pin means the request would do its own DNS lookup, past this check.
+    if (!picked) throw iptvPolicyError(label, 'host could not be resolved safely');
   }
   return {
     href: u.href,
@@ -1610,18 +1615,46 @@ function resolveIptvHlsUri(uri, baseUrl) {
   if (/^[a-z][a-z0-9+.-]*:/i.test(raw) && !/^https?:/i.test(raw) && !raw.startsWith('//')) return raw;
   try { return new URL(raw, baseUrl).href; } catch { return raw; }
 }
-function rewriteIptvHlsPlaylist(text, baseUrl) {
+function rewriteIptvHlsPlaylist(text, baseUrl, mediaUri = null) {
   if (!baseUrl) return String(text || '');
+  const item = (raw) => {
+    const abs = resolveIptvHlsUri(raw, baseUrl);
+    return mediaUri && /^https?:/i.test(abs) ? mediaUri(abs) : abs;
+  };
   return String(text || '').split(/\r?\n/).map((line) => {
     if (!line) return line;
     if (line[0] === '#') {
       return line.replace(/URI=(?:"([^"]*)"|([^,]*))/gi, (match, quoted, bare) => {
-        const abs = resolveIptvHlsUri(quoted != null ? quoted : bare, baseUrl);
+        const abs = item(quoted != null ? quoted : bare);
         return quoted != null ? `URI="${abs}"` : `URI=${abs}`;
       });
     }
-    return resolveIptvHlsUri(line, baseUrl);
+    return item(line);
   }).join('\n');
+}
+// A provider address can hold the source's login, and a playlist is the provider's text: it can name
+// any host. So a viewer who is not an admin gets opaque items, and the server fetches each one through
+// the same address check as the channel itself. Ids live only here, so a playlist poll keeps them alive.
+const iptvMediaRefs = new Map(); // id -> { url, uid, idx, until }
+const IPTV_MEDIA_REF_MS = 10 * 60000;
+const IPTV_MEDIA_REF_CAP = 20000;
+const IPTV_MEDIA_PLAYLIST_MAX = 2 * 1024 * 1024;
+function iptvMediaRef(url, uid, idx) {
+  const id = require('crypto').createHmac('sha256', auth.tokenKey).update(`${uid}|${idx}|${url}`).digest('hex').slice(0, 32);
+  iptvMediaRefs.delete(id);
+  while (iptvMediaRefs.size >= IPTV_MEDIA_REF_CAP) iptvMediaRefs.delete(iptvMediaRefs.keys().next().value);
+  iptvMediaRefs.set(id, { url, uid, idx, until: Date.now() + IPTV_MEDIA_REF_MS });
+  return id;
+}
+function iptvMediaUriFor(ctx, user, ch) {
+  const q = new URLSearchParams();
+  for (const name of ['cid', 't']) { const v = ctx.url.searchParams.get(name); if (v) q.set(name, v); }
+  const query = q.toString() ? `?${q}` : '';
+  return (url) => {
+    let ext = '';
+    try { ext = (/\.(m3u8|ts|m4s|mp4|aac|mp3|vtt|key)$/i.exec(new URL(url).pathname) || [''])[0].toLowerCase(); } catch {}
+    return `/api/iptv/media/${ch.idx}/${iptvMediaRef(url, user.id, ch.idx)}${ext}${query}`;
+  };
 }
 const IPTV_NATIVE_PROXY_UA = 'Mozilla/5.0 (SMART-TV; Linux) AppleWebKit/537.36 TriboonTV/1.0';
 const IPTV_PLAYBACK_USER_AGENTS = [
@@ -1974,7 +2007,9 @@ function createIptvLiveHub(shareKey, label) {
       this.upstream = upstreamRes;
       this.upstreamReq = upstreamReq;
       this.status = status;
-      this.headers = { ...headers };
+      this.headers = { ...headers, 'x-content-type-options': 'nosniff' };
+      // Before the playlist test below: that test is a loose match, so a hostile type could pass it.
+      if (this.headers['content-type']) this.headers['content-type'] = safeMediaType(this.headers['content-type']);
       const playlistBase = String((opts && opts.playlistBase) || '');
       const isHls = /mpegurl/i.test(String(this.headers['content-type'] || ''));
       // FINITE bodies (an HLS playlist, a ranged response) are snapshots, not streams: the subs
@@ -1986,7 +2021,7 @@ function createIptvLiveHub(shareKey, label) {
       if (this.finite) iptvSharedHubs.delete(this.shareKey);
       else { delete this.headers['content-length']; delete this.headers['content-range']; }
       if (isHls && playlistBase) {
-        this._serveHlsPlaylist(upstreamRes, status, playlistBase);
+        this._serveHlsPlaylist(upstreamRes, status, playlistBase, opts && opts.mediaUri);
         return;
       }
       for (const sub of [...this.subs]) {
@@ -2037,7 +2072,7 @@ function createIptvLiveHub(shareKey, label) {
       });
       upstreamRes.on('error', () => this.close('upstream error'));
     },
-    _serveHlsPlaylist(upstreamRes, status, playlistBase) {
+    _serveHlsPlaylist(upstreamRes, status, playlistBase, mediaUri) {
       const chunks = [];
       let len = 0;
       const firstByte = setTimeout(() => this.close('no first byte'), IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS);
@@ -2051,7 +2086,7 @@ function createIptvLiveHub(shareKey, label) {
       });
       upstreamRes.on('end', () => {
         if (this.closed) return;
-        const rewritten = rewriteIptvHlsPlaylist(Buffer.concat(chunks).toString('utf8'), playlistBase);
+        const rewritten = rewriteIptvHlsPlaylist(Buffer.concat(chunks).toString('utf8'), playlistBase, mediaUri);
         const buf = Buffer.from(rewritten);
         const headers = {
           ...this.headers,
@@ -2355,7 +2390,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       ctx.res.off('close', onClientClose);
       ctx.res.off('error', onClientClose);
       hub.subscribe(ctx, slot, label);
-      hub.attach(r, upstreamReq, r.statusCode || 200, out, { playlistBase: u.href });
+      hub.attach(r, upstreamReq, r.statusCode || 200, out, { playlistBase: u.href, mediaUri: meta.mediaUri });
     });
     slot.setCloser((reason) => {
       stop(reason, new Error(`live stream ${reason}`));
@@ -2376,10 +2411,13 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       fail(504, { status: 504, reason: 'live stream startup timeout' });
     }, IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS);
     firstByteTimer.unref();
-    up.setTimeout(IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS, () => {
+    // A hub handoff or a retune clears `up`, and this socket's timer can still fire after that.
+    const thisRequest = up;
+    thisRequest.setTimeout(IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS, () => {
+      if (up !== thisRequest) return;
       if (retryPinnedAddress('upstream timeout')) return;
       markPinFailure();
-      up.destroy(new Error('live stream upstream timeout'));
+      thisRequest.destroy(new Error('live stream upstream timeout'));
     });
     up.end();
   };
@@ -2390,6 +2428,78 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   } else {
     open(target, hops);
   }
+}
+// One playlist item for a viewer who is not an admin. No live slot: a player asks for several of
+// these beside its playlist polls, and each lasts seconds. Every hop passes the address check.
+async function proxyIptvMedia(ctx, rawUrl, mediaUri) {
+  let up = null;
+  ctx.res.once('close', () => { try { if (up) up.destroy(); } catch {} });
+  let current = rawUrl;
+  for (let hop = 0; hop <= 5; hop++) {
+    let pin;
+    try { pin = await validateAndPinIptvUrl(current, 'Live stream URL'); }
+    catch (e) { return send(ctx.res, e.status || 400, { error: e.message || 'blocked live stream url' }); }
+    if (ctx.res.destroyed) return undefined;
+    const u = new URL(pin.href);
+    const headers = { 'user-agent': IPTV_NATIVE_PROXY_UA, accept: '*/*', connection: 'close' };
+    if (ctx.req.headers.range) headers.range = ctx.req.headers.range;
+    const r = await new Promise((resolve) => {
+      const req = (u.protocol === 'https:' ? https : http).request(u, {
+        method: 'GET',
+        headers,
+        agent: false,
+        ...(typeof pin.lookup === 'function' ? { lookup: pin.lookup } : {}),
+      }, resolve);
+      up = req;
+      req.on('error', () => { if (pin.onFailure) pin.onFailure(); resolve(null); });
+      req.setTimeout(IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS, () => req.destroy(new Error('live stream upstream timeout')));
+      req.end();
+    });
+    if (ctx.res.destroyed) { if (r) r.resume(); return undefined; }
+    if (!r) return sendIptvNativeError(ctx.res, 502, 'live stream unavailable');
+    const status = r.statusCode || 502;
+    if (status >= 300 && status < 400 && r.headers.location) {
+      r.resume();
+      current = new URL(r.headers.location, u).href;
+      continue;
+    }
+    if (status >= 400) {
+      r.resume();
+      return sendIptvNativeError(ctx.res, status, 'live stream unavailable');
+    }
+    const out = {
+      'content-type': safeMediaType(r.headers['content-type'] || 'application/octet-stream'),
+      'cache-control': 'no-store',
+      connection: 'close',
+      'x-content-type-options': 'nosniff',
+      'x-accel-buffering': 'no',
+    };
+    if (/mpegurl/i.test(out['content-type']) || /\.m3u8$/i.test(u.pathname)) {
+      const chunks = [];
+      let len = 0;
+      r.on('data', (c) => {
+        len += c.length;
+        if (len > IPTV_MEDIA_PLAYLIST_MAX) r.destroy(new Error('playlist too large'));
+        else chunks.push(c);
+      });
+      r.once('error', () => sendIptvNativeError(ctx.res, 502, 'live stream unavailable'));
+      r.once('end', () => {
+        const body = Buffer.from(rewriteIptvHlsPlaylist(Buffer.concat(chunks).toString('utf8'), u.href, mediaUri));
+        if (ctx.res.destroyed) return;
+        ctx.res.writeHead(status, { ...out, 'content-length': String(body.length) });
+        ctx.res.end(body);
+      });
+      return undefined;
+    }
+    for (const h of ['content-length', 'content-range', 'accept-ranges']) {
+      if (r.headers[h]) out[h] = r.headers[h];
+    }
+    ctx.res.writeHead(status, out);
+    r.on('error', () => { try { ctx.res.destroy(); } catch {} });
+    r.pipe(ctx.res);
+    return undefined;
+  }
+  return sendIptvNativeError(ctx.res, 502, 'too many live stream redirects');
 }
 function shouldResolveIptvRemuxRedirect(err) {
   const text = String(err || '');
@@ -3637,17 +3747,24 @@ function usCertFromTmdb(d, type) {
   } catch { return ''; }
 }
 // The active profile's maturity tier (0 G · 1 PG · 2 PG-13 · 3 R · 4 No limit), read from the STORED
-// profile (server-authoritative) by the id the client sends. No profile id (older clients /
-// account-level access) → 4 (No limit / unrestricted), so nothing is falsely blocked.
-function profileLevelFor(user, profileId) {
-  // No profile context = the account/owner (unrestricted). But a profileId that's PROVIDED yet
-  // matches none of the user's profiles is anomalous (stale client state or tampering) — fail
-  // CLOSED to the strictest tier (0 = G) so a spoofed/bogus id can't slip over-level content past
-  // the gate. Legacy profiles with no stored level back-fill from the old `kid` flag (kid → G,
-  // else No limit); the one-time schema migration in auth.js normalizes these on first boot.
-  if (!profileId) return 4;
-  const p = ((user && user.profiles) || []).find((x) => x.id === profileId);
-  return p ? (p.level ?? (p.kid ? 0 : 4)) : 0;
+// profile (server-authoritative) by the id the client sends. The id is only a claim, so it never
+// reaches past what this session has shown it may use: a profile with no PIN, which anyone on the
+// session can pick, or a PIN profile with its signed proof. No id means the best of those, so an
+// account with no PINs behaves as before, and leaving the id out cannot beat a PIN.
+function profileLevelFor(user, profileId, ctx) {
+  const profiles = (user && user.profiles) || [];
+  const levelOf = (p) => p.level ?? (p.kid ? 0 : 4);
+  const open = profiles.filter((p) => !p.pinHash).map(levelOf);
+  const reachable = !profiles.length ? 4 : (open.length ? Math.max(...open) : 0);
+  if (!profileId) return reachable;
+  // A profileId that's PROVIDED yet matches none of the user's profiles is anomalous (stale client
+  // state or tampering) — fail CLOSED to the strictest tier (0 = G). Legacy profiles with no stored
+  // level back-fill from the old `kid` flag; the schema migration in auth.js normalizes these.
+  const p = profiles.find((x) => x.id === profileId);
+  if (!p) return 0;
+  if (!p.pinHash) return levelOf(p);
+  const proof = ctx && ctx.req && ctx.req.headers['x-triboon-profile'];
+  return auth.profileProofValid(user, p, proof) ? levelOf(p) : Math.min(levelOf(p), reachable);
 }
 // May a profile at `level` (tier index 0..4) play this title? No limit (4) always passes with no
 // lookup (keeps the common/owner case zero-latency). Otherwise fetch the title's US certification +
@@ -4006,6 +4123,18 @@ function throttled(ctx, key, opts) {
     { 'retry-after': String(Math.ceil(r.retryMs / 1000)) });
   return true;
 }
+// One address may fail this many logins, whatever names it tries. Checked before the per-name keys,
+// never cleared by a good login, and only failures count, so a shared address is not locked by the
+// household signing in.
+const LOGIN_IP_LIMIT = { max: parseInt(process.env.TRIBOON_LOGIN_IP_MAX, 10) || 300, windowMs: 15 * 60000, lockMs: 15 * 60000 };
+function loginIpLocked(ctx) {
+  const retryMs = limiter.lockedMs(`login-ip:${clientIp(ctx)}`);
+  if (!retryMs) return false;
+  send(ctx.res, 429, { error: 'too many attempts — try again later', retryAfterMs: retryMs },
+    { 'retry-after': String(Math.ceil(retryMs / 1000)) });
+  return true;
+}
+function noteLoginFailure(ctx) { limiter.check(`login-ip:${clientIp(ctx)}`, LOGIN_IP_LIMIT); }
 function throttleUserRoute(ctx, routeKey, opts) {
   const uid = (ctx.user && ctx.user.id) || (ctx.claims && ctx.claims.uid) || clientIp(ctx);
   return throttled(ctx, `route:${routeKey}:${uid}`, opts);
@@ -4023,6 +4152,13 @@ function extendPlayRouteTimeout(ctx) {
   try { const s = ctx.req && ctx.req.socket; if (s && typeof s.setTimeout === 'function') s.setTimeout(PLAY_ROUTE_TIMEOUT_MS); } catch {}
 }
 // A stream-scope token must be bound to the resource it's used on. Session tokens pass.
+// A group the admin hid is gone for regular users on every route that plays a channel, not only the
+// list. A stream token names a channel, so the check reads the live user, who may have lost access.
+function iptvChannelHiddenFor(user, ch, s = settings.get()) {
+  if (!user) return true;
+  if (user.role === 'admin') return false;
+  return (s.iptvHiddenGroups || []).includes(ch.group || 'Other');
+}
 function streamScopeOk(ctx, resource) {
   if (ctx.claims.scope !== 'stream') return true;
   return ctx.claims.sub === resource;
@@ -4656,6 +4792,9 @@ function armRuntimeCheck(vf, policy, candidate, body) {
 }
 function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, originCountry, articleSiblings, episodeTitle, otherEpisodeTitles, runtimeMin, tmdbId, caps: rawCaps } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
+  // The admin's cap, kept apart from the per-play and per-device limits that narrow maxResolutionRank.
+  // Those can be widened or overridden by a tap. This one cannot.
+  policy.adminMaxResolutionRank = Number.isInteger(user.policy && user.policy.maxResolutionRank) ? user.policy.maxResolutionRank : 4;
   if (Array.isArray(akaTitles) && akaTitles.length) policy.akaTitles = akaTitles.slice(0, 6).map(String);
   if (Array.isArray(otherYears) && otherYears.length) policy.otherYears = otherYears.map(Number).filter((y) => Number.isInteger(y));
   if (originCountry === 'us' || originCountry === 'uk' || originCountry === 'au' || originCountry === 'nz' || originCountry === 'ca' || originCountry === 'other') {
@@ -5114,6 +5253,17 @@ function viewerGeolocationEnabled() {
 function geoCacheKey(ip) {
   return require('crypto').createHash('sha256').update(String(ip)).digest('hex');
 }
+// The address a Jellyfin direct-play grant is tied to. Through a proxy every viewer has one socket
+// address, so a grant would open to all of them: none, unless TRIBOON_TRUST_PROXY says the proxy is
+// ours. Then only the LAST forwarded entry counts: that is the one our proxy added, and any entry
+// before it is whatever the client sent, so it could name the viewer who holds the grant.
+function directGrantAddress(ctx) {
+  const h = ctx.req.headers;
+  const proxied = h['x-forwarded-for'] || h.forwarded || h['x-real-ip'] || h['cf-connecting-ip'];
+  if (!proxied) return (ctx.req.socket && ctx.req.socket.remoteAddress) || '';
+  if (!envFlag('TRIBOON_TRUST_PROXY')) return '';
+  return String(h['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean).pop() || '';
+}
 function clientIpForGeo(ctx) {
   const xff = ctx && ctx.req && ctx.req.headers['x-forwarded-for'];
   if (!envFlag('TRIBOON_TRUST_PROXY')) {
@@ -5380,9 +5530,16 @@ function localItemFor(ctx, libId, idx) {
 function localItemPayload(ctx, libId, item) {
   const safe = unboundLibraryItem(item);
   const { file, artFile, dir, ...rest } = safe;
+  // The direct file address has no age check, so a restricted viewer gets it without its token and
+  // plays through playUrl, which has one.
+  if (ctx.directFileLevel === undefined) {
+    const proof = auth.verifyToken(ctx.req && ctx.req.headers['x-triboon-profile'], 'profile');
+    ctx.directFileLevel = profileLevelFor(ctx.user, proof && proof.pid, ctx);
+  }
+  const fileToken = ctx.directFileLevel >= 4 ? `?t=${auth.stableStreamToken(ctx.user.id, `local:${libId}:${rest.idx}`)}` : '';
   return {
     ...rest,
-    streamUrl: file ? `/api/local/${libId}/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `local:${libId}:${rest.idx}`)}` : null,
+    streamUrl: file ? `/api/local/${libId}/${rest.idx}${fileToken}` : null,
     playUrl: file ? `/api/local/${libId}/${rest.idx}/play` : null,
     artUrl: artFile ? `/api/local/${libId}/art/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `art:${libId}:${rest.idx}`)}` : null,
     thumbUrl: (file || item.kind === 'show')
@@ -5873,7 +6030,7 @@ async function appLatestVersion() {
 // ---------- handlers ----------
 const H = {
   server: async (ctx) => send(ctx.res, 200, {
-    app: 'triboon', version: APP_VERSION, phase: 4, needsSetup: !auth.hasUsers(),
+    app: 'triboon', version: APP_VERSION, phase: 4, needsSetup: !auth.hasUsers() && !auth.usersUnreadable(),
     tmdb: !!settings.get().tmdbKey, ffmpeg: !!detectFfmpeg(),
     // Wyzie only needs the server-side API key; no account login is required.
     opensubs: !!effectiveOpenSubsKey(),
@@ -5934,8 +6091,11 @@ const H = {
   },
 
   setup: async (ctx) => {
+    if (auth.usersUnreadable()) return send(ctx.res, 503, { error: 'user data could not be read' });
     if (auth.hasUsers()) return send(ctx.res, 403, { error: 'already set up' });
     const { name, password } = await readJson(ctx.req);
+    // Again now the body is in: a request held open across the owner's setup must not make a second admin.
+    if (auth.hasUsers()) return send(ctx.res, 403, { error: 'already set up' });
     if (!name || !password || String(password).length < 4) return send(ctx.res, 400, { error: 'name and password (4+ chars) required' });
     auth.createUser({ name, password, role: 'admin' });
     const r = auth.login(name, password);
@@ -5948,17 +6108,20 @@ const H = {
     const pass = String(password || '').trim();
     const key = `login:${uname}:${clientIp(ctx)}`;
     const acctKey = `login-acct:${uname}`;
+    if (loginIpLocked(ctx)) return;
     // Per-(user,IP) throttle PLUS a generous per-account cap, so rotating-IP guessing against one
     // account is still bounded across IPs. Both clear on a successful login.
     if (throttled(ctx, key, { max: 10, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
     if (uname && throttled(ctx, acctKey, { max: 40, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
     try { const r = auth.login(name, pass); limiter.clear(key); limiter.clear(acctKey); send(ctx.res, 200, r); }
-    catch { send(ctx.res, 401, { error: 'invalid credentials' }); }
+    catch { noteLoginFailure(ctx); send(ctx.res, 401, { error: 'invalid credentials' }); }
   },
 
   login2fa: async (ctx) => {
     const { challenge, code } = await readJson(ctx.req);
-    const key = `login2fa:${clientIp(ctx)}:${String(challenge || '').slice(-24)}`;
+    // Keyed on the account inside the signed challenge, never on the raw text a caller can vary.
+    const claims = auth.verifyToken(challenge, 'totp');
+    const key = claims ? `login2fa:${claims.uid}` : `login2fa-bad:${clientIp(ctx)}`;
     if (throttled(ctx, key, { max: 10, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
     try {
       const r = auth.completeTotpLogin(challenge, code);
@@ -6091,7 +6254,7 @@ const H = {
     try {
       const p = auth.setProfilePin(ctx.user.id, ctx.m[1], b.password, b.pin === undefined ? null : b.pin);
       limiter.clear(key);
-      send(ctx.res, 200, profileWithAvatarUrl(ctx.user.id, p));
+      send(ctx.res, 200, { ...profileWithAvatarUrl(ctx.user.id, p), proof: auth.profileProof(ctx.user.id, ctx.m[1]) });
     } catch (e) { send(ctx.res, 400, { error: e.message }); }
   },
 
@@ -6135,7 +6298,7 @@ const H = {
     try {
       const ok = auth.verifyProfilePin(ctx.user.id, ctx.m[1], b.pin);
       if (ok) limiter.clear(key);
-      send(ctx.res, 200, { ok });
+      send(ctx.res, 200, { ok, proof: ok ? auth.profileProof(ctx.user.id, ctx.m[1]) : undefined });
     }
     catch (e) { send(ctx.res, 400, { error: e.message }); }
   },
@@ -6217,7 +6380,7 @@ const H = {
     // Same age gate as play/prepare: a restricted profile cannot list sources for an over-level
     // title, and cannot omit tmdbId to skip the check (Sources always has the title identity).
     if (!(await maturityAllowsPlay(
-      profileLevelFor(ctx.user, ctx.url.searchParams.get('profileId')),
+      profileLevelFor(ctx.user, ctx.url.searchParams.get('profileId'), ctx),
       ctx.url.searchParams.get('tmdbId'),
       ctx.url.searchParams.get('mediaType')
     ))) return maturityBlockedResponse(ctx);
@@ -6270,7 +6433,7 @@ const H = {
     // speculative mount. Adult profiles resolve instantly (no lookup), so they pay nothing here.
     // .catch→true keeps it fail-open AND non-rejecting, so it can't become an unhandled rejection
     // if pipeline.play() throws first (the 502 path below never awaits it).
-    const maturityAllowed = maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType)
+    const maturityAllowed = maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId, ctx), body.tmdbId, body.mediaType)
       .catch(() => true);
     const t0 = Date.now();
     const playWhy = String(body.why || '-').replace(/[^\w-]/g, '').slice(0, 24) || '-';
@@ -6368,7 +6531,7 @@ const H = {
       audio: 'audio',
       ui: 'app error',
     };
-    if (!allowed[kind]) return send(ctx.res, 400, { error: 'kind required' });
+    if (!Object.hasOwn(allowed, kind)) return send(ctx.res, 400, { error: 'kind required' });
     if (throttleUserRoute(ctx, 'playback-issue', { max: 40, windowMs: 60000 })) return;
     const clip = (v, n) => String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);
     const sec = Math.max(0, Math.min(3600, Math.round(Number(body.sec) || 0)));
@@ -6420,7 +6583,7 @@ const H = {
     if (!body.q) return send(ctx.res, 400, { error: 'q required' });
     if (throttleUserRoute(ctx, 'prepare', { max: 20, windowMs: 60000, lockMs: 60000 })) return;
     // Same age gate as play() — don't even prewarm a mount for a restricted profile.
-    if (!(await maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType))) {
+    if (!(await maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId, ctx), body.tmdbId, body.mediaType))) {
       return maturityBlockedResponse(ctx);
     }
     const t0 = Date.now();
@@ -6463,7 +6626,8 @@ const H = {
         attempts,
         prefetch: prefetch || undefined,
       });
-      debug.log('prepare', `${prepared ? 'ready' : 'miss'} q=${body.q} ms=${Date.now() - t0} name=${(candidate && candidate.name) || '-'}`);
+      const missWhy = !prepared && attempts && attempts.length ? ` why=${String(attempts[attempts.length - 1].fail || '').slice(0, 80)}` : '';
+      debug.log('prepare', `${prepared ? 'ready' : 'miss'} q=${body.q} ms=${Date.now() - t0} name=${(candidate && candidate.name) || '-'}${missWhy}`);
     } catch (e) {
       if (!e.cachedFail) {
         debug.fail('play', `prepare failed ${body.q || '-'} — ${playFailDetail(e)}`);
@@ -6549,7 +6713,7 @@ const H = {
         search = s ? '?' + s : '';
       }
       const data = await tmdbSearchWithCloseHint(ctx.m[1], search);
-      const level = pf !== null ? profileLevelFor(ctx.user, pf) : 4;
+      const level = pf !== null ? profileLevelFor(ctx.user, pf, ctx) : 4;
       const out = level < 4 ? await maturityFilterList(level, data) : data;
       send(ctx.res, 200, out, { 'cache-control': 'private, max-age=600' });
     } catch (e) { send(ctx.res, e.status || 500, { error: e.message }); }
@@ -6581,7 +6745,7 @@ const H = {
         return send(ctx.res, 200, { results: rows }, { 'cache-control': 'private, max-age=1800' });
       }
       const SORTS = { bestsellers: 'BestSellers', new: '-ReleaseDate', popular: 'BestSellers' };
-      const sort = SORTS[sortRaw] || 'BestSellers';
+      const sort = Object.hasOwn(SORTS, sortRaw) ? SORTS[sortRaw] : 'BestSellers';
       const category = (ctx.url.searchParams.get('category') || '').replace(/[^0-9]/g, '') || null;
       const rows = await audible.browse({ sort, categoryId: category, region });
       send(ctx.res, 200, { results: rows }, { 'cache-control': 'private, max-age=1800' });
@@ -6812,10 +6976,7 @@ const H = {
       const cidParam = ctx.url.searchParams.get('cid') || '';
       if (!ch) return send(ctx.res, 404, { error: 'channel not found - open Live TV first' });
       if (cidParam && String(ch.id) !== cidParam) return send(ctx.res, 404, { error: 'channel changed - reopen Live TV' });
-      const globalHidden = new Set(s.iptvHiddenGroups || []);
-      if (ctx.user.role !== 'admin' && globalHidden.has(ch.group || 'Other')) {
-        return send(ctx.res, 404, { error: 'channel not found' });
-      }
+      if (iptvChannelHiddenFor(ctx.user, ch, s)) return send(ctx.res, 404, { error: 'channel not found' });
       const channelScope = `iptv:${ch.idx}:${ch.id}`;
       const token = auth.streamToken(ctx.user.id, channelScope);
       const cid = encodeURIComponent(ch.id);
@@ -6849,6 +7010,7 @@ const H = {
   },
 
   myIptvSourceCreate: async (ctx) => {
+    if (throttleUserRoute(ctx, 'iptv-source', { max: 30, windowMs: 60000, lockMs: 60000 })) return;
     const b = await readJson(ctx.req);
     let src;
     try {
@@ -6878,6 +7040,7 @@ const H = {
   },
 
   myIptvSourceUpdate: async (ctx) => {
+    if (throttleUserRoute(ctx, 'iptv-source', { max: 30, windowMs: 60000, lockMs: 60000 })) return;
     const sourceId = cleanIptvSourceId(ctx.m[1]);
     const b = await readJson(ctx.req);
     let updated = null;
@@ -7142,9 +7305,27 @@ const H = {
     const ch = iptvCache.channels && iptvCache.channels[idx];
     if (!ch) return send(ctx.res, 404, { error: 'channel not found - open Live TV first' });
     if (cid && String(ch.id) !== cid) return send(ctx.res, 404, { error: 'channel changed - reopen Live TV' });
+    if (iptvChannelHiddenFor(user, ch)) return send(ctx.res, 404, { error: 'channel not found' });
     const alt = ctx.url.searchParams.get('alt') === '1';
     const target = alt && ch.nativeFallbackUrl ? ch.nativeFallbackUrl : (ch.nativeUrl || ch.url);
-    return proxyIptvNative(ctx, target, 0, { idx: ch.idx, name: ch.name, alt });
+    // Only a source someone else set up has a login to keep from this viewer. Their own playlist
+    // keeps going straight to its provider, so it costs the server nothing.
+    const src = iptvSourcesFromSettings(settings.get()).find((x) => x.id === ch.sourceId);
+    const mediaUri = user.role === 'admin' || (src && src.ownerUserId === user.id) ? null : iptvMediaUriFor(ctx, user, ch);
+    return proxyIptvNative(ctx, target, 0, { idx: ch.idx, name: ch.name, alt, mediaUri });
+  },
+
+  iptvMedia: async (ctx) => {
+    const idx = parseInt(ctx.m[1], 10);
+    const cid = ctx.url.searchParams.get('cid') || '';
+    if (!streamScopeOk(ctx, cid ? `iptv:${idx}:${cid}` : `iptv:${idx}`)) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    const user = ctx.user || auth.getUser(ctx.claims.uid);
+    const ref = iptvMediaRefs.get(ctx.m[2]);
+    if (!user || !ref || ref.until <= Date.now() || ref.uid !== user.id || ref.idx !== idx) return send(ctx.res, 404, { error: 'stream item expired' });
+    try { await ensureIptvChannelStateForUser(user); } catch {}
+    const ch = iptvCache.channels && iptvCache.channels[idx];
+    if (!ch || (cid && String(ch.id) !== cid) || iptvChannelHiddenFor(user, ch)) return send(ctx.res, 404, { error: 'channel not found' });
+    return proxyIptvMedia(ctx, ref.url, iptvMediaUriFor(ctx, user, ch));
   },
 
   iptvStream: async (ctx) => {
@@ -7156,6 +7337,7 @@ const H = {
     let ch = iptvCache.channels && iptvCache.channels[idx];
     if (!ch) return send(ctx.res, 404, { error: 'channel not found — open Live TV first' });
     if (cid && String(ch.id) !== cid) return send(ctx.res, 404, { error: 'channel changed - reopen Live TV' });
+    if (iptvChannelHiddenFor(user, ch)) return send(ctx.res, 404, { error: 'channel not found' });
     if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg required for Live TV' });
     let remuxTargets = iptvRemuxTargets(ch);
     if (!remuxTargets.length) return send(ctx.res, 502, { error: 'invalid live stream url' });
@@ -7233,11 +7415,15 @@ const H = {
       if (liveSlot.closed || ctx.res.destroyed) { liveSlot.done('client closed'); return; }
       let ff;
       try {
-        ff = spawnLiveRemux(iptvRemuxInputHref(pin, target.url), {
-          hlsFriendly,
-          headers: pin.hostHeader ? { Host: pin.hostHeader } : undefined,
-          transcodeVideo,
-        });
+        // A playlist decides what ffmpeg opens next. For a viewer who is not an admin, ffmpeg reads it
+        // from this server, so an address inside it passes the same check as the channel.
+        ff = user.role !== 'admin'
+          ? spawnLiveRemux(`http://127.0.0.1:${server.address().port}${iptvMediaUriFor(ctx, user, ch)(target.url)}`, { hlsFriendly, transcodeVideo })
+          : spawnLiveRemux(iptvRemuxInputHref(pin, target.url), {
+            hlsFriendly,
+            headers: pin.hostHeader ? { Host: pin.hostHeader } : undefined,
+            transcodeVideo,
+          });
       }
       catch (e) {
         liveSlot.done('spawn failed');
@@ -8592,7 +8778,7 @@ Object.assign(H, {
     // The item's TMDB identity comes from the SERVER-side scan record, never the client. Unmatched
     // items (no tmdbId) fail CLOSED for restricted profiles — omitting identity is how a crafted
     // play used to skip the gate. Unknown certifications on a known id still fail OPEN.
-    const level = profileLevelFor(ctx.user, body.profileId);
+    const level = profileLevelFor(ctx.user, body.profileId, ctx);
     if (level < 4) { // any tier below No limit (4) is age-gated; matches maturityAllowsPlay's fast path
       const found = localItemFor(ctx, ctx.m[1], ctx.m[2]);
       if (found.error) return send(ctx.res, found.status || 404, { error: found.error });
@@ -9438,6 +9624,7 @@ Object.assign(H, {
   invitesList: async (ctx) => send(ctx.res, 200, auth.listInvites()),
   inviteAccept: async (ctx) => {
     if (throttled(ctx, `invite:${clientIp(ctx)}`, { max: 10, windowMs: 3600000, lockMs: 3600000 })) return;
+    if (auth.usersUnreadable()) return send(ctx.res, 503, { error: 'user data could not be read' });
     const { token, name, password } = await readJson(ctx.req);
     try { send(ctx.res, 200, auth.acceptInvite(token, { name, password })); }
     catch (e) { send(ctx.res, 400, { error: e.message }); }
@@ -11238,6 +11425,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/iptv\/groups$/, auth: 'user', h: H.iptvGroups },
   { m: 'GET', re: /^\/api\/iptv\/native\/(\d+)$/, auth: 'stream', h: H.iptvNative },
   { m: 'GET', re: /^\/api\/iptv\/stream\/(\d+)$/, auth: 'stream', h: H.iptvStream },
+  { m: 'GET', re: /^\/api\/iptv\/media\/(\d+)\/([a-f0-9]{32})(?:\.[a-z0-9]{1,5})?$/, auth: 'stream', h: H.iptvMedia },
   { m: 'GET', re: /^\/api\/watchlist$/, auth: 'user', h: H.watchlistList },
   { m: 'POST', re: /^\/api\/watchlist$/, auth: 'user', h: H.watchlistToggle },
   { m: 'GET', re: /^\/api\/watch\/next$/, auth: 'user', h: H.watchNext },
@@ -11314,7 +11502,7 @@ async function jellyfinPlay(ctx, body) {
   if (!body || !body.q) return { status: 400, body: { error: 'q required' } };
   if (throttleUserRoute(ctx, 'play', { max: 20, windowMs: 60000, lockMs: 60000 })) return { sent: true };
   extendPlayRouteTimeout(ctx);
-  const maturityAllowed = maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType)
+  const maturityAllowed = maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId, ctx), body.tmdbId, body.mediaType)
     .catch(() => true);
   const t0 = Date.now();
   try {
@@ -11858,7 +12046,7 @@ function jellyfinLocalFacets(ctx, libId) {
 }
 
 const mediaAppDeps = {
-  auth, settings, send, readJson, throttled, clientIp, tmdb,
+  auth, settings, send, readJson, throttled, clientIp, tmdb, loginIpLocked, noteLoginFailure, directGrantAddress,
   jellyfinPlay, jellyfinPrepare, jellyfinStream, jellyfinLocalPlay, jellyfinNextCatalog, jellyfinCoverFile: jellyfinCoverCustom,
   jellyfinSubtitleStreams, jellyfinSubtitleBody, jellyfinSubtitleWarm, jellyfinTracks,
   localLibraries: jellyfinLocalLibraries,
@@ -11925,6 +12113,9 @@ function jellyfinWebDir() {
 
 const server = http.createServer(async (req, res) => {
   res.shouldKeepAlive = false;
+  // Nothing under /api/ is a page to run, so even a reply that slips through as HTML gets no script,
+  // no storage and no same-origin rights. The Cast receiver page sets its own policy.
+  if (String(req.url || '').startsWith('/api/')) res.setHeader('content-security-policy', "sandbox allow-downloads; default-src 'none'");
   let abortedClosed = false;
   const closeAbortedRequest = () => {
     if (abortedClosed) return;
@@ -11944,7 +12135,9 @@ const server = http.createServer(async (req, res) => {
   });
   res.on('error', () => {});
   res._acceptsGzip = /\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''));
-  const url = new URL(req.url, `http://${req.headers.host || 'x'}`);
+  let url;
+  try { url = new URL(req.url, `http://${req.headers.host || 'x'}`); }
+  catch { return send(res, 400, { error: 'bad request' }); }
   const p = url.pathname;
   try {
     // The receiver page is a public, non-/api route the owner registers in the Cast console; route
@@ -12022,10 +12215,12 @@ const server = http.createServer(async (req, res) => {
         const reject = (code, body) => { req.on('error', () => {}); req.resume(); return send(res, code, body, cors); };
         const token = jellyfinToken(req);
         const claims = auth.verifyToken(token, 'session');
-        const grantUid = !claims && route.kind === 'video' ? directGrantUser(clientIp(ctx), url, ctx.m[1]) : null;
-        if (grantUid) {
-          ctx.user = auth.getUser(grantUid);
+        const grant = !claims && route.kind === 'video' ? directGrantUser(directGrantAddress(ctx), url, ctx.m[1]) : null;
+        if (grant) {
+          ctx.user = auth.getUser(grant.uid);
           if (!ctx.user) return reject(401, { error: 'unknown user' });
+          if ((ctx.user.sessionEpoch || 0) !== grant.epoch) return reject(401, { error: 'session expired' });
+          ctx.directGrant = true;
           return await route.h(ctx);
         }
         if (!claims) return reject(401, { error: 'authentication required' });
@@ -12298,6 +12493,7 @@ async function shutdown() {
   if (pool) { pool.close(); pool = null; }
   libraryDb.close();
   store.close();
+  await store.settled();
   return new Promise((r) => server.close(r));
 }
 

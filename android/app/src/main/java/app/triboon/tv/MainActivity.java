@@ -4848,8 +4848,9 @@ public class MainActivity extends Activity {
                 // "Playing" only means READY. This is the moment the viewer sees a picture.
                 @Override public void onRenderedFirstFrame() {
                     if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
-                    if (!"video".equals(nativeMode)) return;
+                    if (!"video".equals(nativeMode) || nativeHandoffAtMs <= 0L) return; // a skip renders one too
                     reportNativePlaybackIssue("trace", "first frame " + (SystemClock.elapsedRealtime() - nativeHandoffAtMs) + "ms after handoff", 0L);
+                    nativeHandoffAtMs = 0L;
                 }
 
                 @Override public void onIsPlayingChanged(boolean isPlaying) {

@@ -128,6 +128,16 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-11-02, v3.4.10 — Security hardening and log fixes:
+- Hardening across accounts, login limits, Live TV, profiles and quality caps. Every change has a test, and the tests that exercise the old behaviour fail on v3.4.9.
+- Live TV: a viewer of a source someone else set up now gets HLS through `/api/iptv/media`. Emulator, ExoPlayer, non-admin: switched between two HLS channels and back with a moving picture, 10 segments through the server per tune. `verify-live --iptv` passed as a non-admin. A real ffmpeg played a non-admin HLS channel in the Node suite.
+- PIN profiles: real browser against the QA server. Wrong PIN refused, right PIN accepted, proof stored, reopening skips the PIN.
+- `Store`: a slower background write can no longer land over a newer sync flush. Found by a test that failed once in a full run. It may explain the earlier CI failure in `maturity migration`; that is not proven.
+- Log fixes held from v3.4.9: stale IPTV timer, stale boot id, one first-frame line per start, `why=` on a warm-up miss.
+- NOT verified: a real TV, Shield, Google TV Streamer, Unraid, a real Xtream provider, and the next-episode warm-up in production, which the `why=` line is there to diagnose. The Android stress step ran on the emulator only. The emulator crashed on two of five runs with a segfault, unrelated to the app code as far as the logs show.
+- Gate: `verify:full` passed on the QA emulator, Node suite 960 of 960, all household and Android steps PASS.
+- Version contract: `package.json` 3.4.10; Android `versionName` 3.4.10 / `versionCode` 438; Windows client package/Tauri/Cargo(.lock) 3.4.10.
+
 2026-11-01, v3.4.9 — Faster switches and cold starts, measured on the Onn TV box:
 - Switch: a backup armed after Play never reached `session.standby`, and it failed after 30s behind the viewer's opening buffer fill (`warm-up waited behind a playing stream`), so every switch was cold. `advance` now reads the title list, `_armStandby` uses the read-ahead lane and retries up to 3 times, 15s apart. Forced switch with the backup ready: 2.2s picture stop (0.1s finding, 2.2s starting), against 6.5s and 7.3s with none. One good run, capped at 6 lines per provider, idle server. The retry is covered by a test only: the backup was ready on its first try on the TV.
 - Cold start: on an idle house, a mount ran on the one warm line. `_advance` now floors the open cap at a viewer's share. Local bench, 30 volumes at 60ms: 3748ms on 1 line, 425ms on 12. TV: S08E17 RAR mount 7874ms before, 5515ms and 4567ms after, far short of the bench, and the remaining time is not explained.

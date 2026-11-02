@@ -4458,9 +4458,175 @@ test('maturity migration never wipes an existing users.json when the read fails'
     'an unreadable users.json is left intact, never overwritten with an empty (stamped) list');
 });
 
+test('security: every /api/ reply is sandboxed, and the Cast receiver keeps its own policy', async () => {
+  const r = await httpRaw(srv.port, '/api/server');
+  assert.match(String(r.headers['content-security-policy']), /^sandbox allow-downloads; default-src 'none'$/);
+  const stat = await httpRaw(srv.port, '/');
+  assert.doesNotMatch(String(stat.headers['content-security-policy']), /sandbox/, 'the app page itself is not sandboxed');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /castReceiver: async[\s\S]{0,900}'content-security-policy': "default-src 'self'; "/, 'the Cast page sends its own policy, which replaces the sandbox');
+});
+
+test('security: a request line or host the URL parser rejects gets a 400, not a hang', async () => {
+  const net = require('net');
+  const raw = (text) => new Promise((resolve, reject) => {
+    const s = net.connect(srv.port, '127.0.0.1', () => s.write(text));
+    let got = '';
+    s.setTimeout(3000, () => { s.destroy(); reject(new Error('no reply')); });
+    s.on('data', (c) => { got += c; });
+    s.on('end', () => resolve(got));
+    s.on('close', () => resolve(got));
+    s.on('error', reject);
+  });
+  assert.match(await raw('GET // HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n'), /^HTTP\/1\.1 400/);
+  assert.match(await raw('GET / HTTP/1.1\r\nHost: a b\r\nConnection: close\r\n\r\n'), /^HTTP\/1\.1 400/);
+});
+
+test('security: a token with extra parts is refused, so a suffix cannot vary the 2FA throttle key', () => {
+  const { Auth } = require('../server/auth');
+  const { Store } = require('../server/store');
+  const store = new Store(fs.mkdtempSync(path.join(require('os').tmpdir(), 'triboon-token-')));
+  const auth = new Auth(store);
+  const good = auth.signToken({ uid: 'u1', scope: 'totp' }, 60000);
+  try {
+    assert.strictEqual(auth.verifyToken(good, 'totp').uid, 'u1');
+    assert.strictEqual(auth.verifyToken(`${good}.junk`, 'totp'), null);
+    assert.strictEqual(auth.verifyToken(`${good}.`, 'totp'), null);
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+    assert.match(src, /const claims = auth\.verifyToken\(challenge, 'totp'\);\s+const key = claims \? `login2fa:\$\{claims\.uid\}`/, 'the throttle reads the verified account');
+  } finally { store.close(); }
+});
+
+test('security: a key flood cannot free a lock, and running counts go oldest first', () => {
+  const { RateLimiter } = require('../server/auth');
+  const limiter = new RateLimiter(100);
+  const rule = { max: 1, windowMs: 60000, lockMs: 60000 };
+  limiter.check('owner', rule);
+  assert.strictEqual(limiter.check('owner', rule).ok, false, 'locked');
+  limiter.check('running', { max: 5, windowMs: 60000 });
+  for (let i = 0; i < 5000; i++) limiter.check(`junk-${i}`, rule);
+  assert.strictEqual(limiter.check('owner', rule).ok, false, 'the lock outlives the flood');
+  assert.ok(limiter.lockedMs('owner') > 0);
+  assert.strictEqual(limiter.lockedMs('junk-4999'), 0, 'lockedMs counts nothing and reports no lock');
+  assert.ok(limiter.hits.size <= 100, 'the table stays bounded');
+  assert.strictEqual(limiter.hits.has('running'), false, 'the oldest running count went first');
+});
+
+test('security: an unknown name costs the same password work as a wrong password', () => {
+  const crypto = require('crypto');
+  const { Auth } = require('../server/auth');
+  const { Store } = require('../server/store');
+  const store = new Store(fs.mkdtempSync(path.join(require('os').tmpdir(), 'triboon-timing-')));
+  const auth = new Auth(store);
+  auth.createUser({ name: 'real', password: 'x1234567' });
+  const real = crypto.scryptSync;
+  let calls = 0;
+  crypto.scryptSync = (...a) => { calls++; return real(...a); };
+  try {
+    assert.throws(() => auth.login('real', 'wrong'), /invalid credentials/);
+    const wrongPassword = calls;
+    calls = 0;
+    assert.throws(() => auth.login('nobody', 'wrong'), /invalid credentials/);
+    assert.ok(calls >= 1, 'an unknown name still runs scrypt');
+    assert.strictEqual(wrongPassword, 1);
+    calls = 0;
+    assert.throws(() => auth.login('nobody', 'wrong'), /invalid credentials/);
+    assert.strictEqual(calls, 1, 'after the first, exactly as many runs as a wrong password');
+  } finally { crypto.scryptSync = real; store.close(); }
+});
+
+test('security: every way to make a password holds the same minimum, and a refused invite stays usable', () => {
+  const { Auth } = require('../server/auth');
+  const { Store } = require('../server/store');
+  const store = new Store(fs.mkdtempSync(path.join(require('os').tmpdir(), 'triboon-minpass-')));
+  const auth = new Auth(store);
+  const owner = auth.createUser({ name: 'owner', password: 'hunter22', role: 'admin' });
+  const { token } = auth.createInvite(owner.id);
+  try {
+    assert.throws(() => auth.acceptInvite(token, { name: 'a', password: 'abc' }), /at least 4/);
+    assert.throws(() => auth.acceptInvite(token, { name: 'a' }), /at least 4/);
+    assert.strictEqual(auth.acceptInvite(token, { name: 'a', password: 'abcd' }).user.name, 'a');
+  } finally { store.close(); }
+});
+
+test('security: a built-in name is not a playback issue kind', async () => {
+  for (const kind of ['constructor', '__proto__', 'toString']) {
+    const r = await httpJson(srv.port, 'POST', '/api/playback-issue', { kind }, admin);
+    assert.strictEqual(r.status, 400, kind);
+  }
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'audible.js'), 'utf8');
+  assert.match(src, /Object\.hasOwn\(REGIONS, r\)/);
+  const jf = fs.readFileSync(path.join(__dirname, '..', 'server', 'jellyfin-api.js'), 'utf8');
+  assert.match(jf, /Object\.hasOwn\(TV_GENRE_ALIAS, key\)/);
+  assert.match(jf, /Object\.hasOwn\(MOVIE_GENRE_ALIAS, key\)/);
+});
+
+test('security: the admin cap holds against a Sources tap and the no-source widen; a per-play limit does not', async () => {
+  const { Pipeline } = require('../server/pipeline');
+  const line = Object.create(Pipeline.prototype);
+  const rows = (uhdReasons) => [
+    { name: 'M.2024.1080p.WEB.x264-A', pickKey: 'hd', score: 280, reasons: ['res 1080p +280'], health: 'ok' },
+    { name: 'M.2024.2160p.WEB.x265-A', pickKey: 'uhd', score: -99805, reasons: uhdReasons, health: 'ok' },
+  ];
+  const capped = rows(['over-cap 2160p -100000', 'over-admin-cap 2160p']);
+  assert.deepStrictEqual(line._playableCandidates(capped, { pickKey: 'uhd' }).map((c) => c.pickKey), ['hd'], 'the tap on an over-cap row does not mount it');
+  const toggled = rows(['over-cap 2160p -100000']);
+  assert.strictEqual(line._playableCandidates(toggled, { pickKey: 'uhd' })[0].pickKey, 'uhd', 'an uncapped user can still tap past the 1080p toggle');
+
+  let searches = 0;
+  line.search = async () => { searches++; return { candidates: [rows(['res 2160p +1'])[1]].map((c) => ({ ...c, score: 100 })) }; };
+  const held = await line._widenPlayable({}, { maxResolutionRank: 3, adminMaxResolutionRank: 3 }, [], []);
+  assert.strictEqual(held.widened, false, 'a 2160p-only title stays empty for a 1080p-capped user');
+  assert.strictEqual(searches, 0);
+  const free = await line._widenPlayable({}, { maxResolutionRank: 3, adminMaxResolutionRank: 4 }, [], []);
+  assert.strictEqual(free.widened, true, 'a toggle-only limit still widens');
+  const seen = [];
+  line.search = async (p, policy) => { seen.push(policy.maxResolutionRank); return { candidates: [] }; };
+  await line._widenPlayable({}, { maxResolutionRank: 2, adminMaxResolutionRank: 3 }, [], []);
+  assert.strictEqual(seen[seen.length - 1], 3, 'the last widen stops at the admin cap');
+});
+
+test('security: a Jellyfin grant address cannot be chosen by the client', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const from = src.indexOf('function directGrantAddress(ctx)');
+  const to = src.indexOf('function clientIpForGeo(ctx)');
+  const run = (trust, headers) => new Function('envFlag', `${src.slice(from, to)}\nreturn directGrantAddress;`)(() => trust)({ req: { headers, socket: { remoteAddress: '10.0.0.9' } } });
+  assert.strictEqual(run(false, {}), '10.0.0.9', 'a direct client is its socket address');
+  assert.strictEqual(run(false, { 'x-forwarded-for': '1.2.3.4' }), '', 'an unknown proxy gets no grant');
+  assert.strictEqual(run(true, { 'x-forwarded-for': '1.1.1.1, 2.2.2.2' }), '2.2.2.2', 'the entry our proxy added, not the one the client wrote');
+  assert.strictEqual(run(true, { 'x-real-ip': '1.1.1.1' }), '', 'no forwarded chain, no grant');
+});
+
+test('security: a Jellyfin grant ends with the session, cannot start a play, and is not given through a proxy', () => {
+  const jf = fs.readFileSync(path.join(__dirname, '..', 'server', 'jellyfin-api.js'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /\(ctx\.user\.sessionEpoch \|\| 0\) !== grant\.epoch\) return reject\(401/, 'a password change ends the grant');
+  assert.match(jf, /if \(!rel\) \{\s+if \(ctx\.directGrant\) return send\(ctx\.res, 401/, 'a grant can only reuse a mount');
+  assert.doesNotMatch(jf, /g\.until = Date\.now\(\) \+ DIRECT_GRANT_MS/, 'use does not extend it');
+});
+
 test('teardown', async () => {
   await srv.shutdown();
   await mockNntp.close();
   tmdbMock.close();
   if (ixServer) ixServer.close();
+});
+
+test('security: an invite token must be a real saved invite, never a built-in property name', () => {
+  const { Auth } = require('../server/auth');
+  const { Store } = require('../server/store');
+  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'triboon-invite-'));
+  const store = new Store(dir);
+  const auth = new Auth(store);
+  const account = { name: 'stranger', password: 'x1234567' };
+  try {
+    for (const token of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', 'valueOf', 'nope', '', null, undefined, 7, {}, ['__proto__']]) {
+      assert.throws(() => auth.acceptInvite(token, account), /invalid invite/, `token ${String(token)} is refused`);
+    }
+    assert.strictEqual(Object.prototype.usedBy, undefined, 'a failed attempt leaves Object.prototype alone');
+    assert.strictEqual(auth.store.read('users', { list: [] }).list.length, 0, 'no account was created');
+  } finally {
+    delete Object.prototype.usedBy;
+    store.close();
+  }
 });

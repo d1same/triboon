@@ -395,6 +395,11 @@ Source contract:
   are rebuilt from encrypted settings at read time.
 - Aggregated channel ids are source-scoped so duplicate channel names or URLs in
   two playlists do not collide.
+- For a viewer of a source someone else set up, HLS playlist items are rewritten
+  to `/api/iptv/media/:idx/:id`, an opaque server route, so provider addresses
+  stay on the server and each hop passes the same address check as the channel.
+  ffmpeg reads every non-admin's channel through this route. Admins, and a
+  viewer playing their own playlist, keep provider addresses.
 - Favorites and hidden groups are user data, but entries belonging to a deleted
   source must be removed during delete cleanup.
 - Adding, deleting, and re-adding the same playlist must fetch a fresh source

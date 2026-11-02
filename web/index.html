@@ -5811,10 +5811,25 @@ const tokenStore = {
 };
 // Keep this off window.api. Jellyfin Desktop replaces window.api with its own
 // object, and a function declaration lives there. A const stays ours.
+// Signed proof a PIN was entered here. Kept beside the token, outside the per-profile prefs that sync.
+const profileProofs = {
+  get(id) {
+    try {
+      const v = localStorage.getItem(`triboon.proof.${id}`) || '';
+      const claims = JSON.parse(atob(v.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')));
+      return claims.exp > Date.now() ? v : '';
+    } catch { return ''; }
+  },
+  set(id, v) { try { if (v) localStorage.setItem(`triboon.proof.${id}`, v); } catch {} },
+};
 const api = async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   const tok = tokenStore.get();
   if (tok) headers.authorization = 'Bearer ' + tok;
+  if (S.profile && S.profile.locked) {
+    const proof = profileProofs.get(S.profile.id);
+    if (proof) headers['x-triboon-profile'] = proof;
+  }
   // Restricted profiles (Kids/Teen/Family): tag TMDB proxy reads with the active profile id so the
   // server filters over-cap titles OUT of the catalog (matches the play gate — they don't show up
   // at all, not just "can't be clicked"). The adult/owner path is untouched: no _pf, no change.
@@ -6350,7 +6365,7 @@ function attemptProfile(pr) {
   promptPin(pr.name, async (pin) => {
     try {
       const r = await api(`/api/me/profiles/${pr.id}/verify`, { method: 'POST', body: { pin } });
-      if (r.ok) { selectProfile(pr); return true; }
+      if (r.ok) { profileProofs.set(pr.id, r.proof); selectProfile(pr); return true; }
     } catch {}
     return false;
   });
@@ -15690,6 +15705,9 @@ function startVodServerWatch() {
   // 21s on the house log while the box was merely busy); the picture jumped and re-buffered
   // for nothing. Now a quiet server only freezes the last frame when the buffer is nearly out,
   // and the stream's own error path remounts if the mount is really gone.
+  // The id kept from page load is stale after a restart that happened with nothing playing, and it
+  // re-opened the first title 5s in (Unraid, 18:24:26). The first poll of this watch sets it.
+  S._serverBoot = '';
   let misses = 0, held = false;
   S._vodServerWatchT = setInterval(async () => {
     const p = S.playing;
@@ -26876,6 +26894,7 @@ function renderPinRows() {
         const [pw, pin] = [...f.querySelectorAll('input')].map((i) => i.value);
         try {
           const updated = await api(`/api/me/profiles/${pr.id}/pin`, { method: 'POST', body: { password: pw, pin: pin || null } });
+          profileProofs.set(pr.id, updated.proof);
           const list = S.user.profiles || [];
           const idx = list.findIndex((x) => x.id === pr.id);
           if (idx >= 0) list[idx] = updated;
@@ -32568,8 +32587,9 @@ async function enterApp() {
   // Profile gate (Plex "who's watching"): restore last, else pick if more than one exists.
   const saved = (() => { try { return localStorage.getItem('triboon.profile'); } catch { return null; } })();
   const pr = (S.user.profiles || []).find((p) => p.id === saved);
-  if (pr) { S.profile = pr; return enterAppShell(); }
-  if ((S.user.profiles || []).length <= 1) { S.profile = (S.user.profiles || [])[0] || null; return enterAppShell(); }
+  const pinDue = (p) => !!(p && p.locked && !profileProofs.get(p.id));
+  if (pr && !pinDue(pr)) { S.profile = pr; return enterAppShell(); }
+  if ((S.user.profiles || []).length <= 1 && !pinDue((S.user.profiles || [])[0])) { S.profile = (S.user.profiles || [])[0] || null; return enterAppShell(); }
   showProfilePicker();
 }
 async function enterAppShell() {
