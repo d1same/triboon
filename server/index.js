@@ -18,7 +18,7 @@ const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
 const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryAutoTmdbMatch, libraryScanUsesLocalMetaOnly, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt } = require('./library-match');
-const { Auth, SecureSettings, RateLimiter } = require('./auth');
+const { Auth, SecureSettings, RateLimiter, SIGN_IN_NAME_MAX } = require('./auth');
 const {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
   attachJellyfinSocket, closeJellyfinSockets,
@@ -811,6 +811,34 @@ const SPEEDTEST_MAX_CONNS = 4;      // a speed test must not log into the whole 
 const SPEEDTEST_SAMPLE_CONNS = 4;   // throughput sample — same handful, then close them
 const speedTestInFlight = new Set(); // provider indices being speed-tested — one at a time per provider
 function isTooManyConnections(e) { return /too many connection|\b502\b/i.test(String((e && e.message) || e)); }
+// The pool entries (current pool plus retired pools) that dial the SAME account as provider p.
+// Matched by identity, not list index: the pool skips accounts with no login, so pool.providers[i]
+// can be another account. Not certain (a duplicate account in the list, or two entries in one
+// pool) → the caller releases nothing and keeps the old behaviour.
+function speedTestPoolEntries(p) {
+  const id = (o) => (o ? [String(o.host || '').trim().toLowerCase(), Number(o.port) || 0, String(o.user || ''), o.tls !== false].join('\n') : '');
+  const want = id(p);
+  if (providerList().filter((o) => id(o) === want).length !== 1) return { certain: false, entries: [] };
+  const entries = [];
+  for (const pl of [pool, ...retiredPools.keys()]) {
+    if (!pl || !Array.isArray(pl.providers)) continue;
+    const hits = pl.providers.filter((pp) => id(pp.opts) === want);
+    if (hits.length > 1) return { certain: false, entries: [] };
+    entries.push(...hits);
+  }
+  return { certain: true, entries };
+}
+// "Playback is active" for the speed test (lead decision, S3-1): an open player read on a Usenet
+// mount, or a Triboon player's heartbeat inside its TTL (sent every 10 s, paused or with a full
+// buffer too). A recent read alone does not count. Gap: an outside (Jellyfin) client that closed
+// its request is not seen; the server keeps no Jellyfin playback-report time stamp.
+function speedTestPlaybackActive(now = Date.now()) {
+  for (const vf of mounts.values()) if (vf && !vf._local && (Number(vf._activeStreamReads) || 0) > 0) return true;
+  for (const row of activitySessions.values()) {
+    if (row && row.type !== 'live' && now - (Number(row.updatedAt) || 0) <= ACTIVITY_TTL_MS) return true;
+  }
+  return false;
+}
 async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
   const configured = providerConnections(p.connections);
   // Never open MORE than the provider's configured cap — testing past it would violate the very
@@ -882,6 +910,57 @@ async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
 }
 
 let pool = null, poolKey = '';
+// A replaced pool is RETIRED, not closed: running streams keep reading through it until their
+// mounts end (owner decision D-05), then it closes. Nothing else may close a pool under a live
+// mount — that cuts every running stream (S3-1).
+const retiredPools = new Map(); // NntpPool -> retiredAt
+const RETIRED_POOL_BUSY_GRACE_MS = 2 * 60000;
+// Everything that changes how the pool dials. The password enters only as a one-way
+// fingerprint; this key is never logged.
+function poolKeyFor(list) {
+  return JSON.stringify(list.map((p) => [[p.host, p.port, p.user, p.connections, p.pipelineDepth || 0, p.backup === true],
+    p.tls !== false, poolPassFingerprint(p.pass)]));
+}
+function poolPassFingerprint(pass) {
+  return require('crypto').createHash('sha256').update(String(pass || '')).digest('hex').slice(0, 16);
+}
+function mountPoolOf(vf) {
+  if (!vf) return null;
+  if (vf.pool) return vf.pool;
+  if (Array.isArray(vf.vols)) for (const v of vf.vols) if (v && v.pool) return v.pool;
+  return null;
+}
+function retirePool(old) {
+  if (!old) return;
+  if (!retiredPools.has(old)) retiredPools.set(old, Date.now());
+  closeIdleRetiredPools();
+}
+// Close each retired pool once no mount still reads through it. A pool that still has work in
+// flight (a mount being built when the pool was replaced) gets a short grace first.
+function closeIdleRetiredPools(now = Date.now()) {
+  for (const [old, at] of retiredPools) {
+    if (old === pool) { retiredPools.delete(old); continue; }
+    let used = false;
+    for (const vf of mounts.values()) if (mountPoolOf(vf) === old) { used = true; break; }
+    if (used) continue;
+    let busy = false;
+    try { const st = old.stats(); busy = (st.inUse || 0) > 0 || (st.queued || 0) > 0; } catch {}
+    if (busy && now - at < RETIRED_POOL_BUSY_GRACE_MS) continue;
+    retiredPools.delete(old);
+    try { old.close(); } catch {}
+  }
+}
+// After a settings save: retire the pool now when the providers changed, so a removed account
+// is not left logged in; otherwise keep it.
+function retirePoolIfProvidersChanged() {
+  if (!pool) return;
+  let key = '';
+  try { key = poolKeyFor(providersReadyToDial(providerList())); } catch { key = ''; }
+  if (key && key === poolKey) return;
+  const old = pool;
+  pool = null; poolKey = '';
+  retirePool(old);
+}
 function getPool() {
   // This PC keeps a copy of the house logins. A local boot used to dial Usenet
   // and the provider dropped the TV. Set TRIBOON_SKIP_USENET=1 to open the page only.
@@ -892,9 +971,9 @@ function getPool() {
   }
   const list = providersReadyToDial(providerList());
   if (!list.length) { const e = new Error('no usenet provider configured'); e.status = 409; throw e; }
-  const key = JSON.stringify(list.map((p) => [p.host, p.port, p.user, p.connections, p.pipelineDepth || 0, p.backup === true]));
+  const key = poolKeyFor(list);
   if (pool && poolKey === key) return pool;
-  if (pool) pool.close();
+  if (pool) retirePool(pool);
   poolKey = key;
   pool = new NntpPool(list, Math.max(...list.map((p) => providerConnections(p.connections))));
   // Nothing is playing yet, so keep a single login. Play raises this to the
@@ -1499,15 +1578,20 @@ function cleanupDeletedIptvSource(sourceId, removed = null) {
     }
     return all;
   });
-  if (removed) {
-    const prefix = `${removed.name}${IPTV_GROUP_SEPARATOR}`;
-    store.update('iptvgroups', {}, (all) => {
-      for (const uid of Object.keys(all || {})) {
-        if (Array.isArray(all[uid])) all[uid] = all[uid].filter((g) => !String(g).startsWith(prefix));
-      }
-      return all;
-    });
-  }
+  if (removed) cleanupIptvGroupPrefix(removed, `${removed.name}${IPTV_GROUP_SEPARATOR}`);
+}
+// Per-user hidden groups are labels ("<source> · <group>"), so a name prefix can also match
+// another source with the same name. A personal playlist is visible only to its owner, so its
+// cleanup touches only the owner's list (S2-2); admin sources keep the all-users cleanup.
+function cleanupIptvGroupPrefix(src, prefix) {
+  const onlyUid = src && src.ownerUserId ? String(src.ownerUserId) : null;
+  store.update('iptvgroups', {}, (all) => {
+    for (const uid of Object.keys(all || {})) {
+      if (onlyUid && uid !== onlyUid) continue;
+      if (Array.isArray(all[uid])) all[uid] = all[uid].filter((g) => !String(g).startsWith(prefix));
+    }
+    return all;
+  });
 }
 function cleanupEditedIptvSource(sourceId, before = null, after = null) {
   clearIptvSourceRuntime(sourceId);
@@ -1523,13 +1607,7 @@ function cleanupEditedIptvSource(sourceId, before = null, after = null) {
     });
   }
   if (before && before.name && (!after || before.name !== after.name || upstreamChanged)) {
-    const prefix = `${before.name}${IPTV_GROUP_SEPARATOR}`;
-    store.update('iptvgroups', {}, (all) => {
-      for (const uid of Object.keys(all || {})) {
-        if (Array.isArray(all[uid])) all[uid] = all[uid].filter((g) => !String(g).startsWith(prefix));
-      }
-      return all;
-    });
+    cleanupIptvGroupPrefix(before, `${before.name}${IPTV_GROUP_SEPARATOR}`);
   }
 }
 function iptvEditBodyForExisting(b = {}, existing = null) {
@@ -1694,7 +1772,22 @@ function iptvLiveSlotKey(ctx) {
   // get their own live slot instead of evicting one another. Retuning the SAME surface still
   // reuses its key and closes the old upstream stream, as intended.
   const surface = ctx && ctx.url && ctx.url.searchParams ? String(ctx.url.searchParams.get('surface') || '').slice(0, 16) : '';
-  return idHash(`${uid}|${ip}|${ua}|${surface}`);
+  // Behind a proxy two boxes of one account share the address and User-Agent; the per-login
+  // device id in the stream token keeps their slots apart (S1-2). Old tokens: key as before.
+  const dev = iptvTokenDevice(ctx);
+  return idHash(dev ? `${uid}|${ip}|${ua}|${surface}|${dev}` : `${uid}|${ip}|${ua}|${surface}`);
+}
+function iptvTokenDevice(ctx) {
+  const dev = ctx && ctx.claims && typeof ctx.claims.dev === 'string' ? ctx.claims.dev : '';
+  return dev.slice(0, 32);
+}
+// Stable per login, never per Play: each Play mints a new stream token, and a per-token id
+// would let one device hold two provider connections across a zap.
+function iptvDeviceClaim(ctx) {
+  const c = ctx && ctx.claims;
+  if (!c || c.scope !== 'session') return null;
+  if (typeof c.sid === 'string' && c.sid) return { dev: c.sid.slice(0, 32) };
+  return { dev: idHash(`${c.uid}|${c.exp}`).slice(0, 12) };
 }
 function markIptvPlaybackHot() {
   iptvPlaybackHotUntil = Math.max(iptvPlaybackHotUntil, Date.now() + IPTV_PLAYBACK_API_QUIET_MS);
@@ -1706,16 +1799,17 @@ function beginIptvLiveSlot(ctx, meta = {}, shareKey = '') {
   markIptvPlaybackHot();
   const key = iptvLiveSlotKey(ctx);
   const prev = activeIptvLiveStreams.get(key);
+  const label = iptvNativeLogLabel(meta);
+  const devTag = iptvTokenDevice(ctx).slice(0, 4);
   let replaced = false;
   if (prev && typeof prev.close === 'function') {
     replaced = true;
-    prev.close('retuned');
+    prev.close('retuned', label);
   }
   // ExoPlayer/web often DROP the old request before opening the next channel. That leave is
   // "client closed" (linger), not "retuned". Kill a lingering different-channel hub so one
   // app/surface never holds ESPN+CNN against a 1-connection provider.
   closeIptvViewerLingerIfDifferentChannel(key, shareKey);
-  const label = iptvNativeLogLabel(meta);
   const entry = {
     key,
     label,
@@ -1729,12 +1823,14 @@ function beginIptvLiveSlot(ctx, meta = {}, shareKey = '') {
     closed: false,
     closer: null,
     setCloser(fn) { this.closer = typeof fn === 'function' ? fn : null; },
-    close(reason = 'closed') {
+    close(reason = 'closed', nextLabel = '') {
       if (this.closed) return;
       this.closed = true;
       try { if (this.closer) this.closer(reason); } catch {}
       if (activeIptvLiveStreams.get(key) === this) activeIptvLiveStreams.delete(key);
-      if (reason === 'retuned') console.log(`[iptv live] closed previous stream before tuning ${label}`);
+      if (reason === 'retuned') {
+        console.log(`[iptv live] closed previous stream ${label}${nextLabel ? ` before tuning ${nextLabel}` : ''}${devTag ? ` dev=${devTag}` : ''}`);
+      }
     },
     done() {
       if (this.closed) return;
@@ -1941,6 +2037,9 @@ function createIptvLiveHub(shareKey, label) {
       const sub = {
         res: ctx.res, req: ctx.req, slot, stallTimer: null, label: subLabel,
         mode: opts.mode === 'pipe' ? 'pipe' : 'http',
+        // This viewer's OWN playlist relay choice (null = provider addresses: admin/source owner).
+        // A shared HLS answer is rewritten per viewer with it (audit S1-1).
+        mediaUri: typeof opts.mediaUri === 'function' ? opts.mediaUri : null,
         onChunk: typeof opts.onChunk === 'function' ? opts.onChunk : null,
         onLive: typeof opts.onLive === 'function' ? opts.onLive : null,
         onFail: typeof opts.onFail === 'function' ? opts.onFail : null,
@@ -2072,6 +2171,10 @@ function createIptvLiveHub(shareKey, label) {
       });
       upstreamRes.on('error', () => this.close('upstream error'));
     },
+    // `mediaUri` is the OPENER's relay choice and is used only for pipe subscribers (browser remux
+    // tee). Every http subscriber gets the playlist rewritten with its own `sub.mediaUri`: each
+    // relay closure carries that viewer's token and user id, so one shared rewrite would hand a
+    // user the admin's raw provider addresses, or the admin a user's relay links (audit S1-1).
     _serveHlsPlaylist(upstreamRes, status, playlistBase, mediaUri) {
       const chunks = [];
       let len = 0;
@@ -2086,23 +2189,25 @@ function createIptvLiveHub(shareKey, label) {
       });
       upstreamRes.on('end', () => {
         if (this.closed) return;
-        const rewritten = rewriteIptvHlsPlaylist(Buffer.concat(chunks).toString('utf8'), playlistBase, mediaUri);
-        const buf = Buffer.from(rewritten);
-        const headers = {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let openerBuf = null; // pipe subscribers: today's opener rewrite, made at most once
+        const headersFor = (buf) => ({
           ...this.headers,
           'content-type': this.headers['content-type'] || 'application/vnd.apple.mpegurl',
           'content-length': String(buf.length),
-        };
+        });
         for (const sub of [...this.subs]) {
           if (sub.mode === 'pipe') {
             try {
+              if (!openerBuf) openerBuf = Buffer.from(rewriteIptvHlsPlaylist(text, playlistBase, mediaUri));
               if (sub.onLive) sub.onLive();
-              if (sub.onChunk) sub.onChunk(buf);
+              if (sub.onChunk) sub.onChunk(openerBuf);
             } catch { this.unsubscribe(sub, 'write failed'); }
             continue;
           }
           try {
-            if (!sub.res.headersSent && !sub.res.destroyed) sub.res.writeHead(status, headers);
+            const buf = Buffer.from(rewriteIptvHlsPlaylist(text, playlistBase, sub.mediaUri));
+            if (!sub.res.headersSent && !sub.res.destroyed) sub.res.writeHead(status, headersFor(buf));
             if (!sub.res.destroyed) sub.res.end(buf);
           } catch { this.unsubscribe(sub, 'write failed'); }
         }
@@ -2114,7 +2219,9 @@ function createIptvLiveHub(shareKey, label) {
       // Startup failed before any bytes: every queued viewer gets the SAME error response the
       // solo path would have produced (negative cache handling already ran in the opener).
       this.closed = true;
-      iptvSharedHubs.delete(this.shareKey);
+      // Only remove OUR entry: a finite hub leaves the map early, and a newer hub may now hold
+      // this key for other viewers (audit S1-8).
+      if (iptvSharedHubs.get(this.shareKey) === this) iptvSharedHubs.delete(this.shareKey);
       for (const sub of [...this.subs]) {
         this.subs.delete(sub);
         if (sub.stallTimer) clearTimeout(sub.stallTimer);
@@ -2131,7 +2238,7 @@ function createIptvLiveHub(shareKey, label) {
       this.closed = true;
       if (this.lingerTimer) clearTimeout(this.lingerTimer);
       forgetIptvViewerLinger(this);
-      iptvSharedHubs.delete(this.shareKey);
+      if (iptvSharedHubs.get(this.shareKey) === this) iptvSharedHubs.delete(this.shareKey); // see failAll (S1-8)
       try { if (this.upstreamReq) { this.upstreamReq.removeAllListeners('error'); this.upstreamReq.on('error', () => {}); this.upstreamReq.destroy(); } } catch {}
       for (const sub of [...this.subs]) this.unsubscribe(sub, reason);
       if (reason !== 'idle (no viewers)' && reason !== 'playlist sent') {
@@ -2153,7 +2260,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   // upstream to the hub on success, so late same-channel viewers join instead of re-opening.
   const existingHub = iptvSharedHubs.get(shareKey);
   if (existingHub && existingHub.joinable()) {
-    existingHub.subscribe(ctx, slot, iptvNativeLogLabel(meta));
+    existingHub.subscribe(ctx, slot, iptvNativeLogLabel(meta), { mediaUri: meta.mediaUri });
     console.log(`[iptv share] ${iptvNativeLogLabel(meta)} joined shared upstream (${existingHub.subs.size} viewer(s))`);
     return;
   }
@@ -2389,7 +2496,8 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       ctx.req.off('aborted', onClientClose);
       ctx.res.off('close', onClientClose);
       ctx.res.off('error', onClientClose);
-      hub.subscribe(ctx, slot, label);
+      hub.subscribe(ctx, slot, label, { mediaUri: meta.mediaUri });
+      // attach's mediaUri is the opener's, for pipe subscribers only; http viewers use their own.
       hub.attach(r, upstreamReq, r.statusCode || 200, out, { playlistBase: u.href, mediaUri: meta.mediaUri });
     });
     slot.setCloser((reason) => {
@@ -2891,6 +2999,8 @@ function m3uChannelFromPair(meta, streamUrl, idx) {
 function fetchM3uChannelsStream(playlistUrl, opts = {}) {
   const maxChannels = opts.maxChannels || 20000;
   const maxBytes = opts.maxBytes || 768 * 1024 * 1024;
+  // Cap on the carried (unfinished) line only, never on the whole body.
+  const maxLineBytes = opts.maxLineBytes || 1024 * 1024;
   const timeoutMs = opts.timeoutMs || 15000;
   const deadlineMs = opts.deadlineMs || 180000;
   const redirects = opts.redirects || 0;
@@ -2957,11 +3067,18 @@ function fetchM3uChannelsStream(playlistUrl, opts = {}) {
         bytes += chunk.length;
         if (bytes > maxBytes) return done(new Error(`m3u playlist too large (>${maxBytes} bytes)`));
         carry += decoder.write(chunk);
-        const lines = carry.split(/\r?\n/);
-        carry = lines.pop() || '';
-        for (const line of lines) {
-          consumeLine(line);
-          if (settled) return;
+        // Split only when the new chunk can end a line: re-splitting one long partial line
+        // on every chunk costs O(n^2) on a body with no line breaks (S2-8).
+        if (chunk.includes(10)) {
+          const lines = carry.split(/\r?\n/);
+          carry = lines.pop() || '';
+          for (const line of lines) {
+            consumeLine(line);
+            if (settled) return;
+          }
+        }
+        if (carry.length > maxLineBytes) {
+          done(new Error(`m3u playlist has no line breaks (line over ${Math.round(maxLineBytes / 1048576) || 1} MB)`));
         }
       });
       res.on('end', () => {
@@ -2974,6 +3091,15 @@ function fetchM3uChannelsStream(playlistUrl, opts = {}) {
     req.on('error', (e) => { markPinFailure(); done(e); });
     req.setTimeout(timeoutMs, () => { markPinFailure(); done(new Error('m3u playlist upstream timeout')); });
   }));
+}
+function keptIptvChannelCount(s, sourceId, key) {
+  const hit = iptvSourceCaches.get(sourceId);
+  if (hit && hit.key === key && Array.isArray(hit.channels) && hit.channels.length) return hit.channels.length;
+  if (s.iptvMode === 'xtream') {
+    const disk = readIptvDiskCaches()[sourceId];
+    if (disk && disk.key === key && Array.isArray(disk.channels) && disk.channels.length) return disk.channels.length;
+  }
+  return 0;
 }
 async function fetchIptvChannels(s, key) {
   const sourceId = cleanIptvSourceId(s.id);
@@ -3053,6 +3179,15 @@ async function fetchIptvChannels(s, key) {
     channels = await fetchM3uChannelsStream(s.iptvUrl, { maxChannels: 20000 });
   }
   channels = scopeIptvChannels(s, channels);
+  if (!channels.length) {
+    // One empty 200 answer must not replace a good list for 24 h (S2-3). Keep the prior list
+    // for the same source and key and report it; a first-ever empty answer stays empty.
+    const kept = keptIptvChannelCount(s, sourceId, key);
+    if (kept) {
+      console.error(`[iptv] source "${String(s.name || 'Live TV').slice(0, 80)}" returned 0 channels; keeping ${kept} cached`);
+      throw new Error(`source returned 0 channels; keeping ${kept} cached channels`);
+    }
+  }
   iptvSourceCaches.set(sourceId, { key, at: Date.now(), channels });
   // Persist Xtream playlists for restart survival — WITHOUT credential-bearing stream URLs
   // (rebuilt from encrypted settings on read). M3U playlists may embed third-party tokens
@@ -4135,6 +4270,9 @@ function loginIpLocked(ctx) {
   return true;
 }
 function noteLoginFailure(ctx) { limiter.check(`login-ip:${clientIp(ctx)}`, LOGIN_IP_LIMIT); }
+// Longest sign-in name accepted before any throttle key is built. Account creation refuses longer
+// names with the same constant (server/auth.js), so no account can hold a name that cannot sign in.
+const LOGIN_NAME_MAX = SIGN_IN_NAME_MAX;
 function throttleUserRoute(ctx, routeKey, opts) {
   const uid = (ctx.user && ctx.user.id) || (ctx.claims && ctx.claims.uid) || clientIp(ctx);
   return throttled(ctx, `route:${routeKey}:${uid}`, opts);
@@ -4157,7 +4295,18 @@ function extendPlayRouteTimeout(ctx) {
 function iptvChannelHiddenFor(user, ch, s = settings.get()) {
   if (!user) return true;
   if (user.role === 'admin') return false;
-  return (s.iptvHiddenGroups || []).includes(ch.group || 'Other');
+  return iptvGroupHiddenGlobally(ch, new Set(s.iptvHiddenGroups || []));
+}
+// The display label is "<source> · <group>" only when the caller sees more than one loaded
+// source, so matching the label alone lets an admin hide slip for a user who sees fewer (or
+// more) sources (S2-1). Match the stable source name + source group too, and a bare group
+// name in any source. Fails closed: a bare label hides that group in every source.
+function iptvGroupHiddenGlobally(ch, hidden) {
+  if (!ch || !hidden || !hidden.size) return false;
+  if (hidden.has(ch.group || 'Other')) return true;
+  const sourceGroup = ch.sourceGroup || ch.group || 'Other';
+  if (hidden.has(sourceGroup)) return true;
+  return !!ch.sourceName && hidden.has(`${ch.sourceName}${IPTV_GROUP_SEPARATOR}${sourceGroup}`);
 }
 function streamScopeOk(ctx, resource) {
   if (ctx.claims.scope !== 'stream') return true;
@@ -4213,7 +4362,14 @@ function mountAccessOk(ctx, vf) {
   if (!vf) return false;
   if (ctx.user && ctx.user.role === 'admin') return true;
   if (ctx.claims && ctx.claims.scope === 'stream') return true;
-  return !vf._ownerUid || (ctx.user && vf._ownerUid === ctx.user.id);
+  return !vf._ownerUid || (!!ctx.user && mountViewerOk(vf, ctx.user.id));
+}
+// Mounts are shared per release: every account that was handed this mount (rememberMountOwner)
+// may read its tracks, health and chapters, not only the first one (S3-10). `_ownerUid` stays
+// the first account for the per-user mount cap.
+function mountViewerOk(vf, uid) {
+  if (!vf || !uid) return false;
+  return vf._ownerUid === uid || !!(vf._viewers && vf._viewers.has(uid));
 }
 // Tear down one HLS session (kill its ffmpeg + delete its temp segment dir). Safe to call twice.
 function highestHlsSegment(dir) {
@@ -4358,6 +4514,8 @@ function releaseMountResources(vf) {
   try { pipeline.cancelPlaybackWarmups(vf); } catch {}
   closeMountHls(vf);
   closeMountFfmpegPipes(vf);
+  // Callers delete the mount right after this; check retired pools once it is gone.
+  if (retiredPools.size) setImmediate(() => { try { closeIdleRetiredPools(); } catch {} });
 }
 function beginMountPlayerRead(vf, now = Date.now()) {
   if (!vf) return false;
@@ -4385,9 +4543,16 @@ function endMountPlayerRead(vf, now = Date.now()) {
 }
 const USER_MOUNT_CAP = 8;
 const SESSION_TTL_MS = 12 * 3600000;
+const MOUNT_VIEWERS_MAX = 32;
 function rememberMountOwner(vf, uid) {
   if (!vf || !uid) return vf;
   vf._ownerUid = vf._ownerUid || uid;
+  if (!vf._viewers) vf._viewers = new Set();
+  if (!vf._viewers.has(uid)) {
+    // Bounded: the set lives only as long as the mount; the oldest viewer drops first.
+    if (vf._viewers.size >= MOUNT_VIEWERS_MAX) vf._viewers.delete(vf._viewers.values().next().value);
+    vf._viewers.add(uid);
+  }
   vf._touched = Date.now();
   return vf;
 }
@@ -4843,6 +5008,12 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
     policy.audioEac3Joc = !!caps.eac3Joc;
     policy.audioDts = !!caps.dts;
     policy.audioDtsHd = !!caps.dtsHd;
+  } else if (rawCaps && typeof rawCaps === 'object' && rawCaps.hevc === false) {
+    // A browser that said it cannot decode HEVC can still get one through a video-copy remux
+    // and play sound over a black picture. Scoring de-ranks HEVC for it (a penalty, not a
+    // filter: canPlayType can under-report). Read the RAW claim: parseCaps turns a missing key
+    // into false, and callers that send no caps (Jellyfin and others) must stay unchanged.
+    policy.browserHevc = false;
   }
   if (budgetAndroidTvCaps(caps)) {
     // Onn/low-memory TV boxes can decode 4K, but huge remux + HD audio is where playback
@@ -6097,13 +6268,25 @@ const H = {
     // Again now the body is in: a request held open across the owner's setup must not make a second admin.
     if (auth.hasUsers()) return send(ctx.res, 403, { error: 'already set up' });
     if (!name || !password || String(password).length < 4) return send(ctx.res, 400, { error: 'name and password (4+ chars) required' });
-    auth.createUser({ name, password, role: 'admin' });
+    try { auth.createUser({ name, password, role: 'admin' }); }
+    catch (e) {
+      if (e && e.code === 'NAME_TOO_LONG') return send(ctx.res, 400, { error: e.message });
+      throw e;
+    }
     const r = auth.login(name, password);
     send(ctx.res, 200, r);
   },
 
   login: async (ctx) => {
     const { name, password } = await readJson(ctx.req);
+    // Account creation refuses names over this cap. A longer name can never sign in, and building
+    // throttle keys from it let one address pin ~2 MB per attempt (audit S2-11). Refuse it first;
+    // it still counts against the per-address failure budget.
+    if (String(name || '').length > LOGIN_NAME_MAX) {
+      if (loginIpLocked(ctx)) return;
+      noteLoginFailure(ctx);
+      return send(ctx.res, 400, { error: 'invalid credentials' });
+    }
     const uname = String(name || '').toLowerCase();
     const pass = String(password || '').trim();
     const key = `login:${uname}:${clientIp(ctx)}`;
@@ -6190,8 +6373,20 @@ const H = {
 
   profileAdd: async (ctx) => {
     const b = await readJson(ctx.req);
-    try { send(ctx.res, 200, auth.addProfile(ctx.user.id, { name: b.name, level: b.level, pin: b.pin, avatar: b.avatar })); }
-    catch (e) { send(ctx.res, 400, { error: e.message }); }
+    // The caller's own level, read like localItemPayload: a PIN profile counts only with its proof.
+    const proof = auth.verifyToken(ctx.req.headers['x-triboon-profile'], 'profile');
+    const callerLevel = profileLevelFor(ctx.user, proof && proof.pid, ctx);
+    // Only the password branch is a brute-force surface; a plain add stays unthrottled.
+    const withPassword = b.password !== undefined && b.password !== null && b.password !== '';
+    const key = `pinset:${ctx.user.id}`;
+    if (withPassword && throttled(ctx, key, { max: 5, windowMs: 60000, lockMs: 60000 })) return;
+    try {
+      const p = auth.addProfile(ctx.user.id, {
+        name: b.name, level: b.level, pin: b.pin, avatar: b.avatar, callerLevel, password: b.password,
+      });
+      if (withPassword) limiter.clear(key);
+      send(ctx.res, 200, p);
+    } catch (e) { send(ctx.res, 400, { error: e.message }); }
   },
 
   // ---- profile avatars ----
@@ -6910,11 +7105,12 @@ const H = {
     try {
       const { channels, sourceErrors } = await loadIptvChannelState(sources);
       const favs = new Set((store.read('iptvfavs', {})[ctx.user.id]) || []);
+      const deviceClaim = iptvDeviceClaim(ctx);
       // Admin-enforced hidden categories are stripped server-side for regular users — they
       // can't re-enable them. Admins still see everything (they manage the list).
       const globalHidden = new Set(s.iptvHiddenGroups || []);
       let list = ctx.user.role === 'admin' ? channels
-        : channels.filter((c) => !globalHidden.has(c.group || 'Other'));
+        : channels.filter((c) => !iptvGroupHiddenGlobally(c, globalHidden));
       // ?fav=1 → only the user's favorites (the home-row widget; keeps the payload tiny).
       if (ctx.url.searchParams.get('fav')) list = list.filter((c) => favs.has(c.id));
       // ?limit=N → first N rows after filters. Android WebView cannot JSON.parse a 20k-row
@@ -6932,7 +7128,7 @@ const H = {
         globalHidden: ctx.user.role === 'admin' ? [...globalHidden] : undefined,
         channels: list.map(({ url: _u, nativeUrl: _nu, nativeFallbackUrl: _nfu, ...c }) => {
           const channelScope = `iptv:${c.idx}:${c.id}`;
-          const token = auth.streamToken(ctx.user.id, channelScope);
+          const token = auth.streamToken(ctx.user.id, channelScope, deviceClaim);
           const cid = encodeURIComponent(c.id);
           const nativeMime = c.nativeMime || iptvNativeMime(_nu || _u);
           const nativeFallbackMime = c.nativeFallbackMime || (_nfu ? iptvNativeMime(_nfu) : '');
@@ -6978,7 +7174,7 @@ const H = {
       if (cidParam && String(ch.id) !== cidParam) return send(ctx.res, 404, { error: 'channel changed - reopen Live TV' });
       if (iptvChannelHiddenFor(ctx.user, ch, s)) return send(ctx.res, 404, { error: 'channel not found' });
       const channelScope = `iptv:${ch.idx}:${ch.id}`;
-      const token = auth.streamToken(ctx.user.id, channelScope);
+      const token = auth.streamToken(ctx.user.id, channelScope, iptvDeviceClaim(ctx));
       const cid = encodeURIComponent(ch.id);
       const nativeMime = ch.nativeMime || iptvNativeMime(ch.nativeUrl || ch.url);
       const nativeFallbackMime = ch.nativeFallbackMime || (ch.nativeFallbackUrl ? iptvNativeMime(ch.nativeFallbackUrl) : '');
@@ -7096,10 +7292,7 @@ const H = {
       if (!nextList.length) {
         next.iptvUrl = null; next.xtHost = null; next.xtUser = null; next.xtPass = null; next.epgUrl = null; next.iptvUsers = [];
       }
-      if (removed) {
-        const prefix = `${removed.name}${IPTV_GROUP_SEPARATOR}`;
-        next.iptvHiddenGroups = (next.iptvHiddenGroups || []).filter((g) => !String(g).startsWith(prefix));
-      }
+      // A personal playlist never edits the admin hide list (S2-2).
       return next;
     });
     if (forbidden) return send(ctx.res, 403, { error: 'not your playlist' });
@@ -7162,11 +7355,20 @@ const H = {
       if (currentIdx < 0) return s;
       const nextList = [...current];
       nextList[currentIdx] = updated;
-      return {
+      const next = {
         ...s,
         iptvSources: nextList,
         iptvUrl: null, xtHost: null, xtUser: null, xtPass: null, epgUrl: null, iptvUsers: [],
       };
+      // An admin rename carries the admin's "<old> · <group>" hides over to the new name (S2-1).
+      const oldName = current[currentIdx].name;
+      if (oldName && updated.name && oldName !== updated.name && Array.isArray(s.iptvHiddenGroups)) {
+        const oldPrefix = `${oldName}${IPTV_GROUP_SEPARATOR}`;
+        const newPrefix = `${updated.name}${IPTV_GROUP_SEPARATOR}`;
+        next.iptvHiddenGroups = [...new Set(s.iptvHiddenGroups.map((g) => (String(g).startsWith(oldPrefix)
+          ? `${newPrefix}${String(g).slice(oldPrefix.length)}`.slice(0, 80) : g)))];
+      }
+      return next;
     });
     cleanupEditedIptvSource(sourceId, previous, updated);
     scheduleIptvWarmSoon('source-updated');
@@ -7252,9 +7454,12 @@ const H = {
     // Only surface a hard "reopen Live TV" when NOTHING resolved — a genuine list change. A
     // partial resolve returns what we could find; a blank subset beats a blank whole guide.
     if (cids.length && !chans.length) return send(ctx.res, 409, { error: 'channel list changed - reopen Live TV' });
-    if (!chans.length) return send(ctx.res, 200, { channels: [] });
+    // Admin-hidden channels get no guide data for regular users, as on the play routes.
+    const settingsNow = settings.get();
+    const visible = chans.filter(({ ch }) => !iptvChannelHiddenFor(ctx.user, ch, settingsNow));
+    if (!visible.length) return send(ctx.res, 200, { channels: [] });
     const from = Date.now() - 90 * 60000, to = Date.now() + 4 * 3600000;
-    const channels = await mapLimit(chans, 8, async ({ ch, reqIdx }) => {
+    const channels = await mapLimit(visible, 8, async ({ ch, reqIdx }) => {
       const src = sourceForIptvChannel(ch);
       let progs = [];
       if (src && src.iptvMode === 'xtream' && ch.xtreamId) {
@@ -7288,7 +7493,7 @@ const H = {
       ch = (iptvCache.channels || []).find((candidate) => candidate && String(candidate.id) === cid) || null;
       if (!ch) return send(ctx.res, 409, { error: 'channel list changed - reopen Live TV' });
     }
-    if (!ch) return send(ctx.res, 404, { error: 'channel not found' });
+    if (!ch || iptvChannelHiddenFor(ctx.user, ch)) return send(ctx.res, 404, { error: 'channel not found' });
     try {
       const nn = await epgNowNext(ch);
       send(ctx.res, 200, nn || {});
@@ -9209,6 +9414,19 @@ Object.assign(H, {
     send(ctx.res, 200, { ok: true, slot, custom: false });
   },
 
+  // Admin hides the notice for the newest kept copy of an unreadable settings.json. The .keep file
+  // is never deleted or changed. Refused while settings do not open right now (the notice must stay)
+  // and when the named copy is not the newest one (a stale page must not hide a newer notice).
+  settingsSideCopyDismiss: async (ctx) => {
+    const b = await readJson(ctx.req);
+    settings.get(); // refresh the live unreadable mark
+    if (settings.unreadable) return send(ctx.res, 409, { error: 'settings do not open right now, so this notice stays until they do' });
+    const copy = settings.sideCopyName();
+    if (!copy || typeof b.name !== 'string' || b.name !== copy) return send(ctx.res, 409, { error: 'that notice is no longer current; reload settings' });
+    settings.dismissSideCopyNotice(copy);
+    send(ctx.res, 200, { ok: true, settingsSideCopy: copy, settingsSideCopyDismissed: true });
+  },
+
   settingsGet: async (ctx) => {
     const s = settings.get();
     const iptvSources = iptvSourcesFromSettings(s);
@@ -9221,6 +9439,10 @@ Object.assign(H, {
         usage: ixUsageToday().byIndexer[i.name] || { api: 0, grabs: 0 },
       })),
       tmdbKey: s.tmdbKey ? '•••' : null,
+      // Audit F1-01: settings.json is there but does not open (secret changed/lost, damaged), and
+      // the name of the kept copy of the old file. Drives the admin banner. Names only, no content.
+      settingsUnreadable: settings.unreadable === true,
+      ...(() => { const n = settings.sideCopyNotice(); return { settingsSideCopy: n.copy, settingsSideCopyDismissed: n.dismissed }; })(),
       openSubsKey: effectiveOpenSubsKey(s) ? '•••' : null,
       builtInSubtitlesEnabled: s.builtInSubtitlesEnabled === true,
       debugLogging: debug.enabled(),
@@ -9308,18 +9530,25 @@ Object.assign(H, {
     // configured cap, the test may only use the FREE headroom (configured − connections playback is
     // already holding), and we FREEZE the live pool at its current size for the test's duration so it
     // can't grow into that headroom. Net guarantee: (live playback + test) ≤ configured, always.
-    const livePp = pool && pool.providers && pool.providers[b.index];
-    const liveOpen = livePp ? livePp.conns.length + livePp.connecting : 0;
-    const headroom = Math.max(0, configured - liveOpen);
-    const want = Math.min(clampInt(b.maxConns, configured, 1, Math.min(configured, SPEEDTEST_MAX_CONNS)), headroom);
-    if (want < 1) {
-      return send(ctx.res, 200, { ok: false, host: p.host, reservedByPlayback: liveOpen,
-        error: `all ${configured} connections are currently in use by active playback — stop a stream and retry` });
-    }
+    // A settings save keeps the pool (S3-1), so its idle logged-in lines stay open. When no player
+    // is active, log this account's idle lines out first (bounded wait); with a player active, or
+    // when this account's pool entry cannot be told apart, behave as before.
+    const own = speedTestPoolEntries(p);
+    const livePps = own.certain ? own.entries : [pool && pool.providers && pool.providers[b.index]].filter(Boolean);
     speedTestInFlight.add(b.index);
-    const origSize = livePp ? livePp.size : null;
-    if (livePp) livePp.size = liveOpen; // freeze: pool won't open new connections during the test
+    const frozen = [];
     try {
+      const releases = own.certain && livePps.length && !speedTestPlaybackActive()
+        ? livePps.map((pp) => pp.releaseIdle()) : [];
+      for (const pp of livePps) { frozen.push([pp, pp.size]); pp.size = pp.conns.length + pp.connecting; }
+      if (releases.length) await Promise.all(releases);
+      const liveOpen = livePps.reduce((n, pp) => n + pp.conns.length + pp.connecting, 0);
+      const headroom = Math.max(0, configured - liveOpen);
+      const want = Math.min(clampInt(b.maxConns, configured, 1, Math.min(configured, SPEEDTEST_MAX_CONNS)), headroom);
+      if (want < 1) {
+        return send(ctx.res, 200, { ok: false, host: p.host, reservedByPlayback: liveOpen,
+          error: `all ${configured} connections are currently in use by active playback — stop a stream and retry` });
+      }
       const r = await speedTestProvider(p, { targetConns: want });
       if (r && r.ok !== false && Number(r.mbpsPerConn) > 0) {
         lastMeasuredProviderSpeed.mbpsPerConn = Math.max(
@@ -9332,7 +9561,7 @@ Object.assign(H, {
       send(ctx.res, 200, { ok: false, host: p.host, error: e.message });
     } finally {
       speedTestInFlight.delete(b.index);
-      if (livePp) { livePp.size = origSize; livePp._pump(); }
+      for (const [pp, size] of frozen) { pp.size = size; try { pp._pump(); } catch {} }
     }
   },
 
@@ -9535,7 +9764,9 @@ Object.assign(H, {
           host: e.host ? String(e.host) : cur.host,
           port: parseInt(e.port, 10) || cur.port,
           tls: e.tls !== undefined ? !!e.tls : cur.tls,
-          user: e.user !== undefined ? String(e.user) : cur.user,
+          // The edit form shows the saved name as blank (the GET redacts it), so a blank or
+          // missing name keeps the saved one, like the password. clearUser removes it on purpose.
+          user: e.clearUser === true ? '' : (e.user !== undefined && String(e.user).trim() ? String(e.user) : cur.user),
           pass: e.pass ? String(e.pass) : cur.pass,
           connections: providerConnections(e.connections, cur.connections || 16),
           backup: e.backup !== undefined ? e.backup === true : cur.backup === true,
@@ -9582,7 +9813,7 @@ Object.assign(H, {
       }
       return next;
     });
-    pool = null; poolKey = ''; // provider change → fresh pool next use
+    retirePoolIfProvidersChanged(); // provider change → fresh pool next use; running mounts keep theirs
     // Indexer/provider changes invalidate cached searches — otherwise a freshly added
     // indexer is invisible (and tests of a replaced one read stale results) for 60s.
     pipeline.searchCache.clear();
@@ -10021,7 +10252,11 @@ Object.assign(H, {
 
     // Per-mount HLS sessions, keyed by (start,audio) so a seek spins up its own window.
     vf._hls = vf._hls || new Map();
-    const key = `${Math.floor(sessionStart)}:${audioTrack}:${jellyfinPlaylist ? 'vod' : 'roll'}`;
+    // One millisecond value for the session key AND the rewritten segment query, so a list and its
+    // segments meet the same session. A floored key let two starts inside one second share a window
+    // that began up to a second early (SUBG-1). sessionStart itself still goes to ffmpeg unchanged.
+    const startKey = Math.round(sessionStart * 1000) / 1000;
+    const key = `${startKey}:${audioTrack}:${jellyfinPlaylist ? 'vod' : 'roll'}`;
 
     // --- segment / init request: serve the file from the session dir with Range + CORS.
     if (fileReq) {
@@ -10204,7 +10439,7 @@ Object.assign(H, {
     // Rewrite bare segment/init filenames to tokened, same-scope route URLs the receiver can pull.
     const token = ctx.url.searchParams.get('t') || auth.streamToken(ctx.claims.uid, vf.id);
     const vod = jellyfinPlaylist ? '&vod=1' : '';
-    const q = `?t=${encodeURIComponent(token)}&start=${Math.floor(sessionStart)}&audio=${audioTrack}${vod}`;
+    const q = `?t=${encodeURIComponent(token)}&start=${startKey}&audio=${audioTrack}${vod}`;
     // Keep the movie id on every piece. The phone reads it from the address,
     // and a piece without one makes play say "source error".
     const movie = ctx.m[2] ? `/${ctx.m[2]}` : '';
@@ -11463,6 +11698,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/mount$/, auth: 'admin', h: H.mount },
   { m: 'GET', re: /^\/api\/settings$/, auth: 'admin', h: H.settingsGet },
   { m: 'POST', re: /^\/api\/settings$/, auth: 'admin', h: H.settingsSet },
+  { m: 'POST', re: /^\/api\/settings\/side-copy\/dismiss$/, auth: 'admin', h: H.settingsSideCopyDismiss },
   { m: 'GET', re: /^\/api\/settings\/jellyfin-cover\/([a-z-]+)$/, auth: 'admin', h: H.jellyfinCoverGet },
   { m: 'POST', re: /^\/api\/settings\/jellyfin-cover\/([a-z-]+)$/, auth: 'admin', h: H.jellyfinCoverSet },
   { m: 'DELETE', re: /^\/api\/settings\/jellyfin-cover\/([a-z-]+)$/, auth: 'admin', h: H.jellyfinCoverClear },
@@ -11641,7 +11877,7 @@ function kickJellyfinOnlineSub(vf, spec) {
 function jellyfinSubtitleWarm(ctx, mountId, spec) {
   const vf = mounts.get(String(mountId || ''));
   if (!vf || !ctx || !ctx.user || !spec || !spec.tmdbId || !effectiveOpenSubsKey()) return;
-  if (vf._ownerUid && vf._ownerUid !== ctx.user.id && ctx.user.role !== 'admin') return;
+  if (vf._ownerUid && !mountViewerOk(vf, ctx.user.id) && ctx.user.role !== 'admin') return;
   const hasText = (vf.releaseSubs || []).some((sub) => sub && JELLYFIN_TEXT_SUB.has(String(sub.ext || '').toLowerCase()));
   if (!hasText) kickJellyfinOnlineSub(vf, spec);
 }
@@ -11670,7 +11906,7 @@ function probeMountTracks(vf, uid) {
 function jellyfinTracks(mountId, uid) {
   const vf = mounts.get(String(mountId || ''));
   if (!vf || !uid || !vf.streamable || !detectFfprobe()) return null;
-  if (vf._ownerUid && vf._ownerUid !== uid) return null;
+  if (vf._ownerUid && !mountViewerOk(vf, uid)) return null;
   return probeMountTracks(vf, uid).catch(() => null);
 }
 
@@ -12223,6 +12459,18 @@ const server = http.createServer(async (req, res) => {
           ctx.directGrant = true;
           return await route.h(ctx);
         }
+        // A caption address carries a stream token bound to its one mount (F2-1). It is
+        // accepted only on the caption route and only for the mount in the path.
+        if (!claims && route.kind === 'subtitle' && token) {
+          const streamClaims = auth.verifyToken(token, 'stream');
+          const sub = streamClaims ? String(streamClaims.sub || '').toLowerCase() : '';
+          const streamUser = streamClaims ? auth.getUser(streamClaims.uid) : null;
+          if (sub && ctx.m && sub === String(ctx.m[2] || '') && streamUser && auth.claimsValidForUser(streamClaims, streamUser)) {
+            ctx.user = streamUser;
+            ctx.claims = streamClaims;
+            return await route.h(ctx);
+          }
+        }
         if (!claims) return reject(401, { error: 'authentication required' });
         ctx.claims = claims;
         ctx.user = auth.getUser(claims.uid);
@@ -12388,6 +12636,7 @@ function sweep(now = Date.now()) {
     }
   }
   for (const [url, id] of pipeline.mountByUrl) if (!mounts.has(id)) pipeline.mountByUrl.delete(url);
+  if (retiredPools.size) closeIdleRetiredPools(now);
   for (const [id, s] of pipeline.sessions) if (now - (s.createdAt || 0) > SESSION_TTL_MS) pipeline.sessions.delete(id);
   // Activity/presence are otherwise pruned only when an admin polls /api/activity — collect stale
   // rows here too so the maps can't accumulate on a server whose admin never opens the screen.
@@ -12491,6 +12740,8 @@ async function shutdown() {
   cleanupYtCookieFiles();
   for (const vf of mounts.values()) releaseMountResources(vf); // cancel warm jobs + HLS ffmpeg/temp dirs
   if (pool) { pool.close(); pool = null; }
+  for (const old of retiredPools.keys()) { try { old.close(); } catch {} }
+  retiredPools.clear();
   libraryDb.close();
   store.close();
   await store.settled();
@@ -12499,6 +12750,7 @@ async function shutdown() {
 
 module.exports = {
   server, mounts, pipeline, getPool, shutdown, sweep, releasePlaySession, releaseUserPlaySessions, sharedUserPlay, resumeFracFromBody,
+  playbackPolicyFor,
   ROUTES: ROUTES.concat(JELLYFIN_ROUTES), auth, settings, store,
   warmIptvCaches, msUntilNextIptvWarm, rewriteIptvHlsPlaylist,
   normalizeIp, isPrivateIp, clientIpForGeo, geoLocate, geoCacheKey, viewerGeolocationEnabled,

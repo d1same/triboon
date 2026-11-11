@@ -236,6 +236,27 @@ playback-failed verdict. A stall also reads `GET /api/health/:id?cached=1`
 already `blocked`. One corrupt copy mixed with a timeout, reset, refused
 login, or unreachable provider is still retried, not killed.
 
+**Pool rebuilds and retirement (2026-11-10, audit S3-1).** `getPool()` keys the
+combined pool by host, port, TLS, user, a one-way fingerprint of the password,
+connections, pipelining depth and the backup flag. The raw password is never in
+the key, and the key is never logged. A settings save that changes none of these
+keeps the pool: it no longer drops the pool on every save, which used to leave
+the running streams on an orphaned pool while the next Play built a second one
+on the same accounts (up to twice the plan). When a provider edit does change
+the key, the old pool is retired, not closed: mounts that are playing keep
+reading through it, and it closes once no mount uses it (the sweep and every
+mount release check this; a pool with work still in flight gets two minutes of
+grace). Shutdown closes the current pool and every retired one. Owner decision
+D-05. Because a kept pool holds idle logged-in lines, the admin "Test speed"
+button first logs out that account's idle lines (`ProviderPool.releaseIdle()`:
+nothing busy, dialing or queued; QUIT, then a bounded destroy) when no player is
+active, then freezes the pool at what is left for the test and restores it after.
+"Active" is an open player read on a Usenet mount or a live Triboon player
+heartbeat (paused players keep sending it); a recent read alone does not count.
+With a player active it refuses as before. It matches the tested account by
+host, port, user and TLS, never by list index. Known gap: an outside (Jellyfin)
+client that closed its request is not seen as active.
+
 **Backup only accounts (2026-09-28).** Settings → Usenet providers has a
 per-account **Backup only** checkbox (`providers[].backup`, boolean, default
 false; part of the pool rebuild key). `_ordered()` sorts as before, then

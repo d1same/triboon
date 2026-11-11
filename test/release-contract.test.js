@@ -224,6 +224,25 @@ test('release contract: Android in-app updates verify repository, identity, sign
     'the updater bounds a malicious or corrupt download');
 });
 
+test('release contract: B15A-01 A1-1 Android 9 and 10 read the update signer through the old flag when signingInfo is empty', () => {
+  const activity = read('android/app/src/main/java/app/triboon/tv/MainActivity.java');
+  const policy = read('android/app/src/main/java/app/triboon/tv/UpdateVerifier.java');
+  const start = activity.indexOf('private boolean verifyDownloadedUpdate(');
+  const end = activity.indexOf('private String sha256Hex(', start);
+  assert.ok(start > 0 && end > start, 'verifyDownloadedUpdate is present');
+  const verify = activity.slice(start, end);
+  assert.match(verify, /PackageManager\.GET_SIGNING_CERTIFICATES\s*\|\s*android\.content\.pm\.PackageManager\.GET_SIGNATURES/,
+    'on API 28+ the archive is read with both the new and the old signer flag');
+  assert.doesNotMatch(verify, /candidate\.signingInfo == null\) return false/,
+    'an empty signingInfo (Android 9/10 archives) no longer refuses the update by itself');
+  assert.match(verify, /candidate\.signingInfo != null[\s\S]+getApkContentsSigners\(\)[\s\S]+candidate\.signatures[\s\S]+UpdateVerifier\.pickSingleSigner\(/,
+    'the new signer list is read first and the old candidate.signatures only as a fallback');
+  assert.match(verify, /if \(signerCert == null\) return false;[\s\S]+sha256Hex\(signerCert\)[\s\S]+UpdateVerifier\.metadataAllowed\(/,
+    'no readable single signer still refuses; the pinned release fingerprint check is unchanged');
+  assert.match(policy, /static byte\[\] pickSingleSigner\(byte\[\]\[\] signingInfoSigners, byte\[\]\[\] legacySigners\)/,
+    'the signer choice is a pure helper the JVM tests cover');
+});
+
 test('release contract: local APK publishing cannot ship a debug build or overwrite assets', () => {
   const release = read('bench/cut-apk-release.ps1');
   const workflow = read('.github/workflows/docker.yml');

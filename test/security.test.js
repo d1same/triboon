@@ -212,7 +212,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['POST', '/api/me/totp/disable'], ['POST', '/api/me/totp/recovery'], ['GET', '/api/status'], ['GET', '/api/search?q=x'],
     ['POST', '/api/play'], ['POST', '/api/play/stop'], ['GET', '/api/playback-story'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
     ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['GET', '/api/watch-stats'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['GET', '/api/mounts'],
-    ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
+    ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'], ['POST', '/api/settings/side-copy/dismiss'],
     ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/libraries/search?q=x'], ['GET', '/api/libraries/local-lookup?key=tmdb:movie:1'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
@@ -242,7 +242,7 @@ test('security: role separation — user tokens cannot reach admin routes', asyn
     { token: inv.json.token, name: 'fam2', password: 'xxxx' });
   assert.strictEqual(reuse.status, 400);
 
-  for (const [m, p] of [['GET', '/api/settings'], ['POST', '/api/settings'], ['POST', '/api/invites'],
+  for (const [m, p] of [['GET', '/api/settings'], ['POST', '/api/settings'], ['POST', '/api/settings/side-copy/dismiss'], ['POST', '/api/invites'],
     ['GET', '/api/invites'], ['GET', '/api/users'], ['POST', '/api/mount'],
     ['POST', '/api/libraries'], ['DELETE', '/api/libraries/abc'], ['POST', '/api/streaming/recommend'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'],
@@ -503,6 +503,57 @@ test('watchlist: per-user toggle add/remove, isolation', async () => {
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/watchlist', null, admin)).json.length, 0, 'admin list unaffected');
 });
 
+test('login: an over-long sign-in name is refused before any throttle key is built; real names still sign in', async () => {
+  // Audit S2-11 (B03-01). Account creation refuses names over 128 characters, so 128 never rejects a real one.
+  const huge = await httpJson(srv.port, 'POST', '/api/login', { name: 'x'.repeat(100000), password: 'p' });
+  assert.strictEqual(huge.status, 400, 'a 100,000-character name is refused');
+  assert.strictEqual(huge.json.error, 'invalid credentials');
+  const edge = await httpJson(srv.port, 'POST', '/api/login', { name: 'y'.repeat(128), password: 'p' });
+  assert.strictEqual(edge.status, 401, 'a 128-character name is still an ordinary failed sign-in');
+  const ok = await httpJson(srv.port, 'POST', '/api/login', { name: 'fam', password: 'fam-pass' });
+  assert.strictEqual(ok.status, 200, 'a real account still signs in');
+});
+
+test('accounts: an invite accept with a name over the sign-in cap is refused and leaves the invite usable', async () => {
+  // Follow-up to B03-01: account creation and sign-in use one cap, so no account can be made that
+  // can never sign in.
+  const before = JSON.parse(fs.readFileSync(path.join(process.env.TRIBOON_DATA, 'users.json'), 'utf8')).list.length;
+  const inv = await httpJson(srv.port, 'POST', '/api/invites', {}, admin);
+  assert.strictEqual(inv.status, 200);
+  const long = await httpJson(srv.port, 'POST', '/api/invite/accept',
+    { token: inv.json.token, name: 'n'.repeat(129), password: 'long-pass1' });
+  assert.strictEqual(long.status, 400, 'a 129-character name is refused');
+  assert.match(long.json.error, /at most 128 characters/);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(process.env.TRIBOON_DATA, 'users.json'), 'utf8')).list.length, before,
+    'no account was made');
+  const ok = await httpJson(srv.port, 'POST', '/api/invite/accept',
+    { token: inv.json.token, name: 'capguest', password: 'capguest-pass1' });
+  assert.strictEqual(ok.status, 200, 'the same invite still works afterwards');
+});
+
+test('accounts: the boot warning names the id and length of a stored over-long sign-in name, never the name', () => {
+  const { Store } = require('../server/store');
+  const { Auth } = require('../server/auth');
+  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'triboon-longname-'));
+  const longName = 'Q'.repeat(135);
+  fs.writeFileSync(path.join(dir, 'users.json'), JSON.stringify({ maturitySchema: 2, list: [
+    { id: 'aaaaaaaaaaaa', name: longName, role: 'user', profiles: [] },
+    { id: 'bbbbbbbbbbbb', name: 'r'.repeat(128), role: 'user', profiles: [] },
+    { id: 'cccccccccccc', name: 'normal', role: 'admin', profiles: [] },
+  ] }));
+  const lines = [];
+  const orig = console.warn;
+  console.warn = (...a) => lines.push(a.join(' '));
+  try { new Auth(new Store(dir), 'test-secret-for-long-names'); }
+  finally { console.warn = orig; }
+  const hits = lines.filter((l) => l.includes('sign-in name of'));
+  assert.strictEqual(hits.length, 1, 'one warning, only for the over-long name');
+  assert.ok(hits[0].includes('aaaaaaaaaaaa') && hits[0].includes('135'), hits[0]);
+  assert.ok(!hits[0].includes(longName.slice(0, 20)), 'the name itself is never logged');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'users.json'), 'utf8')).list[0].name, longName,
+    'the stored name is not cut or renamed');
+});
+
 test('settings ops: add/remove multiple providers and indexers, secrets never round-trip', async () => {
   // add two providers with different connection limits via ops
   await httpJson(srv.port, 'POST', '/api/settings', { addProvider: { host: 'news.a.com', port: 563, user: 'u1', pass: 'p-one-secret', connections: 30 } }, admin);
@@ -524,6 +575,14 @@ test('settings ops: add/remove multiple providers and indexers, secrets never ro
   assert.ok(!s.json.providers.some((p) => p.host === 'news.b.com'), 'provider removed');
   // restore single test provider for later tests
   await httpJson(srv.port, 'POST', '/api/settings', { providers: [{ host: '127.0.0.1', port: nntpPort, tls: false, user: 'u', pass: 'super-secret-pass', connections: 4 }] }, admin);
+});
+
+test('settings: the admin settings answer reports the unreadable-settings state (healthy server: off)', async () => {
+  // Audit F1-01: the admin banner reads these two fields. On a healthy server both are off.
+  const s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(s.status, 200);
+  assert.strictEqual(s.json.settingsUnreadable, false, 'healthy settings are not flagged');
+  assert.strictEqual(s.json.settingsSideCopy, null, 'no side copy on a healthy server');
 });
 
 test('settings save preserves per-user YouTube Music cookies (admin save must not wipe them)', async () => {
@@ -2019,6 +2078,18 @@ test('search: quality policy ranks 1080p and 4K consistently and returns stable 
   ix.close();
 });
 
+test('search: a browser that reports no HEVC decode carries browserHevc:false into the policy; others do not (DEV-1)', () => {
+  assert.strictEqual(typeof srv.playbackPolicyFor, 'function', 'playbackPolicyFor is exported for this test');
+  const user = { policy: {} };
+  const web = { mkv: true, hevc: false, ac3: false, eac3: false, dts: false };
+  assert.strictEqual(srv.playbackPolicyFor(user, { caps: web }).browserHevc, false, 'a browser that said no to HEVC');
+  assert.strictEqual(srv.playbackPolicyFor(user, { caps: { ...web, hevc: true } }).browserHevc, undefined, 'a browser that decodes HEVC');
+  assert.strictEqual(srv.playbackPolicyFor(user, {}).browserHevc, undefined, 'no caps sent (Jellyfin and others) stays unchanged');
+  assert.strictEqual(srv.playbackPolicyFor(user, { caps: { mkv: true } }).browserHevc, undefined, 'a missing hevc key is not a "no"');
+  assert.strictEqual(srv.playbackPolicyFor(user, { caps: { native: true, hevc: false, web } }).browserHevc, undefined,
+    'native clients keep their own device rules');
+});
+
 test('admin: connection tests for saved providers/indexers; daily API limit gates the fan-out', async () => {
   // Provider 0 is the env-bootstrapped mock NNTP — test must succeed with a latency figure.
   const okP = (await httpJson(srv.port, 'POST', '/api/test/provider', { index: 0 }, admin)).json;
@@ -2066,6 +2137,142 @@ test('admin: connection tests for saved providers/indexers; daily API limit gate
   }, admin);
 });
 
+// S3-1 (B04-01): a settings save keeps the pool, so its idle logged-in lines stay open. The speed
+// test may log those out first, but only when no player is active; it never counts a mere recent
+// read as playback, and it only touches the pool entry of the account it tests.
+async function warmSpeedTestEntry(entry, n) {
+  // A pool nobody played on keeps one login (household cap 1); Play raises it. Raise it like Play.
+  if (entry.household && entry._playbackCap() && entry._playbackCap() < n) entry.household.setPlaybackOpenCap(n);
+  entry.warm(n);
+  for (let i = 0; i < 200 && (entry.conns.length < n || entry.connecting); i++) await new Promise((r) => setTimeout(r, 10));
+  assert.strictEqual(entry.conns.length, n, `${n} idle logged-in lines are open before the speed test`);
+}
+async function speedTestMount() {
+  const m = await httpBinary(srv.port, 'POST', '/api/mount', Buffer.from(RELEASE.nzb), admin, 'application/x-nzb');
+  assert.strictEqual(m.status, 200, `mount: ${m.raw}`);
+  const vf = srv.mounts.get(m.json.id);
+  assert.ok(vf, 'the mount exists');
+  return vf;
+}
+async function settlePool(pl) {
+  for (let i = 0; i < 300; i++) {
+    const busy = pl.providers.some((pp) => pp.busy.size || pp.connecting || pp.queue.length);
+    if (!busy) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+test('speed test: kept idle lines and only a recent read: it logs them out, tests, and the pool works after (S3-1)', async () => {
+  const vf = await speedTestMount();
+  const pl = srv.getPool();
+  await settlePool(pl);
+  const entry = pl.providers[0];
+  await warmSpeedTestEntry(entry, 4);
+  const before = entry.conns.slice();
+  const sizeBefore = entry.size;
+  vf._activeStreamReads = 0; vf._playbackTouched = Date.now(); // read a second ago, no open read now
+  const speed = (await httpJson(srv.port, 'POST', '/api/test/provider-speed', { index: 0, maxConns: 2 }, admin)).json;
+  assert.strictEqual(speed.ok, true, JSON.stringify(speed));
+  assert.ok(speed.connections >= 1 && speed.connections <= 2, 'the test opened its own bounded lines');
+  assert.ok(before.every((c) => !entry.conns.includes(c) && c.alive === false), 'the idle lines were logged out first');
+  assert.strictEqual(entry.size, sizeBefore, 'the pool size is restored after the test');
+  assert.strictEqual(srv.getPool(), pl, 'the same pool is kept');
+  const msgId = [...RELEASE.articles.keys()][0];
+  const body = await pl.body(msgId, 'background');
+  assert.ok(body && body.length > 0, 'the next read dials again and works');
+  assert.ok(entry.conns.length >= 1, 'the pool opened a line again');
+});
+
+// Review R6 (B04-01): a Play that lands while the pool is frozen for the speed test keeps the
+// full-capacity probe (no line is reserved), but its queued work must start as soon as the test
+// ends, without another read or save to wake the pool.
+test('speed test: work queued during the freeze starts when the test ends, with no other trigger (S3-1)', async () => {
+  const vf = await speedTestMount();
+  const pl = srv.getPool();
+  await settlePool(pl);
+  const entry = pl.providers[0];
+  await warmSpeedTestEntry(entry, 4);
+  const sizeBefore = entry.size;
+  vf._activeStreamReads = 0; vf._playbackTouched = Date.now();
+  const speedP = httpJson(srv.port, 'POST', '/api/test/provider-speed', { index: 0, maxConns: 2 }, admin);
+  for (let i = 0; i < 400 && entry.size === sizeBefore; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.notStrictEqual(entry.size, sizeBefore, 'precondition: the pool is frozen for the test');
+  const msgId = [...RELEASE.articles.keys()][1];
+  let bodyAt = 0;
+  const bodyP = pl.body(msgId, 'playback').then((b) => { bodyAt = Date.now(); return b; });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.ok(bodyAt === 0 && entry.queue.length >= 1, 'precondition: the read waits in the frozen pool\'s queue');
+  const speed = (await speedP).json;
+  const speedAt = Date.now();
+  assert.strictEqual(speed.ok, true, JSON.stringify(speed));
+  assert.strictEqual(entry.size, sizeBefore, 'the pool size is restored after the test');
+  const body = await Promise.race([bodyP, new Promise((r) => setTimeout(() => r(null), 5000))]);
+  assert.ok(body && body.length > 0, 'the queued read finished on its own after the test');
+  assert.ok(bodyAt - speedAt < 3000, `it started at once, not on a later trigger (${bodyAt - speedAt}ms after the test)`);
+});
+
+test('speed test: an open player read still refuses and keeps every line (S3-1)', async () => {
+  const pl = srv.getPool();
+  await settlePool(pl);
+  const entry = pl.providers[0];
+  await warmSpeedTestEntry(entry, 4);
+  const before = entry.conns.slice();
+  const vf = [...srv.mounts.values()].find((m) => m && !m._local && m.streamable);
+  assert.ok(vf, 'a Usenet mount exists');
+  vf._activeStreamReads = 1;
+  try {
+    const speed = (await httpJson(srv.port, 'POST', '/api/test/provider-speed', { index: 0, maxConns: 2 }, admin)).json;
+    assert.strictEqual(speed.ok, false, JSON.stringify(speed));
+    assert.match(speed.error, /currently in use by active playback/);
+    assert.ok(before.every((c) => entry.conns.includes(c) && c.alive), 'no line was logged out under a player');
+  } finally { vf._activeStreamReads = 0; }
+});
+
+test('speed test: a live player heartbeat (paused or full buffer) still refuses (S3-1)', async () => {
+  const pl = srv.getPool();
+  await settlePool(pl);
+  const entry = pl.providers[0];
+  await warmSpeedTestEntry(entry, 4);
+  const before = entry.conns.slice();
+  const sessionId = 's31-speedtest-heartbeat';
+  const hb = await httpJson(srv.port, 'POST', '/api/activity', {
+    sessionId, state: 'watching', title: 'Paused Movie', type: 'movie', key: 'tmdb:movie:31', position: 600, duration: 6000,
+  }, admin);
+  assert.strictEqual(hb.status, 200, hb.raw);
+  try {
+    const speed = (await httpJson(srv.port, 'POST', '/api/test/provider-speed', { index: 0, maxConns: 2 }, admin)).json;
+    assert.strictEqual(speed.ok, false, JSON.stringify(speed));
+    assert.match(speed.error, /currently in use by active playback/);
+    assert.ok(before.every((c) => entry.conns.includes(c) && c.alive), 'no line was logged out under a paused player');
+  } finally {
+    await httpJson(srv.port, 'POST', '/api/activity', { sessionId, state: 'stopped' }, admin);
+  }
+});
+
+test('speed test: it acts on the tested account, never on another account at the same list index (S3-1)', async () => {
+  const savedProviders = srv.settings.get().providers;
+  // Account 0 has no login, so the pool dials only account 1: pool.providers[0] is account 1.
+  const net = require('net');
+  const closedPort = await new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
+  srv.settings.update((s) => ({ ...s, providers: [
+    { host: '127.0.0.1', port: closedPort, tls: false, user: '', pass: '', connections: 4, backup: false },
+    { host: '127.0.0.1', port: nntpPort, tls: false, user: 's31-id', pass: 'pw', connections: 4, backup: false },
+  ] }));
+  try {
+    const pl = srv.getPool();
+    assert.strictEqual(pl.providers.length, 1, 'only the account with a login is in the pool');
+    const other = pl.providers[0];
+    await warmSpeedTestEntry(other, 4);
+    const before = other.conns.slice();
+    const speed = (await httpJson(srv.port, 'POST', '/api/test/provider-speed', { index: 0, maxConns: 2 }, admin)).json;
+    assert.ok(before.every((c) => other.conns.includes(c) && c.alive), "the other account's lines were not logged out");
+    assert.doesNotMatch(String(speed.error || ''), /in use by active playback/, "account 0 has no lines: the other account's lines are not its playback");
+    assert.strictEqual(other.size, 4, "the other account's pool size is untouched");
+  } finally {
+    srv.settings.update((s) => ({ ...s, providers: savedProviders }));
+  }
+});
+
 test('settings: edit provider/indexer in place — blank secret keeps the saved one', async () => {
   // Indexer: rename + change URL/limits with a BLANK apikey → key must survive the edit.
   await httpJson(srv.port, 'POST', '/api/settings', {
@@ -2111,6 +2318,79 @@ test('settings: edit provider/indexer in place — blank secret keeps the saved 
   assert.strictEqual(srv.settings.get().providers[idx + 1].backup, false, 'only a real true means backup (no truthy strings)');
   await httpJson(srv.port, 'POST', '/api/settings', { removeProvider: idx + 1 }, admin);
   await httpJson(srv.port, 'POST', '/api/settings', { removeProvider: idx }, admin); // leave others untouched
+});
+
+test('settings: editing a provider with a blank username keeps the saved login (W6-1)', async () => {
+  const idx = srv.settings.get().providers.length;
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    addProvider: { host: 'w61.example', port: 563, user: 'u', pass: 'pw', connections: 8 },
+  }, admin);
+  try {
+    // The exact body the Settings page sent before the fix: the edit form shows the name as blank.
+    const r = await httpJson(srv.port, 'POST', '/api/settings', {
+      editProvider: { index: idx, host: 'w61.example', port: 563, tls: true, user: '', pass: '', connections: 12, backup: false },
+    }, admin);
+    assert.strictEqual(r.status, 200, r.raw);
+    const p = srv.settings.get().providers[idx];
+    assert.ok(p.user === 'u', 'a blank username in an edit keeps the saved one');
+    assert.ok(p.pass === 'pw', 'a blank password in an edit keeps the saved one');
+    assert.strictEqual(p.connections, 12);
+    const view = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+    assert.strictEqual(view.json.providers[idx].user, '•••', 'the Settings page still sees a saved login');
+    // An edit that leaves the username out also keeps it; a new name replaces it.
+    await httpJson(srv.port, 'POST', '/api/settings', { editProvider: { index: idx, connections: 6 } }, admin);
+    assert.ok(srv.settings.get().providers[idx].user === 'u', 'an edit without a username keeps the saved one');
+    await httpJson(srv.port, 'POST', '/api/settings', { editProvider: { index: idx, user: 'u2' } }, admin);
+    assert.ok(srv.settings.get().providers[idx].user === 'u2', 'a typed username replaces the saved one');
+    // Removing the login on purpose (IP-based access) needs the explicit flag.
+    await httpJson(srv.port, 'POST', '/api/settings', { editProvider: { index: idx, clearUser: true } }, admin);
+    assert.ok(srv.settings.get().providers[idx].user === '', 'clearUser removes the saved username');
+    assert.ok(srv.settings.get().providers[idx].pass === 'pw', 'clearUser leaves the password rule alone');
+  } finally {
+    await httpJson(srv.port, 'POST', '/api/settings', { removeProvider: idx }, admin);
+  }
+});
+
+test('nntp pool: unrelated settings saves keep the pool; a replaced pool retires until its mounts end (S3-1)', async () => {
+  const savedProviders = srv.settings.get().providers;
+  const closed = (pool) => pool.providers.every((p) => p.closed === true);
+  const mock = { host: '127.0.0.1', port: nntpPort, tls: false, user: '', pass: 'pool-pw-1', connections: 4, backup: false };
+  srv.settings.update((s) => ({ ...s, providers: [mock] }));
+  let mountId = null;
+  try {
+    const p1 = srv.getPool();
+    // 1. A save that changes no provider keeps the same pool (no second pool on the same accounts).
+    const save = await httpJson(srv.port, 'POST', '/api/settings', { openSubsKey: null }, admin);
+    assert.strictEqual(save.status, 200, save.raw);
+    assert.strictEqual(srv.getPool(), p1, 'an unrelated settings save must keep the NNTP pool');
+    // 2. A password-only edit still rebuilds the pool (the key carries a one-way fingerprint).
+    await httpJson(srv.port, 'POST', '/api/settings', { editProvider: { index: 0, pass: 'pool-pw-2' } }, admin);
+    const p2 = srv.getPool();
+    assert.notStrictEqual(p2, p1, 'a password-only edit must build a fresh pool');
+    assert.ok(closed(p1), 'a retired pool with no mount is closed at once');
+    // 3. A mount holds p2; a connections edit replaces the pool but must not cut the mount.
+    const m = await httpBinary(srv.port, 'POST', '/api/mount', Buffer.from(RELEASE.nzb), admin, 'application/x-nzb');
+    assert.strictEqual(m.status, 200, `mount: ${m.raw}`);
+    mountId = m.json.id;
+    await httpJson(srv.port, 'POST', '/api/settings', { editProvider: { index: 0, connections: 6 } }, admin);
+    const p3 = srv.getPool();
+    assert.notStrictEqual(p3, p2, 'a connections edit builds a fresh pool');
+    srv.sweep();
+    assert.ok(!closed(p2), 'the old pool stays open while a mount still uses it');
+    const vf = srv.mounts.get(mountId);
+    assert.ok(vf, 'the mount is still there');
+    // Let the mount's own background triage finish so the pool has no work in flight.
+    for (let i = 0; i < 200; i++) { const st = p2.stats(); if (!st.inUse && !st.queued) break; await new Promise((r) => setTimeout(r, 25)); }
+    vf._touched = 0; vf.mountedAt = 0; // idle long enough for the sweep to release it
+    srv.sweep();
+    assert.ok(!srv.mounts.has(mountId), 'the sweep released the idle mount');
+    await new Promise((r) => setImmediate(r));
+    assert.ok(closed(p2), 'the retired pool closes once its last mount is released');
+    assert.ok(!closed(p3), 'the current pool stays open');
+  } finally {
+    if (mountId && srv.mounts.has(mountId)) srv.mounts.delete(mountId);
+    srv.settings.update((s) => ({ ...s, providers: savedProviders }));
+  }
 });
 
 test('subtitles: diagnostic URL redaction never leaks the Wyzie API key', () => {
@@ -2453,6 +2733,37 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
     await httpJson(srv.port, 'POST', '/api/settings', { openSubsKey: null }, admin).catch(() => {});
     await new Promise((r) => osMock.close(r));
   }
+});
+
+test('mounts: every account that legitimately received a shared mount reads its tracks and health (S3-10)', async () => {
+  if (ixServer && ixServer.listening) await new Promise((r) => ixServer.close(() => r()));
+  const ixPort = await startIndexer();
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    indexers: [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  }, admin);
+  const login = async (name) => {
+    srv.auth.createUser({ name, password: `${name}-pass` });
+    const r = await httpJson(srv.port, 'POST', '/api/login', { name, password: `${name}-pass` });
+    assert.strictEqual(r.status, 200);
+    return r.json.token;
+  };
+  const a = await login('viewer-s310-a');
+  const b = await login('viewer-s310-b');
+  const c = await login('viewer-s310-c');
+  const playA = await httpJson(srv.port, 'POST', '/api/play', { q: 'Sec Test 2024' }, a);
+  assert.strictEqual(playA.status, 200, playA.raw);
+  const playB = await httpJson(srv.port, 'POST', '/api/play', { q: 'Sec Test 2024' }, b);
+  assert.strictEqual(playB.status, 200, playB.raw);
+  assert.strictEqual(playB.json.id, playA.json.id, 'both accounts receive the same shared mount');
+  const id = playA.json.id;
+  for (const [label, tok] of [['A', a], ['B', b]]) {
+    const tracks = await httpJson(srv.port, 'GET', `/api/tracks/${id}`, null, tok);
+    assert.strictEqual(tracks.status, 200, `${label} reads tracks: ${tracks.raw}`);
+    const health = await httpJson(srv.port, 'GET', `/api/health/${id}?cached=1`, null, tok);
+    assert.strictEqual(health.status, 200, `${label} reads health: ${health.raw}`);
+  }
+  assert.strictEqual((await httpJson(srv.port, 'GET', `/api/tracks/${id}`, null, c)).status, 404, 'an account that never played it gets 404');
+  assert.strictEqual((await httpJson(srv.port, 'GET', `/api/health/${id}?cached=1`, null, c)).status, 404);
 });
 
 test('settings: custom scoring — trusted-group override flips the auto-pick via the real API', async () => {
@@ -3161,6 +3472,61 @@ test('music: search uses ytmusicapi even for linked (cookie) users, returning th
   }
 });
 
+test('profiles: adding a profile above the caller\'s level needs the account password (F1-08)', async () => {
+  await httpJson(srv.port, 'POST', '/api/settings', { tmdbKey: 'gate-test-key' }, admin);
+  // In-process account: the shared server's invite-accept budget (10 per hour per address) is
+  // spent by earlier tests.
+  srv.auth.createUser({ name: 'family-f108', password: 'family-pass' });
+  const acc = await httpJson(srv.port, 'POST', '/api/login', { name: 'family-f108', password: 'family-pass' });
+  assert.strictEqual(acc.status, 200);
+  const tok = acc.json.token;
+  const me = async () => (await httpJson(srv.port, 'GET', '/api/me', null, tok)).json;
+  const adult = (await me()).profiles[0];
+  assert.strictEqual(adult.level, 4);
+  // The parent PIN-locks the adult profile and adds a PIN-less Kid profile.
+  assert.strictEqual((await httpJson(srv.port, 'POST', `/api/me/profiles/${adult.id}/pin`, { password: 'family-pass', pin: '4321' }, tok)).status, 200);
+  const kid = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'Kid', level: 0 }, tok);
+  assert.strictEqual(kid.status, 200, 'a profile at or below the caller level needs no password');
+  const count = async () => (await me()).profiles.length;
+  const before = await count();
+
+  // 1 and 2: the child, with no proof, cannot add a level-4 profile (with or without a PIN).
+  const plain = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'X' }, tok);
+  assert.strictEqual(plain.status, 400, `default level-4 add must be refused: ${plain.raw}`);
+  assert.match(plain.json.error, /account password/);
+  const pinned = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'Y', level: 4, pin: '1111' }, tok);
+  assert.strictEqual(pinned.status, 400, 'a level-4 add with a child-chosen PIN must be refused too');
+  const wrong = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'W', level: 3, password: 'nope' }, tok);
+  assert.strictEqual(wrong.status, 400, 'a wrong account password is refused');
+  assert.strictEqual(await count(), before, 'no profile was added');
+
+  // 3: a maturity-gated request with no proof is still refused.
+  const gated = await httpJson(srv.port, 'POST', '/api/prepare', { q: 'Restricted Movie', tmdbId: 990001, mediaType: 'movie' }, tok);
+  assert.strictEqual(gated.status, 403, `the cap stays: ${gated.raw}`);
+
+  // 4: with the account password the add works.
+  const ok = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'Grown', level: 4, password: 'family-pass' }, tok);
+  assert.strictEqual(ok.status, 200, ok.raw);
+  assert.strictEqual(ok.json.level, 4);
+  // 5: at or below the caller's level no password is needed.
+  const low = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'Z', level: 0 }, tok);
+  assert.strictEqual(low.status, 200);
+  // A caller holding the adult profile's PIN proof is at level 4 and adds freely.
+  const proof = await httpJson(srv.port, 'POST', `/api/me/profiles/${adult.id}/verify`, { pin: '4321' }, tok);
+  assert.strictEqual(proof.status, 200, proof.raw);
+  const proofTok = proof.json.proof || proof.json.token;
+  assert.ok(proofTok, 'verify returns a profile proof');
+  const withProof = await new Promise((resolve, reject) => {
+    const body = JSON.stringify({ name: 'Parent2', level: 4 });
+    const req = http.request({ host: '127.0.0.1', port: srv.port, path: '/api/me/profiles', method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${tok}`, 'x-triboon-profile': proofTok } }, (res) => {
+      const chunks = []; res.on('data', (c) => chunks.push(c)); res.on('end', () => resolve({ status: res.statusCode, raw: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject); req.end(body);
+  });
+  assert.strictEqual(withProof.status, 200, `the PIN-proven adult needs no password: ${withProof.raw}`);
+});
+
 test('play/prepare: age gate blocks a restricted profile from over-level titles (server-side)', async () => {
   await httpJson(srv.port, 'POST', '/api/settings', { tmdbKey: 'gate-test-key' }, admin);
   const kid = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'GateKid', level: 0 }, admin);
@@ -3816,6 +4182,86 @@ test('fetchUrl: response-size cap aborts oversized bodies instead of buffering t
   big.close();
 });
 
+// B05-01 (G2-19): a remote that sends headers (and maybe part of the body) and then closes the
+// connection cleanly must not leave the call unsettled forever. Raw `net` servers, so the test
+// controls exactly what reaches the socket.
+function earlyCloseServer(write) {
+  const net = require('net');
+  const srv = net.createServer((sock) => {
+    sock.once('data', () => { write(sock); sock.end(); });
+    sock.on('error', () => {});
+  });
+  return new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
+}
+function settleWithin(promise, ms) {
+  let t = null;
+  const guard = new Promise((_, rej) => { t = setTimeout(() => rej(new Error('GUARD: never settled')), ms); });
+  return Promise.race([promise, guard]).finally(() => clearTimeout(t));
+}
+
+test('fetchUrl: a connection closed before the body is complete rejects on time (content-length, chunked, headers only)', async () => {
+  const { fetchUrl } = require('../server/newznab');
+  const cases = {
+    'content-length': (s) => s.write('HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n' + 'x'.repeat(12)),
+    chunked: (s) => s.write('HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n'),
+    'headers only': (s) => s.write('HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\n'),
+  };
+  for (const [name, write] of Object.entries(cases)) {
+    const srv = await earlyCloseServer(write);
+    let failures = 0;
+    try {
+      const t0 = Date.now();
+      const err = await settleWithin(
+        fetchUrl(`http://127.0.0.1:${srv.address().port}/api?apikey=SECRETKEY`, {
+          timeoutMs: 1000, deadlineMs: 1500,
+          validateUrl: () => ({ onFailure: () => { failures++; } }),
+        }).then(() => null, (e) => e),
+        3000,
+      );
+      assert.ok(err instanceof Error, `${name}: must reject, not resolve with a partial body`);
+      assert.ok(!/GUARD/.test(err.message), `${name}: must settle, got ${err.message}`);
+      assert.ok(Date.now() - t0 < 2000, `${name}: rejected within ~2s`);
+      assert.ok(!/SECRETKEY|apikey/.test(err.message), `${name}: no query string in the error`);
+      assert.ok(failures <= 1, `${name}: onFailure fired at most once (got ${failures})`);
+    } finally { srv.close(); }
+  }
+});
+
+test('fetchUrl: complete bodies and connection-close-delimited bodies still resolve', async () => {
+  const { fetchUrl } = require('../server/newznab');
+  const full = await earlyCloseServer((s) => s.write('HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello'));
+  const eof = await earlyCloseServer((s) => s.write('HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nuntil-eof'));
+  try {
+    const a = await settleWithin(fetchUrl(`http://127.0.0.1:${full.address().port}/`, { timeoutMs: 1000, deadlineMs: 1500 }), 3000);
+    assert.strictEqual(a.body.toString(), 'hello');
+    const b = await settleWithin(fetchUrl(`http://127.0.0.1:${eof.address().port}/`, { timeoutMs: 1000, deadlineMs: 1500 }), 3000);
+    assert.strictEqual(b.body.toString(), 'until-eof');
+  } finally { full.close(); eof.close(); }
+});
+
+test('trakt request: a connection closed before the body is complete rejects on time', async () => {
+  const { _request: tkReq } = require('../server/trakt');
+  const srv = await earlyCloseServer((s) => s.write('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{"a":'));
+  const oldBase = process.env.TRAKT_BASE;
+  process.env.TRAKT_BASE = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const t0 = Date.now();
+    const err = await settleWithin(tkReq('/x', { deadlineMs: 1500 }).then(() => null, (e) => e), 3000);
+    assert.ok(err instanceof Error, 'must reject, not resolve with a partial body');
+    assert.ok(!/GUARD/.test(err.message), `must settle, got ${err.message}`);
+    assert.ok(Date.now() - t0 < 2000, 'rejected within ~2s');
+    const ok = await earlyCloseServer((s) => s.write('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 8\r\n\r\n{"a":1}\n'));
+    process.env.TRAKT_BASE = `http://127.0.0.1:${ok.address().port}`;
+    try {
+      const r = await settleWithin(tkReq('/x', { deadlineMs: 1500 }), 3000);
+      assert.deepStrictEqual(r.json, { a: 1 }, 'a complete body still resolves');
+    } finally { ok.close(); }
+  } finally {
+    if (oldBase === undefined) delete process.env.TRAKT_BASE; else process.env.TRAKT_BASE = oldBase;
+    srv.close();
+  }
+});
+
 test('fetchUrl: validator-provided lookup pins the already-checked upstream address', async () => {
   const { fetchUrl } = require('../server/newznab');
   const up = http.createServer((req, res) => {
@@ -4445,6 +4891,199 @@ test('secret: existing secret is reused; an unreadable one never crashes the boo
   }
 });
 
+// Audit F1-01 (B01-02): settings that cannot be opened (changed/lost secret, damaged file) used to
+// read as empty defaults with no sign, and the FIRST settings write of any kind then replaced the
+// real blob for good. Now the state is flagged and the raw file is kept once before that write.
+const SETTINGS_DEFAULTS = { providers: [], indexers: [], tmdbKey: null };
+function settingsSideCopies(dir) { return fs.readdirSync(dir).filter((n) => /^settings\.json\.unreadable-.*\.keep$/.test(n)); }
+
+test('settings: a changed secret is flagged and the old blob is kept before the first write', () => {
+  const os = require('os');
+  const { Store } = require('../server/store');
+  const { SecureSettings } = require('../server/auth');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-settings-'));
+  new SecureSettings(new Store(dir), 'A'.repeat(64)).set({ providers: [{ host: 'h' }], indexers: [], tmdbKey: 'k' });
+  const original = fs.readFileSync(path.join(dir, 'settings.json'));
+  const s = new SecureSettings(new Store(dir), 'B'.repeat(64));
+  assert.deepStrictEqual(s.get(), SETTINGS_DEFAULTS, 'unreadable settings still read as defaults');
+  assert.strictEqual(s.unreadable, true, 'the unreadable state is flagged');
+  assert.strictEqual(s.sideCopyName(), null, 'no side copy before any write');
+  s.update((cur) => ({ ...cur, x: 1 }));
+  const sides = settingsSideCopies(dir);
+  assert.strictEqual(sides.length, 1, 'one side copy was made before the write');
+  assert.ok(original.equals(fs.readFileSync(path.join(dir, sides[0]))), 'the side copy holds the old bytes exactly');
+  assert.ok(!/\.json\.tmp\d+$/.test(sides[0]), 'the boot temp scrub never deletes the side copy');
+  assert.strictEqual(s.sideCopyName(), sides[0], 'the side copy is reported for the admin banner');
+  // The old secret still opens the kept copy: nothing is lost.
+  const back = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-settings-'));
+  fs.writeFileSync(path.join(back, 'settings.json'), fs.readFileSync(path.join(dir, sides[0])));
+  assert.strictEqual(new SecureSettings(new Store(back), 'A'.repeat(64)).get().providers[0].host, 'h');
+  // Later writes in the same process do not pile up copies.
+  s.update((cur) => ({ ...cur, x: 2 }));
+  assert.strictEqual(settingsSideCopies(dir).length, 1, 'no copy on every save');
+  assert.strictEqual(s.unreadable, false, 'the new blob opens with the current key');
+  // A later boot still finds the side copy for the banner.
+  assert.strictEqual(new SecureSettings(new Store(dir), 'B'.repeat(64)).sideCopyName(), sides[0]);
+});
+
+test('settings: a damaged settings file is flagged, kept, and the new save is served', () => {
+  const os = require('os');
+  const { Store } = require('../server/store');
+  const { SecureSettings } = require('../server/auth');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-settings-'));
+  fs.writeFileSync(path.join(dir, 'settings.json'), '{ not json');
+  const s = new SecureSettings(new Store(dir), 'A'.repeat(64));
+  assert.deepStrictEqual(s.get(), SETTINGS_DEFAULTS);
+  assert.strictEqual(s.unreadable, true, 'a damaged file is flagged');
+  s.update((cur) => ({ ...cur, tmdbKey: 'new' }));
+  const sides = settingsSideCopies(dir);
+  assert.strictEqual(sides.length, 1);
+  assert.strictEqual(fs.readFileSync(path.join(dir, sides[0]), 'utf8'), '{ not json', 'the damaged bytes are kept');
+  assert.strictEqual(s.get().tmdbKey, 'new', 'the new save is served, not the defaults');
+  assert.strictEqual(s.unreadable, false);
+});
+
+test('settings: if the side copy cannot be written, the settings write is refused and disk is unchanged', () => {
+  const os = require('os');
+  const { Store } = require('../server/store');
+  const { SecureSettings } = require('../server/auth');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-settings-'));
+  new SecureSettings(new Store(dir), 'A'.repeat(64)).set({ providers: [{ host: 'h' }], indexers: [], tmdbKey: 'k' });
+  const original = fs.readFileSync(path.join(dir, 'settings.json'));
+  const s = new SecureSettings(new Store(dir), 'B'.repeat(64));
+  const realWrite = fs.writeFileSync;
+  let refused = 0;
+  fs.writeFileSync = (file, ...rest) => {
+    if (String(file).includes('.unreadable-') && !refused++) { const e = new Error('EPERM: locked'); e.code = 'EPERM'; throw e; }
+    return realWrite(file, ...rest);
+  };
+  try {
+    assert.throws(() => s.update((cur) => ({ ...cur, tmdbKey: 'new' })), /settings/i, 'the caller sees an error');
+  } finally { fs.writeFileSync = realWrite; }
+  assert.strictEqual(refused, 1, 'the side copy was attempted');
+  assert.ok(original.equals(fs.readFileSync(path.join(dir, 'settings.json'))), 'the live settings.json is unchanged');
+  assert.deepStrictEqual(settingsSideCopies(dir), []);
+  assert.strictEqual(s.unreadable, true, 'still flagged');
+  // The next attempt (lock gone) keeps the copy and then writes.
+  s.update((cur) => ({ ...cur, tmdbKey: 'new' }));
+  assert.strictEqual(settingsSideCopies(dir).length, 1);
+  assert.strictEqual(s.get().tmdbKey, 'new');
+});
+
+test('settings: normal saves are never flagged and never make a side copy', () => {
+  const os = require('os');
+  const { Store } = require('../server/store');
+  const { SecureSettings } = require('../server/auth');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-settings-'));
+  const s = new SecureSettings(new Store(dir), 'A'.repeat(64));
+  assert.deepStrictEqual(s.get(), SETTINGS_DEFAULTS, 'a missing file is the normal first-run defaults');
+  assert.strictEqual(s.unreadable, false, 'a missing file is not unreadable');
+  s.set({ providers: [], indexers: [], tmdbKey: 'k' });
+  s.get(); s.get();
+  s.update((cur) => ({ ...cur, tmdbKey: 'k2' }));
+  assert.strictEqual(s.unreadable, false);
+  assert.deepStrictEqual(settingsSideCopies(dir), []);
+  assert.strictEqual(s.sideCopyName(), null);
+  assert.strictEqual(new SecureSettings(new Store(dir), 'A'.repeat(64)).get().tmdbKey, 'k2');
+});
+
+test('settings: safe mode (frozen store) never writes a side copy', () => {
+  const os = require('os');
+  const { Store } = require('../server/store');
+  const { SecureSettings } = require('../server/auth');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-settings-'));
+  new SecureSettings(new Store(dir), 'A'.repeat(64)).set({ providers: [{ host: 'h' }], indexers: [], tmdbKey: 'k' });
+  const original = fs.readFileSync(path.join(dir, 'settings.json'));
+  const store = new Store(dir);
+  store.freezeCriticalWrites = true;
+  const s = new SecureSettings(store, 'B'.repeat(64));
+  s.get();
+  assert.strictEqual(s.unreadable, true);
+  s.update((cur) => ({ ...cur, tmdbKey: 'new' }));
+  assert.deepStrictEqual(settingsSideCopies(dir), [], 'the frozen store touches nothing on disk');
+  assert.ok(original.equals(fs.readFileSync(path.join(dir, 'settings.json'))));
+});
+
+test('settings: a 0-byte or whitespace-only settings file is treated like a missing file (no flag, no side copy)', () => {
+  // Follow-up to B01-02 (review L1): an empty file holds nothing to recover, so flagging it and
+  // keeping a 0-byte copy only raised a false alarm in every server settings tab.
+  const os = require('os');
+  const { Store } = require('../server/store');
+  const { SecureSettings } = require('../server/auth');
+  for (const body of ['', '  \r\n\t  ']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-settings-'));
+    fs.writeFileSync(path.join(dir, 'settings.json'), body);
+    const s = new SecureSettings(new Store(dir), 'A'.repeat(64));
+    assert.deepStrictEqual(s.get(), SETTINGS_DEFAULTS, 'defaults, as for a missing file');
+    assert.strictEqual(s.unreadable, false, `not flagged (${JSON.stringify(body)})`);
+    s.update((cur) => ({ ...cur, tmdbKey: 'k' }));
+    assert.deepStrictEqual(settingsSideCopies(dir), [], `no side copy (${JSON.stringify(body)})`);
+    assert.strictEqual(s.sideCopyName(), null);
+    assert.strictEqual(new SecureSettings(new Store(dir), 'A'.repeat(64)).get().tmdbKey, 'k', 'the save landed');
+  }
+  // Any other content that does not open keeps the B01-02 behaviour.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-settings-'));
+  fs.writeFileSync(path.join(dir, 'settings.json'), ' x ');
+  const s = new SecureSettings(new Store(dir), 'A'.repeat(64));
+  s.get();
+  assert.strictEqual(s.unreadable, true, 'a non-blank damaged file is still flagged');
+  s.update((cur) => cur);
+  assert.strictEqual(settingsSideCopies(dir).length, 1, 'and still kept');
+});
+
+test('settings: hiding the side-copy notice keeps the file, survives a restart, and a newer copy shows it again', () => {
+  const os = require('os');
+  const { Store } = require('../server/store');
+  const { SecureSettings } = require('../server/auth');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-settings-'));
+  fs.writeFileSync(path.join(dir, 'settings.json'), '{ damaged one');
+  const s = new SecureSettings(new Store(dir), 'A'.repeat(64));
+  s.update((cur) => ({ ...cur, tmdbKey: 'k' }));
+  const [first] = settingsSideCopies(dir);
+  const bytes = fs.readFileSync(path.join(dir, first));
+  assert.deepStrictEqual(s.sideCopyNotice(), { copy: first, dismissed: false }, 'the notice shows for a new copy');
+  s.dismissSideCopyNotice(first);
+  assert.deepStrictEqual(s.sideCopyNotice(), { copy: first, dismissed: true }, 'hidden');
+  assert.ok(bytes.equals(fs.readFileSync(path.join(dir, first))), 'the kept file is byte-identical');
+  assert.deepStrictEqual(settingsSideCopies(dir), [first], 'the kept file is not deleted');
+  const again = new SecureSettings(new Store(dir), 'A'.repeat(64));
+  assert.deepStrictEqual(again.sideCopyNotice(), { copy: first, dismissed: true }, 'still hidden after a restart');
+  // A newer unreadable file makes a newer copy: its notice shows again.
+  fs.writeFileSync(path.join(dir, 'settings.json'), '{ damaged two');
+  const later = new SecureSettings(new Store(dir), 'A'.repeat(64));
+  later.update((cur) => cur);
+  const copies = settingsSideCopies(dir).sort();
+  assert.strictEqual(copies.length, 2);
+  assert.deepStrictEqual(later.sideCopyNotice(), { copy: copies[1], dismissed: false }, 'a newer copy brings the notice back');
+});
+
+test('secret: a new secret next to existing data, or an env secret that differs from secret.json, is warned about', () => {
+  const os = require('os');
+  const { Store } = require('../server/store');
+  const { Auth } = require('../server/auth');
+  const logs = [];
+  const realErr = console.error;
+  console.error = (...a) => { logs.push(a.join(' ')); };
+  try {
+    // secret.json lost, settings.json still there.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-secret-'));
+    fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ iv: 'x', tag: 'y', data: 'z' }));
+    const a = new Auth(new Store(dir));
+    assert.ok(logs.some((l) => /new secret/i.test(l) && /settings\.json/.test(l)), 'a fresh secret next to existing data is warned about');
+    assert.ok(!logs.some((l) => l.includes(a.secret)), 'the secret is never printed');
+    // Env secret differs from the one on disk.
+    logs.length = 0;
+    const envSecret = 'C'.repeat(64);
+    new Auth(new Store(dir), envSecret);
+    assert.ok(logs.some((l) => /TRIBOON_SECRET/.test(l) && /secret\.json/.test(l)), 'a differing env secret is warned about');
+    assert.ok(!logs.some((l) => l.includes(envSecret) || l.includes(a.secret)), 'neither value is printed');
+    // Same env secret as on disk: no warning.
+    logs.length = 0;
+    new Auth(new Store(dir), a.secret);
+    assert.ok(!logs.some((l) => /TRIBOON_SECRET/.test(l)), 'a matching env secret is quiet');
+  } finally { console.error = realErr; }
+});
+
 test('maturity migration never wipes an existing users.json when the read fails', () => {
   const os = require('os');
   const { Store } = require('../server/store');
@@ -4510,6 +5149,44 @@ test('security: a key flood cannot free a lock, and running counts go oldest fir
   assert.strictEqual(limiter.lockedMs('junk-4999'), 0, 'lockedMs counts nothing and reports no lock');
   assert.ok(limiter.hits.size <= 100, 'the table stays bounded');
   assert.strictEqual(limiter.hits.has('running'), false, 'the oldest running count went first');
+});
+
+test('security: a huge limiter key is stored short, and clear/lockedMs still find it', () => {
+  // Audit S2-11 (B03-01): sign-in names of up to 1 MB were kept whole as limiter keys, ~2 MB per
+  // failed attempt that was never freed, until the process ran out of memory.
+  const { RateLimiter } = require('../server/auth');
+  const limiter = new RateLimiter(100);
+  const long = 'login:' + 'x'.repeat(10000) + ':1.2.3.4';
+  const rule = { max: 1, windowMs: 60000, lockMs: 60000 };
+  limiter.check(long, rule);
+  for (const k of limiter.hits.keys()) assert.ok(k.length <= 200, `a stored key is at most 200 characters (saw ${k.length})`);
+  assert.strictEqual(limiter.check(long, rule).ok, false, 'the long key still counts and locks');
+  assert.ok(limiter.lockedMs(long) > 0, 'lockedMs finds the hashed entry');
+  limiter.clear(long);
+  assert.strictEqual(limiter.lockedMs(long), 0, 'clear finds the hashed entry');
+  assert.strictEqual(limiter.hits.size, 0);
+  // Two different long keys never share one entry.
+  limiter.check('a'.repeat(500), rule);
+  limiter.check('b'.repeat(500), rule);
+  assert.strictEqual(limiter.hits.size, 2);
+  // Short keys are stored as they are (other tests and callers read them back).
+  limiter.check('owner', rule);
+  assert.ok(limiter.hits.has('owner'));
+});
+
+test('security: finished limiter entries are swept, live locks and running counts stay', async () => {
+  const { RateLimiter } = require('../server/auth');
+  const limiter = new RateLimiter(100, { sweepMs: 5 });
+  for (let i = 0; i < 50; i++) limiter.check(`old-${i}`, { max: 5, windowMs: 1, lockMs: 1 });
+  limiter.check('owner', { max: 1, windowMs: 1, lockMs: 60000 });
+  limiter.check('owner', { max: 1, windowMs: 1, lockMs: 60000 }); // locked for a minute
+  limiter.check('running', { max: 5, windowMs: 60000 });
+  await new Promise((r) => setTimeout(r, 25));
+  limiter.check('new', { max: 5, windowMs: 60000 });
+  assert.ok(limiter.lockedMs('owner') > 0, 'a live lock is never swept');
+  assert.ok(limiter.hits.has('running'), 'a running count is never swept');
+  assert.ok(limiter.hits.has('new'));
+  assert.strictEqual(limiter.hits.size, 3, 'the 50 finished entries were swept');
 });
 
 test('security: an unknown name costs the same password work as a wrong password', () => {

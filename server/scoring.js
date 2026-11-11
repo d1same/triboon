@@ -373,6 +373,9 @@ function scoreRelease(candidate, policy = {}) {
   // AV1 hard at ALL resolutions so a decodable HEVC/AVC source always wins; keep it above the -100000
   // disqualify so an AV1-only title still plays (as a software-decoded last resort) rather than 404.
   if (policy.av1Hardware === false && a.codec === 'av1') add('no-av1-hardware-decode', -260);
+  // A browser that told the server it cannot decode HEVC (DEV-1): a video-copy remux would give it
+  // sound over a black picture. Prefer H.264; HEVC stays playable (it then goes to transcode).
+  if (policy.browserHevc === false && a.codec === 'hevc') add('browser-no-hevc', -150);
   // Soundtracks / bonus discs / bare music rips are never what "press play on a movie" means.
   const ntm = notTheMovie(candidate.name);
   if (ntm) add(`not-the-movie:${ntm}`, -100000);

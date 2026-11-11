@@ -719,6 +719,272 @@ test('e2e: remux mid-file Range past a short yEnc part keeps streaming', async (
   await mock.close();
 });
 
+// B06B-02 (E2G-1, E2G-8 part 1; owner answer D-02 = refuse and switch, plus the early grid check).
+// Every read path assumes piece i starts at i * partSize. Uneven yEnc parts used to be served
+// shifted or zero-padded with no log line. Now each case either reads identical bytes or refuses.
+function unevenRelease(name, sizes, { firstEndPlusOne = false } = {}) {
+  const total = sizes.reduce((s, n) => s + n, 0);
+  const data = Buffer.allocUnsafe(total);
+  let seed = 0x0dd5;
+  for (let i = 0; i < total; i++) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; data[i] = seed & 0xff; }
+  const articles = new Map();
+  const segs = [];
+  let begin = 0;
+  sizes.forEach((len, p) => {
+    let body = encodePart(data, { name, partNum: p + 1, totalParts: sizes.length, begin, end: begin + len, totalSize: total });
+    if (p === 0 && firstEndPlusOne) {
+      body = Buffer.from(body.toString('latin1').replace(/=ypart begin=1 end=\d+/, `=ypart begin=1 end=${len + 1}`), 'latin1');
+    }
+    const msgId = `u${p + 1}@uneven.test`;
+    articles.set(msgId, body);
+    segs.push(`<segment bytes="${body.length}" number="${p + 1}">${msgId}</segment>`);
+    begin += len;
+  });
+  const nzb = `<?xml version="1.0"?><nzb><file poster="t" date="1" subject="&quot;${name}&quot; yEnc (1/${sizes.length})"><groups><group>a.b.t</group></groups><segments>${segs.join('')}</segments></file></nzb>`;
+  return { data, articles, nzb };
+}
+function unevenPool(articles) {
+  return {
+    body(msgId) {
+      const raw = articles.get(String(msgId).replace(/[<>]/g, ''));
+      return raw ? Promise.resolve(raw) : Promise.reject(Object.assign(new Error('430'), { code: '430' }));
+    },
+  };
+}
+// Resolves to { bytes } or { err }; never lets a different byte string pass as a success.
+async function readOutcome(fn) {
+  try { return { bytes: await fn() }; } catch (err) { return { err }; }
+}
+
+test('vfs: uneven yEnc parts are refused (MISPLACED or blocked at mount), never served as shifted bytes', async () => {
+  const cases = [
+    [1000, 1000, 900, 1000, 1000, 1000],
+    [1000, 1000, 1100, 1000, 1000, 1000],
+    [1000, 998, 1003, 1001, 997, 1000, 1002, 999],
+    [900, 1000, 1000, 1000, 1000, 1000],
+  ];
+  for (const sizes of cases) {
+    const label = sizes.join(',');
+    const rel = unevenRelease('Uneven.mkv', sizes);
+    const outcomes = [];
+    for (const how of ['read', 'seek', 'readAt']) {
+      const vf = new VirtualFile(unevenPool(rel.articles), rel.nzb, { readAhead: 0 });
+      await vf.mount();
+      const out = await readOutcome(async () => {
+        if (how === 'readAt') return vf.readAt(4000, 200);
+        const [s, e, priority] = how === 'read' ? [0, vf.size, 'playback'] : [4000, 4500, 'seek'];
+        const parts = [];
+        for await (const c of vf.read(s, e, { priority })) parts.push(c);
+        return Buffer.concat(parts);
+      });
+      const want = how === 'read' ? rel.data : how === 'seek' ? rel.data.subarray(4000, 4500) : rel.data.subarray(4000, 4200);
+      if (out.bytes) assert.ok(out.bytes.equals(want), `${label} ${how}: resolved, so the bytes must be the source bytes`);
+      else assert.strictEqual(out.err && out.err.code, 'MISPLACED', `${label} ${how}: refused with the typed error (${out.err && out.err.message})`);
+      outcomes.push({ how, refused: !out.bytes, blockedAtMount: vf.deadPieceCount() > 0 });
+    }
+    assert.ok(outcomes.some((o) => o.refused || o.blockedAtMount), `${label}: the release is refused somewhere`);
+  }
+});
+
+test('vfs: even parts, a short last part and an off-by-one =ypart end on piece 0 read identical bytes', async () => {
+  const cases = [
+    { sizes: [1000, 1000, 1000, 1000, 1000, 1000] },
+    { sizes: [1000, 1000, 1000, 1000, 1000, 400] },
+    { sizes: [1000, 1000, 1000, 1000, 1000, 1000], firstEndPlusOne: true },
+  ];
+  for (const { sizes, firstEndPlusOne } of cases) {
+    const label = `${sizes.join(',')}${firstEndPlusOne ? ' (end+1)' : ''}`;
+    const rel = unevenRelease('Even.mkv', sizes, { firstEndPlusOne });
+    const vf = new VirtualFile(unevenPool(rel.articles), rel.nzb, { readAhead: 0 });
+    await vf.mount();
+    assert.strictEqual(vf.deadPieceCount(), 0, `${label}: a healthy post is not blocked at mount`);
+    const parts = [];
+    for await (const c of vf.read(0, vf.size, { priority: 'playback' })) parts.push(c);
+    assert.ok(Buffer.concat(parts).equals(rel.data), `${label}: full read is byte-identical`);
+    const seek = [];
+    for await (const c of vf.read(4000, 4500, { priority: 'seek' })) seek.push(c);
+    assert.ok(Buffer.concat(seek).equals(rel.data.subarray(4000, 4500)), `${label}: seek read is byte-identical`);
+    assert.ok((await vf.readAt(4000, 200)).equals(rel.data.subarray(4000, 4200)), `${label}: readAt is byte-identical`);
+  }
+});
+
+// Review R7 (note N6): some writers count =ypart offsets from 0 instead of 1. The Wave 1 base read
+// such a post with identical bytes; the strict begin check refused it at piece 2 ("starts at 999,
+// expected 1000"). `inclusiveEnd`: begin=0 end=999 (0-based inclusive); otherwise begin=0 end=1000.
+function zeroBasedRelease(name, sizes, { inclusiveEnd = true } = {}) {
+  const rel = unevenRelease(name, sizes);
+  const articles = new Map();
+  for (const [id, body] of rel.articles) {
+    const text = body.toString('latin1').replace(/=ypart begin=(\d+) end=(\d+)/,
+      (_, b, e) => `=ypart begin=${+b - 1} end=${inclusiveEnd ? +e - 1 : +e}`);
+    articles.set(id, Buffer.from(text, 'latin1'));
+  }
+  return { ...rel, articles };
+}
+
+test('vfs: a post whose =ypart offsets all count from 0 reads identical bytes and is not refused', async () => {
+  for (const sizes of [[1000, 1000, 1000, 1000, 1000, 600], [1000, 1000, 1000, 1000, 1000, 1000]]) {
+    for (const inclusiveEnd of [true, false]) {
+      const label = `${sizes.join(',')} ${inclusiveEnd ? 'end inclusive' : 'end exclusive'}`;
+      const rel = zeroBasedRelease('Zero.mkv', sizes, { inclusiveEnd });
+      for (const how of ['read', 'seek', 'readAt']) {
+        const vf = new VirtualFile(unevenPool(rel.articles), rel.nzb, { readAhead: 0 });
+        await vf.mount();
+        assert.strictEqual(vf.deadPieceCount(), 0, `${label} ${how}: not blocked at mount`);
+        let got;
+        if (how === 'readAt') got = await vf.readAt(4000, 200);
+        else {
+          const [s, e, priority] = how === 'read' ? [0, vf.size, 'playback'] : [4000, 4500, 'seek'];
+          const parts = [];
+          for await (const c of vf.read(s, e, { priority })) parts.push(c);
+          got = Buffer.concat(parts);
+        }
+        const want = how === 'read' ? rel.data : how === 'seek' ? rel.data.subarray(4000, 4500) : rel.data.subarray(4000, 4200);
+        assert.ok(got.equals(want), `${label} ${how}: byte-identical`);
+        assert.strictEqual(vf.deadPieceCount(), 0, `${label} ${how}: nothing marked dead after the read`);
+      }
+    }
+  }
+});
+
+// Review R7: begin=0 on piece 1 alone (the rest count from 1) is a lone off-by-one header. Both
+// earlier versions played it, so the first later piece decides the grid instead of piece 1.
+test('vfs: a post where only piece 1 says begin=0 (the rest count from 1) reads identical bytes', async () => {
+  for (const inclusiveEnd of [true, false]) {
+    const rel = unevenRelease('FirstZero.mkv', [1000, 1000, 1000, 1000, 1000, 600]);
+    const id = 'u1@uneven.test';
+    rel.articles.set(id, Buffer.from(rel.articles.get(id).toString('latin1').replace(/=ypart begin=1 end=(\d+)/,
+      (_, e) => `=ypart begin=0 end=${inclusiveEnd ? +e - 1 : +e}`), 'latin1'));
+    for (const how of ['read', 'seek', 'readAt']) {
+      const label = `${inclusiveEnd ? 'end inclusive' : 'end exclusive'} ${how}`;
+      const vf = new VirtualFile(unevenPool(rel.articles), rel.nzb, { readAhead: 0 });
+      await vf.mount();
+      let got;
+      if (how === 'readAt') got = await vf.readAt(4000, 200);
+      else {
+        const [s, e, priority] = how === 'read' ? [0, vf.size, 'playback'] : [4000, 4500, 'seek'];
+        const parts = [];
+        for await (const c of vf.read(s, e, { priority })) parts.push(c);
+        got = Buffer.concat(parts);
+      }
+      const want = how === 'read' ? rel.data : how === 'seek' ? rel.data.subarray(4000, 4500) : rel.data.subarray(4000, 4200);
+      assert.ok(got.equals(want), `${label}: byte-identical`);
+      assert.strictEqual(vf.deadPieceCount(), 0, `${label}: not blocked`);
+    }
+  }
+});
+
+test('vfs: a 0-based post with a really misplaced piece is still refused', async () => {
+  for (const sizes of [[1000, 1000, 900, 1000, 1000, 1000], [1000, 1000, 1100, 1000, 1000, 1000]]) {
+    const label = sizes.join(',');
+    const rel = zeroBasedRelease('ZeroUneven.mkv', sizes);
+    const outcomes = [];
+    for (const how of ['read', 'seek', 'readAt']) {
+      const vf = new VirtualFile(unevenPool(rel.articles), rel.nzb, { readAhead: 0 });
+      await vf.mount();
+      const out = await readOutcome(async () => {
+        if (how === 'readAt') return vf.readAt(4000, 200);
+        const [s, e, priority] = how === 'read' ? [0, vf.size, 'playback'] : [4000, 4500, 'seek'];
+        const parts = [];
+        for await (const c of vf.read(s, e, { priority })) parts.push(c);
+        return Buffer.concat(parts);
+      });
+      const want = how === 'read' ? rel.data : how === 'seek' ? rel.data.subarray(4000, 4500) : rel.data.subarray(4000, 4200);
+      if (out.bytes) assert.ok(out.bytes.equals(want), `${label} ${how}: resolved, so the bytes must be the source bytes`);
+      else assert.strictEqual(out.err && out.err.code, 'MISPLACED', `${label} ${how}: refused with the typed error`);
+      outcomes.push(!out.bytes || vf.deadPieceCount() > 0);
+    }
+    assert.ok(outcomes.some(Boolean), `${label}: the release is refused somewhere`);
+  }
+  // One piece of a 0-based post shifted by exactly one more byte: refused at that piece.
+  const rel = zeroBasedRelease('ZeroShift.mkv', [1000, 1000, 1000, 1000, 1000, 1000]);
+  const id = 'u4@uneven.test';
+  rel.articles.set(id, Buffer.from(rel.articles.get(id).toString('latin1').replace(/=ypart begin=(\d+) end=(\d+)/,
+    (_, b, e) => `=ypart begin=${+b - 1} end=${+e - 1}`), 'latin1'));
+  const vf = new VirtualFile(unevenPool(rel.articles), rel.nzb, { readAhead: 0 });
+  await vf.mount();
+  const out = await readOutcome(() => vf.readAt(3000, 200));
+  assert.strictEqual(out.err && out.err.code, 'MISPLACED', 'a piece off the 0-based grid is refused');
+});
+
+test('vfs: an NZB whose first article was dropped from the list refuses at mount with MISPLACED', async () => {
+  const rel = unevenRelease('NoFirst.mkv', [1000, 1000, 1000, 1000, 1000, 1000]);
+  const nzb = rel.nzb.replace(/<segment bytes="\d+" number="1">u1@uneven\.test<\/segment>/, '');
+  assert.notStrictEqual(nzb, rel.nzb, 'precondition: article 1 removed');
+  const vf = new VirtualFile(unevenPool(rel.articles), nzb, { readAhead: 0 });
+  await assert.rejects(() => vf.mount(), (e) => e && e.code === 'MISPLACED');
+  assert.ok(vf.deadPieceCount() > 0, 'the release is marked dead so the player switches release');
+});
+
+// Review R1 (B06B-02): a reposted part listed twice in the NZB (same part number, second message
+// id) is neither a gap nor an uneven part (D-02). The Wave 1 base read the last-part shape with
+// identical bytes; the early grid check then refused it ("7 pieces of 1000 bytes cannot hold 5600").
+function withRepeatedPart(rel, part) {
+  const re = new RegExp(`<segment bytes="(\\d+)" number="${part}">u${part}@uneven\\.test</segment>`);
+  const nzb = rel.nzb.replace(re, (m, bytes) => `${m}<segment bytes="${bytes}" number="${part}">u${part}b@uneven.test</segment>`);
+  assert.notStrictEqual(nzb, rel.nzb, `precondition: part ${part} listed twice`);
+  const articles = new Map(rel.articles);
+  articles.set(`u${part}b@uneven.test`, rel.articles.get(`u${part}@uneven.test`));
+  return { ...rel, nzb, articles };
+}
+
+test('nzb: a part number listed twice keeps its first entry; meaningless numbering is left as listed', () => {
+  const rel = withRepeatedPart(unevenRelease('Twice.mkv', [1000, 1000, 1000, 1000, 1000, 600]), 3);
+  const segs = parseNzb(rel.nzb).files[0].segments;
+  assert.deepStrictEqual(segs.map((s) => s.number), [1, 2, 3, 4, 5, 6]);
+  assert.strictEqual(segs[2].msgId, 'u3@uneven.test', 'the first listed copy is kept');
+  const flat = '<nzb><file subject="&quot;Flat.mkv&quot; yEnc"><segments>'
+    + [1, 2, 3, 4].map((p) => `<segment bytes="10" number="1">f${p}@x</segment>`).join('') + '</segments></file></nzb>';
+  assert.deepStrictEqual(parseNzb(flat).files[0].segments.map((s) => s.msgId), ['f1@x', 'f2@x', 'f3@x', 'f4@x'],
+    'when most entries share one number the numbering says nothing, so nothing is dropped');
+});
+
+// Review R9 (re-check notes 2 and 3): two segments that share a number say nothing about the parts,
+// and a segment with no `number` attribute only gets a position, so neither may drop an entry.
+test('nzb: a 2-segment file with one shared number, or a segment without a number, is left as listed', () => {
+  const file = (segs) => `<nzb><file subject="&quot;Small.nfo&quot; yEnc"><segments>${segs}</segments></file></nzb>`;
+  const ids = (xml) => parseNzb(xml).files[0].segments.map((s) => s.msgId);
+  assert.deepStrictEqual(ids(file('<segment bytes="10" number="1">a@x</segment><segment bytes="10" number="1">b@x</segment>')),
+    ['a@x', 'b@x'], 'two segments numbered 1: both kept, as before R1');
+  assert.deepStrictEqual(ids(file('<segment bytes="10">u@x</segment><segment bytes="10" number="1">e1@x</segment><segment bytes="10" number="2">e2@x</segment>')),
+    ['u@x', 'e1@x', 'e2@x'], 'a segment without a number never makes an explicitly numbered one drop');
+  assert.deepStrictEqual(ids(file('<segment bytes="10" number="1">e1@x</segment><segment bytes="10">u@x</segment><segment bytes="10" number="2">e2@x</segment><segment bytes="10" number="3">e3@x</segment>')),
+    ['e1@x', 'u@x', 'e2@x', 'e3@x'], 'nor the other way round');
+  // Explicit repeats in a longer list are still dropped (R1).
+  assert.deepStrictEqual(ids(file('<segment bytes="10" number="1">e1@x</segment><segment bytes="10" number="2">e2@x</segment><segment bytes="10" number="2">e2b@x</segment>')),
+    ['e1@x', 'e2@x'], 'an explicit repeat in a 3-entry list is still dropped');
+});
+
+test('vfs: a part listed twice in the NZB (last, middle or first) reads identical bytes and is not blocked', async () => {
+  const sizes = [1000, 1000, 1000, 1000, 1000, 600];
+  for (const part of [6, 3, 1]) {
+    const rel = withRepeatedPart(unevenRelease('Twice.mkv', sizes), part);
+    for (const how of ['read', 'seek', 'readAt']) {
+      const vf = new VirtualFile(unevenPool(rel.articles), rel.nzb, { readAhead: 0 });
+      await vf.mount();
+      assert.strictEqual(vf.deadPieceCount(), 0, `part ${part} twice, ${how}: not blocked at mount`);
+      let got;
+      if (how === 'readAt') got = await vf.readAt(4000, 200);
+      else {
+        const [s, e, priority] = how === 'read' ? [0, vf.size, 'playback'] : [4000, 4500, 'seek'];
+        const parts = [];
+        for await (const c of vf.read(s, e, { priority })) parts.push(c);
+        got = Buffer.concat(parts);
+      }
+      const want = how === 'read' ? rel.data : how === 'seek' ? rel.data.subarray(4000, 4500) : rel.data.subarray(4000, 4200);
+      assert.ok(got.equals(want), `part ${part} twice, ${how}: byte-identical`);
+      assert.strictEqual(vf.deadPieceCount(), 0, `part ${part} twice, ${how}: nothing marked dead after the read`);
+    }
+  }
+  // A repeated part does not hide a real gap: the gap is still refused at mount.
+  const rel = withRepeatedPart(unevenRelease('Twice.mkv', sizes), 6);
+  const gapNzb = rel.nzb.replace(/<segment bytes="\d+" number="4">u4@uneven\.test<\/segment>/, '');
+  assert.notStrictEqual(gapNzb, rel.nzb, 'precondition: article 4 removed');
+  const vf = new VirtualFile(unevenPool(rel.articles), gapNzb, { readAhead: 0 });
+  await vf.mount();
+  assert.ok(vf.deadPieceCount() > 0, 'a gap next to a repeated part is still refused');
+});
+
 test('yenc: a cut-off, empty or length-mismatched article is not intact, and a single-part crc32 is checked', () => {
   const data = Buffer.from('The quick brown fox jumps over the lazy dog'.repeat(40));
   const good = encodePart(data, { name: 'a.bin', partNum: 1, totalParts: 1, begin: 0, end: data.length, totalSize: data.length });
@@ -1864,6 +2130,50 @@ test('vfs: a stray cancel on a live reader\'s piece is fetched again, not ended 
   assert.strictEqual(strayLeft, 0, 'the stray cancel really happened');
 });
 
+// B06B-03 (E2-1): when the player's fast copy fails, the boost fallback took the lower-priority
+// copy even when that copy starts LATER in the piece: the player got bytes from S served as if
+// they started at F (right length, wrong bytes, nothing logged).
+test('vfs: a failed boost never serves a lower-priority tail that starts later in the piece', async () => {
+  const P = 64 * 1024;
+  for (const fastFails of [true, false]) {
+    const rel = makeRelease('BoostTail.Test.mkv', 6 * P, P);
+    let failLeft = fastFails ? 1 : 0;
+    const fakePool = {
+      body(msgId, priority) {
+        const id = String(msgId).replace(/[<>]/g, '');
+        const raw = rel.articles.get(id);
+        if (!raw) return Promise.reject(Object.assign(new Error('430'), { code: '430' }));
+        if (id === 'seg4@triboon.test' && priority === 'background') return new Promise((r) => setTimeout(() => r(raw), 150));
+        if (id === 'seg4@triboon.test' && priority === 'playback' && failLeft > 0) {
+          failLeft--;
+          return new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('NNTP command timed out'), { code: 'NNTP_STALL' })), 20));
+        }
+        return Promise.resolve(raw);
+      },
+    };
+    const vf = new VirtualFile(fakePool, rel.nzb, { readAhead: 0 });
+    await vf.mount();
+    const collect = async (start, end, priority) => {
+      const out = [];
+      for await (const c of vf.read(start, end, { priority })) out.push(c);
+      return Buffer.concat(out);
+    };
+    // A low-priority reader (moviehash tail, byte check, warm-up) is fetching piece 3 from +40000.
+    const low = collect(3 * P + 40000, 4 * P, 'background');
+    await new Promise((r) => setTimeout(r, 10));
+    const player = await collect(3 * P + 10000, 4 * P, 'playback');
+    assert.ok(player.equals(rel.data.subarray(3 * P + 10000, 4 * P)), `fastFails=${fastFails}: the player gets the bytes from its own start`);
+    assert.ok((await low).equals(rel.data.subarray(3 * P + 40000, 4 * P)), `fastFails=${fastFails}: the low reader still gets its bytes`);
+    if (fastFails) assert.strictEqual(failLeft, 0, 'the fast copy really failed');
+  }
+  // Unit rule: a buffer tagged as starting after `from` is never sliced from 0.
+  const { _sliceStartFor, _markStart } = require('../server/vfs');
+  const tail = _markStart(Buffer.alloc(10), 40000);
+  assert.strictEqual(_sliceStartFor(tail, 10000, false), -1);
+  assert.strictEqual(_sliceStartFor(tail, 40005, false), 5);
+  assert.strictEqual(_sliceStartFor(Buffer.alloc(10), 3, true), 3, 'untagged buffers keep the old rule');
+});
+
 test('nntp: a BODY reply that names a different article drops the out-of-step line instead of returning it', async () => {
   // Shield on 3.4.0: blocky picture + a jump ahead on two different releases. A reply for article A
   // handed to the request for article B is a valid article with a good CRC — just the wrong one.
@@ -1881,6 +2191,87 @@ test('nntp: a BODY reply that names a different article drops the out-of-step li
   const bare = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
   bare._cmd = async () => ({ status: '222 body follows', body: Buffer.from('z') });
   assert.strictEqual(String(await bare.body('seg4@triboon.test')), 'z', 'a server that does not echo the id is trusted as before');
+});
+
+// B06A-01 (N1-1): one unasked status line on an idle line used to be kept and handed to the next
+// command, so every later STAT got the answer of the STAT before it ("present" and "missing" swap).
+test('nntp: an unasked line on an idle connection drops the line instead of shifting later STAT answers', async () => {
+  const articles = new Map([['here@unasked', Buffer.from('x')]]);
+  for (const parser of ['chunked', 'legacy']) {
+    const old = process.env.TRIBOON_NNTP_PARSER;
+    if (parser === 'legacy') process.env.TRIBOON_NNTP_PARSER = 'legacy'; else delete process.env.TRIBOON_NNTP_PARSER;
+    const mock = createMockNntp({ articles });
+    const port = await mock.listen();
+    const conn = new NntpConnection({ host: '127.0.0.1', port, tls: false });
+    try {
+      await conn.connect();
+      assert.strictEqual(await conn.stat('here@unasked'), true, `${parser}: precondition`);
+      mock.sendUnasked('200 hello');
+      await new Promise((r) => setTimeout(r, 30));
+      assert.strictEqual(conn.alive, false, `${parser}: the out-of-step line is no longer used`);
+      let missing = null; let present = null;
+      try { missing = await conn.stat('gone@unasked'); } catch (e) { missing = e; }
+      try { present = await conn.stat('here@unasked'); } catch (e) { present = e; }
+      assert.notStrictEqual(missing, true, `${parser}: a missing article never reads as present`);
+      assert.notStrictEqual(present, false, `${parser}: a present article never reads as missing`);
+      for (const r of [missing, present]) {
+        if (r instanceof Error) assert.ok(!/^\d{3}$/.test(String(r.code || '')), `${parser}: a dropped line is not an NNTP answer (${r.code})`);
+      }
+      const fresh = new NntpConnection({ host: '127.0.0.1', port, tls: false });
+      await fresh.connect();
+      assert.strictEqual(await fresh.stat('gone@unasked'), false);
+      assert.strictEqual(await fresh.stat('here@unasked'), true);
+      fresh.close();
+    } finally {
+      if (old === undefined) delete process.env.TRIBOON_NNTP_PARSER; else process.env.TRIBOON_NNTP_PARSER = old;
+      try { conn.close(); } catch {}
+      await mock.close();
+    }
+  }
+});
+
+test('nntp: pool STAT verdicts stay right after an unasked line on an idle connection', async () => {
+  const articles = new Map([['here@unasked', Buffer.from('x')]]);
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool([{ host: '127.0.0.1', port, tls: false }], 1);
+  try {
+    assert.strictEqual(await pool.stat('here@unasked'), true, 'precondition: the line is open and idle');
+    mock.sendUnasked('200 hello');
+    await new Promise((r) => setTimeout(r, 30));
+    assert.strictEqual(await pool.stat('gone@unasked'), false);
+    assert.strictEqual(await pool.stat('here@unasked'), true);
+    assert.strictEqual(pool.missCache.has(pool.providers[0], 'here@unasked'), false, 'a present article is never remembered as missing');
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('nntp: a STAT reply that names a different article drops the line; a reply without an id is trusted', async () => {
+  const conn = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
+  let destroyed = false;
+  conn.sock = { destroy() { destroyed = true; }, end() {} };
+  conn.alive = true;
+  conn._cmd = async () => ({ status: '223 0 <other@x>' });
+  await assert.rejects(() => conn.stat('want@x'), (e) => e.code === 'NNTP_DESYNC');
+  assert.strictEqual(conn.alive, false, 'the out-of-step line is no longer used');
+  assert.ok(destroyed, 'and its socket is closed');
+  const same = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
+  same._cmd = async () => ({ status: '223 0 <want@x>' });
+  assert.strictEqual(await same.stat('<want@x>'), true);
+  const bare = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
+  bare._cmd = async () => ({ status: '223' });
+  assert.strictEqual(await bare.stat('want@x'), true, 'some providers leave the id out');
+  // A 2xx other than 222 in reply to BODY is a STAT answer read by the wrong waiter.
+  const body = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
+  let bodyDestroyed = false;
+  body.sock = { destroy() { bodyDestroyed = true; }, end() {} };
+  body.alive = true;
+  body._cmd = async () => ({ status: '223 0 <want@x>', body: null });
+  await assert.rejects(() => body.body('want@x'), (e) => e.code === 'NNTP_DESYNC');
+  assert.strictEqual(body.alive, false);
+  assert.ok(bodyDestroyed);
 });
 
 test('vfs: an NZB missing one article entry never feeds the player shifted bytes; the release is marked dead', async () => {
@@ -1982,6 +2373,89 @@ test('nntp: a fully stalled provider fails within the timeout budget instead of 
 
   pool.close();
   await mock.close();
+});
+
+// B04-01 (S3-1): the admin speed test logs out a kept pool's idle lines first. A provider that
+// never answers QUIT and never closes must not hang that release, and a line with a command in
+// flight is never touched.
+test('nntp: releaseIdle logs out idle lines within its grace even when the provider never closes them', async () => {
+  const net = require('net');
+  const held = new Set();
+  const silent = net.createServer({ allowHalfOpen: true }, (sock) => {
+    held.add(sock); sock.on('close', () => held.delete(sock)); sock.on('error', () => {});
+    sock.write('200 silent ready\r\n'); // then never answers anything, QUIT included, and never closes
+  });
+  await new Promise((r) => silent.listen(0, '127.0.0.1', r));
+  const pool = new NntpPool({ host: '127.0.0.1', port: silent.address().port, tls: false, commandTimeoutMs: 200 }, 3);
+  const pp = pool.providers[0];
+  try {
+    pp.warm(3);
+    for (let i = 0; i < 200 && pp.conns.length < 3; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.strictEqual(pp.conns.length, 3, 'three idle logged-in lines');
+    const lines = pp.conns.slice();
+    const t0 = Date.now();
+    const released = await pp.releaseIdle({ graceMs: 150 });
+    assert.strictEqual(released, 3, 'all three idle lines released');
+    assert.ok(Date.now() - t0 < 1500, `bounded by the grace, not by the provider (${Date.now() - t0}ms)`);
+    assert.strictEqual(pp.conns.length, 0, 'the pool no longer lists them');
+    assert.ok(lines.every((c) => c.alive === false && c.sock.destroyed), 'each socket is really gone on our side');
+    assert.strictEqual(pool.providers[0].closed, false, 'the pool itself stays open');
+  } finally {
+    pool.close();
+    for (const s of held) s.destroy();
+    await new Promise((r) => silent.close(r));
+  }
+});
+
+test('nntp: releaseIdle never touches a line with a command in flight, and the pool dials again after it', async () => {
+  const { articles } = makeRelease('ReleaseIdle.mkv', 64 * 1024, 64 * 1024);
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 200 }, 2);
+  const pp = pool.providers[0];
+  const msgId = [...articles.keys()][0];
+  try {
+    mock.stallNext(1); // this command never gets an answer: the line stays busy until its timeout
+    const stalled = pool.body(msgId, 'background').catch((e) => e);
+    for (let i = 0; i < 200 && !pp.busy.size; i++) await new Promise((r) => setTimeout(r, 5));
+    assert.ok(pp.busy.size >= 1, 'a command is in flight');
+    const busyLines = pp.conns.slice();
+    assert.strictEqual(await pp.releaseIdle({ graceMs: 50 }), 0, 'nothing is released while the account is in use');
+    assert.ok(busyLines.every((c) => pp.conns.includes(c) && c.alive), 'the busy line is untouched');
+    await stalled; // ends by the inactivity timeout or its one retry, not by the release
+    for (let i = 0; i < 200 && (pp.busy.size || pp.queue.length || pp.connecting); i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(await pp.releaseIdle({ graceMs: 200 }) >= 1, 'once idle, the lines are released');
+    assert.strictEqual(pp.conns.length, 0);
+    const body = await pool.body(msgId, 'background');
+    assert.ok(body && body.length > 0, 'the next read dials a new line and works');
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+// Review R6 (B04-01): in a quiet window after a 480 burst the pool keeps its signed-in lines on
+// purpose (a new login would be refused). The speed test's release must not log them out.
+test('nntp: releaseIdle keeps every line while the account refuses new logins', async () => {
+  const { articles } = makeRelease('QuietRelease.mkv', 64 * 1024, 64 * 1024);
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 500 }, 3);
+  const pp = pool.providers[0];
+  try {
+    pp.warm(3);
+    for (let i = 0; i < 200 && pp.conns.length < 3; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.strictEqual(pp.conns.length, 3, 'three idle logged-in lines');
+    const lines = pp.conns.slice();
+    pp.authCapped = true;
+    pp.capHitAt = Date.now();
+    assert.strictEqual(pp.refusingNewLogins(), true, 'precondition: quiet window');
+    assert.strictEqual(await pp.releaseIdle({ graceMs: 50 }), 0, 'nothing is released in a quiet window');
+    assert.ok(lines.every((c) => pp.conns.includes(c) && c.alive), 'every kept line stays signed in');
+  } finally {
+    pool.close();
+    await mock.close();
+  }
 });
 
 test('nntp: read-ahead never takes the last connection — the active player always gets one (no head-of-line stall)', async () => {

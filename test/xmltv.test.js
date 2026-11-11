@@ -29,6 +29,35 @@ test('XMLTV parser decodes entities and keeps only carried channels', () => {
   assert.strictEqual(byChannel.get('news')[0].title, 'Tom & Jerry 📺');
 });
 
+// B05-02 (G2-1): the 200,000 programme cap counted every <programme>, before the carried-channel
+// and time-window filters, so a big guide lost carried channels that come late in the file.
+test('XMLTV programme cap counts only kept rows: a carried channel after 200,001 filler rows still gets its guide', () => {
+  const now = Date.UTC(2026, 6, 13, 12, 0, 0);
+  const start = xmltvStamp(now - 60000);
+  const stop = xmltvStamp(now + 3600000);
+  const filler = `<programme channel="filler" start="${start}" stop="${stop}"><title>F</title></programme>`;
+  const xml = ['<tv><channel id="news"><display-name>News</display-name></channel>',
+    new Array(200001).fill(filler).join(''),
+    `<programme channel="news" start="${start}" stop="${stop}"><title>Now On News</title></programme></tv>`].join('');
+  const parsed = parseXmltv(xml, [{ tvgId: 'news', name: 'News' }], now);
+  const rows = new Map(parsed.byChannel).get('news') || [];
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].title, 'Now On News');
+});
+
+test('XMLTV programme cap counts only kept rows: old rows outside the window do not use up the cap', () => {
+  const now = Date.UTC(2026, 6, 13, 12, 0, 0);
+  const oldStart = xmltvStamp(now - 3 * 86400000);
+  const oldStop = xmltvStamp(now - 3 * 86400000 + 1800000);
+  const old = `<programme channel="news" start="${oldStart}" stop="${oldStop}"><title>Old</title></programme>`;
+  const xml = ['<tv><channel id="news"><display-name>News</display-name></channel>',
+    new Array(200001).fill(old).join(''),
+    `<programme channel="news" start="${xmltvStamp(now - 60000)}" stop="${xmltvStamp(now + 3600000)}"><title>Current</title></programme></tv>`].join('');
+  const parsed = parseXmltv(xml, [{ tvgId: 'news', name: 'News' }], now);
+  const rows = new Map(parsed.byChannel).get('news') || [];
+  assert.deepStrictEqual(rows.map((r) => r.title), ['Current']);
+});
+
 test('XMLTV payload decoding recognizes headerless gzip and enforces an expanded-size cap', async () => {
   const xml = Buffer.from('<tv><channel id="news"><display-name>News</display-name></channel></tv>');
   assert.deepStrictEqual(await decodeXmltvPayload(zlib.gzipSync(xml)), xml,

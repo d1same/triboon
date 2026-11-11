@@ -22,6 +22,17 @@ final class UpdateVerifier {
                 && RELEASE_CERT_SHA256.equals(normalizeSha256(signerSha256));
     }
 
+    // B15A-01 (A1-1): on API 28+ the new signingInfo list wins. Only when it is missing or empty
+    // (Android 9/10 can leave it empty for an archive) does the old signatures list count.
+    // Exactly one non-empty signer, or null: never a mix of the two lists, never two signers.
+    static byte[] pickSingleSigner(byte[][] signingInfoSigners, byte[][] legacySigners) {
+        byte[][] list = signingInfoSigners != null && signingInfoSigners.length > 0
+                ? signingInfoSigners : legacySigners;
+        if (list == null || list.length != 1) return null;
+        byte[] only = list[0];
+        return only == null || only.length == 0 ? null : only;
+    }
+
     static String normalizeSha256(String value) {
         return value == null ? "" : value.replace(":", "").trim().toLowerCase(Locale.US);
     }

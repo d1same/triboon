@@ -197,6 +197,10 @@ public class MainActivity extends Activity {
     private View nativeLoadingLaneGlow;
     private ObjectAnimator nativeLoadingLaneAnimator;
     private int nativeLoadingToken;
+    private int nativePlaybackStartSeq;
+    // nativePlaybackStartSeq when the Next button or the Up Next card silenced the video for a
+    // handoff; -1 when nothing is silenced (review R5, see onNativeNextRefused).
+    private int nativeNextHandoffStartSeq = -1;
     private int nativeLoadingStatusIndex;
     private String[] nativeLoadingStatuses = new String[]{"Preparing", "Finding source", "Mounting", "Checking health...", "Starting stream"};
     private final String[] usenetLoadingStatuses = nativeLoadingStatuses;
@@ -379,6 +383,7 @@ public class MainActivity extends Activity {
     private boolean nativeVideoStarted;
     private boolean nativeVideoMemoryTrimmedDuringBuffer;
     private boolean nativeVideoErrorNotified;
+    private long nativeVideoErrorReportedAtMs; // B15B-02: when the last one-shot report went out
     // The same OK press that first reveals chrome must not also click Play.
     private boolean nativeIgnoreNextPlayClick;
     private long nativeLastVideoDisplayMs;
@@ -453,7 +458,7 @@ public class MainActivity extends Activity {
     private long lastWebRendererGoneAt;
     private int webRendererGoneCount;
     private final java.util.ArrayList<String> pendingTvKeys = new java.util.ArrayList<>();
-    private final java.util.HashMap<String, PersonalIptvHostPin> personalIptvHostSafetyCache = new java.util.HashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, PersonalIptvHostPin> personalIptvHostSafetyCache = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile String nativePlaybackCapsCache; // written on main, read on the JS bridge thread
     private String nativeAudioRescueUrl = ""; // the stream we already raised a sound problem for
     private final AudioDeviceCallback nativeAudioOutputCallback = new AudioDeviceCallback() {
@@ -952,20 +957,29 @@ public class MainActivity extends Activity {
         try {
             android.content.pm.PackageManager pm = getPackageManager();
             android.content.pm.PackageInfo candidate;
-            android.content.pm.Signature[] signers;
+            byte[][] modernSigners = null;
+            byte[][] legacySigners;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                // Android 9 and 10 can leave signingInfo empty for an archive when only
+                // GET_SIGNING_CERTIFICATES is asked, which failed every in-app update there.
+                // Ask for both; signingInfo stays first, the old list is only the fallback.
                 candidate = pm.getPackageArchiveInfo(apk.getAbsolutePath(),
-                        android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
-                if (candidate == null || candidate.signingInfo == null) return false;
-                signers = candidate.signingInfo.getApkContentsSigners();
+                        android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+                                | android.content.pm.PackageManager.GET_SIGNATURES);
+                if (candidate == null) return false;
+                if (candidate.signingInfo != null) {
+                    modernSigners = signerBytes(candidate.signingInfo.getApkContentsSigners());
+                }
+                legacySigners = signerBytes(candidate.signatures);
             } else {
                 candidate = pm.getPackageArchiveInfo(apk.getAbsolutePath(),
                         android.content.pm.PackageManager.GET_SIGNATURES);
                 if (candidate == null) return false;
-                signers = candidate.signatures;
+                legacySigners = signerBytes(candidate.signatures);
             }
-            if (signers == null || signers.length != 1) return false;
-            String signer = sha256Hex(signers[0].toByteArray());
+            byte[] signerCert = UpdateVerifier.pickSingleSigner(modernSigners, legacySigners);
+            if (signerCert == null) return false;
+            String signer = sha256Hex(signerCert);
             android.content.pm.PackageInfo installed = pm.getPackageInfo(getPackageName(), 0);
             long candidateCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
                     ? candidate.getLongVersionCode() : candidate.versionCode;
@@ -976,6 +990,13 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private static byte[][] signerBytes(android.content.pm.Signature[] signers) {
+        if (signers == null) return null;
+        byte[][] out = new byte[signers.length][];
+        for (int i = 0; i < signers.length; i++) out[i] = signers[i] == null ? null : signers[i].toByteArray();
+        return out;
     }
 
     private String sha256Hex(byte[] value) throws Exception {
@@ -1114,6 +1135,12 @@ public class MainActivity extends Activity {
         PersonalIptvHostPin cached = personalIptvHostSafetyCache.get(cacheKey);
         InetAddress picked = cached != null && cached.expiresAt > now ? cached.address : null;
         if (picked == null) {
+            if (!hostLooksLiteral(host) && Looper.myLooper() == Looper.getMainLooper()) {
+                // B15A-02 (A1-4): never run DNS on the UI thread. The bridge warms the pin first
+                // (warmNativePlaybackPins); a caller that still lands here gets a readable error.
+                // A numeric IP needs no DNS (getAllByName only parses it), so it is not refused.
+                throw new IOException("stream host is still being checked; try again");
+            }
             InetAddress[] addresses = InetAddress.getAllByName(host);
             if (addresses == null || addresses.length == 0) throw new IOException("host could not be resolved");
             for (InetAddress address : addresses) {
@@ -1151,6 +1178,41 @@ public class MainActivity extends Activity {
             msg = e == null ? "native player failed" : e.getClass().getSimpleName();
         }
         return msg;
+    }
+
+    // B15A-02 (A1-4): runs on the JavaBridge thread before a native start is posted. Validates
+    // (and so DNS-pins, TTL 60s) every URL startNativePlayback will check on the UI thread.
+    // Returns the primary URL's failure, or null. Fallback failures are logged and skipped
+    // there as before.
+    private Throwable warmNativePlaybackPins(String json) {
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
+            try {
+                validateNativePlaybackUrl(j.optString("url", ""));
+            } catch (Throwable e) {
+                return e;
+            }
+            warmNativeFallbackPin(j.optString("fallbackUrl", ""), "primary fallback");
+            org.json.JSONArray fallbacks = j.optJSONArray("fallbacks");
+            if (fallbacks != null) {
+                for (int i = 0; i < fallbacks.length(); i++) {
+                    org.json.JSONObject fb = fallbacks.optJSONObject(i);
+                    if (fb != null) warmNativeFallbackPin(fb.optString("url", ""), "fallback " + i);
+                }
+            }
+            return null;
+        } catch (Throwable e) {
+            return e;
+        }
+    }
+
+    private void warmNativeFallbackPin(String raw, String label) {
+        if (raw == null || raw.trim().isEmpty()) return;
+        try {
+            validateNativePlaybackUrl(raw);
+        } catch (Throwable e) {
+            Log.w(TAG, "Native " + label + " precheck failed: " + nativeThrowableMessage(e));
+        }
     }
 
     private ValidatedNativeUrl optionalNativeFallbackUrl(String raw, String label) {
@@ -1546,12 +1608,22 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void playLive(String json) {
                 if (!trustedBridgeOrigin()) return;
+                // B15A-02 (A1-4): a device-local IPTV host name is looked up HERE, on the JavaBridge
+                // thread, so the UI-thread start finds a fresh pin and never runs DNS itself
+                // (that was "Live TV unavailable: NetworkOnMainThreadException" after 60s idle).
+                Throwable precheck = warmNativePlaybackPins(json);
+                if (precheck != null) {
+                    runOnUiThread(() -> handleNativePlaybackStartFailure(precheck, "live", "Live TV", "",
+                            "direct", "", "", 0L));
+                    return;
+                }
                 runOnUiThread(() -> startNativeLive(json));
             }
 
             @android.webkit.JavascriptInterface
             public void playVideo(String json) {
                 if (!trustedBridgeOrigin()) return;
+                warmNativePlaybackPins(json); // server URLs return before any lookup
                 runOnUiThread(() -> startNativeVideo(json));
             }
 
@@ -1581,6 +1653,13 @@ public class MainActivity extends Activity {
             public void showVideoLoading(String json) {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> showNativeVideoLoading(json));
+            }
+
+            // Review R5: the web refused the next episode the Next button or Up Next card asked for.
+            @android.webkit.JavascriptInterface
+            public void nativeNextRefused(String message, String token) {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> onNativeNextRefused(message, token));
             }
 
             @android.webkit.JavascriptInterface
@@ -4245,6 +4324,7 @@ public class MainActivity extends Activity {
     }
 
     private void triggerNativeUpNextPlay() {
+        nativeNextHandoffStartSeq = nativePlaybackStartSeq;
         nativeUpNextVisible = false;
         hideNativeUpNextCard();
         // Cover the ended 00:00 surface now. Waiting on JS would flash the next episode
@@ -4256,8 +4336,47 @@ public class MainActivity extends Activity {
                     nativePlaybackTitle == null || nativePlaybackTitle.isEmpty() ? "Next episode" : nativePlaybackTitle,
                     nativePlaybackBackdropUrl,
                     true);
+            armUpNextStuckLoaderNet();
         }
         if (web != null) web.evaluateJavascript("window.__upNextPlayNative && __upNextPlayNative()", null);
+    }
+
+    // Review R5: the web had no playable next episode (a finale, or not aired yet). Drop the handoff
+    // loader, give the episode its sound back, show the reason on the TV, and let the web restart
+    // the same source where it was (it knows how for direct, remux and transcode). A refusal with
+    // nothing silenced (web autoplay) only shows the reason.
+    private void onNativeNextRefused(String message, String token) {
+        boolean videoOpen = nativePlayer != null && nativePlayerOpen() && "video".equals(nativeMode);
+        if (!videoOpen) return;
+        long refusedToken = UpNextHandoff.parseToken(token);
+        if (UpNextHandoff.shouldResumeAfterRefusal(videoOpen, refusedToken, nativePlaybackToken,
+                nativeNextHandoffStartSeq, nativePlaybackStartSeq)) {
+            nativeNextHandoffStartSeq = -1;
+            hideNativeLoading();
+            try {
+                nativePlayer.setVolume(1f);
+            } catch (Throwable e) {
+                Log.w(TAG, "Next refused: unmute ignored: " + nativeThrowableMessage(e));
+            }
+            Log.i(TAG, "Next refused by the web; resuming the same episode");
+            if (web != null) {
+                web.evaluateJavascript("window.__tvNativeNextResume && __tvNativeNextResume(" + nativePlaybackToken + ")", null);
+            }
+        }
+        Toast.makeText(this, UpNextHandoff.refusalText(message), Toast.LENGTH_LONG).show();
+    }
+
+    // Owner decision D-04 (b): a refused next episode must not leave this loader up for good.
+    private void armUpNextStuckLoaderNet() {
+        final int loaderToken = nativeLoadingToken;
+        final int startSeq = nativePlaybackStartSeq;
+        nativeProgress.postDelayed(() -> {
+            boolean visible = nativeLoading != null && nativeLoading.getVisibility() == View.VISIBLE;
+            if (!UpNextHandoff.shouldCloseStuckLoader(loaderToken, nativeLoadingToken, startSeq, nativePlaybackStartSeq, visible)) return;
+            Log.w(TAG, "Up Next handoff: nothing started within " + UpNextHandoff.STUCK_LOADER_TIMEOUT_MS
+                    + "ms; closing the stuck loader like Back");
+            closeNativePlayback(true);
+        }, UpNextHandoff.STUCK_LOADER_TIMEOUT_MS);
     }
 
     private boolean handleNativeUpNextKey(KeyEvent e) {
@@ -4413,6 +4532,8 @@ public class MainActivity extends Activity {
     }
 
     private void startNativePlayback(String json, String mode) {
+        nativePlaybackStartSeq++; // disarms the Up Next stuck-loader net (UpNextHandoff)
+        nativeNextHandoffStartSeq = -1; // a new start ends any silenced Next handoff
         String title = "video".equals(mode) ? "Triboon" : "Live TV";
         String backdropUrl = "";
         String loadingKind = "direct";
@@ -6361,18 +6482,27 @@ public class MainActivity extends Activity {
         // (the key factory would also keep them unique, but not wrapping is the primary guard).
         androidx.media3.datasource.DataSource.Factory ds = http;
         if ("video".equals(nativeMode) && !nativeServerSeekMode()) {
-            ds = precache().readOnlyDataSourceFactory(http);
+            try {
+                ds = precache().readOnlyDataSourceFactory(http);
+            } catch (Throwable e) {
+                // B15B-01: a cache fault never fails a start; play straight from the network.
+                Log.w(TAG, "Pre-cache unavailable, playing without it: " + nativeThrowableMessage(e));
+                ds = http;
+            }
         }
         return new DefaultMediaSourceFactory(ds).setLoadErrorHandlingPolicy(nativeRemuxLoadErrorPolicy());
     }
 
-    private StreamPrecache streamPrecache;
+    // B15B-01 (A2-2): ONE pre-cache per process. Media3 allows one SimpleCache per folder; as an
+    // Activity field, a reopened app (same process, new Activity after Back twice) built a second
+    // one that Media3 refuses, so every prefetch was skipped and direct play fell to remux until
+    // the process died. Never released in onDestroy: a prefetch may still be writing, and a new
+    // Activity's onCreate can run before the old onDestroy. Holds only the application context.
+    private static final ProcessOnce<StreamPrecache> STREAM_PRECACHE = new ProcessOnce<>();
 
     private StreamPrecache precache() {
-        if (streamPrecache == null) {
-            streamPrecache = new StreamPrecache(getApplicationContext(), "TriboonTV/" + BuildConfig.VERSION_NAME);
-        }
-        return streamPrecache;
+        final Context app = getApplicationContext();
+        return STREAM_PRECACHE.get(() -> new StreamPrecache(app, "TriboonTV/" + BuildConfig.VERSION_NAME));
     }
 
     // Bridge entry for the web layer's prepare responses: { url, budgetMb, size }. The URL must be
@@ -6737,6 +6867,7 @@ public class MainActivity extends Activity {
     private void notifyNativeVideoError(String msg, long pos, long dur) {
         if (nativeVideoErrorNotified) return;
         nativeVideoErrorNotified = true;
+        nativeVideoErrorReportedAtMs = SystemClock.elapsedRealtime();
         reportNativePlaybackIssue("crash", msg == null || msg.isEmpty() ? "the player stopped" : msg, 0L);
         String title = nativePlaybackTitle;
         String backdropUrl = nativePlaybackBackdropUrl;
@@ -8443,11 +8574,14 @@ public class MainActivity extends Activity {
         long dur = nativeDurSeconds();
         long playbackToken = nativePlaybackToken;
         if (!"video".equals(mode)) return;
+        nativeNextHandoffStartSeq = nativePlaybackStartSeq;
         silenceNativeVideoForHandoff();
         if (nativeLoading != null) {
             showNativeLoading(
                     nativePlaybackTitle == null || nativePlaybackTitle.isEmpty() ? "Next episode" : nativePlaybackTitle,
                     nativePlaybackBackdropUrl);
+            // Review R5: an older page refuses without telling the shell; never leave this loader up.
+            armUpNextStuckLoaderNet();
         }
         // JS owns the atomic player-to-player handoff. Cover first so the next title
         // cannot flash at 00:00 while /api/play is still mounting.
@@ -8594,9 +8728,17 @@ public class MainActivity extends Activity {
                     ? NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS
                     : NATIVE_VIDEO_REBUFFER_RECOVERY_MS;
             if (elapsed >= recoveryMs) {
-                Log.w(TAG, "Native VOD rebuffer stalled after " + elapsed + "ms; retrying same source");
-                notifyNativeVideoError(state == Player.STATE_IDLE ? "native player idle" : "native rebuffer stalled",
-                        nativePosSeconds(), nativeDurSeconds());
+                // B15B-02 (A2-1, A2-5): the web drops a report while a quiet remount is pending. If
+                // that remount never plays, one more report per full window is the deadline (the
+                // WebView timers are throttled during native playback). Re-armed here only, never
+                // in the player-error path. The next window starts fresh: one log line per report.
+                if (NativeStallReport.shouldReport(nativeVideoErrorNotified, nativeVideoErrorReportedAtMs, now, recoveryMs)) {
+                    nativeVideoErrorNotified = false;
+                    Log.w(TAG, "Native VOD rebuffer stalled after " + elapsed + "ms; reported to the web player");
+                    notifyNativeVideoError(state == Player.STATE_IDLE ? "native player idle" : "native rebuffer stalled",
+                            nativePosSeconds(), nativeDurSeconds());
+                }
+                nativeVideoUnhealthySinceMs = now;
             }
             return;
         }

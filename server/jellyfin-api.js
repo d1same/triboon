@@ -13,6 +13,10 @@ const zlib = require('zlib');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const debug = require('./debug');
 
+// Longest sign-in name accepted before any throttle key is built; the same constant caps account
+// creation (server/auth.js), so the two cannot drift apart.
+const { SIGN_IN_NAME_MAX: JELLYFIN_LOGIN_NAME_MAX } = require('./auth');
+
 // Phone and TV apps accept a Jellyfin version with three numbers.
 // "12.1" has two numbers, so they say the server is unsupported.
 const SERVER_VERSION = '10.11.11';
@@ -1298,13 +1302,18 @@ const SUB_LANG = {
   ar: 'Arabic',
 };
 
-function stampSubtitleUrls(streams, itemId, mountId) {
+function stampSubtitleUrls(streams, itemId, mountId, uid) {
   // The phone's page calls getUrl on every external caption. An empty address
   // throws and the play spinner dies. Point each one at the caption we serve.
   if (!Array.isArray(streams) || !itemId || !mountId) return streams;
+  // A player that fetches the caption with no auth header (an HTML <track>, a
+  // native player handed a bare URL) needs a login in the address itself: a
+  // stream token bound to this one mount, never the session token (F2-1).
+  const key = uid && deps.auth && typeof deps.auth.streamToken === 'function'
+    ? deps.auth.streamToken(uid, mountId) : '';
   for (const row of streams) {
     if (!row || row.Type !== 'Subtitle' || row.DeliveryMethod !== 'External' || row.DeliveryUrl) continue;
-    row.DeliveryUrl = `/videos/${itemId}/${mountId}/subtitles/${row.Index}/stream.vtt`;
+    row.DeliveryUrl = `/videos/${itemId}/${mountId}/subtitles/${row.Index}/stream.vtt${key ? `?api_key=${encodeURIComponent(key)}` : ''}`;
   }
   return streams;
 }
@@ -1693,10 +1702,22 @@ function localJellyItem(row, libId) {
   });
 }
 
+// Every episode of one local show, in season then episode order (F2-2). The browse clamp of
+// localPage is 100 rows sorted by title, so a long show lost episodes from the middle; the
+// `scan` view lifts the clamp for this one show read only.
+const LOCAL_SHOW_PAGE = 2000;
 function localRows(ctx, libId, showIdx) {
   if (typeof deps.localPage !== 'function') return [];
-  const page = deps.localPage(ctx, libId, 0, 500, showIdx);
-  return (page && page.items) || [];
+  const rows = [];
+  for (let offset = 0; offset < 100000; offset += LOCAL_SHOW_PAGE) {
+    const page = deps.localPage(ctx, libId, offset, LOCAL_SHOW_PAGE, showIdx, { scan: true });
+    const items = (page && page.items) || [];
+    rows.push(...items);
+    const total = page && Number.isFinite(page.total) ? page.total : null;
+    if (items.length < LOCAL_SHOW_PAGE || (total !== null && rows.length >= total)) break;
+  }
+  return rows.sort((a, b) => episodeOrder(a && (a.s ?? a.season), a && (a.e ?? a.episode))
+    - episodeOrder(b && (b.s ?? b.season), b && (b.e ?? b.episode)));
 }
 
 function episodeOrder(season, episode) {
@@ -2520,7 +2541,8 @@ async function handleKind(kind, ctx) {
       if (season && season.type === 'localseason') {
         eps = eps.filter((row) => (Number(row.s || row.season) || 1) === season.season);
       }
-      return send(ctx.res, 200, pageOf(eps.map((row) => localJellyItem(row, parsed.libId)).filter(Boolean), ctx), cors);
+      // Same as the usenet branch: apps ask without a Limit and expect every episode.
+      return send(ctx.res, 200, fullPageOf(eps.map((row) => localJellyItem(row, parsed.libId)).filter(Boolean), ctx), cors);
     }
     const q = ctx.url && ctx.url.searchParams;
     const seasonId = q && (q.get('seasonId') || q.get('SeasonId'));
@@ -2807,7 +2829,7 @@ async function handleKind(kind, ctx) {
     if (typeof deps.jellyfinMarkDirect === 'function') deps.jellyfinMarkDirect(playedBody.id, direct);
     const url = playUrlForClient(ctx, playedBody, resumeAt, audioRel, ctx.m[1], durationSeconds);
     if (!url && !direct) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
-    stampSubtitleUrls(streams, ctx.m[1], playedBody.id);
+    stampSubtitleUrls(streams, ctx.m[1], playedBody.id, uid);
     const runtimeTicks = spec ? ticks(spec.runtime) : 0;
     const hls = url.includes('/api/hls/');
     const source = completeSource({
@@ -2931,6 +2953,13 @@ async function handleKind(kind, ctx) {
   if (kind === 'login') {
     const body = await readJson(ctx.req);
     const name = String(body.Username || body.username || body.Name || body.name || '');
+    // Same cap as the Triboon sign-in (audit S2-11): account creation refuses longer names, so a
+    // longer one never signs in; refuse it before any throttle key is built from it.
+    if (name.length > JELLYFIN_LOGIN_NAME_MAX) {
+      if (deps.loginIpLocked(ctx)) return;
+      deps.noteLoginFailure(ctx);
+      return send(ctx.res, 400, { error: 'invalid credentials' }, cors);
+    }
     const pass = String(body.Pw || body.Password || body.password || '').trim();
     const uname = name.toLowerCase();
     const ip = clientIp(ctx);

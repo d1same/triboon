@@ -303,7 +303,7 @@ class NntpConnection {
     // never reset hid every later burst on this account for the whole run.
     const alreadyTold = err && err.code === 'NNTP_AUTH_LOST' && this.pool
       && typeof this.pool.refusingNewLogins === 'function' && this.pool.refusingNewLogins();
-    if (!alreadyTold && err && (err.code === 'NNTP_STALL' || err.code === 'NNTP_AUTH_LOST' || /connect timeout|auth failed|body too large/i.test(msg))) {
+    if (!alreadyTold && err && (err.code === 'NNTP_STALL' || err.code === 'NNTP_AUTH_LOST' || err.code === 'NNTP_UNASKED' || /connect timeout|auth failed|body too large/i.test(msg))) {
       const host = (this.opts && this.opts.host) || 'usenet';
       const waiting = (this.waiters || []).map((w) => w && w.cmdName).filter(Boolean).slice(0, 4).join(', ');
       const line = `${host}: ${msg || err.code || 'socket stopped'}${waiting ? ` while waiting on ${waiting}` : ''}`;
@@ -329,6 +329,19 @@ class NntpConnection {
     return this._onDataChunked(d);
   }
 
+  // Bytes that arrive while no command waits (N1-1). Keeping them handed the stray line to the
+  // NEXT command, so each later STAT read the answer of the STAT before it: "present" and
+  // "missing" swapped with no error, and the miss cache stored the wrong verdicts. A live line
+  // that hears an unasked reply is out of step: drop it (one log line; the pool retries the task
+  // on a fresh line). A line we closed ourselves (QUIT → "205 bye") drops the bytes silently.
+  _unasked(data) {
+    if (!this.alive) return;
+    const shown = Buffer.from(data).subarray(0, 40).toString('latin1').replace(/[^\x20-\x7e]/g, '.');
+    const err = new Error(`unasked reply on an idle line ("${shown}"), line dropped`);
+    err.code = 'NNTP_UNASKED';
+    this._fail(err);
+  }
+
   // Article bodies arrive in TLS-record-sized pieces (~16 KB). The legacy path re-copied the whole
   // buffer and re-scanned it for the end marker on every piece: ~9 ms of main-thread CPU per
   // 790 KB article, on the thread that also writes video to every player. This keeps the pieces in
@@ -339,7 +352,7 @@ class NntpConnection {
     let data = d;
     while (data && data.length) {
       const w = this.waiters[0];
-      if (!w) { this.buf = this.buf.length ? Buffer.concat([this.buf, data]) : data; return; }
+      if (!w) { this.buf = Buffer.alloc(0); this._unasked(data); return; }
       if (!w.statusLine) {
         const head = this.buf.length ? Buffer.concat([this.buf, data]) : data;
         const nl = head.indexOf(0x0a);
@@ -407,6 +420,10 @@ class NntpConnection {
   }
 
   _onDataLegacy(d) {
+    if (!this.waiters.length) {
+      if (d && d.length) { this.buf = Buffer.alloc(0); this._unasked(d); }
+      return;
+    }
     this.buf = this.buf.length ? Buffer.concat([this.buf, d]) : d;
     // Progress on in-flight commands (NNTP responses are strictly FIFO, so waiters[0] is the one
     // being answered): reset stall timers so a slow-but-alive BODY transfer is never killed
@@ -471,6 +488,12 @@ class NntpConnection {
       this.lastUsed = Date.now();
       w.resolve({ status: w.statusLine, body });
     }
+    // Bytes left after the last waiter's reply in the same chunk: nobody asked for them.
+    if (this.buf.length && !this.waiters.length) {
+      const extra = this.buf;
+      this.buf = Buffer.alloc(0);
+      this._unasked(extra);
+    }
   }
 
   // (Re)arm a waiter's stall timer. The timeout is measured from the LAST activity, not from when
@@ -533,11 +556,27 @@ class NntpConnection {
     return err;
   }
 
+  _desync(cmd, want, got) {
+    this.alive = false;
+    try { this.sock.destroy(); } catch {}
+    const err = new Error(`${cmd} <${want}>: reply was for <${got}> — connection out of step, dropped`);
+    err.code = 'NNTP_DESYNC';
+    return err;
+  }
+
   async stat(msgId, opts = {}) {
     const r = await this._cmd(`STAT <${msgId.replace(/[<>]/g, '')}>`, false, opts);
     if (isAuthLostStatus(r.status)) throw this._authLost('STAT', r.status);
     this.served = true; // a real answer means this login worked; a 480 before this is the account
-    if (r.status.startsWith('223')) return true;
+    if (r.status.startsWith('223')) {
+      // "223 0 <id>" names the article (N1-1). A reply for a DIFFERENT article means the line is
+      // out of step with its queue, and its present/missing answers belong to other articles.
+      // Drop the line; the pool asks again on a fresh one. No id named = trusted as before.
+      const named = /<([^<>\s]+)>/.exec(r.status);
+      const want = String(msgId).replace(/[<>]/g, '');
+      if (named && named[1] !== want) throw this._desync('STAT', want, named[1]);
+      return true;
+    }
     // Only "no such article" is a real "missing". Any other reply (500 command unknown, 503
     // fault, 400 shutting down) is the SERVER'S problem and must not be cached as a dead source.
     if (r.status.startsWith('430') || r.status.startsWith('423')) return false;
@@ -551,6 +590,12 @@ class NntpConnection {
     if (!r.status.startsWith('222')) {
       if (isAuthLostStatus(r.status)) throw this._authLost('BODY', r.status);
       this.served = true;
+      // A 2xx other than 222 in reply to BODY (a "223" STAT answer, a "200" notice) was read by
+      // the wrong waiter: the line is out of step. Drop it so the pool retries on a fresh line.
+      if (/^2\d\d/.test(r.status)) {
+        const named = /<([^<>\s]+)>/.exec(r.status);
+        throw this._desync('BODY', String(msgId).replace(/[<>]/g, ''), named ? named[1] : r.status.slice(0, 3));
+      }
       const err = new Error(`BODY ${msgId}: ${r.status}`);
       err.code = r.status.slice(0, 3);
       throw err;
@@ -563,13 +608,7 @@ class NntpConnection {
     // the pool retries the piece once on a fresh connection.
     const named = /<([^<>\s]+)>/.exec(r.status);
     const want = String(msgId).replace(/[<>]/g, '');
-    if (named && named[1] !== want) {
-      this.alive = false;
-      try { this.sock.destroy(); } catch {}
-      const err = new Error(`BODY <${want}>: reply was for <${named[1]}> — connection out of step, dropped`);
-      err.code = 'NNTP_DESYNC';
-      throw err;
-    }
+    if (named && named[1] !== want) throw this._desync('BODY', want, named[1]);
     return r.body;
   }
 
@@ -1418,6 +1457,25 @@ class ProviderPool {
   // piece; it takes over when every primary is down, refusing logins, or has no clean copy.
   isBackup() {
     return this.opts.backup === true;
+  }
+  // Admin speed test only (S3-1): log out every logged-in line with no command in flight, so the
+  // test can use this account's slots. Releases nothing while anything uses or waits for the
+  // account. Each line gets QUIT; one the provider never closes is destroyed after graceMs, so the
+  // caller's wait is bounded. The pool stays open and dials again on the next piece of work.
+  // In a quiet window (a 480 burst: new logins are refused) the kept lines are the only ones this
+  // account can have, so nothing is released and the speed test behaves as before (review R6).
+  releaseIdle({ graceMs = 2000 } = {}) {
+    if (this.closed || this.busy.size || this.connecting || this.queue.length || this.refusingNewLogins()) return Promise.resolve(0);
+    const idle = this.conns.filter((c) => !this.busy.has(c) && !this.inflight.has(c));
+    if (!idle.length) return Promise.resolve(0);
+    this.conns = this.conns.filter((c) => !idle.includes(c));
+    return Promise.all(idle.map((c) => new Promise((resolve) => {
+      const sock = c.sock;
+      try { c.close(); } catch {}
+      if (!sock || sock.destroyed) return resolve();
+      const timer = setTimeout(() => { try { sock.destroy(); } catch {} resolve(); }, Math.max(0, Number(graceMs) || 0));
+      sock.once('close', () => { clearTimeout(timer); resolve(); });
+    }))).then(() => idle.length);
   }
   close() {
     this.closed = true;

@@ -15,7 +15,7 @@ const debug = require('./debug');
 const { parseRarVolumes, rar5VolumeInfo, RAR4_SIG, RAR5_SIG } = require('./rar');
 const { parseZip } = require('./zip');
 const { parseFileDescs, headHash, HEAD_HASH_BYTES } = require('./par2');
-const { getMountMap } = require('./mount-map');
+const { getMountMap, mapScope, scopedMapKey } = require('./mount-map');
 
 const SIG_7Z = Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]);
 const VIDEO_EXT = /\.(mkv|mp4|avi|m4v|ts|webm|mov)$/i;
@@ -435,9 +435,19 @@ class ArchiveVirtualFile {
     const end = start + v.partSize;
     return this.extents.some((e) => e.vol === volIndex && e.offset < end && e.offset + e.length > start);
   }
+  // A volume whose piece count cannot hold its size (D-02 early grid check) misplaces bytes, but
+  // only bytes of this file matter: in a season pack posted as one RAR set, a broken volume that
+  // holds only another episode's bytes must not block the picked one (review R2).
+  _gridBreakMatters(volIndex) {
+    const v = this.vols[volIndex];
+    if (!v || !v._gridBroken) return false;
+    if (!this.extents.length) return true;
+    return this.extents.some((e) => e.vol === volIndex);
+  }
   deadPieceCount() {
     let n = 0;
     this.vols.forEach((v, volIndex) => {
+      if (this._gridBreakMatters(volIndex)) n++;
       if (!v || !v._deadPieces) return;
       for (const i of v._deadPieces.keys()) if (this._deadPieceMatters(volIndex, i)) n++;
     });
@@ -446,6 +456,7 @@ class ArchiveVirtualFile {
   deadPieceReason() {
     for (let volIndex = 0; volIndex < this.vols.length; volIndex++) {
       const v = this.vols[volIndex];
+      if (this._gridBreakMatters(volIndex)) return `volume ${volIndex + 1} has an unreadable layout: ${v._gridBroken}`;
       if (!v || !v._deadPieces) continue;
       for (const [i, why] of v._deadPieces) {
         if (this._deadPieceMatters(volIndex, i)) return `piece ${i + 1}/${v.segments.length} unreadable on every provider: ${why}`;
@@ -524,7 +535,7 @@ class ArchiveVirtualFile {
   }
 }
 
-function rememberArchiveMap(nzbXml, vf) {
+function rememberArchiveMap(nzbXml, vf, opts = {}) {
   const store = getMountMap();
   if (!store || !vf || !Array.isArray(vf.vols) || !vf.vols.length) return;
   // A multi-file audiobook needs the full inner list. Replaying one file would drop the chapters.
@@ -532,7 +543,9 @@ function rememberArchiveMap(nzbXml, vf) {
   const volumes = [];
   for (const v of vf.vols) {
     if (!(v && v.name && v.size > 0 && v.partSize > 0)) return;
-    volumes.push({ name: v.name, size: v.size, partSize: v.partSize });
+    // A post that counts =ypart offsets from 0 (review R7): the replay never reads piece 1's header.
+    const origin = typeof v.partOriginForStore === 'function' ? v.partOriginForStore() : null;
+    volumes.push({ name: v.name, size: v.size, partSize: v.partSize, ...(origin === -1 || origin === 0 ? { partOrigin: origin } : {}) });
   }
   const inner = vf.extents && vf.extents.length ? {
     name: vf.name,
@@ -554,8 +567,12 @@ function rememberArchiveMap(nzbXml, vf) {
       extents: sub._source.extents,
     } : null,
   })).filter((sub) => sub.source);
-  store.put(nzbXml, {
+  // Scoped by episode and audiobook mode (E2-2): a season pack's map names ONE inner episode.
+  const scope = mapScope(opts);
+  store.put(scopedMapKey(nzbXml, opts), {
     v: 1,
+    ep: scope.ep,
+    audiobook: scope.audiobook,
     container: vf.container,
     method: vf.method,
     streamable: !!vf.streamable,
@@ -569,8 +586,12 @@ function rememberArchiveMap(nzbXml, vf) {
 async function mountFromSavedMap(pool, nzbXml, candidates, opts, password) {
   const store = getMountMap();
   if (!store) return null;
-  const saved = store.get(nzbXml);
+  const saved = store.get(scopedMapKey(nzbXml, opts));
   if (!saved || saved.v !== 1 || !Array.isArray(saved.volumes) || !saved.volumes.length) return null;
+  // Second guard: the record must have been saved for this exact selection. Old records carry no
+  // scope and only ever match a plain (movie) request, which is what they were saved for.
+  const scope = mapScope(opts);
+  if ((saved.ep || null) !== scope.ep || !!saved.audiobook !== scope.audiobook) return null;
   const byName = new Map();
   for (const f of candidates) {
     if (f && f.name && !byName.has(f.name)) byName.set(f.name, f);
@@ -586,6 +607,7 @@ async function mountFromSavedMap(pool, nzbXml, candidates, opts, password) {
   for (let i = 0; i < vols.length; i++) {
     vols[i].size = saved.volumes[i].size;
     vols[i].partSize = saved.volumes[i].partSize;
+    vols[i]._setPartOrigin(saved.volumes[i].partOrigin); // missing (older version) = open (review R8)
     vols[i].setSharedCacheBudget(sharedCacheBudget);
   }
   try {
@@ -633,7 +655,7 @@ async function mountNzb(pool, nzbXml, opts = {}) {
     if (vf && vf.id && Array.isArray(vf.vols)) {
       for (const v of vf.vols) if (v) v.viewerId = vf.id;
     }
-    rememberArchiveMap(nzbXml, vf);
+    rememberArchiveMap(nzbXml, vf, opts);
     return vf;
   };
   // Two obfuscation signatures: (a) one or zero named volumes next to several anonymous slices;

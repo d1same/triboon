@@ -144,6 +144,8 @@ class NzbFileStream {
     this.segments = fileEntry.segments;
     this.size = null;       // learned from =ybegin size=
     this.partSize = null;   // learned from segment 1 (=ypart end - begin)
+    this._partOrigin = 0;   // -1 when segment 1 says begin=0 (a writer that counts from 0)
+    this._partOriginOpen = false; // segment 1 said begin=0: the first later piece decides (review R7)
     this.readAhead = readAhead;
     this.baseReadAhead = readAhead;
     this.maxReadAhead = readAhead;
@@ -346,13 +348,16 @@ class NzbFileStream {
     this.trimCache();
     if (!persist) return;
     if (disk && disk.enabled && msgId) {
-      disk.put(msgId, buf, { size: this.size, partSize: this.partSize, pin: pin === true });
+      disk.put(msgId, buf, { size: this.size, partSize: this.partSize, partOrigin: this.partOriginForStore(), pin: pin === true });
     }
   }
 
   _applyDiskMeta(hit) {
     if (hit && this.size == null && Number.isFinite(hit.size) && hit.size > 0) this.size = hit.size;
-    if (hit && this.partSize == null && Number.isFinite(hit.partSize) && hit.partSize > 0) this.partSize = hit.partSize;
+    if (hit && this.partSize == null && Number.isFinite(hit.partSize) && hit.partSize > 0) {
+      this.partSize = hit.partSize;
+      this._setPartOrigin(hit.partOrigin); // the grid's origin travels with it (review R7; missing = open, R8)
+    }
   }
 
   _cacheDrop(i, { fromSharedBudget = false } = {}) {
@@ -459,7 +464,7 @@ class NzbFileStream {
         // this piece: reject this copy so the next account is tried. If every account hands back the
         // same misplaced article, the NZB itself is off and the piece is dead for this release.
         if (i > 0 && dec.part && Number.isFinite(dec.part.begin) && Number(this.partSize) > 0
-            && Math.abs(dec.part.begin - i * this.partSize) >= Math.floor(this.partSize / 2)) return 'misplaced';
+            && Math.abs(dec.part.begin - this._partOrigin - i * this.partSize) >= Math.floor(this.partSize / 2)) return 'misplaced';
         verified = { raw, dec };
         return true;
       } catch { return false; }
@@ -482,20 +487,46 @@ class NzbFileStream {
     // the wrong bytes every time (Shield, FLUX 1080p: +95 s audio jump at 31:29, then "Invalid
     // integer size" at 34:00 on every retry). A piece more than half a part away from its slot is
     // dead for this release, so the player switches release instead of being fed garbage.
-    const checkPlaced = (dec) => {
-      if (i === 0 || !dec || !dec.part || !Number.isFinite(dec.part.begin)) return;
-      const ps = Number(this.partSize) || 0;
-      if (!(ps > 0)) return;
-      const want = i * ps;
-      if (Math.abs(dec.part.begin - want) < Math.floor(ps / 2)) return;
-      const e = new Error(`piece ${i + 1} holds file bytes from ${dec.part.begin}, expected ${want} (the NZB's article list has a gap or a duplicate)`);
+    // A small shift is refused too (E2G-1, owner answer D-02: refuse and switch release): pieces of
+    // uneven length put every later byte off the grid, and the player got shifted or zero-padded
+    // bytes with no log line. Only `begin` is compared, never the length: a short LAST piece is
+    // normal and its begin is on the grid. Piece 0 must start at byte 0 (E2G-8 part 1): an NZB
+    // whose first article was dropped from the list shifts the whole file. For piece 0 only a shift
+    // of at least half the piece is refused (that is the dropped-article case); existing test
+    // fixtures encode a lone piece with a 1-byte begin, and that is left as it was.
+    const misplaced = (message) => {
+      const e = new Error(message);
       e.code = 'MISPLACED';
       e.everyProviderDefinitive = true;
       if (!this._misplacedLogged) {
         this._misplacedLogged = true;
         try { this._troubleLine(e.message); } catch {}
       }
-      throw e;
+      return e;
+    };
+    const checkPlaced = (dec) => {
+      if (!dec || !dec.part || !Number.isFinite(dec.part.begin)) return;
+      if (i === 0) {
+        const own = Number(this.partSize) || Number(dec.decodedLen) || 0;
+        if (own > 0 && dec.part.begin >= Math.floor(own / 2)) throw misplaced(`piece 1 holds file bytes from ${dec.part.begin}, expected 0 (the NZB's article list is missing its first article)`);
+        return;
+      }
+      const ps = Number(this.partSize) || 0;
+      if (!(ps > 0)) return;
+      // A post that counts =ypart offsets from 0 (piece 1 said begin=0) has every begin one byte
+      // low; compare on that post's own origin (review R7). Piece 1's begin=0 may also be a lone
+      // off-by-one header on a post that counts from 1 (both earlier versions played that), so the
+      // first later piece decides between exactly those two grids, and the grid is locked after.
+      if (this._partOriginOpen) {
+        if (dec.part.begin === i * ps) { this._partOrigin = 0; this._partOriginOpen = false; return; }
+        if (dec.part.begin === i * ps - 1) { this._partOrigin = -1; this._partOriginOpen = false; return; }
+      }
+      const want = i * ps + this._partOrigin;
+      if (dec.part.begin === want) return;
+      if (Math.abs(dec.part.begin - want) >= Math.floor(ps / 2)) {
+        throw misplaced(`piece ${i + 1} holds file bytes from ${dec.part.begin}, expected ${want} (the NZB's article list has a gap or a duplicate)`);
+      }
+      throw misplaced(`piece ${i + 1} starts at ${dec.part.begin}, expected ${want} (uneven yEnc parts)`);
     };
     const decodeAndCache = (raw, skip) => {
       let dec = (skip <= 0 && verified && verified.raw === raw) ? verified.dec : decode(raw, skip > 0 ? { skipDecoded: skip } : undefined);
@@ -516,8 +547,18 @@ class NzbFileStream {
       // A malformed =ypart (begin without a valid end) would yield NaN here and poison ALL
       // offset→segment math (NaN segment indices). Only learn partSize from a sane header.
       if (dec.part && i === 0) {
-        const ps = dec.part.end - dec.part.begin;
-        if (Number.isFinite(ps) && ps > 0) this.partSize = ps;
+        let ps = dec.part.end - dec.part.begin;
+        // Some writers put an off-by-one =ypart end on an intact article (its checksum matched).
+        // Learning the grid from that end shifted every later piece by one byte per piece, and the
+        // strict start check would refuse a healthy post. The decoded length is the real size.
+        if (Number.isFinite(ps) && Number.isFinite(dec.decodedLen) && Math.abs(ps - dec.decodedLen) === 1) ps = dec.decodedLen;
+        if (Number.isFinite(ps) && ps > 0) {
+          // yEnc 1.3 counts from 1 (begin=1 is stored as 0). begin=0 (stored as -1) marks a
+          // writer that counts from 0: every later piece carries the same one-byte offset.
+          this._setPartOrigin(dec.part.begin === -1 ? -1 : 0);
+          this.partSize = ps;
+          this._checkGrid();
+        }
       }
       if (skip > 0) {
         this._rememberSlice(i, skip, dec.data);
@@ -549,7 +590,16 @@ class NzbFileStream {
           if (signalAborted(signal)) { settled = true; unlink(); reject(e); return; }
           // A cancel we did not ask for (pipelined line draining) falls back to the read-ahead copy
           // like any other failure. Rejecting with ABORT_ERR here cut the player's response short.
-          rec.promise.then(win, (e2) => { if (!settled) { settled = true; unlink(); reject(e2); } });
+          const lose = (e2) => { if (!settled) { settled = true; unlink(); reject(e2); } };
+          // Only a copy that starts at or before the player's own byte can stand in (E2-1). A
+          // lower-priority tail from later in the piece (moviehash, warm-up, byte check, an extent
+          // read) was served as if it started at the player's byte: right length, wrong bytes.
+          // Then fetch the whole piece once on the player's lane. Not via _fetchSegment: the
+          // low-priority rec is still in flight there, so that would take this boost path again.
+          if ((rec.skipDecoded || 0) <= skipDecoded) { rec.promise.then(win, lose); return; }
+          this.pool.body(this.segments[i].msgId, priority, bodyOpts(signal))
+            .then((raw) => decodeAndCache(raw, 0))
+            .then(win, lose);
         });
         if (ahead) ahead.then(win, () => {});
       });
@@ -620,10 +670,41 @@ class NzbFileStream {
     this._troubleLine(`health blocked: piece ${i + 1}${total ? `/${total}` : ''} marked dead on the ${lane || 'unknown'} lane (${e.code || 'unreadable'})${asked}`);
     if (this.health && this.health.verdict !== 'blocked') this.health = { ...this.health, verdict: 'blocked', dead: this._deadPieces.size };
   }
+  // -1: piece 1 said begin=0 (a post that counts from 0, or a lone off-by-one header); left open
+  // until the first later piece shows which grid the post uses. 0: yEnc 1.3, counts from 1.
+  _setPartOrigin(origin) {
+    // Review R8: anything else (a record from an older version has no field) is unknown: open,
+    // so the first later piece decides between the two grids, exactly as for begin=0.
+    if (origin === 0) { this._partOrigin = 0; this._partOriginOpen = false; return; }
+    this._partOrigin = origin === -1 ? -1 : 0;
+    this._partOriginOpen = true;
+  }
+  // What a saved map or disk record keeps: -1 (counts from 0, or piece 1 said begin=0 and no later
+  // piece decided yet: reopens on replay), 0 (decided: counts from 1), null (unknown, still open).
+  partOriginForStore() {
+    if (this._partOrigin === -1) return -1;
+    return this._partOriginOpen ? null : 0;
+  }
+  // Early grid check (owner answer D-02): once piece 0 has taught us partSize, the piece count must
+  // be able to hold the file. If it cannot (a gap in the NZB's article list, or uneven parts), the
+  // grid is wrong somewhere and later bytes would be served shifted. The mount is marked blocked
+  // at once so Play switches release; piece 0 itself is fine and is not rejected. A one-article
+  // file has no later piece that a wrong grid could shift, so it keeps today's behaviour.
+  _checkGrid() {
+    const n = Array.isArray(this.segments) ? this.segments.length : 0;
+    const ps = Number(this.partSize) || 0;
+    const size = Number(this.size);
+    if (this._gridBroken || !(n > 1) || !(ps > 0) || !Number.isFinite(size) || !(size > 0)) return;
+    if (size <= n * ps && size > (n - 1) * ps) return;
+    this._gridBroken = `${n} pieces of ${ps} bytes cannot hold ${size} bytes (a gap in the NZB's article list or uneven yEnc parts)`;
+    try { this._troubleLine(`health blocked: ${this._gridBroken}`); } catch {}
+    if (this.health && this.health.verdict !== 'blocked') this.health = { ...this.health, verdict: 'blocked', dead: this.deadPieceCount() };
+  }
   deadPieceCount() {
-    return this._deadPieces ? this._deadPieces.size : 0;
+    return (this._deadPieces ? this._deadPieces.size : 0) + (this._gridBroken ? 1 : 0);
   }
   deadPieceReason() {
+    if ((!this._deadPieces || !this._deadPieces.size) && this._gridBroken) return `unreadable layout: ${this._gridBroken}`;
     if (!this._deadPieces || !this._deadPieces.size) return '';
     const [i, why] = this._deadPieces.entries().next().value;
     return `piece ${i + 1}/${this.segments.length} unreadable on every provider: ${why}`;
@@ -736,11 +817,18 @@ class NzbFileStream {
       // skipped the head twice when read-ahead cached the whole piece while our tail fetch was out:
       // the player got bytes from the wrong offset (Shield, 10:02: MKV element size 335 MB ->
       // ArrayIndexOutOfBounds, PARSING_CONTAINER_MALFORMED, a 52 s audio jump).
-      const startInBuf = sliceStartFor(data, from, this.cache.has(segIdx));
+      let startInBuf = sliceStartFor(data, from, this.cache.has(segIdx));
+      if (startInBuf < 0) {
+        // A tail that starts after our byte cannot serve it: fetch the whole piece instead.
+        data = await this._fetchSegment(segIdx, activePriority, { signal, skipDecoded: 0 });
+        startInBuf = sliceStartFor(data, from, this.cache.has(segIdx));
+        if (startInBuf < 0) throw new Error(`piece ${segIdx + 1} came back starting after byte ${from} twice`);
+      }
       let want = Math.min(data.length - startInBuf, end - offset);
       if (want <= 0 && from > 0 && !this.cache.has(segIdx)) {
         data = await this._fetchSegment(segIdx, activePriority, { signal, skipDecoded: 0 });
         const retryFrom = sliceStartFor(data, from, this.cache.has(segIdx));
+        if (retryFrom < 0) throw new Error(`piece ${segIdx + 1} came back starting after byte ${from} twice`);
         want = Math.min(data.length - retryFrom, end - offset);
         if (want > 0) {
           this.playbackStats.segmentsServed++;
@@ -885,11 +973,13 @@ function markStart(buf, start) {
   if (buf && typeof buf === 'object') BUF_START.set(buf, Math.max(0, Number(start) || 0));
   return buf;
 }
-// Offset inside `data` of segment byte `from`. Untagged buffers keep the old rule.
+// Offset inside `data` of segment byte `from`. Untagged buffers keep the old rule. -1 = these
+// bytes start AFTER `from` (E2-1): they cannot serve it, and clamping to 0 served wrong bytes.
 function sliceStartFor(data, from, inCache) {
   const start = data && typeof data === 'object' ? BUF_START.get(data) : undefined;
   if (start === undefined) return inCache ? from : 0;
-  return Math.max(0, from - start);
+  if (start > from) return -1;
+  return from - start;
 }
 
 // One health STAT for triage: 'ok', 'missing' (every account asked said 430, or is remembered
@@ -942,4 +1032,7 @@ class VirtualFile extends NzbFileStream {
   }
 }
 
-module.exports = { VirtualFile, NzbFileStream, SharedCacheBudget, statSample, healthFromSamples, blockedLine };
+module.exports = {
+  VirtualFile, NzbFileStream, SharedCacheBudget, statSample, healthFromSamples, blockedLine,
+  _sliceStartFor: sliceStartFor, _markStart: markStart,
+};

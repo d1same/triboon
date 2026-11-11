@@ -16,6 +16,10 @@ function sleepMs(ms) {
 // Tables that hold the user's real, hard-to-recreate state. In "safe mode" (secret unreadable at
 // boot) writes to these are frozen so a temporary-key session can't overwrite the intact data on disk.
 const CRITICAL_TABLES = new Set(['secret', 'users', 'settings']);
+// A rename that fails because something holds the live file (Windows AV, an open reader) is the
+// only case that earns the non-atomic in-place write. A full disk fails the temp write instead.
+const RENAME_LOCK_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+function isRenameLock(e) { return !!(e && RENAME_LOCK_CODES.has(e.code)); }
 
 class Store {
   constructor(dir = process.env.TRIBOON_DATA || path.join(__dirname, '..', 'data')) {
@@ -164,27 +168,40 @@ class Store {
         const file = this._file(table);
         const syncWrites = this._syncWrites.get(table) || 0;
         let ok = false;
+        let err = null;
+        const tmp = this._tmpFile(file);
+        // Stage 1: the temp copy. If THIS fails (full disk, quota), the live file is untouched:
+        // an in-place write would truncate it first and could leave it empty (audit F1-02).
+        let tmpWritten = false;
         try {
-          const tmp = this._tmpFile(file);
           await fs.promises.writeFile(tmp, json, { mode: 0o600 });
+          tmpWritten = true;
+        } catch (e) {
+          this._unlinkTmp(tmp);
+          err = e;
+        }
+        // Stage 2: the rename. Only a LOCK on the live file (Windows AV / an open reader) earns
+        // the in-place fallback; any other rename error keeps the live copy and retries later.
+        if (tmpWritten) {
           try {
             await fs.promises.rename(tmp, file);
-          } catch (renameErr) {
-            this._unlinkTmp(tmp);
-            throw renameErr;
-          }
-          fs.promises.chmod(file, 0o600).catch(() => {});
-          ok = true;
-        } catch {
-          try {
-            await fs.promises.writeFile(file, json, { mode: 0o600 });
             fs.promises.chmod(file, 0o600).catch(() => {});
             ok = true;
-          } catch (e2) {
-            this.dirty.add(table);
-            this.lastFlushError = e2;
-            this._noteFlushFailure([table]);
+          } catch (renameErr) {
+            this._unlinkTmp(tmp);
+            if (isRenameLock(renameErr)) {
+              try {
+                await fs.promises.writeFile(file, json, { mode: 0o600 });
+                fs.promises.chmod(file, 0o600).catch(() => {});
+                ok = true;
+              } catch (e2) { err = e2; }
+            } else err = renameErr;
           }
+        }
+        if (!ok) {
+          this.dirty.add(table);
+          this.lastFlushError = err;
+          this._noteFlushFailure([table]);
         }
         if (ok) { this._lastFlushAt.set(table, Date.now()); this._noteFlushRecovered(); }
         // A sync flush ran during those awaits, so this older copy landed over its newer one.
@@ -236,25 +253,29 @@ class Store {
     this._syncWrites.set(table, (this._syncWrites.get(table) || 0) + 1);
     const json = JSON.stringify(this.cache.get(table), null, 0);
     const file = this._file(table);
+    const tmp = this._tmpFile(file);
+    // Stage 1: the temp copy. A failure here (full disk) must not touch the live file: the old
+    // in-place fallback truncated users.json/settings.json and a second ENOSPC left it empty.
     try {
-      const tmp = this._tmpFile(file);
       fs.writeFileSync(tmp, json, { mode: 0o600 });
-      try {
-        fs.renameSync(tmp, file);
-      } catch (renameErr) {
-        this._unlinkTmp(tmp);
-        throw renameErr;
-      }
-      try { fs.chmodSync(file, 0o600); } catch {}
-      this._lastFlushAt.set(table, Date.now());
-    } catch {
+    } catch (e) {
+      this._unlinkTmp(tmp);
+      this.lastFlushError = e;
+      return false;
+    }
+    // Stage 2: the rename. Only a lock (EPERM/EBUSY/EACCES: Windows AV or an open reader) falls
+    // back to the in-place write; any other rename error keeps the live copy for a retry.
+    try {
+      fs.renameSync(tmp, file);
+    } catch (renameErr) {
+      this._unlinkTmp(tmp);
+      if (!isRenameLock(renameErr)) { this.lastFlushError = renameErr; return false; }
       try {
         fs.writeFileSync(file, json, { mode: 0o600 });
-        try { fs.chmodSync(file, 0o600); } catch {}
-        this._lastFlushAt.set(table, Date.now());
-      }
-      catch (e2) { this.lastFlushError = e2; return false; }
+      } catch (e2) { this.lastFlushError = e2; return false; }
     }
+    try { fs.chmodSync(file, 0o600); } catch {}
+    this._lastFlushAt.set(table, Date.now());
     return true;
   }
 

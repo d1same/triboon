@@ -31,6 +31,13 @@ function isIndexerRateLimitedMessage(text) {
   return /\b429\b|too many request|rate.?limit|code 50[01]\b/i.test(String(text || ''));
 }
 
+// Error texts name only the host (with its port). Newznab NZB links often carry the user id and
+// API key in the PATH (`.../getnzb/<id>.nzb&i=<uid>&r=<key>`, no "?"), so `split('?')[0]` kept the
+// key, and these texts reach attempts[].fail in answers to signed-in users (14-P1).
+function urlHost(url) {
+  try { return new URL(url).host || 'indexer'; } catch { return 'indexer'; }
+}
+
 // timeoutMs = idle timeout; deadlineMs = HARD total budget (a steadily-trickling download
 // never idles, so without a deadline a 30MB NZB can stall the pipeline for half a minute).
 // The deadline and hop budget are SHARED across redirects so a redirect chain can't reset the
@@ -51,9 +58,9 @@ function fetchUrl(url, opts = {}) {
     .then((v) => { validated = v; })
     .then(() => new Promise((resolve, reject) => {
     if (signal && signal.aborted) return reject(abortError());
-    if (hops > 5) return reject(new Error(`too many redirects: ${url.split('?')[0]}`));
+    if (hops > 5) return reject(new Error(`too many redirects: ${urlHost(url)}`));
     const remaining = deadlineAt - Date.now();
-    if (remaining <= 0) return reject(new Error(`deadline exceeded: ${url.split('?')[0]}`));
+    if (remaining <= 0) return reject(new Error(`deadline exceeded: ${urlHost(url)}`));
     const lib = url.startsWith('https') ? https : http;
     // agent:false → one-shot connection, no keep-alive: every fetch here is a single search
     // or NZB download. Node ≥19 keeps agent sockets alive for minutes otherwise — idle
@@ -64,12 +71,38 @@ function fetchUrl(url, opts = {}) {
       ...(validated && typeof validated.lookup === 'function' ? { lookup: validated.lookup } : {}),
     };
     let onAbort = null;
+    // One exit for every failure (G2-19): a remote that sends headers and then closes the
+    // connection used to leave this promise unsettled forever, past its own deadline. The size
+    // cap, deadline, idle timeout and abort RECORD their reason before req.destroy, so that
+    // specific text (and the XMLTV cancel reason) wins over a generic "closed early"; `settled`
+    // makes any later exit harmless and keeps onFailure (address-health) to one call.
+    let settled = false;
+    let failReason = null;
     const cleanup = () => {
       clearTimeout(deadline);
       if (signal && onAbort) signal.removeEventListener('abort', onAbort);
     };
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const aborted = !!(signal && signal.aborted);
+      const e = aborted ? abortError() : (failReason || err);
+      if (!aborted && validated && typeof validated.onFailure === 'function') {
+        try { validated.onFailure(e); } catch {}
+      }
+      reject(e);
+    };
+    const stop = (reason) => {
+      if (!failReason) failReason = reason;
+      req.destroy(failReason);
+      fail(failReason);
+    };
+    const closedEarly = () => new Error(`connection closed before the response was complete: ${urlHost(url)}`);
     const req = lib.get(url, requestOptions, (res) => {
+      if (settled) { res.resume(); return; }
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        settled = true;
         res.resume(); cleanup();
         const next = new URL(res.headers.location, url).href;
         return fetchUrl(next, {
@@ -80,31 +113,36 @@ function fetchUrl(url, opts = {}) {
       // Response-size cap: a hostile/broken upstream must not be able to balloon memory.
       const chunks = []; let len = 0;
       res.on('data', (c) => {
+        if (settled) return;
         len += c.length;
-        if (len > maxBytes) { cleanup(); req.destroy(new Error(`response too large (>${maxBytes} bytes): ${url.split('?')[0]}`)); }
+        if (len > maxBytes) stop(new Error(`response too large (>${maxBytes} bytes): ${urlHost(url)}`));
         else chunks.push(c);
       });
-      res.on('end', () => { cleanup(); resolve({ status: res.statusCode, body: Buffer.concat(chunks) }); });
+      res.on('end', () => {
+        if (settled) return;
+        if (!res.complete) return fail(closedEarly());
+        settled = true;
+        cleanup();
+        resolve({ status: res.statusCode, body: Buffer.concat(chunks) });
+      });
+      res.on('error', (e) => fail(e || closedEarly()));
+      res.on('aborted', () => fail(closedEarly()));
+      // `close` also fires after a normal `end`; only an incomplete body is a failure, and a
+      // settled request ignores it.
+      res.on('close', () => { if (!res.complete) fail(closedEarly()); });
     });
-    const deadline = setTimeout(() => req.destroy(new Error(`deadline after ${deadlineMs}ms: ${url.split('?')[0]}`)), remaining);
-    req.on('error', (e) => {
-      if (!(signal && signal.aborted) && validated && typeof validated.onFailure === 'function') {
-        try { validated.onFailure(e); } catch {}
-      }
-      cleanup(); reject(e);
-    });
+    const deadline = setTimeout(() => stop(new Error(`deadline after ${deadlineMs}ms: ${urlHost(url)}`)), remaining);
+    req.on('error', (e) => fail(e));
     if (signal) {
       onAbort = () => {
         req.destroy(abortError());
+        fail(abortError());
       };
       signal.addEventListener('abort', onAbort, { once: true });
       if (signal.aborted) onAbort();
     }
     req.setTimeout(timeoutMs, () => {
-      if (validated && typeof validated.onFailure === 'function') {
-        try { validated.onFailure(new Error('timeout')); } catch {}
-      }
-      req.destroy(new Error(`timeout after ${timeoutMs}ms: ${url.split('?')[0]}`));
+      stop(new Error(`timeout after ${timeoutMs}ms: ${urlHost(url)}`));
     });
   }));
 }

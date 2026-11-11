@@ -495,6 +495,25 @@ them when the table is reorganized:
   snap back to the typed plan. Code: `server/nntp.js` `_markAuthCap`,
   `refusingNewLogins`, `_ordered`. Verification: the 480 pause, both-accounts,
   and two-minute restore tests in `test/e2e.test.js`.
+- **P14 - a settings save keeps the NNTP pool; a replaced pool retires.** Only
+  a change to how the pool dials (host, port, TLS, user, password fingerprint,
+  connections, pipelining, backup) builds a new pool. The old one stays open
+  for the mounts still reading through it and closes when the last one is
+  released, so a provider edit never cuts a running stream. While those mounts
+  run, the retired pool keeps its open lines and the new pool dials the same
+  account beside it, so for that time the account can hold the old pool's
+  open lines plus the new pool's lines (no shared cap covers both); once the
+  last old mount ends, only the new pool's lines remain (before S3-1 the old
+  pool was never closed). Code: `server/index.js` `poolKeyFor`, `retirePool`,
+  `closeIdleRetiredPools`, `retirePoolIfProvidersChanged`, `shutdown`.
+  Verification: the `nntp pool: unrelated settings saves keep the pool` test in
+  `test/security.test.js`. The admin speed test logs out the tested account's
+  idle lines only when no player read is open and no Triboon player heartbeat
+  is live and the account is not in a 480 quiet window, and never touches
+  another account (`speedTestPoolEntries`,
+  `speedTestPlaybackActive`, `ProviderPool.releaseIdle`). Verification: the
+  `speed test:` tests in `test/security.test.js` and the `releaseIdle` stall
+  tests in `test/e2e.test.js`.
 - **P14 - a dark account sorts behind a busy one.** An account with zero open
   lines whose last dial failed inside the backoff window is `down()`. It must
   not win `_ordered()` on headroom alone: a busy account that is actually

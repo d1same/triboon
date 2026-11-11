@@ -1,6 +1,8 @@
 package app.triboon.tv;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -31,5 +33,29 @@ public class UpdateVerifierTest {
         assertFalse(UpdateVerifier.metadataAllowed("app.triboon.tv", 303, 304, signer));
         assertFalse(UpdateVerifier.metadataAllowed("app.triboon.tv", 305, 304,
                 "00".repeat(32)));
+    }
+
+    // B15A-01 (A1-1): Android 9/10 can leave signingInfo empty for an archive; the old
+    // signatures field is then the only signer list. Never more than one signer, never a mix.
+    @Test
+    public void signerComesFromSigningInfoFirstAndTheOldFieldOnlyAsFallback() {
+        byte[] modern = {1, 2, 3};
+        byte[] legacy = {9, 9};
+        assertArrayEquals(modern, UpdateVerifier.pickSingleSigner(new byte[][] {modern}, new byte[][] {legacy}));
+        assertArrayEquals(modern, UpdateVerifier.pickSingleSigner(new byte[][] {modern}, null));
+        assertArrayEquals(legacy, UpdateVerifier.pickSingleSigner(null, new byte[][] {legacy}));
+        assertArrayEquals(legacy, UpdateVerifier.pickSingleSigner(new byte[0][], new byte[][] {legacy}));
+    }
+
+    @Test
+    public void noReadableSingleSignerIsRefused() {
+        byte[] a = {1};
+        byte[] b = {2};
+        assertNull(UpdateVerifier.pickSingleSigner(null, null));
+        assertNull(UpdateVerifier.pickSingleSigner(new byte[0][], new byte[0][]));
+        assertNull(UpdateVerifier.pickSingleSigner(new byte[][] {a, b}, new byte[][] {a}));
+        assertNull(UpdateVerifier.pickSingleSigner(null, new byte[][] {a, b}));
+        assertNull(UpdateVerifier.pickSingleSigner(new byte[][] {null}, new byte[][] {a}));
+        assertNull(UpdateVerifier.pickSingleSigner(null, new byte[][] {new byte[0]}));
     }
 }

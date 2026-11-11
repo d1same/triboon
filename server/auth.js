@@ -22,10 +22,19 @@ const STREAM_TTL_MS = 6 * 3600 * 1000;        // stream link: 6 hours (covers an
 const STABLE_STREAM_BUCKET_MS = 60 * 60 * 1000; // cache-stable URLs, still max 6h validity
 const INVITE_TTL_MS = 48 * 3600 * 1000;
 const QC_TTL_MS = 60 * 1000;
+// Longest sign-in name. Account creation refuses longer names and both sign-in routes (web and
+// Jellyfin) refuse them before any throttle key is built (audit S2-11), so one constant keeps the
+// two from drifting apart.
+const SIGN_IN_NAME_MAX = 128;
 const TOTP_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const TOTP_PERIOD_SEC = 30;
 const TOTP_DIGITS = 6;
 const TOTP_ISSUER = 'Triboon';
+// Kept copies of a settings.json that could not be opened (audit F1-01). Must never match the
+// store's boot temp scrub (/\.json\.tmp\d+$/), or the next boot would delete them.
+const SETTINGS_SIDE_COPY_RE = /^settings\.json\.unreadable-.+\.keep$/;
+// Plain store table that records which side-copy notice the admin hid (a file name only).
+const SETTINGS_NOTICE_TABLE = 'settings-notice';
 const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 function deriveKey(secret, label) {
@@ -43,10 +52,35 @@ function deriveKey(secret, label) {
 // flooding unique keys can't leak memory (clearing it only ever *loosens* limits briefly).
 const RATE_LIMIT_KEYS = 50000;
 
+// Keys longer than this are stored as a fixed prefix + SHA-256 digest, so a caller-chosen key (a
+// 1 MB sign-in name) costs a few dozen bytes, not megabytes (audit S2-11).
+const RATE_LIMIT_KEY_MAX = 200;
+const RATE_LIMIT_SWEEP_MS = 60000;
+
 class RateLimiter {
-  constructor(maxKeys = RATE_LIMIT_KEYS) { this.hits = new Map(); this.maxKeys = maxKeys; } // key -> { n, resetAt, lockedUntil }
-  check(key, { max = 5, windowMs = 60000, lockMs = 60000 } = {}) {
+  constructor(maxKeys = RATE_LIMIT_KEYS, { sweepMs = RATE_LIMIT_SWEEP_MS } = {}) {
+    this.hits = new Map(); // key -> { n, resetAt, lockedUntil }
+    this.maxKeys = maxKeys;
+    this.sweepMs = sweepMs;
+    this._sweptAt = Date.now();
+  }
+  _key(key) {
+    const k = String(key);
+    return k.length > RATE_LIMIT_KEY_MAX ? `h:${crypto.createHash('sha256').update(k).digest('hex')}` : k;
+  }
+  // Lazy sweep (no timer: every limiter would hold one and change process exit): at most once
+  // per interval, drop entries whose window AND lock are over. Live locks and running counts stay.
+  _sweep(now) {
+    if (now - this._sweptAt < this.sweepMs) return;
+    this._sweptAt = now;
+    for (const [k, e] of this.hits) {
+      if (e.lockedUntil <= now && now > e.resetAt) this.hits.delete(k);
+    }
+  }
+  check(rawKey, { max = 5, windowMs = 60000, lockMs = 60000 } = {}) {
     const now = Date.now();
+    const key = this._key(rawKey);
+    this._sweep(now);
     let e = this.hits.get(key);
     if (e && e.lockedUntil > now) return { ok: false, retryMs: e.lockedUntil - now };
     if (!e || now > e.resetAt) {
@@ -74,10 +108,10 @@ class RateLimiter {
   }
   // Is this key locked? Unlike check, it counts nothing.
   lockedMs(key) {
-    const e = this.hits.get(key);
+    const e = this.hits.get(this._key(key));
     return e && e.lockedUntil > Date.now() ? e.lockedUntil - Date.now() : 0;
   }
-  clear(key) { this.hits.delete(key); }
+  clear(key) { this.hits.delete(this._key(key)); }
 }
 
 const MIN_PASSWORD_LENGTH = 4;
@@ -90,6 +124,7 @@ function hashPassword(password) {
 // Built-in profile avatars ship as web/avatars/av01.svg..av20.svg; the profile stores only the
 // id. 'custom' (an uploaded picture) is set exclusively by the upload route, never accepted
 // from a bare profile edit — so a profile can't claim a custom image that was never uploaded.
+function newSessionId() { return crypto.randomBytes(6).toString('base64url'); }
 function validAvatarId(a) { return /^av(0[1-9]|1\d|20)$/.test(String(a || '')); }
 // Every profile gets a face: profiles created before avatars existed (or after a "remove")
 // derive a STABLE builtin from their id hash — no migration write, no bare letter tiles, and
@@ -183,8 +218,21 @@ class Auth {
     // can't function without the real secret, and the lock almost always clears within seconds. We must
     // NEVER crash while waiting (that surfaces as Error 1067 "the service won't start"), and never
     // regenerate unless the file is truly unrecoverable — and even then we PRESERVE the old one.
-    if (secret) this.secret = secret;
-    else {
+    if (secret) {
+      this.secret = secret;
+      // An env secret that differs from a secret.json on disk means the encrypted settings were
+      // most likely made with the other one (audit F1-01). Compare only; never print either value.
+      try {
+        if (fs.existsSync(path.join(store.dir, 'secret.json'))) {
+          const sec = store.read('secret', {});
+          if (sec && sec.value && sec.value !== secret) {
+            console.error('[triboon] WARNING: TRIBOON_SECRET differs from the secret in secret.json. Settings saved '
+              + 'under the other secret will not open (they read as empty). If settings look blank, restore the '
+              + 'previous TRIBOON_SECRET (or remove it to use secret.json) and restart before saving anything.');
+          }
+        }
+      } catch {}
+    } else {
       const secFile = path.join(store.dir, 'secret.json');
       const sec = store.read('secret', {});
       if (sec && sec.value) {
@@ -221,6 +269,17 @@ class Auth {
             + '(or reboot) and it will load your real secret and data. File: ' + secFile);
         }
       } else {
+        // A NEW secret next to existing data: the encrypted settings (and TOTP secrets) were made
+        // with a key that is now gone. Say so loudly; the settings side copy (SecureSettings) keeps
+        // the old blob before anything overwrites it (audit F1-01).
+        const existing = ['users.json', 'settings.json'].filter((n) => { try { return fs.existsSync(path.join(store.dir, n)); } catch { return false; } });
+        if (existing.length) {
+          try {
+            console.error(`[triboon] WARNING: secret.json is missing but ${existing.join(' and ')} already exist. A new secret `
+              + 'is being made, so encrypted settings saved under the old secret will NOT open (they read as empty). '
+              + 'To recover, stop the server, restore the old secret.json (or TRIBOON_SECRET) and restart before saving anything.');
+          } catch {}
+        }
         const value = crypto.randomBytes(32).toString('hex');
         store.write('secret', { value }); store.flush(['secret']);
         this.secret = value;                           // fresh install
@@ -230,6 +289,21 @@ class Auth {
     this.totpKey = deriveKey(this.secret, 'admin-totp-aes-gcm-v1');
     this.quickConnect = new Map(); // code -> { createdAt, deviceName, token? }
     this._migrateMaturitySchema();
+    this._warnLongSignInNames();
+  }
+
+  // Accounts made before the sign-in name cap may hold a longer name, which can no longer sign in.
+  // Nothing is renamed or cut; one warning per such account names its id and length (never the name).
+  _warnLongSignInNames() {
+    let list;
+    try { list = this._users().list || []; } catch { return; }
+    for (const u of list) {
+      const len = String((u && u.name) ?? '').length;
+      if (len > SIGN_IN_NAME_MAX) {
+        console.warn(`[triboon] account ${u.id} has a sign-in name of ${len} characters, over the `
+          + `${SIGN_IN_NAME_MAX}-character limit, so it cannot sign in by name.`);
+      }
+    }
   }
 
   // One-time maturity-tier migration (v1 → v2). v1 tiers: 0 Kids(≤PG) · 1 Teen(≤PG-13) ·
@@ -270,6 +344,11 @@ class Auth {
   createUser({ name, password, role = 'user', policy = {} }) {
     if (this.usersUnreadable()) throw new Error('user data could not be read');
     if (String(password || '').length < MIN_PASSWORD_LENGTH) throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+    // Every account-creation path comes through here (first-run setup and invite accept). A name
+    // the sign-in routes would refuse must never become an account that can never sign in.
+    if (String(name ?? '').length > SIGN_IN_NAME_MAX) {
+      throw Object.assign(new Error(`name must be at most ${SIGN_IN_NAME_MAX} characters`), { code: 'NAME_TOO_LONG' });
+    }
     const users = this._users();
     if (users.list.some((u) => u.name.toLowerCase() === name.toLowerCase())) {
       throw new Error('user already exists');
@@ -295,13 +374,20 @@ class Auth {
 
   // Maturity tiers by rating cap: 0 G · 1 PG · 2 PG-13 · 3 R · 4 No limit. The catalog is filtered
   // to the profile's tier (a G/PG profile never sees mature titles). Optional 4-digit PIN = parental lock.
-  addProfile(uid, { name, level = 4, pin, avatar }) {
+  // `callerLevel` (the HTTP route passes it): a profile ABOVE the caller's own level needs the
+  // account password, or a kid on the session could add a level-4 profile and lift the cap
+  // (F1-08). Compared on the normalized level so the stored level and the check agree.
+  addProfile(uid, { name, level = 4, pin, avatar, callerLevel, password } = {}) {
     const users = this._users();
     const u = users.list.find((x) => x.id === uid);
     if (!u) throw new Error('unknown user');
     if (!name || !String(name).trim()) throw new Error('profile name required');
     if ((u.profiles || []).length >= 8) throw new Error('profile limit reached');
     const lvl = Math.max(0, Math.min(4, parseInt(level, 10) || 0));
+    if (Number.isInteger(callerLevel) && lvl > callerLevel) {
+      if (password === undefined || password === null || password === '') throw new Error('account password required');
+      if (!verifyPassword(String(password), u.salt, u.hash)) throw new Error('account password incorrect');
+    }
     const profile = {
       id: crypto.randomBytes(4).toString('hex'), name: String(name).trim().slice(0, 24),
       level: lvl, kid: lvl === 0,
@@ -437,8 +523,10 @@ class Auth {
     return true;
   }
 
+  // `sid` is a random per-login id: it lets the server tell two devices of one account apart
+  // (Live TV slots, S1-2). Old tokens without it stay valid.
   sessionForUser(u) {
-    return this.signToken({ uid: u.id, role: u.role, scope: 'session', epoch: u.sessionEpoch || 0 }, TOKEN_TTL_MS);
+    return this.signToken({ uid: u.id, role: u.role, scope: 'session', epoch: u.sessionEpoch || 0, sid: newSessionId() }, TOKEN_TTL_MS);
   }
 
   _encryptTotpSecret(secret) {
@@ -621,9 +709,11 @@ class Auth {
 
   // Stream tokens are BOUND to one resource (mount id / local:<lib>:<idx> / iptv:<idx>):
   // a leaked VLC URL streams that one thing, not everything the account can reach.
-  streamToken(uid, sub) {
+  // `extra` adds claims (for example a Live TV device id); it can never override the binding.
+  streamToken(uid, sub, extra = null) {
     const u = this.getUser(uid);
-    return this.signToken({ uid, scope: 'stream', sub: sub || null, epoch: u ? (u.sessionEpoch || 0) : 0 }, STREAM_TTL_MS);
+    const more = extra && typeof extra === 'object' ? extra : {};
+    return this.signToken({ ...more, uid, scope: 'stream', sub: sub || null, epoch: u ? (u.sessionEpoch || 0) : 0 }, STREAM_TTL_MS);
   }
 
   // STABLE stream token: same (uid, sub) -> same token for a one-hour cache bucket, with
@@ -719,7 +809,7 @@ class Auth {
     if (!e) throw new Error('code expired or unknown');
     const u = this.getUser(approverUid);
     if (!u) throw new Error('unknown user');
-    e.token = this.signToken({ uid: u.id, role: u.role, scope: 'session', epoch: u.sessionEpoch || 0 }, TOKEN_TTL_MS);
+    e.token = this.signToken({ uid: u.id, role: u.role, scope: 'session', epoch: u.sessionEpoch || 0, sid: newSessionId() }, TOKEN_TTL_MS);
     return { ok: true, deviceName: e.deviceName };
   }
   qcPoll(code) {
@@ -738,6 +828,7 @@ class SecureSettings {
     this.store = store;
     this.key = deriveKey(secret, 'settings-aes-gcm-v1');
     this.legacyKey = crypto.createHash('sha256').update('triboon-settings:' + secret).digest();
+    this.unreadable = false; // live mark: settings.json is there but does not open (see _load)
   }
   _encrypt(obj) {
     const iv = crypto.randomBytes(12);
@@ -754,17 +845,104 @@ class SecureSettings {
     try { return this._decryptWithKey(blob, this.key); }
     catch (e) { return this._decryptWithKey(blob, this.legacyKey); }
   }
-  get() {
+  // Reads the blob and reports whether it opens. A MISSING file is the normal first run (defaults,
+  // not unreadable). A file that is there but damaged/locked (the store gives up and returns null
+  // without caching it), a blob that is not an encrypted settings object, or one that does not
+  // decrypt with this secret (TRIBOON_SECRET changed, secret.json lost) is UNREADABLE (audit F1-01).
+  // readFailed() is checked only in the null-blob branch: the store never clears that mark on a
+  // write, so checking it first would keep serving defaults after the admin saves again.
+  _load() {
     const blob = this.store.read('settings', null);
-    if (!blob || !blob.iv) return { providers: [], indexers: [], tmdbKey: null };
-    try { return this._decrypt(blob); } catch { return { providers: [], indexers: [], tmdbKey: null }; }
+    if (!blob) {
+      if (!this.store.readFailed('settings')) return { value: null, unreadable: false };
+      // A 0-byte or whitespace-only file holds nothing to lose: treat it like a missing file (defaults,
+      // no flag, no side copy). Any other file that does not open, or a raw read that fails (a lock),
+      // stays unreadable.
+      return { value: null, unreadable: !this._settingsFileBlank() };
+    }
+    if (!blob.iv) return { value: null, unreadable: true };
+    try { return { value: this._decrypt(blob), unreadable: false }; }
+    catch { return { value: null, unreadable: true }; }
+  }
+  _note(unreadable) {
+    this.unreadable = unreadable;
+    if (unreadable && !this._unreadableWarned) {
+      this._unreadableWarned = true;
+      try {
+        console.error('[triboon] settings.json is present but cannot be opened with the current secret (TRIBOON_SECRET '
+          + 'changed, secret.json lost or replaced, or the file is damaged). Settings read as EMPTY until the old '
+          + 'secret is restored and the server restarted. The original file is kept as a side copy before any save.');
+      } catch {}
+    }
+  }
+  get() {
+    const { value, unreadable } = this._load();
+    this._note(unreadable);
+    return value || { providers: [], indexers: [], tmdbKey: null };
+  }
+  _settingsFileBlank() {
+    try { return fs.readFileSync(path.join(this.store.dir, 'settings.json'), 'utf8').trim() === ''; }
+    catch (e) { return !!(e && e.code === 'ENOENT'); }
+  }
+  // The admin may hide the notice for the newest side copy. Only the copy's NAME is recorded, in a
+  // plain store table (not the encrypted settings); the .keep file itself is never touched. A newer
+  // side copy has a new name, so its notice shows again.
+  sideCopyNotice() {
+    const copy = this.sideCopyName();
+    let dismissed = null;
+    try { dismissed = (this.store.read(SETTINGS_NOTICE_TABLE, {}) || {}).dismissedSideCopy || null; } catch {}
+    return { copy, dismissed: !!copy && dismissed === copy };
+  }
+  dismissSideCopyNotice(name) {
+    this.store.write(SETTINGS_NOTICE_TABLE, { dismissedSideCopy: String(name), at: new Date().toISOString() });
+    this.store.flush([SETTINGS_NOTICE_TABLE]);
+  }
+  // Newest kept copy of an unreadable settings.json, for the admin banner (null when none).
+  sideCopyName() {
+    try {
+      const names = fs.readdirSync(this.store.dir).filter((n) => SETTINGS_SIDE_COPY_RE.test(n)).sort();
+      return names.length ? names[names.length - 1] : null;
+    } catch { return null; }
+  }
+  // Before the first write over an unreadable settings.json, keep its RAW bytes once (the store
+  // cache never holds an unreadable file). If that copy cannot be made, refuse THIS write: the
+  // caller sees an error and the old blob stays recoverable with the old secret.
+  _keepUnreadableCopy() {
+    if (this.store.freezeCriticalWrites) return; // safe mode: the frozen store touches nothing on disk
+    const file = path.join(this.store.dir, 'settings.json');
+    let raw;
+    try { raw = fs.readFileSync(file); }
+    catch (e) {
+      if (e && e.code === 'ENOENT') return; // nothing on disk to lose
+      try { console.error(`[triboon] settings save refused: could not read the unreadable settings.json to keep a copy (${e.code || e.message}).`); } catch {}
+      throw new Error('settings save refused: the existing settings file could not be kept; try again');
+    }
+    if (!raw.toString('utf8').trim()) return; // blank: nothing to lose (see _load)
+    let names = [];
+    try { names = fs.readdirSync(this.store.dir).filter((n) => SETTINGS_SIDE_COPY_RE.test(n)); } catch {}
+    for (const n of names) {
+      try { if (raw.equals(fs.readFileSync(path.join(this.store.dir, n)))) return; } catch {}
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    let name = `settings.json.unreadable-${stamp}.keep`;
+    for (let i = 2; names.includes(name) || fs.existsSync(path.join(this.store.dir, name)); i++) name = `settings.json.unreadable-${stamp}-${i}.keep`;
+    try { fs.writeFileSync(path.join(this.store.dir, name), raw, { mode: 0o600, flag: 'wx' }); }
+    catch (e) {
+      try { console.error(`[triboon] settings save refused: could not keep a copy of the unreadable settings.json (${e.code || e.message}).`); } catch {}
+      throw new Error('settings save refused: the existing settings file could not be kept; try again');
+    }
+    try { console.error(`[triboon] kept the unreadable settings.json as ${name} before saving new settings. Restore the old secret and this file to recover the old settings.`); } catch {}
   }
   set(settings) {
+    const { unreadable } = this._load();
+    this._note(unreadable);
+    if (unreadable) this._keepUnreadableCopy();
     this.store.write('settings', this._encrypt(settings));
     this.store.flush(['settings']);
+    this.unreadable = false;
     return settings;
   }
   update(mutator) { return this.set(mutator(this.get())); }
 }
 
-module.exports = { Auth, SecureSettings, RateLimiter, hashPassword, verifyPassword, deriveKey, totpCode };
+module.exports = { Auth, SecureSettings, RateLimiter, SIGN_IN_NAME_MAX, hashPassword, verifyPassword, deriveKey, totpCode };

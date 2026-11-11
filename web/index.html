@@ -937,6 +937,17 @@ body.tv .pcard.adultBlur .art::after{background:rgba(255,255,255,.4)}
 #libModal .modalBtns{display:flex;gap:10px;margin-top:22px}
 #updateModal .modalBtns{display:flex;gap:12px;margin-top:24px;align-items:stretch}
 #updateModal .modalBtns .btn{min-height:48px}
+/* Account password for an add-profile above the current level (review R4): masked, in the page,
+   above the profile picker gate (z-index 50). Same plain box as the update prompt. */
+#pwModal{position:fixed;inset:0;z-index:52;display:none;place-items:center;background:rgba(5,3,9,.8);backdrop-filter:blur(6px)}
+#pwModal.open{display:grid}
+#pwModal .box{width:min(420px,92vw);background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:28px}
+#pwModal h2{font:800 22px "Sora";margin-bottom:4px}
+#pwModal .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+#pwModal input{width:100%;background:var(--field);border:1px solid var(--line);border-radius:12px;padding:12px 13px;color:var(--text);font:500 14px "Albert Sans";outline:none}
+#pwModal input:focus{border-color:var(--magenta)}
+#pwModal .modalBtns{display:flex;gap:12px;margin-top:24px;align-items:stretch}
+#pwModal .modalBtns .btn{min-height:48px}
 #plotModal .box{width:min(720px,90vw);max-height:min(78vh,680px);background:var(--panel);border:1px solid var(--line);
   border-radius:20px;padding:26px 28px 22px;display:flex;flex-direction:column;min-height:0}
 #plotModal h2{font:800 22px "Sora";margin-bottom:12px;flex:none}
@@ -4277,6 +4288,20 @@ body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
   </div>
 </div>
 
+<!-- Account password for adding a profile above the current level (review R4). In the page and
+     masked, never prompt(): the Android prompt dialog shows the text in the clear. -->
+<div id="pwModal" role="dialog" aria-modal="true" aria-labelledby="pwModalTitle">
+  <form class="box" id="pwModalForm" autocomplete="off">
+    <h2 id="pwModalTitle">Account password</h2>
+    <div class="sub" id="pwModalSub">Needed for a profile above your current level.</div>
+    <input id="pwModalInput" type="password" autocomplete="current-password" inputmode="text" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Account password">
+    <div class="modalBtns">
+      <button type="button" class="btn ghost focusable" id="pwModalCancel" style="min-width:108px;justify-content:center">Cancel</button>
+      <button type="submit" class="btn primary focusable" id="pwModalGo" style="flex:1;justify-content:center">Continue</button>
+    </div>
+  </form>
+</div>
+
 <section id="browse">
   <div class="browseHead">
     <h1 id="browseTitle">Movies</h1>
@@ -6399,6 +6424,7 @@ $('pinBack').addEventListener('click', showProfilePicker);
 function selectProfile(pr) {
   S.profile = pr;
   S.maxLevel = pr.level ?? 4;
+  resetProfileScopedState();
   clearPageCaches();
   try { localStorage.setItem('triboon.profile', pr.id); } catch {}
   enterAppShell();
@@ -6417,11 +6443,61 @@ async function addProfileFlow() {
     // New profiles start with a random built-in face — a fresh tile never looks bare, and the
     // owner can swap it any time in Preferences → Profiles.
     const avatar = AVATAR_IDS[Math.floor(Math.random() * AVATAR_IDS.length)];
-    const pr = await api('/api/me/profiles', { method: 'POST', body: { name: name.trim(), level, pin, avatar } });
+    const body = { name: name.trim(), level, pin, avatar };
+    let pr;
+    try { pr = await api('/api/me/profiles', { method: 'POST', body }); }
+    catch (e) {
+      // A profile above the current profile's level needs the account password (never stored).
+      if (!/account password required/i.test(e.message || '')) throw e;
+      const password = await askAccountPassword();
+      if (!password) return;
+      pr = await api('/api/me/profiles', { method: 'POST', body: { ...body, password } });
+    }
     S.user.profiles.push(pr);
     selectProfile(pr);
   } catch (e) { toast(e.message); }
 }
+// In-page masked password field (review R4). Resolves with the typed text, or null on Cancel,
+// Escape or Back. Keys: the global keydown handler routes D-pad/Escape here (TV keys reach
+// `document`); a browser also gets Enter = Continue from the form and Escape from the box.
+let pwModalDone = null;
+function askAccountPassword() {
+  if (pwModalDone) pwModalDone(null);
+  return new Promise((resolve) => {
+    const input = $('pwModalInput');
+    input.value = '';
+    captureOverlayReturn('pwModal');
+    pwModalDone = (value) => {
+      pwModalDone = null;
+      input.value = '';
+      closeFocusOverlay('pwModal', 'pwModal');
+      resolve(value || null);
+    };
+    $('pwModal').classList.add('open');
+    const focusField = () => {
+      if (!$('pwModal').classList.contains('open')) return;
+      clearFocus();
+      try { input.focus({ preventScroll: true }); } catch { input.focus(); }
+    };
+    requestAnimationFrame(focusField); setTimeout(focusField, 80);
+  });
+}
+function closePwModal(value = null) {
+  if (pwModalDone) pwModalDone(value);
+  else closeFocusOverlay('pwModal', 'pwModal');
+}
+$('pwModalForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const value = $('pwModalInput').value;
+  if (!value) { try { $('pwModalInput').focus(); } catch {} return; }
+  closePwModal(value);
+});
+$('pwModalCancel').addEventListener('click', () => closePwModal(null));
+$('pwModal').addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  e.preventDefault(); e.stopPropagation();
+  closePwModal(null);
+});
 function setLogin2faMode(challenge) {
   S.loginChallenge = challenge || null;
   const on = !!S.loginChallenge;
@@ -6688,6 +6764,14 @@ function watchCacheKey() { return S.profile ? S.profile.id : 'default'; }
 function invalidateWatchCache() {
   S._watchAt = 0; S._watchRows = null; S._watchJob = null;
 }
+// Profile switch (no page reload on a TV box): the last profile's watch rows, resume points and
+// next-up cards must never carry into the new one; a kids profile used to see the adult's CW.
+function resetProfileScopedState() {
+  invalidateWatchCache();
+  S.watchMap = {}; S._watchKey = '';
+  S._homeTvNext = undefined; S._homeTvNextFp = ''; S._homeTvNextAt = 0; S._homeTvNextJob = null;
+  S._pendingHomeNext = null; S._homeRowsSig = ''; S.rows = [];
+}
 // Watch-write ordering: server reads that DERIVE from watch state (/api/watch refetch,
 // /api/watch/next) must not race an in-flight watch POST — the classic "watched half, went Home,
 // Continue Watching still shows the old spot" was a refetch answered from PRE-save server state
@@ -6727,14 +6811,15 @@ async function loadWatchState(force) {
   const key = watchCacheKey();
   if (!force && S._watchKey === key && Array.isArray(S._watchRows) && Date.now() - (S._watchAt || 0) < 10000) return S._watchRows;
   if (!force && S._watchKey === key && S._watchJob) return S._watchJob;
+  const prevKey = S._watchKey; // local rows merge only into the SAME profile's answer
   S._watchKey = key;
-  S._watchJob = (async () => {
+  const job = S._watchJob = (async () => {
     // Never let this refetch race an in-flight watch POST: the server would answer from
     // PRE-save state and the stale rows would CLOBBER the fresh local cache (the "went Home,
     // Continue Watching hasn't updated" report). Waiting costs at most the POST round-trip.
     await watchPostsSettled();
     const fetchStart = Date.now();
-    const localRows = Array.isArray(S._watchRows) ? S._watchRows : [];
+    const localRows = prevKey === key && Array.isArray(S._watchRows) ? S._watchRows : [];
     const rows = await api('/api/watch' + profileQ());
     // A just-saved local row must beat a slower /api/watch answer. Mid-fetch upserts used to
     // be the only winners; a native close that POSTed first then refetched still painted the
@@ -6747,6 +6832,7 @@ async function loadWatchState(force) {
       if (loc._localAt > fetchStart) return loc;
       return localAt >= serverAt ? loc : server;
     };
+    if (watchCacheKey() !== key) return []; // late answer for a profile we already left
     const merged = (rows || []).map((w) => newerLocal(w, localBy.get(w.key)));
     for (const [k, loc] of localBy) if (!merged.some((w) => w && w.key === k)) merged.unshift(loc);
     S._watchRows = merged;
@@ -6754,10 +6840,9 @@ async function loadWatchState(force) {
     S.watchMap = Object.fromEntries(S._watchRows.map((w) => [w.key, w]));
     return S._watchRows;
   })().catch((e) => {
-    S._watchRows = [];
-    S.watchMap = {};
+    if (watchCacheKey() === key) { S._watchRows = []; S.watchMap = {}; }
     throw e;
-  }).finally(() => {     S._watchJob = null; });
+  }).finally(() => { if (S._watchJob === job) S._watchJob = null; });
   return S._watchJob;
 }
 function repairWatchArtUrl(u) {
@@ -8683,7 +8768,9 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   if (ids.tvdbid) body.tvdbid = ids.tvdbid;
   if (ids.season != null) body.season = ids.season;
   if (ids.ep != null) body.ep = ids.ep;
-  const aliases = searchAliasesFor(it).concat(searchAliasesFor(S.detailItem))
+  // The open show's original title helps its own episodes only; never another title's search.
+  const sameTitle = S.detailItem && qualityTitleKey(S.detailItem) === qualityTitleKey(it);
+  const aliases = searchAliasesFor(it).concat(sameTitle ? searchAliasesFor(S.detailItem) : [])
     .filter((a, i, all) => all.findIndex((x) => x.toLowerCase() === a.toLowerCase()) === i);
   if (aliases.length) body.aliases = aliases;
   if (it && it.originalLanguage) body.originalLanguage = String(it.originalLanguage);
@@ -9569,7 +9656,11 @@ function resumePositionForItem(it) {
   if (!it || it.type === 'live') return 0;
   const w = S.watchMap && it.key && S.watchMap[it.key];
   if (w && watchLooksFinished(w)) return 0;
-  return Math.max(+it.resume || 0, +(w && w.position) || 0);
+  // The saved row is the truth: after a rewind (40:00 back to 11:00) the card's older, larger
+  // value used to win and the next save wrote 40:00 back. A row with no position (Trakt %)
+  // or no row at all keeps the card value.
+  if (w && +w.position > 0) return +w.position;
+  return +it.resume || 0;
 }
 function startOverItem(it) {
   return it ? { ...it, resume: 0, _startOver: true } : it;
@@ -9884,6 +9975,26 @@ async function openSources(it) {
     if (!current()) return;
     list.innerHTML = '';
     if (!r.candidates.length) {
+      // Indexers failed: say so and offer a manual Retry (no timer: it would burn the daily API
+      // allowance). Only the count is shown; the raw error text can carry an indexer key.
+      if (Array.isArray(r.errors) && r.errors.length) {
+        // One row per search the indexer failed (widened searches repeat it): count indexers.
+        const n = new Set(r.errors.map((x) => String((x && x.indexer) || ''))).size || 1;
+        list.innerHTML = `<div class="sub">Could not reach ${n} indexer${n === 1 ? '' : 's'}. No releases to list right now.</div>`;
+        const retry = document.createElement('button');
+        retry.className = 'srcRow focusable srcRetry'; // a drawer row: D-pad Enter clicks it from the one global key handler
+        retry.textContent = 'Retry';
+        retry.addEventListener('click', () => {
+          // openSources forgets an opener inside the drawer; keep where Close should send focus back to.
+          const ret = S.drawerReturn;
+          openSources(it);
+          if (ret) S.drawerReturn = { ...ret, epoch: S.drawerReq };
+        });
+        list.appendChild(retry);
+        // A fast failure can land before the opening frame that focuses Close; focus Retry after it.
+        requestAnimationFrame(() => { if (current()) focusDrawer(0); });
+        return;
+      }
       list.innerHTML = r.camOnly
         ? '<div class="sub">Not available yet.</div>'
         : '<div class="sub">No releases found.</div>';
@@ -11357,6 +11468,17 @@ async function checkAvailability(it) {
     $('qToggle').style.display = offer ? '' : 'none';
     S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || globalQualityPref() || 3) : null;
     if (offer) paintQualityToggle(effectiveDetailQualityPref(it));
+    // Indexers that timed out, cooled down or refused the key answer "no releases" too. That is
+    // not proof the title has none: keep Play pressable with a soft hint (rebuilt from the
+    // remembered label so it cannot stack) and never show the raw error text (it can carry a key).
+    if (!playable && Array.isArray(r.errors) && r.errors.length) {
+      if (!playBtn.dataset.availPrevLabel) playBtn.dataset.availPrevLabel = $('dPlayLabel').textContent || 'Play';
+      playBtn.dataset.availMark = String(reqId);
+      playBtn.disabled = false; playBtn.classList.remove('unavail');
+      $('dSources').style.display = '';
+      $('dPlayLabel').textContent = playBtn.dataset.availPrevLabel + ' · indexers did not answer';
+      return;
+    }
     // An id-less pass on a TMDB title is only the FIRST of two checks — never let it condemn a
     // title whose imdb/tvdb ids (and the sources they find) are still on the way.
     if (!playable && (hadStrongIds || !searchItem.tmdbId)) {
@@ -13790,7 +13912,7 @@ async function openPlayer(it, mount, opts = {}) {
   v.onplaying = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
     markPictureMoving(playingRef);
-    clearWebRebufferRecovery(); clearPauseIdleExit(); cancelPauseWarmAhead(); playingRef._pausedAt = 0; playingRef._webResuming = false; markVodPlaybackStarted(playingRef);
+    clearWebRebufferRecovery(); clearPauseIdleExit(); cancelPauseWarmAhead(); playingRef._pausedAt = 0; playingRef._webResuming = false; playingRef._resumingSince = 0; markVodPlaybackStarted(playingRef);
     bumpPlayClock(playingRef);
     clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame();
     if (!(playingRef.item && playingRef.item.type === 'live')) renderSubCues();
@@ -13988,6 +14110,7 @@ function startSource(kind, atSeconds, opts = {}) {
   if (p) { markPlaybackSourceSwap(p); p.usingNative = false; }
   if (opts.quietSeek && p) {
     p._webResuming = true;
+    if (typeof markPlaybackResuming === 'function') markPlaybackResuming(p);
     p.suppressSeekLoaderUntil = appMs() + 4500;
     clearTimeout(S._waitT);
     $('playerLoader').classList.remove('show');
@@ -14468,7 +14591,9 @@ function remuxPlaybackUrl(p, seekStart = 0, opts = {}) {
 // re-spawns the segment window at the seek offset, so the player's normal server-seek path works here too.
 function hlsPlaybackUrl(p, seekStart = 0) {
   const audio = p && Number.isFinite(Number(p.audioTrack)) ? Number(p.audioTrack) : 0;
-  return `${p.hlsUrl}&start=${Math.max(0, Math.floor(seekStart || 0))}&audio=${audio}&audioSafe=1`;
+  // Milliseconds, like remuxPlaybackUrl: a floored start began a whole keyframe group early, so
+  // captions, the time bar and saved progress ran ahead of the picture (SUBG-1).
+  return `${p.hlsUrl}&start=${Math.max(0, Math.round((seekStart || 0) * 1000) / 1000)}&audio=${audio}&audioSafe=1`;
 }
 function selectedPlayerAudioTrack(p) {
   const audio = p && p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
@@ -14674,6 +14799,7 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
   nativeSubtitleOnPlayer(p, subPayload);
   p.usingNative = true;
   if (opts.quietSeek) p._nativeResuming = true;
+  if (opts.quietSeek && typeof markPlaybackResuming === 'function') markPlaybackResuming(p);
   p.usingRemux = kind === 'remux';
   p.usingTranscode = kind === 'transcode';
   updatePlayerMeta();
@@ -14935,6 +15061,7 @@ window.__tvNativeVideoPlaying = (pos, dur, token, why) => {
   if (wasPaused && p._pausedAt) notePlaybackTrace('started again after pause at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's — ' + (why || 'the picture started'));
   p.nativePaused = false;
   p._nativeResuming = false;
+  p._resumingSince = 0;
   clearPauseIdleExit();
   bumpPlayClock(p);
   // READY means ExoPlayer parsed enough media to be ready; it does not prove a frame advanced.
@@ -14948,6 +15075,7 @@ window.__tvNativeVideoResuming = (pos, dur, token, why) => {
   if (p.nativePaused && p._pausedAt) notePlaybackTrace('resumed at ' + (Math.max(0, +pos || 0).toFixed(3)) + 's — ' + (why || 'play was sent'));
   p.nativePaused = false;
   p._nativeResuming = true;
+  if (typeof markPlaybackResuming === 'function') markPlaybackResuming(p);
   p._pausedAt = 0;
   clearPauseIdleExit();
 };
@@ -15078,6 +15206,7 @@ window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
   if (resume && p._sourceAdvancePending) return;
   p._nativeResuming = true;
+  if (typeof markPlaybackResuming === 'function') markPlaybackResuming(p);
   p._nativeSeekGen = (p._nativeSeekGen || 0) + 1;
   const seekGen = p._nativeSeekGen;
   const current = () => S.playing === p && S.view === 'player' && p.usingNative && p._nativeSeekGen === seekGen;
@@ -15210,11 +15339,21 @@ window.__tvNativeAudioUnplayable = (detail, pos, dur, token, fatal) => {
 };
 // The shell saw the audio output change (receiver, headphones, HDMI). Ask it again on the next play.
 window.__tvAudioOutputChanged = () => { S._nativeCaps = undefined; S._caps = null; };
+// Review R5: the shell dropped its Next loader after a refusal; restart the same source where it
+// was (quiet, same surface), the way a same-source recovery does.
+window.__tvNativeNextResume = (token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || S.view !== 'player' || !nativePlaybackCallbackMatches(p, token)) return;
+  const at = Math.max(0, Number(currentTime()) || 0);
+  if (canUseNativeVideoPlayer() && tryNativeVideoPlayer(currentPlayerKind(p), at, { quietSeek: true })) return;
+  showPlaybackInterrupted('the episode could not resume after Next');
+};
 window.__tvNativeVideoNext = (pos, dur, token) => {
   const p = S.playing;
   if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   window.__tvNativeVideoProgress(pos, dur, token);
   saveWatch(true);
+  S._shellNext = true;
   playNextEpisode();
 };
 window.__tvNativeVideoQuality = (quality, pos, dur, token) => {
@@ -15589,6 +15728,19 @@ function skipPastUnreadable(p, atSec, reason) {
 }
 // ExoPlayer 3xxx parsing errors only. 2xxx (including IO_UNSPECIFIED) are network/IO errors.
 const PLAYBACK_CONTENT_ERROR_RE = /PARSING_|MALFORMED|varint|extractor|invalid (data|media)/i;
+// "A restart is in flight" (_webResuming / _nativeResuming) blocks a second recovery, but only
+// for a while: a restart that died before its first frame held the flag forever (frozen picture,
+// no log, dead Play). 25s covers the Android resume graces (NATIVE_VIDEO_RESUME_GRACE_MS 25s,
+// NATIVE_VIDEO_REMUX_RESUME_GRACE_MS 20s for a 4K ffmpeg start), so a healthy slow start is kept.
+const RESUME_IN_FLIGHT_MAX_MS = 25000;
+function markPlaybackResuming(p) { if (p) p._resumingSince = appMs(); }
+function clearStaleResumeFlags(p) {
+  if (!p || !(p._webResuming || p._nativeResuming)) return false;
+  if (!p._resumingSince) { p._resumingSince = appMs(); return false; } // unstamped: a fresh restart
+  if (appMs() - p._resumingSince <= RESUME_IN_FLIGHT_MAX_MS) return false;
+  p._webResuming = false; p._nativeResuming = false; p._resumingSince = 0;
+  return true;
+}
 function recoverSamePlaybackSource(reason = '') {
   const p = S.playing; if (!vodPlaybackStarted(p)) return false;
   const kind = currentPlayerKind(p);
@@ -15608,7 +15760,11 @@ function recoverSamePlaybackSource(reason = '') {
   if (!p.usingNative && $('video') && $('video').paused && !sourceDead && !decoderFailure) return false;
   // Play already asked for a quiet remount. A second recovery on top freezes the picture. Unreadable
   // bytes are the exception: that remount is what just failed, and returning here froze the viewer
-  // for 148s with no switch (The Good Doctor S07E06, 8:34).
+  // for 148s with no switch (The Good Doctor S07E06, 8:34). A restart past its time limit, or one
+  // whose mount is gone (404), is not in flight any more: it failed. Only these words, never the
+  // generic "playback interrupted" that every web failover sends.
+  if (/HTTP 404|mount not found|session expired/i.test(String(reason || ''))) { p._webResuming = false; p._nativeResuming = false; p._resumingSince = 0; }
+  clearStaleResumeFlags(p);
   if (p.usingNative && p._nativeResuming && !sourceDead && !decoderFailure && !contentError) return false;
   if (p._webResuming && !sourceDead && !decoderFailure && !contentError) return false;
   // Server restart / swept mount: do not replay the dead URL (that flickers Preparing).
@@ -15624,6 +15780,14 @@ function recoverSamePlaybackSource(reason = '') {
   if (mountGone && !p._reMounting) {
     reMountAndResume(reason || 'playback session expired');
     return true;
+  }
+  // The Android shell re-reports a stall once per window (B15B-02). While a server remount or a
+  // source hunt is in flight, its new stream replaces this one: a same-source restart on top of it
+  // is a double recovery. Hold one guard window; one still not done after that no longer blocks.
+  if (!(p._reMounting || p._sourceAdvancePending)) p._restartHeldSince = 0;
+  else if (p.usingNative && !sourceDead && !decoderFailure && !contentError) {
+    if (!p._restartHeldSince) p._restartHeldSince = now;
+    if (now - p._restartHeldSince <= RESUME_IN_FLIGHT_MAX_MS) return true;
   }
   if (decoderFailure && p.usingNative && (clientCaps() || {}).lowPower
       && tryNextNativeKind(kind, at, reason || 'playback failed')) return true;
@@ -15654,6 +15818,7 @@ function recoverSamePlaybackSource(reason = '') {
   }
   if (p.usingNative) p._nativeResuming = true;
   else p._webResuming = true;
+  markPlaybackResuming(p);
   forwardRemuxResumeSec(p, at).then((next) => {
     if (S.playing !== p || S.view !== 'player') return;
     at = next;
@@ -15760,6 +15925,8 @@ async function reMountAndResume(reason = '', attempt = 0) {
   if (!vodPlaybackStarted(p) || !p.item) { showPlaybackInterrupted(reason); return; }
   if (attempt === 0 && p._reMounting) return;
   p._reMounting = true;
+  // A new remount gets its own native-report hold window (review R3); a retry attempt keeps it.
+  if (attempt === 0) p._restartHeldSince = 0;
   if (typeof maybeHoldPlaybackAcrossRestart === 'function') maybeHoldPlaybackAcrossRestart(p);
   if (attempt === 0) {
     try { saveWatch(true); } catch {}
@@ -15868,6 +16035,7 @@ async function autoAdvance(opts = {}) {
   }
   if (p._sourceAdvancePending) return;
   p._sourceAdvancePending = true;
+  p._restartHeldSince = 0; // a new source hunt gets its own native-report hold window (review R3)
   const switchT0 = appMs();
   const reportedAt = Number(currentTime());
   const at = Math.max(0, Number.isFinite(reportedAt) && (reportedAt > 0 || vodPlaybackStarted(p))
@@ -16594,7 +16762,7 @@ function prepNextEpisode(it) {
 }
 async function prepNextEpisodeJob(it) {
   const token = (S._nextEpisodeToken = (S._nextEpisodeToken || 0) + 1);
-  S.nextEp = null; S.upNextShown = false; S.upNextDismissed = false; S.nextEpPrepared = false;
+  S.nextEp = null; S.nextEpUnaired = null; S.upNextShown = false; S.upNextDismissed = false; S.nextEpPrepared = false;
   updateNextEpisodeButton();
   if (!it || it.type !== 'episode' || !it.key) return;
   it = enrichLibraryEpisodeContext(it);
@@ -16619,6 +16787,9 @@ async function prepNextEpisodeJob(it) {
     const season = ns === s ? ctx.season : await api(`/api/tmdb/tv/${tmdbId}/season/${ns}`);
     if (!current()) return;
     const ep = (season.episodes || []).find((x) => x.episode_number === ne); if (!ep) return;
+    // Caught up on an airing show: next week's episode is not "Up Next" (same rule as the play gate).
+    // Remember it, so a native Next press can say why nothing plays (review R5).
+    if (ep.air_date && ep.air_date > todayStr()) { S.nextEpUnaired = { key: it.key, airDate: ep.air_date }; return; }
     const base = epItemOf(ctx.show, season, ep);
     const inheritedQuality = preferredQualityRankForItem(it);
     const item = inheritedQuality ? { ...base, qualityRank: inheritedQuality } : base;
@@ -16792,6 +16963,10 @@ async function ensureNextEpisode(it) {
 function playNextEpisode() {
   // A countdown tick and a remote Next can land in the same moment. The second one must
   // not tear down the handoff the first one just started.
+  // Review R10: set by the shell's Next button / media key / native Up Next card (they silenced the
+  // video and put up a loader); read once. The web's own countdown leaves it unset.
+  const fromShell = S._shellNext === true;
+  S._shellNext = false;
   if (S._nextBusy) return;
   const ne = S.nextEp;
   if (!ne) {
@@ -16802,11 +16977,15 @@ function playNextEpisode() {
       S._nextBusy = true;
       return ensureNextEpisode(it).then((found) => {
         S._nextBusy = false;
-        if (found && S.nextEp) return playNextEpisode();
-        toast('No next episode');
-      }).catch(() => { S._nextBusy = false; });
+        if (found && S.nextEp) { S._shellNext = fromShell; return playNextEpisode(); }
+        refuseNextEpisode(noNextEpisodeReason(it), fromShell);
+      }).catch(() => {
+        S._nextBusy = false;
+        // A shell Next is waiting behind its loader: answer it now, not after the 75 s net.
+        if (fromShell) refuseNextEpisode('Next episode unavailable right now', true);
+      });
     }
-    toast('No next episode');
+    if (!refuseNextOnNativeShell('No next episode')) { closeForOlderNativeShell(fromShell); toast('No next episode'); }
     return;
   }
   S._nextBusy = true;
@@ -16818,10 +16997,54 @@ function playNextEpisode() {
   hideUpNextUi();
   const cur = S.playing && S.playing.item;
   if (cur && ne.item && ne.item.key === cur.key) {
-    toast('No next episode');
+    refuseNextEpisode('No next episode', fromShell);
+    return;
+  }
+  // The play gate would refuse an unaired episode with a toast nobody sees (native playback hides
+  // the WebView) while the native handoff loader stays up over a stopped video. Close first, so
+  // the loader goes and the toast is drawn on the visible page.
+  if (ne.item && ne.item.type === 'episode' && ne.item.airDate && ne.item.airDate > todayStr()) {
+    const why = `This episode hasn’t aired yet — airs ${fmtDate(ne.item.airDate)}`;
+    if (refuseNextOnNativeShell(why)) return;
+    closePlayer();
+    toast(why);
     return;
   }
   play(ne.item, null, { directHandoff: true, why: 'next' });
+}
+// Review R5: why a Next press plays nothing. An unaired next episode is never kept as S.nextEp,
+// so prepNextEpisodeJob leaves a note for the reason text.
+function noNextEpisodeReason(it) {
+  const u = S.nextEpUnaired;
+  if (u && it && u.key === it.key && u.airDate) return `This episode hasn’t aired yet — airs ${fmtDate(u.airDate)}`;
+  return 'No next episode';
+}
+// Native playback hides the WebView, and the shell's Next button already silenced the video and
+// put up its "Next episode" loader. A new shell takes the refusal: it drops the loader, shows the
+// reason on the TV and asks for the same episode back (__tvNativeNextResume). Never call a bridge
+// method an older shell does not have.
+function refuseNextOnNativeShell(message) {
+  const p = S.playing;
+  if (!p || !p.usingNative || S.view !== 'player') return false;
+  const bridge = window.TriboonTV;
+  if (!bridge || typeof bridge.nativeNextRefused !== 'function') return false;
+  try { bridge.nativeNextRefused(String(message), String(Number(p.playbackToken) || 0)); return true; } catch { return false; }
+}
+// An older Android shell keeps its loader up over a stopped video: close first, so the loader goes
+// and the reason is drawn on the visible page. Only a Next the shell started put that loader up
+// (review R10): the web's autoplay countdown keeps playing with a toast, as before. The browser
+// player only shows the toast, and so does the Windows client (its Next leaves mpv playing).
+function closeForOlderNativeShell(fromShell) {
+  const p = S.playing;
+  if (!fromShell || !p || !p.usingNative || S.view !== 'player') return;
+  const bridge = window.TriboonTV;
+  if (bridge && bridge.__triboonWindowsBridge === true) return;
+  closePlayer();
+}
+function refuseNextEpisode(message, fromShell = false) {
+  if (refuseNextOnNativeShell(message)) return;
+  closeForOlderNativeShell(fromShell);
+  toast(message);
 }
 $('unPlay').addEventListener('click', playNextEpisode);
 // An explicit dismiss is sticky for THIS episode: the card stays hidden and autoplay never arms
@@ -16829,7 +17052,7 @@ $('unPlay').addEventListener('click', playNextEpisode);
 function dismissUpNext() { S.upNextDismissed = true; hideUpNextUi(); }
 $('unCancel').addEventListener('click', dismissUpNext);
 // Native Up Next card → web (the bridge forwards Play/Dismiss here so the countdown owner decides).
-window.__upNextPlayNative = () => playNextEpisode();
+window.__upNextPlayNative = () => { S._shellNext = true; playNextEpisode(); };
 window.__upNextDismissNative = () => dismissUpNext();
 $('vlcCopy').addEventListener('click', () => {
   navigator.clipboard.writeText($('vlcUrl').textContent).then(() => toast('Stream URL copied — paste into VLC'));
@@ -17323,12 +17546,14 @@ function playbackFinishedDetailTarget(item) {
   if (!type && (item._kind === 'movie' || item.kind === 'movie')) type = 'movie';
   if (!type && tmdbId && /^local:/i.test(key) && item._kind !== 'movie' && item.kind !== 'movie') type = 'episode';
   if (!tmdbId) return null;
-  if (type === 'movie') return { ...item, key: item.key || `tmdb:movie:${tmdbId}`, type: 'movie', tmdbId };
-  if (type === 'tv') return { ...item, key: item.key || `tmdb:tv:${tmdbId}`, type: 'tv', tmdbId };
+  // Details derives Resume from the watch map; the closed card's resume / start-over must not ride along.
+  const { resume: _oldResume, _startOver: _oldStartOver, ...base } = item;
+  if (type === 'movie') return { ...base, key: item.key || `tmdb:movie:${tmdbId}`, type: 'movie', tmdbId };
+  if (type === 'tv') return { ...base, key: item.key || `tmdb:tv:${tmdbId}`, type: 'tv', tmdbId };
   if (type === 'episode') {
     const title = showTitleFromEpisodeItem({ ...item, tmdbId });
     return {
-      ...item,
+      ...base,
       key: `tmdb:tv:${tmdbId}`,
       type: 'tv',
       tmdbId,
@@ -17384,12 +17609,6 @@ async function closePlayer(opts = {}) {
   cancelLiveTune('split:1');
   const closingItem = S.playing && S.playing.item;
   const closingSessionId = S.playing && S.playing.sessionId;
-  // Backing out of the player while casting stops the TV too (don't leave it playing an orphaned stream).
-  if (S.playing && S.playing.castingActive && !opts._fromCast) {
-    S.playing.castingActive = false;
-    try { const s = _castCtx && _castCtx.getCurrentSession(); if (s) s.endSession(true); } catch {} // browser Cast SDK
-    try { if (window.TriboonTV && TriboonTV.castStop) TriboonTV.castStop(); } catch {}                // native app bridge
-  }
   const finishedTarget = opts && opts.ended ? playbackFinishedDetailTarget(closingItem) : null;
   // opts.ended => playback reached the end of the file: record it watched even if the duration
   // probe never landed (remux/transcode reports duration=0 until /api/tracks resolves), which
@@ -17406,6 +17625,14 @@ async function closePlayer(opts = {}) {
   // Leaving a movie/episode MID-PLAY: remember it, so jumping into Live TV later still
   // offers "← Back to <title>" at the top of the guide (it used to vanish on stop).
   rememberVodReturn(S.playing && S.playing.item, currentTime(), { onlyMidstream: true });
+  // Backing out of the player while casting stops the TV too (don't leave it playing an orphaned stream).
+  // Only AFTER the final save and the return target: while the flag is on, currentTime() is the TV
+  // clock. Clearing it first saved the cast-start minute over the TV's real position.
+  if (S.playing && S.playing.castingActive && !opts._fromCast) {
+    S.playing.castingActive = false;
+    try { const s = _castCtx && _castCtx.getCurrentSession(); if (s) s.endSession(true); } catch {} // browser Cast SDK
+    try { if (window.TriboonTV && TriboonTV.castStop) TriboonTV.castStop(); } catch {}                // native app bridge
+  }
   // Leaving fullscreen with the player is mandatory — a fullscreen <body> with the player
   // closed leaves the menus visible but unclickable.
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -17636,6 +17863,7 @@ function remountWebRemuxResume(p) {
   if (!p || p !== S.playing) return;
   clearTimeout(p._remuxPlayT);
   p._remuxPlayT = 0;
+  clearStaleResumeFlags(p);
   if (p._webResuming) return;
   startSource(currentPlayerKind(p), currentTime(), { quietSeek: true });
 }
@@ -17671,6 +17899,7 @@ function togglePlay() {
     // Leftover remux plays immediately when the buffer is still ahead. A dead pipe
     // (no leftover, or play() never starts) remounts the same file.
     if (remux) {
+      clearStaleResumeFlags(p);
       if (p._webResuming) { updPP(); return; }
       p._pausedAt = 0;
       if (remuxResumeLooksLive(v)) {
@@ -18005,7 +18234,12 @@ function seekTo(seconds) {
   }
   resetSubtitleClock(p, (p.usingRemux || p.usingTranscode) ? Math.max(0, seconds - (p.startOffset || 0)) : seconds);
   if (p.castingActive) { // seek the TV, not the idle local element
-    if (_castRp && _castRpc) { try { _castRp.currentTime = seconds; _castRpc.seek(); p.castPos = seconds; } catch {} }
+    if (_castRp && _castRpc) {
+      // A server-seek stream's clock starts at its start= minute: seeking the receiver there would
+      // land at the wrong place. Load the stream again at the new title minute instead.
+      if (p.castBase || p.usingRemux || p.usingTranscode) { p.castPos = seconds; castLoadCurrent(); }
+      else { try { _castRp.currentTime = seconds; _castRpc.seek(); p.castPos = seconds; } catch {} }
+    }
     else if (window.TriboonTV && TriboonTV.castControl) { try { TriboonTV.castControl('seek:' + Math.floor(seconds)); p.castPos = seconds; } catch {} }
   } else if (p.usingJellyfinDesktop) {
     startJellyfinDesktopPlayback(p, seconds);
@@ -19400,6 +19634,7 @@ function subtitleMediaNow(p) {
   if (p._subShown == null) p._subShown = raw;
   if (!moving) {
     p._subFrozen = true;
+    p._subPaceWall = 0; // a pause/buffer wait is not "the browser clock fell behind"; re-base on resume
     return Math.max(0, p._subShown - (p._subSlip || 0));
   }
   const jump = raw - p._subShown;
@@ -19757,8 +19992,9 @@ function setupCastContext() {
     _castRp = new cast.framework.RemotePlayer();
     _castRpc = new cast.framework.RemotePlayerController(_castRp);
     const RPE = cast.framework.RemotePlayerEventType;
-    _castRpc.addEventListener(RPE.CURRENT_TIME_CHANGED, () => { if (S.playing && S.playing.castingActive) S.playing.castPos = _castRp.currentTime || 0; });
-    _castRpc.addEventListener(RPE.DURATION_CHANGED, () => { if (S.playing && S.playing.castingActive && _castRp.duration) S.playing.castDuration = _castRp.duration; });
+    _castRpc.addEventListener(RPE.CURRENT_TIME_CHANGED, () => { if (S.playing && S.playing.castingActive) S.playing.castPos = castTitleTime(S.playing, _castRp.currentTime); });
+    // A server-seek stream's receiver duration is stream-relative (or missing): keep the title duration.
+    _castRpc.addEventListener(RPE.DURATION_CHANGED, () => { if (S.playing && S.playing.castingActive && _castRp.duration && !S.playing.castBase) S.playing.castDuration = _castRp.duration; });
     _castRpc.addEventListener(RPE.IS_PAUSED_CHANGED, () => {
       updPP();
       if (_castRp && _castRp.isPaused) saveWatch(true);
@@ -19813,18 +20049,28 @@ function currentCastStreamUrl() {
   const p = S.playing; if (!p) return null;
   // Cast whatever variant the browser is already playing — if the browser could decode it, the
   // receiver almost certainly can (transcode is H.264/AAC = universally safe on the Default Receiver).
-  const pos = Math.floor(currentTime() || 0);
+  const pos = Number.isFinite(p._castLoadPos) ? p._castLoadPos : Math.floor(currentTime() || 0);
   let path;
   if (p.usingTranscode) path = `${p.transcodeUrl}&start=${pos}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
   else if (p.usingRemux) path = remuxPlaybackUrl(p, pos);
   else path = p.streamUrl;
   try { return new URL(path, castPublicOrigin()).href; } catch { return null; }
 }
+// A remux/transcode cast starts a stream whose own clock is 0 at the cast start minute (start= in
+// the URL). Everything else (seek bar, saves, Trakt, return to local play) needs title time.
+function castTitleTime(p, receiverSeconds) {
+  return (Number(p && p.castBase) || 0) + (Number(receiverSeconds) || 0);
+}
 function castLoadCurrent() {
   const p = S.playing, sess = _castCtx && _castCtx.getCurrentSession();
   if (!p || !sess || !castVodEligible()) return;
-  const url = currentCastStreamUrl(); if (!url) return;
+  const pos = Math.floor(currentTime() || 0); // ONE read: the URL start and the cast base must agree
+  p._castLoadPos = pos;
+  const url = currentCastStreamUrl();
+  p._castLoadPos = undefined;
+  if (!url) return;
   const serverSeek = !!(p.usingRemux || p.usingTranscode); // seek is baked into the URL → start the receiver at 0
+  const castBase = serverSeek ? pos : 0;
   const info = new chrome.cast.media.MediaInfo(url, 'video/mp4');
   info.streamType = chrome.cast.media.StreamType.BUFFERED;
   const md = new chrome.cast.media.GenericMediaMetadata();
@@ -19835,15 +20081,21 @@ function castLoadCurrent() {
   info.metadata = md;
   const req = new chrome.cast.media.LoadRequest(info);
   req.autoplay = true;
-  req.currentTime = serverSeek ? 0 : Math.max(0, Math.floor(currentTime() || 0));
-  sess.loadMedia(req).then(enterCastMode).catch(() => toast('Cast could not load this title'));
+  req.currentTime = serverSeek ? 0 : Math.max(0, pos);
+  sess.loadMedia(req).then(() => {
+    if (S.playing === p) { p.castBase = castBase; if (p.castingActive) p.castPos = pos; }
+    enterCastMode();
+  }).catch(() => toast('Cast could not load this title'));
 }
 function enterCastMode() {
   const p = S.playing; if (!p) { updateCastButtons(); return; }
   if (!p.castingActive) {
+    // Read BEFORE the flag: with castingActive set, currentTime() returns the old castPos (0 on a
+    // first cast) and the pause checkpoint below saved 0:00 as the resume point.
+    const pos = currentTime() || 0, dur = totalDuration() || 0;
     p.castingActive = true;
-    p.castPos = currentTime() || 0;
-    p.castDuration = totalDuration() || 0;
+    p.castPos = pos;
+    p.castDuration = dur;
     try { $('video').pause(); } catch {}
   }
   try { const s = _castCtx.getCurrentSession(); const dev = s && s.getCastDevice && s.getCastDevice(); S.castDeviceName = (dev && dev.friendlyName) || 'TV'; } catch { S.castDeviceName = 'TV'; }
@@ -19855,7 +20107,7 @@ function exitCastMode() {
   if (!p || !p.castingActive) return;
   const finalPos = p.castPos || currentTime() || 0;
   const ended = p.castDuration && finalPos >= p.castDuration - 3;
-  p.castingActive = false; p.castPos = 0;
+  p.castingActive = false; p.castPos = 0; p.castBase = 0;
   updateCastButtons();
   if (ended) { closePlayer({ ended: true, _fromCast: true }); return; }
   // Resume local playback where the TV left off (reuses the exact resume machinery).
@@ -19866,11 +20118,12 @@ function exitCastMode() {
 }
 function onCastPlayerState() {
   const p = S.playing; if (!p || !p.castingActive || !_castRp) return;
-  p.castPos = _castRp.currentTime || p.castPos || 0;
-  if (_castRp.duration) p.castDuration = _castRp.duration;
+  p.castPos = _castRp.currentTime ? castTitleTime(p, _castRp.currentTime) : (p.castPos || 0);
+  if (_castRp.duration && !p.castBase) p.castDuration = _castRp.duration;
   updPP();
   try {
-    if (_castRp.playerState === chrome.cast.media.PlayerState.IDLE && _castRp.duration && p.castPos >= _castRp.duration - 3) {
+    const titleDur = p.castDuration || p.duration || 0; // title time vs title duration
+    if (_castRp.playerState === chrome.cast.media.PlayerState.IDLE && titleDur && p.castPos >= titleDur - 3) {
       saveWatch(true);
       const s = _castCtx && _castCtx.getCurrentSession(); if (s) s.endSession(true);
     }
@@ -26874,7 +27127,7 @@ function renderPinRows() {
         try {
           await api(`/api/me/profiles/${pr.id}/delete`, { method: 'POST', body: { password: f.querySelector('input').value } });
           S.user.profiles = (S.user.profiles || []).filter((x) => x.id !== pr.id);
-          if (S.profile && S.profile.id === pr.id) { S.profile = null; S.maxLevel = 4; try { localStorage.removeItem('triboon.profile'); } catch {} clearPageCaches(); loadRows(); }
+          if (S.profile && S.profile.id === pr.id) { S.profile = null; S.maxLevel = 4; try { localStorage.removeItem('triboon.profile'); } catch {} resetProfileScopedState(); clearPageCaches(); loadRows(); }
           toast(`Profile “${pr.name}” deleted`);
           renderPinRows();
         } catch (e) { toast(e.message); }
@@ -26918,17 +27171,30 @@ function renderPinRows() {
     <select aria-label="Profile maturity level">
       ${LEVELS.map((l, i) => `<option value="${i}" ${i === 4 ? 'selected' : ''}>${l}</option>`).join('')}
     </select>
+    <input type="password" class="addProfilePw" placeholder="account password" autocomplete="current-password" aria-label="Account password" style="display:none">
     <button class="profileAddBtn focusable">${profileIcon('plus')}<span>Add profile</span></button>`;
   addForm.querySelector('button').addEventListener('click', async () => {
     const name = addForm.querySelector('input').value.trim();
     if (!name) return toast('Enter a profile name');
+    const pwI = addForm.querySelector('.addProfilePw');
     try {
       const avatar = AVATAR_IDS[Math.floor(Math.random() * AVATAR_IDS.length)]; // never a bare tile
-      const pr = await api('/api/me/profiles', { method: 'POST', body: { name, level: +addForm.querySelector('select').value, avatar } });
+      const body = { name, level: +addForm.querySelector('select').value, avatar };
+      if (pwI.value) body.password = pwI.value; // sent once, never stored
+      const pr = await api('/api/me/profiles', { method: 'POST', body });
+      pwI.value = '';
       (S.user.profiles = S.user.profiles || []).push(pr);
       toast(`Profile “${pr.name}” added — set a PIN below to lock it`);
       renderPinRows();
-    } catch (e) { toast(e.message); }
+    } catch (e) {
+      // A level above the current profile's needs the account password: show the field, ask once.
+      if (/account password required/i.test(e.message || '')) {
+        pwI.style.display = '';
+        pwI.focus();
+        return toast('Enter the account password to add a profile above your level');
+      }
+      toast(e.message);
+    }
   });
   wrap.appendChild(addForm);
 }
@@ -27350,9 +27616,14 @@ function savePrefLiveCats() { // debounced — a burst of presses saves once
     const global = $('prefCatScope').value === 'all';
     try {
       if (global) {
-        await api('/api/settings', { method: 'POST', body: { iptvHiddenGroups: hidden } });
-        S.liveGlobalHidden = new Set(hidden);
-        toast(hidden.length ? `${hidden.length} categories hidden for ALL users` : 'Global hide list cleared');
+        // Keep admin hides for categories that are not on screen right now (a source that is
+        // down, or a label from another view), so this save cannot drop them.
+        const rendered = new Set([...document.querySelectorAll('#prefCatList input')].map((c) => c.dataset.group));
+        const kept = [...(S.liveGlobalHidden || [])].filter((g) => !rendered.has(g));
+        const globalList = [...new Set([...hidden, ...kept])];
+        await api('/api/settings', { method: 'POST', body: { iptvHiddenGroups: globalList } });
+        S.liveGlobalHidden = new Set(globalList);
+        toast(globalList.length ? `${globalList.length} categories hidden for ALL users` : 'Global hide list cleared');
       } else {
         savePersonalHiddenSet(new Set(hidden));
         if (S.serverInfo && S.serverInfo.iptv && (!S.user || S.user.iptvAllowed !== false)) {
@@ -28760,6 +29031,50 @@ function paintAdminUsers(users, s = {}) {
     } catch (e) { toast('Delete failed: ' + e.message); }
   }));
 }
+// Audit F1-01: settings.json is there but does not open with the current secret (or it was kept
+// as a side copy before a save). Shown at the top of every server panel (they are folded into
+// #prefs by mergeServerSettingsIntoPrefs). While settings do not open it cannot be hidden; once
+// they do, the admin can hide the notice for that side copy (the file is kept; a newer copy shows
+// the notice again). The Hide button is a plain button: the global D-pad handler activates it.
+function paintSettingsUnreadable(s) {
+  const live = !!(s && s.settingsUnreadable);
+  const copy = (s && s.settingsSideCopy) || '';
+  const hidden = !live && !!(s && s.settingsSideCopyDismissed);
+  const panels = [...document.querySelectorAll('.setGrid[data-stab]')];
+  if ((!live && !copy) || hidden) { panels.forEach((p) => { const b = p.querySelector(':scope > .srvUnreadable'); if (b) b.remove(); }); return; }
+  const html = `<h2 style="color:#ff8d8d">Saved settings could not be opened</h2>
+    <p>${live ? 'The settings file on this server does not open with the current secret, so providers, indexers and keys look empty.' : 'Settings that did not open with the current secret were saved over.'}
+    This happens when <code>TRIBOON_SECRET</code> changed or <code>secret.json</code> was lost or replaced.
+    To get the old settings back: put the old <code>TRIBOON_SECRET</code> or <code>secret.json</code> back${copy ? `, copy <code>${esc(copy)}</code> over <code>settings.json</code> in the data folder,` : ''} and restart the server.${live ? ' Saving here first keeps a copy of the old file.' : ''}</p>
+    ${copy ? `<p class="hint">The old file is kept as <code>${esc(copy)}</code> in the data folder.${live ? '' : ' Hiding this notice keeps that file; a newer kept copy shows the notice again.'}</p>` : ''}
+    ${copy && !live ? '<button type="button" class="btn ghost focusable srvUnreadableHide">Hide this notice</button>' : ''}`;
+  for (const p of panels) {
+    let b = p.querySelector(':scope > .srvUnreadable');
+    if (!b) {
+      b = document.createElement('div');
+      b.className = 'panel srvUnreadable';
+      b.setAttribute('role', 'alert');
+      b.style.cssText = 'grid-column:1 / -1;border:1px solid #ff8d8d';
+      p.prepend(b);
+    }
+    b.innerHTML = html;
+    const hide = b.querySelector('.srvUnreadableHide');
+    if (hide) hide.addEventListener('click', () => hideSettingsSideCopyNotice(copy, hide));
+  }
+}
+async function hideSettingsSideCopyNotice(copy, btn) {
+  const hadFocus = !!(btn && (document.activeElement === btn || btn.classList.contains('focus')));
+  try { await api('/api/settings/side-copy/dismiss', { method: 'POST', body: { name: copy } }); }
+  catch (e) { toast(e.message); return refreshSettings({ force: true }); }
+  document.querySelectorAll('.setGrid[data-stab] > .srvUnreadable').forEach((b) => b.remove());
+  toast('Notice hidden. The kept file is still in the data folder.');
+  // The focused button is gone: put D-pad focus back on the panel's first real control.
+  if (hadFocus) {
+    const cfg = sectionFormConfig();
+    const panel = cfg && activeSectionPanel(cfg);
+    if (panel) { S.settingsZone = 'panel'; focusSectionControl(formCtls(panel)[0]); }
+  }
+}
 async function refreshSettings(opts = {}) {
   const now = Date.now();
   const tab = accountTabKey();
@@ -28788,6 +29103,7 @@ async function refreshSettings(opts = {}) {
     if (opts.force || tab === 'activity') refreshActivity();
     if (opts.force || tab === 'security') refreshSecurity();
     const s = await api('/api/settings');
+    paintSettingsUnreadable(s);
     setPerfForm(s.streamingPerformance || {});
     S.perfRecommendation = null;
     perfSetApplyEnabled(false);
@@ -28839,6 +29155,7 @@ async function refreshSettings(opts = {}) {
       S.editingProvider = +b.dataset.edp;
       $('npSave').textContent = `Save changes (${p.host})`;
       $('npPass').placeholder = 'password (blank = keep saved)';
+      $('npUser').placeholder = 'username (blank = keep saved)';
       $('npHost').focus();
     }));
     document.querySelectorAll('[data-edi]').forEach((b) => b.addEventListener('click', () => {
@@ -29119,9 +29436,12 @@ $('npSave').addEventListener('click', async () => {
     backup: !!($('npBackup') && $('npBackup').checked),
   };
   const editing = Number.isInteger(S.editingProvider);
+  // The edit form cannot show the saved name, so a blank box means "keep the saved one".
+  if (editing && !fields.user) delete fields.user;
   await api('/api/settings', { method: 'POST', body: editing
     ? { editProvider: { index: S.editingProvider, ...fields } } : { addProvider: fields } });
   S.editingProvider = null; $('npSave').textContent = 'Add provider'; $('npPass').placeholder = 'password';
+  $('npUser').placeholder = 'username';
   ['npHost', 'npPort', 'npUser', 'npPass', 'npConn'].forEach((id) => { $(id).value = ''; }); $('npPreset').value = '';
   if ($('npBackup')) $('npBackup').checked = false;
   toast(editing ? 'Provider updated' : 'Provider added (encrypted)'); refreshSettings({ force: true });
@@ -29772,6 +30092,13 @@ function switchView(v, push = true, opts = {}) {
   if (prevView === 'audiobooks' && v !== 'audiobooks') { $('abDetail').classList.remove('open'); if (typeof stopAudiobook === 'function') stopAudiobook(); }
   if (typeof updateAbMini === 'function') updateAbMini();
   $('searchBar').classList.toggle('show', v === 'search');
+  // Leaving an open detail page through the menu: drop its title state as closeDetail does
+  // (without its back-route code). A stale S.detailItem rode as a search alias on other titles.
+  if (v !== 'player' && $('detail').classList.contains('open')) {
+    S.detailReq = (S.detailReq || 0) + 1; S.seasonReq = (S.seasonReq || 0) + 1;
+    if (prevView !== 'player') S._playIntent = (S._playIntent || 0) + 1;
+    S.detailItem = null; S.qualityPref = null;
+  }
   $('detail').classList.remove('open'); document.body.classList.remove('detailOpen'); $('person').classList.remove('open');
   document.querySelectorAll('.railBtn[data-nav]').forEach((b) => b.classList.toggle('active', b.dataset.nav === v));
   document.querySelectorAll('.railBtn[data-libid]').forEach((b) =>
@@ -31083,7 +31410,12 @@ function closeFocusOverlay(id, key, opts = {}) {
 }
 function formCtls(scope) {
   if (!scope) return [];
-  return [...scope.querySelectorAll('button, input, select, a')].filter((el) => el.offsetParent !== null && !el.disabled);
+  const els = [...scope.querySelectorAll('button, input, select, a')].filter((el) => el.offsetParent !== null && !el.disabled);
+  // The unreadable-settings notice sits at the TOP of server panels. Its Hide button is listed LAST
+  // so every landing spot (formCtls(...)[0]) stays the panel's first real control; D-pad movement
+  // in panels is geometric, so Up still reaches the button.
+  const notice = els.filter((el) => el.closest('.srvUnreadable'));
+  return notice.length ? els.filter((el) => !notice.includes(el)).concat(notice) : els;
 }
 // GEOMETRIC D-pad for the full-page forms (Settings/Preferences): ↑/↓ move between visual
 // ROWS, ←/→ within a row, ← past the row's left edge exits to the rail. The DOM-order
@@ -31256,12 +31588,14 @@ document.addEventListener('keydown', (e) => {
   // Native TV sends synthetic arrows even while a real modal input owns focus. Route those before
   // the generic text-input bailout, but leave phone/web caret keys and Backspace entirely native.
   const tvFormModal = [$('libModal'), $('matchModal'), $('updateModal')]
+    .concat($('pwModal')) // the add-profile account password (review R4)
     .find((m) => m && m.classList.contains('open'));
   if (tvFormModal && document.body.classList.contains('tv')) {
     if (k === 'Escape') {
       e.preventDefault();
       if (tvFormModal.id === 'libModal') closeLibModal();
       else if (tvFormModal.id === 'matchModal') closeMatchModal();
+      else if (tvFormModal.id === 'pwModal') closePwModal();
       else closeUpdateModal();
       return;
     }
@@ -31378,6 +31712,12 @@ document.addEventListener('keydown', (e) => {
   if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', ' ', 'f', 'F', '2', '3', '4', 'PageUp', 'PageDown',
     'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaTrackNext', 'MediaTrackPrevious', 'MediaNextTrack', 'MediaPreviousTrack'].includes(k)) return;
   if ((k === 'f' || k === 'F') && S.view !== 'player') return; // F = fullscreen, player only
+  if ($('pwModal').classList.contains('open')) {
+    e.preventDefault();
+    if (k === 'Escape' || k === 'Backspace') closePwModal(); // Back / Esc = Cancel
+    else dpadCycle($('pwModal'), k);
+    return;
+  }
   if ($('gateProfiles').classList.contains('open')) {
     e.preventDefault(); // without this the TV WebView's native spatial nav ALSO moves → double jumps
     const cards = [...$('profileGrid').querySelectorAll('.profCard')];
@@ -32379,7 +32719,7 @@ window.__tvBack = () => {
   }
   const overlay = document.querySelector(
     '.gate.open, #detail.open, #player.open, #abDetail.open, #abPlayer.open, #drawer.open, #trailer.open, ' +
-    '#libModal.open, #matchModal.open, #updateModal.open, #catModal.open, #filterMenu.open, #cwMenu.open, #trackMenu.open, #musicNow.open');
+    '#libModal.open, #matchModal.open, #updateModal.open, #pwModal.open, #catModal.open, #filterMenu.open, #cwMenu.open, #trackMenu.open, #musicNow.open');
   if (overlay) {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     return 'ok';
@@ -32891,6 +33231,18 @@ function showAbDiscovery(show) {
 
 // "Continue Listening" — in-progress audiobooks, on the Audiobooks page only (kept OUT of the
 // home Continue Watching rail so books and video don't mix). Sourced from the /api/watch rows.
+// A free public-domain book is saved as audiobook:pub:<source>:<id>. The Audible detail route
+// takes only a 10-character id, so its card opened an empty "Audiobook" page. Play the free book
+// again under the same key instead (it resumes at the saved spot).
+function abContinueTarget(asin, meta) {
+  const s = String(asin || '');
+  if (!s.startsWith('pub:')) return { kind: 'detail' };
+  const rest = s.slice(4);
+  const cut = rest.indexOf(':');
+  if (cut <= 0) return { kind: 'detail' };
+  const m = meta || {};
+  return { kind: 'pub', source: rest.slice(0, cut), id: rest.slice(cut + 1), title: m.title || 'Audiobook', cover: m.cover || '', authors: m.author ? [m.author] : [] };
+}
 async function renderAbContinue() {
   const box = $('abContinue');
   box.innerHTML = '';
@@ -32920,7 +33272,11 @@ async function renderAbContinue() {
   }).join('');
   box.innerHTML = `<div class="abRowTitle">Continue Listening</div><div class="abGrid abContRow">${cards}</div>`;
   box.querySelectorAll('.abCard').forEach((el) => {
-    el.addEventListener('click', () => openAbDetail(el.dataset.asin));
+    el.addEventListener('click', () => {
+      const target = abContinueTarget(el.dataset.asin, AB.contMeta && AB.contMeta[el.dataset.asin]);
+      if (target.kind === 'pub') abPlayPubaudio(target);
+      else openAbDetail(el.dataset.asin);
+    });
     const mb = el.querySelector('.abContMenuBtn');
     if (mb) mb.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); openAbCardMenu(el.dataset.asin, el); });
   });
@@ -32946,7 +33302,7 @@ function openAbCardMenu(asin, card) {
     if (!btn || !m.contains(btn)) return;
     const act = btn.dataset.act;
     e.stopPropagation(); closeCwMenu();
-    if (act === 'abinfo') openAbDetail(asin);
+    if (act === 'abinfo') { const target = abContinueTarget(asin, meta); if (target.kind === 'pub') abPlayPubaudio(target); else openAbDetail(asin); }
     else if (act === 'abfin') abMarkFinished(asin, meta);
     else if (act === 'abrm') abRemoveContinue(asin, meta);
   };
@@ -33133,6 +33489,8 @@ async function abLoadRelated(book, fallback, detailReq, requestedAsin) {
 async function abStartPlay(book, fallback, seekTo) {
   const title = book.title || (fallback && fallback.title) || '';
   const author = (book.authors || (fallback && fallback.authors) || [])[0] || '';
+  // No title: never search usenet or the free libraries with an empty query (it matches any book).
+  if (!String(title).trim()) { toast('This book has no title to search for'); return; }
   toast('Finding a source…');
   let payload;
   try {

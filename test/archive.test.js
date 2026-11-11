@@ -1005,3 +1005,51 @@ test('archive: a dead RAR trailer piece is never fetched and never blocks a rele
     await mock.close();
   }
 });
+
+// Review R2 (B06B-02, D-02 early grid check): in a season pack posted as one RAR set, a gap in the
+// article list of a volume that holds only ANOTHER episode's bytes must not block the picked
+// episode. A gap in a volume that does hold the picked episode is still refused.
+test('archive: a list gap in a volume without bytes of the picked file does not block it', async () => {
+  const e03 = seededPayload(150000, 0xe003);
+  const e05 = seededPayload(150000, 0xe005);
+  const vols = writeRar4Store([{ name: 'Show.S01E03.mkv', data: e03 }, { name: 'Show.S01E05.mkv', data: e05 }],
+    { volSize: 60000, naming: 'part', base: 'show.s01' });
+  const partSize = 9000;
+  const run = async (gapVolume) => {
+    const { articles, nzb } = makeArchiveNzb(vols, partSize, { junk: false });
+    const fileNo = gapVolume + 1;
+    // The gap is the volume's LAST article (it holds the RAR end block). A gap earlier in a volume
+    // already fails the RAR walk on the Wave 1 base too: the end-block read lands on a misplaced
+    // article. The last-article gap is the shape the walk survives and the grid check catches.
+    const last = Math.ceil(vols[gapVolume].data.length / partSize);
+    const gapNzb = nzb.replace(new RegExp(`<segment bytes="\\d+" number="${last}">f${fileNo}s${last}@triboon\\.test</segment>`), '');
+    assert.notStrictEqual(gapNzb, nzb, `precondition: article ${last} of volume ${fileNo} removed`);
+    const mock = createMockNntp({ articles });
+    const port = await mock.listen();
+    const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+    // Pool and mock stay open for the reads; the outer finally closes them.
+    run.cleanup.push(async () => { pool.close(); await mock.close(); });
+    const vf = await mountNzb(pool, gapNzb, { wantedEpisode: { s: 1, e: 5 } });
+    assert.strictEqual(vf.name, 'Show.S01E05.mkv');
+    const holds = vf.extents.some((e) => e.vol === gapVolume);
+    return { vf, holds, readAll: () => readAll(vf, 0, vf.size) };
+  };
+  run.cleanup = [];
+  try {
+    // Volume 2 (index 1) holds only E03 bytes.
+    const other = await run(1);
+    assert.strictEqual(other.holds, false, 'precondition: the broken volume holds no E05 bytes');
+    assert.ok(other.vf.vols[1] && other.vf.vols[1]._gridBroken, 'precondition: that volume\'s grid is broken');
+    assert.strictEqual(other.vf.deadPieceCount(), 0, 'another episode\'s broken volume does not block E05');
+    assert.strictEqual(other.vf.deadPieceReason(), '');
+    assert.ok((await other.readAll()).equals(e05), 'E05 reads identical bytes');
+    assert.strictEqual(other.vf.deadPieceCount(), 0, 'still not blocked after the full read');
+    // Volume 4 (index 3) holds E05 bytes: still refused.
+    const own = await run(3);
+    assert.strictEqual(own.holds, true, 'precondition: the broken volume holds E05 bytes');
+    assert.ok(own.vf.deadPieceCount() > 0, 'a broken volume with bytes of the picked file still blocks');
+    assert.match(own.vf.deadPieceReason(), /^volume 4 has an unreadable layout/);
+  } finally {
+    for (const c of run.cleanup) await c();
+  }
+});

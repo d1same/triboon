@@ -18,6 +18,16 @@ const HAS_FFMPEG = !!detectFfmpeg();
 const HAS_FFPROBE = !!detectFfprobe();
 const HAS_ENCODER = !!detectEncoder();
 
+// B17-11 (T2-7): a source regex must answer fast. Greedy "any text" spans backtrack for seconds
+// on the 1.9 MB web UI; lazy spans accept exactly the same texts. This tripwire fails a slow regex.
+function matchSource(text, re, msg, maxMs = 500) {
+  const t0 = process.hrtime.bigint();
+  const hit = re.exec(text);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.ok(hit, msg || (`source should match ${re}`));
+  assert.ok(ms < maxMs, `source regex took ${ms.toFixed(0)} ms (limit ${maxMs} ms): ${msg || re}`);
+}
+
 function pngHasTransparentPixels(file) {
   const png = fs.readFileSync(file);
   assert.strictEqual(png.toString('ascii', 1, 4), 'PNG', `${file} must be a PNG`);
@@ -821,7 +831,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the Next chip pairs with a small dismiss (✕) control');
   assert.match(ui, /\$\('unPlay'\)\.addEventListener\('click', playNextEpisode\);[\s\S]+\$\('unCancel'\)\.addEventListener\('click', dismissUpNext\);/,
     'browser Next Episode and X are clickable');
-  assert.match(ui, /if \(\$\('upNext'\)\.classList\.contains\('show'\)\) \{[\s\S]+\$\('unPlay'\), \$\('unCancel'\)[\s\S]+Escape[\s\S]+ArrowLeft[\s\S]+ArrowRight[\s\S]+Enter[\s\S]+un\[i\]\.click\(\)/,
+  matchSource(ui, /if \(\$\('upNext'\)\.classList\.contains\('show'\)\) \{[\s\S]+?\$\('unPlay'\), \$\('unCancel'\)[\s\S]+?Escape[\s\S]+?ArrowLeft[\s\S]+?ArrowRight[\s\S]+?Enter[\s\S]+?un\[i\]\.click\(\)/,
     'browser D-pad Left/Right chooses Next/X, OK activates, Back dismisses');
   assert.match(ui, /#upNext\{[^}]*z-index:7/,
     'the Next chip sits above the OSD so mouse and remote clicks reach it');
@@ -1424,7 +1434,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Search shows a Did you mean list under the field for close misspellings');
   assert.match(ui, /const serverHint = r\.didYouMean \|\| ''/,
     'Search uses the server close-title retry so a cold typo still finds the real name');
-  assert.match(ui, /if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+if \(S\.view === 'home'\) \{[\s\S]+setRowsView\(\$\('rows'\), S\.rows, true\);[\s\S]+\}[\s\S]+S\.view === 'home' && S\.zone !== 'rail' && !document\.querySelector\('#home \.focus'\)[\s\S]+focusContent\(\);[\s\S]+return false;/,
+  matchSource(ui, /if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+?if \(S\.view === 'home'\) \{[\s\S]+?setRowsView\(\$\('rows'\), S\.rows, true\);[\s\S]+?\}[\s\S]+?S\.view === 'home' && S\.zone !== 'rail' && !document\.querySelector\('#home \.focus'\)[\s\S]+?focusContent\(\);[\s\S]+?return false;/,
     'returning Home with cached rows should repoint the row model and reclaim focus from hidden pages');
   assert.match(ui, /if \(\(S\.maxLevel \?\? 4\) < 4\) \{[\s\S]+renderRowsInto\(root, rows\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(current\(\) && S\.zone !== 'rail'\) focusCard\(0, 0\);/,
     'restricted-profile Discover rows should focus the first card only while that request still owns the page');
@@ -1653,6 +1663,25 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'watch progress should persist sanitized metadata through the shared watchlist metadata helper');
   assert.match(ui, /function openLocalDetail\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \}/,
     'unmatched local library details should expose the same Resume and Start Over behavior');
+});
+
+test('SRC-1: indexer errors with no releases never mark a title Unavailable; Sources offers a D-pad Retry', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const avail = ui.slice(ui.indexOf('async function checkAvailability(it) {'), ui.indexOf('function closeDetail() {'));
+  assert.ok(avail.length > 1000, 'checkAvailability found');
+  const guard = avail.indexOf('if (!playable && Array.isArray(r.errors) && r.errors.length) {');
+  const verdict = avail.indexOf('if (!playable && (hadStrongIds || !searchItem.tmdbId)) {');
+  assert.ok(guard > 0 && verdict > guard, 'an empty answer WITH indexer errors is handled before the Unavailable verdict');
+  const branch = avail.slice(guard, verdict);
+  assert.match(branch, /return;\s*\}\s*(\/\/[^\n]*\s*)*$/, 'the indexer-error branch returns before the verdict');
+  assert.doesNotMatch(branch, /'Unavailable'|disabled = true|classList\.add\('unavail'\)/,
+    'an indexer outage never disables Play or says Unavailable');
+  assert.doesNotMatch(branch, /\.error\b/, 'the raw indexer error text (host, path-style key) is never shown');
+  const drawer = ui.slice(ui.indexOf('async function openSources(it) {'), ui.indexOf('const fmtAttr = (v) => {'));
+  const empty = drawer.slice(drawer.indexOf('if (!r.candidates.length) {'));
+  assert.match(empty, /if \(Array\.isArray\(r\.errors\) && r\.errors\.length\) \{[\s\S]+Could not reach[\s\S]+className = 'srcRow focusable srcRetry'[\s\S]+addEventListener\('click', \(\) => \{[\s\S]{0,200}const ret = S\.drawerReturn;\s*openSources\(it\);\s*if \(ret\) S\.drawerReturn = \{ \.\.\.ret, epoch: S\.drawerReq \};[\s\S]+requestAnimationFrame\(\(\) => \{ if \(current\(\)\) focusDrawer\(0\); \}\)[\s\S]+return;[\s\S]+r\.camOnly/,
+    'the drawer says the indexers failed, offers Retry as a drawer row (D-pad Enter clicks it), and keeps the old texts after it');
+  assert.doesNotMatch(empty.slice(0, empty.indexOf('r.camOnly')), /\.error\b/, 'the drawer never prints raw indexer error text');
 });
 
 test('Kids catalog stays PG-max and lives on a hideable menu page', () => {
@@ -2598,6 +2627,65 @@ test('preferences profile manager has TV-friendly profile icons and add action',
     'Down the Settings tab list must not swap panels');
   assert.doesNotMatch(ui, /addEventListener\('mouseenter', \(\) => scheduleAccountTab/,
     'hover must not swap Settings panels');
+});
+
+// Review R4 (B01-03): the "Who's watching" add-profile flow asked for the account password through
+// prompt(), which shows it unmasked on the TV (Android onJsPrompt builds a plain EditText). The
+// child the check guards against could read it. It now uses an in-page masked field.
+test('B01-03 R4: the add-profile flow takes the account password through a masked in-page field', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const a = ui.indexOf('async function addProfileFlow() {');
+  const b = ui.indexOf('// In-page masked password field (review R4).', a);
+  assert.ok(a >= 0 && b > a, 'addProfileFlow is extractable');
+  const flow = ui.slice(a, b);
+  assert.doesNotMatch(flow, /prompt\([^)]*[Pp]assword/, 'no prompt() for the password');
+  assert.match(flow, /await askAccountPassword\(/, 'the password comes from the in-page field');
+  // The field is masked, and the dialog is wired into the ONE global key handler (TV keys reach
+  // `document`, not the field) and into hardware Back.
+  assert.match(ui, /<div id="pwModal"[\s\S]{0,600}<input id="pwModalInput" type="password"/, 'a type="password" input');
+  assert.match(ui, /const tvFormModal = \[\$\('libModal'\), \$\('matchModal'\), \$\('updateModal'\)\]\s+\.concat\(\$\('pwModal'\)\)[^\n]*\n\s+\.find\(/,
+    'TV D-pad and Escape reach the dialog');
+  assert.match(ui, /else if \(tvFormModal\.id === 'pwModal'\) closePwModal\(\);/, 'TV Escape cancels it');
+  assert.match(ui, /if \(\$\('pwModal'\)\.classList\.contains\('open'\)\) \{[\s\S]{0,200}closePwModal\(\)[\s\S]{0,80}dpadCycle\(\$\('pwModal'\), k\)/,
+    'browser keys reach the dialog before the profile picker grid');
+  assert.ok(ui.indexOf("if ($('pwModal').classList.contains('open')) {") < ui.indexOf("if ($('gateProfiles').classList.contains('open')) {"),
+    'the dialog is handled before the picker grid takes the keys');
+  assert.match(ui, /'#libModal\.open, #matchModal\.open, #updateModal\.open, #pwModal\.open,/, 'hardware Back closes it');
+
+  // Behaviour: run the real addProfileFlow with stubs.
+  const run = async (password, { firstError = 'account password required' } = {}) => {
+    const prompts = [];
+    const calls = [];
+    const toasts = [];
+    const selected = [];
+    const S = { user: { profiles: [] } };
+    const fn = new Function('prompt', 'confirm', 'toast', 'api', 'selectProfile', 'AVATAR_IDS', 'S', 'askAccountPassword',
+      `${flow}\nreturn addProfileFlow;`)(
+      (q) => { prompts.push(q); return prompts.length === 1 ? 'Grown' : '4'; },
+      () => false, (m) => toasts.push(m),
+      async (url, opts) => {
+        calls.push(opts.body);
+        if (calls.length === 1 && firstError) throw new Error(firstError);
+        if (opts.body.password && opts.body.password !== 'right') throw new Error('wrong account password');
+        return { id: 'p2', name: opts.body.name, level: opts.body.level };
+      },
+      (pr) => selected.push(pr), ['a1'], S, async () => password);
+    await fn();
+    return { prompts, calls, toasts, selected };
+  };
+  const ok = await run('right');
+  assert.strictEqual(ok.prompts.length, 2, 'only the name and level use prompt(); the password does not');
+  assert.ok(ok.prompts.every((q) => !/password/i.test(q)));
+  assert.strictEqual(ok.calls.length, 2);
+  assert.strictEqual(ok.calls[1].password, 'right', 'the typed password is sent with the second try');
+  assert.strictEqual(ok.selected.length, 1, 'the new profile is selected');
+  const cancelled = await run(null);
+  assert.strictEqual(cancelled.calls.length, 1, 'Cancel sends nothing more');
+  assert.strictEqual(cancelled.selected.length, 0);
+  assert.deepStrictEqual(cancelled.toasts, [], 'Cancel is quiet');
+  const wrong = await run('nope');
+  assert.deepStrictEqual(wrong.toasts, ['wrong account password'], 'a wrong password shows the existing error');
+  assert.strictEqual(wrong.selected.length, 0);
 });
 
 test('admin security panel exposes own-password change separately from user resets', () => {
@@ -4618,7 +4706,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'episode playback should split show title from season/episode metadata for the player header');
   assert.match(ui, /id="playerEpisodes"[\s\S]+id="trackMenu"/,
     'episode players should have a hidden current-season thumbnail strip below the controls');
-  assert.match(ui, /#playerEpisodes\{display:flex;max-height:0[\s\S]+transition:max-height[\s\S]+#playerEpisodes\.open\{max-height:calc\(var\(--playerThumb, var\(--thumb\)\) \* 0\.5625 \+ 68px\);padding:5px 8px 20px[\s\S]+\.playerEpCard\{[\s\S]+flex:0 0 var\(--playerThumb, var\(--thumb\)\)[\s\S]+border-radius:10px[\s\S]+background:transparent[\s\S]+box-shadow:none[\s\S]+\.playerEpCard\.focusable::before,\.playerEpCard\.focusable:focus-visible::before\{display:none\}[\s\S]+\.playerEpCard \.peStill\{[\s\S]+aspect-ratio:16\/9;border-radius:10px[\s\S]+box-shadow:none[\s\S]+\.playerEpCard \.peMeta\{display:flex;flex-direction:column[\s\S]+min-height:38px/,
+  matchSource(ui, /#playerEpisodes\{display:flex;max-height:0[\s\S]+?transition:max-height[\s\S]+?#playerEpisodes\.open\{max-height:calc\(var\(--playerThumb, var\(--thumb\)\) \* 0\.5625 \+ 68px\);padding:5px 8px 20px[\s\S]+?\.playerEpCard\{[\s\S]+?flex:0 0 var\(--playerThumb, var\(--thumb\)\)[\s\S]+?border-radius:10px[\s\S]+?background:transparent[\s\S]+?box-shadow:none[\s\S]+?\.playerEpCard\.focusable::before,\.playerEpCard\.focusable:focus-visible::before\{display:none\}[\s\S]+?\.playerEpCard \.peStill\{[\s\S]+?aspect-ratio:16\/9;border-radius:10px[\s\S]+?box-shadow:none[\s\S]+?\.playerEpCard \.peMeta\{display:flex;flex-direction:column[\s\S]+?min-height:38px/,
     'web episode strip should fit compact rounded 16:9 stills that follow cover size');
   assert.match(ui, /\.playerEpCard\.focus \.peStill,\.playerEpCard:focus-visible \.peStill\{box-shadow:inset 0 0 0 1\.5px var\(--artFocusLine\)\}/,
     'player episode thumbnails should keep the hollow theme frame inside the still image');
@@ -6440,7 +6528,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'web Live TV should merge server playlists and Android device-local playlists through a lean channel payload');
   assert.match(ui, /async function hydrateLivePlaybackUrls\(it\) \{[\s\S]+api\(`\/api\/iptv\/play\/\$\{idx\}\$\{q\.toString\(\) \? '\?' \+ q\.toString\(\) : ''\}`\)[\s\S]+it\._streamUrl = r\.streamUrl[\s\S]+full\.nativeFallbackUrl = it\._nativeFallbackUrl/,
     'web Live TV should mint playback URLs only for the selected server channel');
-  assert.match(server, /iptvPlay: async \(ctx\) => \{[\s\S]+ensureIptvChannelStateForUser\(ctx\.user\)[\s\S]+const channelScope = `iptv:\$\{ch\.idx\}:\$\{ch\.id\}`;[\s\S]+auth\.streamToken\(ctx\.user\.id, channelScope\)[\s\S]+streamUrl: `\/api\/iptv\/stream\/\$\{ch\.idx\}\?cid=\$\{cid\}&t=\$\{token\}`/,
+  assert.match(server, /iptvPlay: async \(ctx\) => \{[\s\S]+ensureIptvChannelStateForUser\(ctx\.user\)[\s\S]+const channelScope = `iptv:\$\{ch\.idx\}:\$\{ch\.id\}`;[\s\S]+auth\.streamToken\(ctx\.user\.id, channelScope(?:, [\w.]+(?:\([\w.]*\))?)?\)[\s\S]+streamUrl: `\/api\/iptv\/stream\/\$\{ch\.idx\}\?cid=\$\{cid\}&t=\$\{token\}`/,
     'server Live TV should expose a per-channel playback URL endpoint without bloating the channel list');
   assert.match(ui, /function openPrefs\(\)[\s\S]+\$\('prefTabLive'\)\.style\.display = '';/,
     'Preferences should always expose Live TV so users can find the personal IPTV setup before a playlist exists');
@@ -6996,6 +7084,52 @@ test('Android native player: direct source and native chrome stay out of the web
     'native guide button should be available for both Live TV and movie/episode playback');
   assert.doesNotMatch(android, /switchNativeToWeb/,
     'native Android chrome should not keep old-player escape controls');
+});
+
+test('B15A-02 A1-4: the device-local IPTV DNS lookup never runs on the UI thread', () => {
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const slice = (from, to) => {
+    const a = android.indexOf(from);
+    const b = android.indexOf(to, a + from.length);
+    assert.ok(a >= 0 && b > a, `${from} is present`);
+    return android.slice(a, b);
+  };
+  const playLive = slice('public void playLive(String json) {', '@android.webkit.JavascriptInterface');
+  assert.match(playLive, /if \(!trustedBridgeOrigin\(\)\) return;[\s\S]*warmNativePlaybackPins\(json\)[\s\S]*runOnUiThread\(\(\) -> startNativeLive\(json\)\)/,
+    'playLive checks (and DNS-pins) the stream URLs on the JavaBridge thread before it posts the native start');
+  assert.match(playLive, /runOnUiThread\(\(\) -> handleNativePlaybackStartFailure\([^;]*"live"/,
+    'a live URL that fails the check reports through the live error path on the UI thread, without a second lookup');
+  assert.doesNotMatch(playLive, /evaluateJavascript/, 'no WebView call on the JavaBridge thread');
+  const playVideo = slice('public void playVideo(String json) {', '@android.webkit.JavascriptInterface');
+  assert.match(playVideo, /if \(!trustedBridgeOrigin\(\)\) return;[\s\S]*warmNativePlaybackPins\(json\)[\s\S]*runOnUiThread\(\(\) -> startNativeVideo\(json\)\)/,
+    'playVideo warms the same pins before its UI-thread start');
+  const warm = slice('private Throwable warmNativePlaybackPins(String json) {', '\n    }\n');
+  assert.match(warm, /validateNativePlaybackUrl\(j\.optString\("url", ""\)\)[\s\S]*j\.optString\("fallbackUrl", ""\)[\s\S]*j\.optJSONArray\("fallbacks"\)[\s\S]*fb\.optString\("url", ""\)/,
+    'the primary URL, the primary fallback and every fallbacks[i].url are warmed');
+  const validator = slice('private ValidatedNativeUrl validateAndPinPersonalIptvUrl(String raw) throws IOException {', 'private String validatedPersonalIptvUrl(');
+  assert.match(validator, /if \(picked == null\) \{\s*if \(!hostLooksLiteral\(host\) && Looper\.myLooper\(\) == Looper\.getMainLooper\(\)\) \{[\s\S]*throw new IOException\([^)]*\);\s*\}\s*InetAddress\[\] addresses = InetAddress\.getAllByName\(host\);/,
+    'without a fresh pin the validator refuses to run DNS on the main looper (readable error, not NetworkOnMainThreadException); a numeric IP needs no DNS and is not refused');
+  assert.match(android, /private final java\.util\.concurrent\.ConcurrentHashMap<String, PersonalIptvHostPin> personalIptvHostSafetyCache = new java\.util\.concurrent\.ConcurrentHashMap<>\(\);/,
+    'the pin map is written from the bridge, list and guide threads, so it is a ConcurrentHashMap');
+});
+
+test('B15B-01 A2-2: one process-wide precache, so a reopened app can still direct-play', () => {
+  const dir = path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv');
+  const android = fs.readFileSync(path.join(dir, 'MainActivity.java'), 'utf8');
+  assert.doesNotMatch(android, /private StreamPrecache streamPrecache;/,
+    'the precache is not an Activity field (a second Activity in the same process built a second SimpleCache on the same folder)');
+  assert.match(android, /private static final ProcessOnce<StreamPrecache> STREAM_PRECACHE = new ProcessOnce<>\(\);/,
+    'the precache lives in one static, process-wide holder');
+  const getter = android.slice(android.indexOf('private StreamPrecache precache() {'), android.indexOf('private void handleNativePrefetch(String json) {'));
+  assert.match(getter, /getApplicationContext\(\)[\s\S]*STREAM_PRECACHE\.get\(\(\) -> new StreamPrecache\(/,
+    'the holder builds it once, with the application context (no Activity leak)');
+  const holder = fs.readFileSync(path.join(dir, 'ProcessOnce.java'), 'utf8');
+  assert.match(holder, /synchronized T get\(Factory<T> factory\)/, 'the holder getter is synchronized (UI and bridge threads)');
+  const factory = android.slice(android.indexOf('DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()'), android.indexOf('private StreamPrecache precache() {'));
+  assert.match(factory, /try \{\s*ds = precache\(\)\.readOnlyDataSourceFactory\(http\);\s*\} catch \(Throwable e\) \{[\s\S]*ds = http;/,
+    'a cache fault can never fail a direct start: it plays from the plain network factory');
+  assert.doesNotMatch(android, /STREAM_PRECACHE[\s\S]{0,80}release\(\)|streamPrecache\.release\(\)/,
+    'the shared precache is never released in onDestroy');
 });
 
 test('Android native Back dismisses Up Next before player chrome', () => {
@@ -7937,14 +8071,35 @@ test('hls variant: spawnHls copies video, emits fMP4 HLS, and refuses without an
     'the mount payload exposes hlsUrl for the iOS Safari player');
   // Client: iOS routes the remux kind to native HLS (Safari can\'t play the non-rangeable remux pipe).
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  assert.match(ui, /function hlsPlaybackUrl\(p, seekStart = 0\) \{[\s\S]+`\$\{p\.hlsUrl\}&start=\$\{Math\.max\(0, Math\.floor\(seekStart \|\| 0\)\)\}&audio=\$\{audio\}&audioSafe=1`/,
-    'hlsPlaybackUrl builds a tokened HLS URL with a server-seek start and forced stereo AAC');
+  // Owner decision D-03 (2026-11-10): this pin moved from the whole-second floor to millisecond
+  // rounding, the same form as remuxPlaybackUrl (SUBG-1).
+  assert.match(ui, /function hlsPlaybackUrl\(p, seekStart = 0\) \{[\s\S]+`\$\{p\.hlsUrl\}&start=\$\{Math\.max\(0, Math\.round\(\(seekStart \|\| 0\) \* 1000\) \/ 1000\)\}&audio=\$\{audio\}&audioSafe=1`/,
+    'hlsPlaybackUrl builds a tokened HLS URL with a millisecond server-seek start and forced stereo AAC');
   assert.match(ui, /kind === 'remux'\) \{[\s\S]+v\.src = \(\(iosWebkitVideo\(\) \|\| macSafariVideo\(\)\) && p\.hlsUrl\) \? hlsPlaybackUrl\(p, seekStart\) : remuxPlaybackUrl\(p, seekStart\);/,
     'iOS AND Mac desktop Safari get the remux as native HLS; every other browser (incl. Chrome/FF on Mac) keeps the direct fMP4 remux');
   // Mac-Safari detection must be TIGHT: require the Apple vendor string and exclude every Chromium/Gecko UA,
   // so a non-Safari Mac browser (which can't play native HLS) is never routed to the m3u8.
   assert.match(ui, /function macSafariVideo\(\) \{[\s\S]+navigator\.vendor === 'Apple Computer, Inc\.'[\s\S]+!\/\\b\(CriOS\|FxiOS\|Chrome\|Chromium\|Edg\|EdgA\|OPR\|Opera\|Android\)\\b\/i\.test\(ua\)/,
     'Mac Safari is detected via the Apple vendor string with all Chromium/Gecko UAs excluded (no false positive → no broken Chrome-on-Mac)');
+});
+
+test('SUBG-1: the Safari HLS start keeps milliseconds in the URL, the session key and the segment query', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const fn = ui.slice(ui.indexOf('function hlsPlaybackUrl(p, seekStart = 0) {'), ui.indexOf('function selectedPlayerAudioTrack('));
+  assert.ok(fn.length > 40 && !/Math\.floor\(seekStart/.test(fn), 'the web start is never floored to a whole second');
+  const hlsPlaybackUrl = new Function(`${fn}; return hlsPlaybackUrl;`)();
+  assert.match(hlsPlaybackUrl({ hlsUrl: '/api/hls/m/index.m3u8?t=x', audioTrack: 1 }, 100.5024), /&start=100\.502&audio=1&audioSafe=1$/,
+    'a resume at 100.502 s asks the server for 100.502, not 100');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const hls = server.slice(server.indexOf('const sessionStart = startSeconds;'), server.indexOf('// Keep the movie id on every piece.'));
+  assert.ok(hls.length > 1000, 'the /api/hls handler was found');
+  assert.doesNotMatch(hls, /Math\.floor\(sessionStart\)/, 'the session key and segment query never floor the start');
+  assert.match(hls, /const startKey = Math\.round\(sessionStart \* 1000\) \/ 1000;/, 'one millisecond value for key and query');
+  assert.match(hls, /const key = `\$\{startKey\}:\$\{audioTrack\}:/, 'the session key uses it');
+  assert.match(hls, /&start=\$\{startKey\}&audio=\$\{audioTrack\}/, 'the segment query uses the same value, so segments meet the session');
+  // The list's own segment query must parse back to the same key.
+  const startKey = Math.round(100.5024 * 1000) / 1000;
+  assert.strictEqual(Math.round((parseFloat(String(startKey)) || 0) * 1000) / 1000, startKey);
 });
 
 test('Android phone: Settings Dashboard tap is not the burger, and tabs stay readable', () => {
@@ -9127,12 +9282,19 @@ test('finished watch rows never resume or show in Continue Watching', () => {
     'tmdb:movie:1': { position: 5700, duration: 6000 },
     'tmdb:movie:2': { position: 1200, duration: 6000 },
     'tmdb:movie:3': { position: 900, duration: 0, watched: true },
+    'tmdb:movie:4': { position: 660, duration: 7200 },
+    'tmdb:movie:5': { position: 0, duration: 0, traktPct: 40 },
   } };
   const resumePositionForItem = new Function('S', `${ui.slice(finStart, finEnd)}\n${ui.slice(resStart, resEnd)}\nreturn resumePositionForItem;`)(S);
   assert.strictEqual(resumePositionForItem({ key: 'tmdb:movie:1', resume: 5700 }), 0,
     'a 95% row is finished: Play starts at 0:00, not in the credits');
   assert.strictEqual(resumePositionForItem({ key: 'tmdb:movie:2' }), 1200, 'a real mid-movie row still resumes');
   assert.strictEqual(resumePositionForItem({ key: 'tmdb:movie:3', resume: 900 }), 0, 'a watched row never resumes');
+  // B10A-02 (W1-1): after a rewind the saved row is the truth; the card's old, larger value lost it.
+  assert.strictEqual(resumePositionForItem({ key: 'tmdb:movie:4', resume: 2400 }), 660, 'the saved row beats the old resume value on the card');
+  assert.strictEqual(resumePositionForItem({ key: 'tmdb:movie:5', resume: 0 }), 0, 'a Trakt-percent row with no position keeps 0');
+  assert.strictEqual(resumePositionForItem({ key: 'tmdb:movie:5', resume: 1300 }), 1300, 'a row with no position keeps the card value');
+  assert.strictEqual(resumePositionForItem({ key: 'tmdb:movie:99', resume: 1500 }), 1500, 'no row: the card value still resumes');
   assert.match(ui, /function buildCwItems\(cw\) \{\s*const items = cw\.filter\(\(w\) => !w\.watched && !watchLooksFinished\(w\) &&/,
     'Continue Watching uses the same finished rule as detail next-up');
 });
@@ -10093,4 +10255,779 @@ test('a damaged spot: unreadable bytes switch at once and demote, and the shell 
   assert.match(ui, /\.\.\.\(repeatedHere \|\| unreadable \? \{ keepSourceIfNone: true, failedAt: at \} : \{\}\),/, 'the only release keeps playing');
   assert.match(android, /stuckMs >= 2000L && nativeBadDataToken == nativePlaybackToken && !nativePlayer\.isLoading\(\)\) \{[\s\S]{0,320}reportNativeStreamDrop\(resumeAt, true, null\);/,
     'a clock stopped by bad bytes switches after 2s, not after the 10s stuck-player timeout');
+});
+
+test('B10A-01 W1-2: a profile switch starts a fresh watch cache and drops late answers for the old profile', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const cut = (a, b) => {
+    const s = ui.indexOf(a);
+    const e = ui.indexOf(b, s);
+    assert.ok(s >= 0 && e > s, `slice ${a}`);
+    return ui.slice(s, e);
+  };
+  const src = [
+    cut('function selectProfile(pr) {', '// Inline add-profile editor'),
+    cut('function profileQ() {', 'function repairWatchArtUrl(u)'),
+    cut('function cachedWatchRowsForHome() {', 'function homeRowsSignature(rows)'),
+  ].join('\n');
+  const make = () => {
+    const S = { watchMap: {} };
+    const pending = [];
+    const api = (url) => new Promise((resolve, reject) => pending.push({ url, resolve, reject }));
+    const store = { setItem() {}, getItem() { return null; }, removeItem() {} };
+    const fns = new Function('S', 'api', 'clearPageCaches', 'enterAppShell', 'localStorage',
+      `${src}\nreturn { selectProfile, loadWatchState, cachedWatchRowsForHome };`)(S, api, () => {}, () => {}, store);
+    return { S, pending, ...fns };
+  };
+  const flush = () => new Promise((r) => setImmediate(r));
+  const rowsA = () => [{ key: 'tmdb:movie:10', position: 3000, updatedAt: 5 }, { key: 'tmdb:movie:11', position: 500, updatedAt: 5 }];
+  const rowsB = () => [{ key: 'tmdb:movie:11', position: 100, updatedAt: 5 }, { key: 'tmdb:movie:20', position: 900, updatedAt: 5 }];
+  const shown = (S) => (S._watchRows || []).map((w) => `${w.key}@${w.position}`).sort();
+  const wantB = ['tmdb:movie:11@100', 'tmdb:movie:20@900'];
+
+  // Case 1: A loads, the viewer switches to B, B loads. Nothing of A may survive.
+  {
+    const t = make();
+    t.S.profile = { id: 'A', level: 4 };
+    const a = t.loadWatchState(true); await flush();
+    t.pending.shift().resolve(rowsA()); await a;
+    t.selectProfile({ id: 'B', level: 1 });
+    assert.deepStrictEqual(t.cachedWatchRowsForHome(), [], 'Home must not paint A\'s rows under B before B answers');
+    const b = t.loadWatchState(); await flush();
+    const req = t.pending.shift();
+    assert.match(req.url, /profile=B/);
+    req.resolve(rowsB()); await b;
+    assert.deepStrictEqual(shown(t.S), wantB, 'B sees only B\'s rows and B\'s resume points');
+    assert.ok(!t.S.watchMap['tmdb:movie:10'], 'A\'s movie is not in B\'s watch map');
+    assert.strictEqual(t.S.watchMap['tmdb:movie:11'].position, 100);
+  }
+
+  // Case 2: A's answer is still in flight at the switch and lands after B's.
+  {
+    const t = make();
+    t.S.profile = { id: 'A', level: 4 };
+    const a = t.loadWatchState(true).catch(() => {}); await flush();
+    const reqA = t.pending.shift();
+    t.selectProfile({ id: 'B', level: 1 });
+    const b = t.loadWatchState(); await flush();
+    const reqB = t.pending.shift();
+    reqA.resolve(rowsA()); await a;
+    assert.ok(t.S._watchJob, 'A\'s late finish must not clear B\'s open job');
+    assert.notDeepStrictEqual(shown(t.S), ['tmdb:movie:10@3000', 'tmdb:movie:11@500'], 'A\'s late answer is dropped');
+    reqB.resolve(rowsB()); await b;
+    assert.deepStrictEqual(shown(t.S), wantB);
+    assert.strictEqual(t.S._watchJob, null, 'B\'s own finish clears its job');
+  }
+
+  // Case 3: B answers first, then A's answer (or A's failure) lands late.
+  for (const late of ['resolve', 'reject']) {
+    const t = make();
+    t.S.profile = { id: 'A', level: 4 };
+    const a = t.loadWatchState(true).catch(() => {}); await flush();
+    const reqA = t.pending.shift();
+    t.selectProfile({ id: 'B', level: 1 });
+    const b = t.loadWatchState(); await flush();
+    t.pending.shift().resolve(rowsB()); await b;
+    if (late === 'resolve') reqA.resolve(rowsA()); else reqA.reject(new Error('net'));
+    await a;
+    assert.deepStrictEqual(shown(t.S), wantB, `a late ${late} for A leaves B's rows alone`);
+    assert.strictEqual(t.S.watchMap['tmdb:movie:20'].position, 900);
+  }
+
+  // Same profile: a just-saved local row still beats a slower answer (kept behaviour).
+  {
+    const t = make();
+    t.S.profile = { id: 'A', level: 4 };
+    const a = t.loadWatchState(true); await flush();
+    t.pending.shift().resolve(rowsA()); await a;
+    t.S._watchRows[1] = { key: 'tmdb:movie:11', position: 777, updatedAt: 9 };
+    const again = t.loadWatchState(true); await flush();
+    t.pending.shift().resolve(rowsA()); await again;
+    assert.strictEqual(t.S.watchMap['tmdb:movie:11'].position, 777, 'same-profile local merge is kept');
+  }
+
+  assert.match(ui, /try \{ localStorage\.removeItem\('triboon\.profile'\); \} catch \{\} resetProfileScopedState\(\); clearPageCaches\(\); loadRows\(\);/,
+    'deleting the active profile also drops its watch cache');
+});
+
+test('B10A-02 W1-12: the Details target after playback carries no stale resume or start-over flag', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function playbackFinishedDetailTarget(item) {');
+  const end = ui.indexOf('async function localContinueDetailTarget', start);
+  assert.ok(start >= 0 && end > start, 'playbackFinishedDetailTarget should be extractable');
+  const target = new Function('showTitleFromEpisodeItem', `${ui.slice(start, end)}\nreturn playbackFinishedDetailTarget;`)(
+    (it) => it.showTitle || it.title || '');
+  const movie = target({ key: 'tmdb:movie:9', type: 'movie', tmdbId: 9, resume: 2400, _startOver: true });
+  assert.strictEqual(movie.type, 'movie');
+  assert.strictEqual(movie.key, 'tmdb:movie:9');
+  assert.ok(!('resume' in movie), 'Details reads resume from the watch map, not from the closed card');
+  assert.ok(!('_startOver' in movie), 'a start-over press does not carry into Details');
+  const show = target({ key: 'tmdb:tv:7', type: 'tv', tmdbId: 7, resume: 300, _startOver: true });
+  assert.strictEqual(show.type, 'tv');
+  assert.ok(!('resume' in show) && !('_startOver' in show));
+  const ep = target({ key: 'tmdb:tv:7:s1e2', tmdbId: 7, resume: 300, _startOver: true, showTitle: 'Show' });
+  assert.strictEqual(ep.type, 'tv');
+  assert.strictEqual(ep.key, 'tmdb:tv:7');
+  assert.strictEqual(ep.resume, 0);
+  assert.ok(!('_startOver' in ep), 'an episode start-over press does not carry into the show page');
+});
+
+test('B10B-02 W2-12: a closed detail page no longer sends its original title as a search alias for other titles', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const cut = (a, b) => {
+    const s = ui.indexOf(a);
+    const e = ui.indexOf(b, s);
+    assert.ok(s >= 0 && e > s, `slice ${a}`);
+    return ui.slice(s, e);
+  };
+  const src = [
+    cut('function searchAliasesFor(it) {', 'function sourceIdentityFor(it) {'),
+    cut('function qualityTitleKey(it) {', 'function qualityPrefStoreKey(it) {'),
+    cut('function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) {', 'function maybePrepareFocusedHomeCard() {'),
+  ].join('\n');
+  const S = { watchMap: {} };
+  const body = new Function('S', 'sourceIdentityFor', 'shouldReplayResumePin', 'queryFor', 'clientCaps', 'prefAudioLang',
+    'qualityRankForItem', 'releaseRankOfSource', 'traktResumeFractionForItem',
+    `${src}\nreturn playbackRequestBody;`)(S, () => ({}), () => false, (it) => (it && it.title) || '', () => ({}), () => '',
+    () => null, () => null, () => 0);
+  S.detailItem = { key: 'tmdb:tv:1', type: 'tv', tmdbId: 1, title: 'Northern Lights', originalTitle: 'La Casa Azul' };
+  const other = body({ key: 'tmdb:tv:2:s2e5', type: 'episode', tmdbId: 2, title: 'Other Show' });
+  assert.ok(!(other.aliases || []).includes('La Casa Azul'), 'another title must not inherit the open detail page alias');
+  const same = body({ key: 'tmdb:tv:1:s1e1', type: 'episode', tmdbId: 1, title: 'Pilot' });
+  assert.ok((same.aliases || []).includes('La Casa Azul'), 'an episode of the open show still searches under its original title');
+
+  const sv = cut('function switchView(v, push = true, opts = {}) {', "document.querySelectorAll('.railBtn[data-nav]')");
+  const reset = sv.indexOf('S.detailItem = null');
+  assert.ok(reset > 0, 'switchView resets S.detailItem when it closes an open detail page');
+  assert.match(sv, /if \(v !== 'player' && \$\('detail'\)\.classList\.contains\('open'\)\) \{[^}]*S\.detailItem = null;/,
+    'the reset runs only when the detail page was open and never for the player');
+  assert.ok(reset < sv.indexOf("$('detail').classList.remove('open')"), 'the open state is read before the page is closed');
+});
+
+test('B08A-01 SUB-14: a pause or buffer wait never pushes browser captions ahead of the picture', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function resetSubtitleClock(p, videoSeconds) {');
+  const end = ui.indexOf('function activeSubtitleCues(tt) {', start);
+  assert.ok(start >= 0 && end > start, 'the caption clock should be extractable');
+  const src = ui.slice(start, end);
+  for (const name of ['subtitleSeekLanded', 'armSubtitleSeekLanding', 'subtitleMediaNow', 'subtitlePace', 'subtitleCueNow']) {
+    assert.ok(src.includes(`function ${name}(`), `${name} is inside the slice`);
+  }
+  const rig = () => {
+    const clock = { t: 1_000_000 };
+    const video = { currentTime: 0, paused: false, seeking: false, readyState: 4 };
+    const FakeDate = { now: () => clock.t };
+    const api = new Function('$', 'Date', `${src}\nreturn { resetSubtitleClock, subtitleCueNow };`)(() => video, FakeDate);
+    const p = { item: { type: 'movie' } };
+    api.resetSubtitleClock(p, 0);
+    const tick = (wallSec, mediaSec, set = {}) => {
+      Object.assign(video, set);
+      clock.t += wallSec * 1000;
+      video.currentTime += mediaSec;
+      return api.subtitleCueNow(p);
+    };
+    return { video, p, tick };
+  };
+
+  // Scenario A: play 60 s, pause 30 s, play 10 s.
+  {
+    const r = rig();
+    let cue = 0;
+    for (let i = 0; i < 60; i++) cue = r.tick(1, 1);
+    for (let i = 0; i < 30; i++) cue = r.tick(1, 0, { paused: true });
+    for (let i = 0; i < 10; i++) cue = r.tick(1, 1, { paused: false });
+    assert.ok(Math.abs(cue - r.video.currentTime) < 0.5, `after a 30 s pause the caption clock is ${cue.toFixed(2)} s, the picture ${r.video.currentTime} s`);
+  }
+  // Scenario B: the same with an 8 s buffer wait (readyState 2) instead of a pause.
+  {
+    const r = rig();
+    let cue = 0;
+    for (let i = 0; i < 60; i++) cue = r.tick(1, 1);
+    for (let i = 0; i < 8; i++) cue = r.tick(1, 0, { readyState: 2 });
+    for (let i = 0; i < 10; i++) cue = r.tick(1, 1, { readyState: 4 });
+    assert.ok(Math.abs(cue - r.video.currentTime) < 0.5, `after an 8 s buffer wait the caption clock is ${cue.toFixed(2)} s, the picture ${r.video.currentTime} s`);
+  }
+  // Scenario C (kept purpose): a browser clock that lags the wall while moving is still pulled forward.
+  {
+    const r = rig();
+    let cue = 0;
+    for (let i = 0; i < 10; i++) cue = r.tick(1, 0.8);
+    assert.ok(cue > r.video.currentTime + 1.5, `a lagging browser clock is still paced forward (cue ${cue.toFixed(2)}, picture ${r.video.currentTime.toFixed(2)})`);
+  }
+});
+
+test('B11A-01 W3-1: a restart that never showed a frame stops blocking recovery after its time limit', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const a = ui.indexOf('function playbackServerGone(reason) {');
+  const b = ui.indexOf('function holdPlaybackAcrossRestart() {', a);
+  assert.ok(a >= 0 && b > a, 'the recovery block should be extractable');
+  const run = ({ native = false, flagAgoMs, reason, stamp = true }) => {
+    const clock = { t: 100000 };
+    const calls = { issue: [], remount: [], advance: [], start: [], nativeTry: [] };
+    const p = { item: { type: 'movie', key: 'tmdb:movie:1' }, mountId: 'm1', sourcePickKey: 'A', usingNative: native, usingRemux: true };
+    if (native) p._nativeResuming = true; else p._webResuming = true;
+    if (stamp) p._resumingSince = clock.t - flagAgoMs;
+    const S = { playing: p, view: 'player' };
+    const video = { paused: false };
+    const recover = new Function('S', 'vodPlaybackStarted', 'currentPlayerKind', 'currentTime', 'appMs', '$', 'notePlaybackIssue',
+      'reMountAndResume', 'clientCaps', 'tryNextNativeKind', 'autoAdvance', 'forwardRemuxResumeSec', 'markPlaybackSourceSwap',
+      'canUseNativeVideoPlayer', 'tryNativeVideoPlayer', 'startSource', 'showPlaybackInterrupted', 'revealWebPlayerShell',
+      `${ui.slice(a, b)}\nreturn recoverSamePlaybackSource;`)(
+      S, () => true, () => 'remux', () => 600, () => clock.t, () => video,
+      (kind, detail) => calls.issue.push([kind, detail]),
+      (why) => calls.remount.push(why), () => ({}), () => false, (o) => calls.advance.push(o),
+      (pp, at) => Promise.resolve(at), () => {}, () => true,
+      (kind, at) => { calls.nativeTry.push(at); return true; }, (kind, at) => { calls.start.push(at); return true; }, () => {}, () => {});
+    const out = recover(reason);
+    return { out, calls, p, S };
+  };
+  const limit = Number((/const RESUME_IN_FLIGHT_MAX_MS = (\d+);/.exec(ui) || [])[1]);
+  assert.ok(limit > 0, 'one named time limit for a restart in flight');
+  const graces = [...android.matchAll(/NATIVE_VIDEO_(?:REMUX_)?RESUME_GRACE_MS = (\d+)L;/g)].map((m) => +m[1]);
+  assert.ok(graces.length === 2 && limit >= Math.max(...graces),
+    'the web limit never cuts a restart that the Android side still treats as a healthy slow start');
+
+  // 1. Web: the flag was set long ago and the restart never showed a frame.
+  {
+    const r = run({ native: false, flagAgoMs: limit + 5000, reason: 'web rebuffer stalled' });
+    assert.strictEqual(r.out, true, 'a stuck web restart is recovered, not swallowed');
+    assert.ok(r.calls.issue.length >= 1, 'the failure is logged');
+    assert.strictEqual(r.S._sourceFailLedger.length, 1, 'the same-spot count runs');
+  }
+  // 2. Native: the same with the Android TV flag.
+  {
+    const r = run({ native: true, flagAgoMs: limit + 5000, reason: 'native rebuffer stalled' });
+    assert.strictEqual(r.out, true);
+    assert.ok(r.calls.issue.length >= 1);
+    assert.strictEqual(r.S._sourceFailLedger.length, 1);
+  }
+  // 3. Native: the mount itself is gone (404) one second into the restart.
+  {
+    const r = run({ native: true, flagAgoMs: 1000, reason: 'mount not found (HTTP 404)' });
+    assert.strictEqual(r.out, true);
+    assert.deepStrictEqual(r.calls.remount, ['mount not found (HTTP 404)'], 'a 404 cannot wait for a restart on a mount that is gone');
+  }
+  // Controls: inside the limit a generic stall or the generic web failover text stays blocked
+  // (the double-restart protection), on both clients.
+  for (const native of [false, true]) {
+    for (const ago of [1000, limit - 1000]) {
+      for (const reason of ['web rebuffer stalled', 'native rebuffer stalled', 'playback interrupted']) {
+        const r = run({ native, flagAgoMs: ago, reason });
+        assert.strictEqual(r.out, false, `${native ? 'native' : 'web'} ${reason} ${ago} ms into a restart stays blocked`);
+        assert.strictEqual(r.calls.issue.length + r.calls.remount.length + r.calls.advance.length + r.calls.start.length, 0);
+      }
+    }
+  }
+  // A flag with no time stamp counts as a fresh restart, never as a stale one.
+  {
+    const r = run({ native: false, stamp: false, reason: 'web rebuffer stalled' });
+    assert.strictEqual(r.out, false, 'an unstamped flag keeps the guard');
+    assert.ok(r.p._resumingSince > 0, 'and starts its clock now');
+  }
+  // Play on a paused remux and the remux resume use the same stale check, so Play is never dead.
+  assert.match(ui, /function remountWebRemuxResume\(p\) \{[\s\S]{0,200}clearStaleResumeFlags\(p\);\s+if \(p\._webResuming\) return;/);
+  assert.match(ui, /if \(remux\) \{\s+clearStaleResumeFlags\(p\);\s+if \(p\._webResuming\) \{ updPP\(\); return; \}/);
+});
+
+test('B15B-02 A2-1 A2-5: the native error report is never lost while a quiet remount is pending', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const dir = path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv');
+  const android = fs.readFileSync(path.join(dir, 'MainActivity.java'), 'utf8');
+  const a = ui.indexOf('function playbackServerGone(reason) {');
+  const b = ui.indexOf('function holdPlaybackAcrossRestart() {', a);
+  assert.ok(a >= 0 && b > a, 'the recovery block should be extractable');
+  // One player, one clock, several reports in a row (the shell re-reports once per stall window).
+  const session = (init) => {
+    const clock = { t: 100000 };
+    const calls = { issue: [], remount: [], advance: [], start: [], nativeTry: [], hold: 0 };
+    const p = Object.assign({ item: { type: 'movie', key: 'tmdb:movie:1' }, mountId: 'm1', sourcePickKey: 'A', usingNative: true, usingRemux: true }, init(clock));
+    const S = { playing: p, view: 'player' };
+    const recover = new Function('S', 'vodPlaybackStarted', 'currentPlayerKind', 'currentTime', 'appMs', '$', 'notePlaybackIssue',
+      'reMountAndResume', 'clientCaps', 'tryNextNativeKind', 'autoAdvance', 'forwardRemuxResumeSec', 'markPlaybackSourceSwap',
+      'canUseNativeVideoPlayer', 'tryNativeVideoPlayer', 'startSource', 'showPlaybackInterrupted', 'revealWebPlayerShell', 'holdPlaybackAcrossRestart',
+      `${ui.slice(a, b)}\nreturn recoverSamePlaybackSource;`)(
+      S, () => true, () => 'remux', () => 600, () => clock.t, () => ({ paused: false }),
+      (kind, detail) => calls.issue.push([kind, detail]),
+      (why) => calls.remount.push(why), () => ({}), () => false, (o) => calls.advance.push(o),
+      (pp, at) => Promise.resolve(at), () => {}, () => true,
+      (kind, at) => { calls.nativeTry.push(at); return true; }, (kind, at) => { calls.start.push(at); return true; }, () => {}, () => {},
+      () => { calls.hold++; });
+    const recoveries = () => calls.remount.length + calls.advance.length + calls.start.length + calls.nativeTry.length;
+    return { clock, calls, p, S, recover, recoveries, settle: () => new Promise((r) => setTimeout(r, 5)) };
+  };
+  const limit = Number((/const RESUME_IN_FLIGHT_MAX_MS = (\d+);/.exec(ui) || [])[1]);
+  const windowMs = Number((/NATIVE_VIDEO_REBUFFER_RECOVERY_MS = (\d+)L;/.exec(android) || [])[1]);
+  assert.ok(limit > 0 && windowMs > limit,
+    'a re-armed native report (one per stall window) always lands after the web restart guard has gone stale');
+
+  // 1. Quiet remount pending (_nativeResuming): the first report inside the guard waits; the
+  //    shell's next report, one full window later, reaches the log, the ledger and a recovery.
+  {
+    const s = session((c) => ({ _nativeResuming: true, _resumingSince: c.t }));
+    s.clock.t += 1000;
+    assert.strictEqual(s.recover('native rebuffer stalled'), false, 'a first report during a pending remount still waits (no double recovery)');
+    s.clock.t += windowMs;
+    assert.strictEqual(s.recover('native rebuffer stalled'), true, 'the re-armed report is handled');
+    await s.settle();
+    assert.ok(s.calls.issue.length >= 1 && s.S._sourceFailLedger.length === 1, 'logged and counted');
+    assert.strictEqual(s.recoveries(), 1, 'exactly one recovery');
+  }
+  // 2. A server remount in flight (_reMounting): a stall report must not start a second, same-source
+  //    native restart on top of it. The next report, a full window later, may act.
+  {
+    const s = session(() => ({ _reMounting: true }));
+    s.clock.t += 1000;
+    assert.strictEqual(s.recover('native rebuffer stalled'), true, 'the remount in flight owns the recovery');
+    await s.settle();
+    assert.strictEqual(s.recoveries(), 0, 'no second recovery on top of the server remount');
+    assert.ok(s.calls.issue.length === 1, 'the report is still logged');
+    s.clock.t += windowMs;
+    s.recover('native rebuffer stalled');
+    await s.settle();
+    assert.strictEqual(s.recoveries(), 1, 'a remount that is still not done a full window later no longer blocks recovery');
+  }
+  // 2b. The existing hold for a gone mount during a remount is unchanged.
+  {
+    const s = session(() => ({ _reMounting: true }));
+    assert.strictEqual(s.recover('mount not found (HTTP 404)'), true);
+    await s.settle();
+    assert.strictEqual(s.recoveries(), 0);
+    assert.strictEqual(s.calls.hold, 1);
+  }
+  // 2c. A remount that finished resets the hold, so the next remount's first report waits again.
+  {
+    const s = session(() => ({ _reMounting: true }));
+    s.recover('native rebuffer stalled');
+    s.p._reMounting = false;
+    s.clock.t += windowMs * 3;
+    s.recover('native rebuffer stalled');
+    await s.settle();
+    const before = s.recoveries();
+    s.p._reMounting = true; s.p._nativeResuming = false;
+    s.clock.t += windowMs * 3;
+    s.recover('native rebuffer stalled');
+    await s.settle();
+    assert.strictEqual(s.recoveries(), before, 'a later remount gets its own hold');
+  }
+  // 2d. A source hunt in flight (_sourceAdvancePending) gets the same one-window hold.
+  {
+    const s = session(() => ({ _sourceAdvancePending: true }));
+    s.clock.t += 1000;
+    assert.strictEqual(s.recover('native rebuffer stalled'), true, 'the hunt in flight owns the recovery');
+    await s.settle();
+    assert.strictEqual(s.recoveries(), 0, 'no same-source restart on top of a source hunt');
+    s.clock.t += windowMs;
+    s.recover('native rebuffer stalled');
+    await s.settle();
+    assert.strictEqual(s.recoveries(), 1, 'a hunt still pending a full window later no longer blocks recovery');
+  }
+  // 2e. The hold is for the native shell's re-reports only: the browser player is unchanged here.
+  {
+    const s = session(() => ({ _reMounting: true, usingNative: false }));
+    s.recover('web rebuffer stalled');
+    await s.settle();
+    assert.strictEqual(s.recoveries(), 1, 'browser handling during a remount is left as it was');
+  }
+
+  // 3. Native: the one-shot report is re-armed by the watchdog only, once per full window.
+  const notify = android.slice(android.indexOf('private void notifyNativeVideoError(String msg, long pos, long dur) {'), android.indexOf('private float nativeShiftFromUrl('));
+  assert.match(notify, /if \(nativeVideoErrorNotified\) return;\s*nativeVideoErrorNotified = true;\s*nativeVideoErrorReportedAtMs = SystemClock\.elapsedRealtime\(\);/,
+    'every report stores its time (the one-shot guard itself is unchanged)');
+  const watchdog = android.slice(android.indexOf('private void updateNativeVideoWatchdog() {'), android.indexOf('private void releaseNativePlayer(boolean notifyClosed) {'));
+  assert.match(watchdog, /if \(elapsed >= recoveryMs\) \{[\s\S]*NativeStallReport\.shouldReport\(nativeVideoErrorNotified, nativeVideoErrorReportedAtMs, now, recoveryMs\)[\s\S]*nativeVideoErrorNotified = false;[\s\S]*reported to the web player[\s\S]*notifyNativeVideoError\([\s\S]*nativeVideoUnhealthySinceMs = now;/,
+    'the stall branch re-arms after a full window, logs once per report, and starts the next window fresh');
+  assert.doesNotMatch(watchdog, /retrying same source/, 'the log no longer claims a retry the shell does not do, every tick');
+  const policy = fs.readFileSync(path.join(dir, 'NativeStallReport.java'), 'utf8');
+  assert.match(policy, /static boolean shouldReport\(boolean notified, long lastReportAtMs, long nowMs, long windowMs\)/);
+});
+
+// Review R3 (B15B-02): the hold stamp was cleared only by a report that arrived while nothing was
+// in flight. Remount 1 got a report, ended, no report came in between, then remount 2 started on
+// the same playback object: its first report found the old stamp and restarted the same source on
+// top of the remount. Here the REAL reMountAndResume starts both remounts.
+test('B15B-02 R3: a second remount on the same playback gets its own hold, with no report in between', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const dir = path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv');
+  const android = fs.readFileSync(path.join(dir, 'MainActivity.java'), 'utf8');
+  const cut = (from, to) => {
+    const a = ui.indexOf(from);
+    const b = ui.indexOf(to, a);
+    assert.ok(a >= 0 && b > a, `slice ${from}`);
+    return ui.slice(a, b);
+  };
+  const windowMs = Number((/NATIVE_VIDEO_REBUFFER_RECOVERY_MS = (\d+)L;/.exec(android) || [])[1]);
+  assert.ok(windowMs > 0);
+  const clock = { t: 100000 };
+  const calls = { remount: [], advance: [], start: [], nativeTry: [], interrupted: [] };
+  const p = { item: { type: 'movie', key: 'tmdb:movie:1' }, mountId: 'm1', sourcePickKey: 'A', usingNative: true, usingRemux: true };
+  const S = { playing: p, view: 'player' };
+  const recover = new Function('S', 'vodPlaybackStarted', 'currentPlayerKind', 'currentTime', 'appMs', '$', 'notePlaybackIssue',
+    'reMountAndResume', 'clientCaps', 'tryNextNativeKind', 'autoAdvance', 'forwardRemuxResumeSec', 'markPlaybackSourceSwap',
+    'canUseNativeVideoPlayer', 'tryNativeVideoPlayer', 'startSource', 'showPlaybackInterrupted', 'revealWebPlayerShell', 'holdPlaybackAcrossRestart',
+    `${cut('function playbackServerGone(reason) {', 'function holdPlaybackAcrossRestart() {')}\nreturn recoverSamePlaybackSource;`)(
+    S, () => true, () => 'remux', () => 600, () => clock.t, () => ({ paused: false }), () => {},
+    (why) => calls.remount.push(why), () => ({}), () => false, (o) => calls.advance.push(o),
+    (pp, at) => Promise.resolve(at), () => {}, () => true,
+    (kind, at) => { calls.nativeTry.push(at); return true; }, (kind, at) => { calls.start.push(at); return true; },
+    (why) => calls.interrupted.push(why), () => {}, () => {});
+  const waits = [];
+  const reMount = new Function('S', 'vodPlaybackStarted', 'showPlaybackInterrupted', 'maybeHoldPlaybackAcrossRestart', 'saveWatch',
+    'vodRestartHoldNeeded', 'toast', 'currentPlayerKind', 'waitForTriboonServer',
+    `${cut('async function reMountAndResume(', 'function failover() {')}\nreturn reMountAndResume;`)(
+    S, () => true, (why) => calls.interrupted.push(why), undefined, () => {}, () => false, () => {}, () => 'remux',
+    () => new Promise((resolve) => waits.push(resolve)));
+  const recoveries = () => calls.remount.length + calls.advance.length + calls.start.length + calls.nativeTry.length;
+  const settle = () => new Promise((r) => setTimeout(r, 5));
+
+  // Remount 1: one report inside it is held (sets the stamp).
+  const first = reMount('server restarted');
+  assert.strictEqual(p._reMounting, true, 'precondition: remount 1 in flight');
+  clock.t += 1000;
+  assert.strictEqual(recover('native rebuffer stalled'), true);
+  await settle();
+  assert.strictEqual(recoveries(), 0, 'remount 1: its first report is held');
+  // Remount 1 ends (the server did not come back); no report arrives while nothing is in flight.
+  waits.shift()(false);
+  await first;
+  assert.strictEqual(p._reMounting, false, 'precondition: remount 1 finished');
+  // Much later, remount 2 starts on the SAME playback object.
+  clock.t += windowMs * 3;
+  const second = reMount('server restarted again');
+  assert.strictEqual(p._reMounting, true, 'precondition: remount 2 in flight');
+  clock.t += 1000;
+  assert.strictEqual(recover('native rebuffer stalled'), true, 'remount 2 owns the recovery');
+  await settle();
+  assert.strictEqual(recoveries(), 0, 'remount 2: its first report is held too (no same-source restart on top of it)');
+  waits.shift()(false);
+  await second;
+
+  // A new source hunt resets the stamp at the same place it sets its own flag.
+  const advance = cut('async function autoAdvance(opts = {}) {', 'const switchT0 = appMs();');
+  assert.match(advance, /p\._sourceAdvancePending = true;\s*p\._restartHeldSince = 0;/,
+    'a source hunt that starts gets its own hold window');
+});
+
+test('B11B-01 W4-1 W4-13: a remux or transcode cast keeps the cast clock in title time', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const cut = (a, b) => {
+    const s = ui.indexOf(a);
+    const e = ui.indexOf(b, s);
+    assert.ok(s >= 0 && e > s, `slice ${a}`);
+    return ui.slice(s, e);
+  };
+  const src = [
+    cut('function currentTime() {', 'function rememberVodReturn('),
+    cut('function setupCastContext() {', 'function castApplyVolume() {'),
+  ].join('\n');
+  const rig = (playing, localSec) => {
+    const handlers = {};
+    const loads = [];
+    const calls = { save: 0, end: 0, start: [], close: [] };
+    const sess = {
+      loadMedia: (req) => { loads.push(req); return Promise.resolve(); },
+      endSession: () => { calls.end++; },
+      getCastDevice: () => ({ friendlyName: 'Living room' }),
+      getMediaSession: () => null,
+    };
+    const rp = { currentTime: 0, duration: 0, isPaused: false, playerState: 'PLAYING' };
+    const castNs = { framework: {
+      CastContext: { getInstance: () => ({ setOptions() {}, addEventListener() {}, getCurrentSession: () => sess, getCastState: () => 'CONNECTED' }) },
+      RemotePlayer: function RemotePlayer() { return rp; },
+      RemotePlayerController: function RemotePlayerController() { return { addEventListener: (ev, fn) => { handlers[ev] = fn; } }; },
+      RemotePlayerEventType: { CURRENT_TIME_CHANGED: 'time', DURATION_CHANGED: 'dur', IS_PAUSED_CHANGED: 'paused', PLAYER_STATE_CHANGED: 'state' },
+      CastContextEventType: { CAST_STATE_CHANGED: 'cs', SESSION_STATE_CHANGED: 'ss' },
+      SessionState: {}, CastState: { NO_DEVICES_AVAILABLE: 'NONE', CONNECTED: 'CONNECTED' },
+    } };
+    const chromeNs = { cast: {
+      AutoJoinPolicy: {},
+      media: {
+        MediaInfo: function MediaInfo(url) { this.url = url; },
+        StreamType: {}, GenericMediaMetadata: function GenericMediaMetadata() {}, Image: function Image() {},
+        LoadRequest: function LoadRequest(info) { this.media = info; },
+        PlayerState: { IDLE: 'IDLE' },
+      },
+    } };
+    const video = { currentTime: localSec, duration: NaN, pause() {} };
+    const el = () => ({ style: {}, classList: { toggle() {}, contains() { return false; } }, innerHTML: '' });
+    const S = { playing };
+    const api = new Function('S', '$', 'cast', 'chrome', 'castSdkReady', 'castReceiverAppId', 'saveWatch', 'updPP', 'castEligible',
+      'castVodEligible', 'document', 'playerCastToast', 'ensureCastLanOrigin', 'initCastSender', 'toast', 'knownPlaybackSeconds',
+      'remuxPlaybackUrl', 'castPublicOrigin', 'esc', 'castApplyVolume', 'showOsd', 'closePlayer', 'startSource', 'requestVideoPlay',
+      `${src}\nreturn { currentTime, totalDuration, setupCastContext, castLoadCurrent, exitCastMode, onCastPlayerState };`)(
+      S, (id) => (id === 'video' ? video : el()), castNs, chromeNs, () => true, () => 'CC1AD845', () => { calls.save++; }, () => {}, () => true,
+      () => true, { body: { classList: { contains: () => false } } }, () => {}, async () => true, () => {}, () => {}, (p, d) => d,
+      (p, pos) => `${p.remuxUrl}&start=${pos}`, () => 'http://192.168.1.5:7777', (s) => s, () => {}, () => {},
+      (o) => calls.close.push(o), (kind, at) => calls.start.push([kind, at]), () => Promise.resolve());
+    api.setupCastContext();
+    return { api, rp, handlers, loads, calls, S };
+  };
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  // Remux cast started at title minute 50 (3000 s).
+  {
+    const r = rig({ item: { type: 'movie', title: 'X' }, usingRemux: true, remuxUrl: '/api/remux/m1?t=a', startOffset: 3000, duration: 7200 }, 0);
+    assert.strictEqual(r.api.currentTime(), 3000);
+    r.api.castLoadCurrent(); await flush();
+    assert.strictEqual(r.loads.length, 1);
+    assert.match(r.loads[0].media.url, /start=3000/, 'the cast stream starts at the title minute');
+    assert.strictEqual(r.loads[0].currentTime, 0, 'the receiver starts the server-seek stream at its own 0');
+    assert.strictEqual(r.api.currentTime(), 3000, 'cast start keeps the title minute, never 0:00 (W4-13)');
+    r.rp.currentTime = 60; r.handlers.time();
+    assert.strictEqual(r.api.currentTime(), 3060, 'one minute in, the bar and the saves read 51:00');
+    r.rp.duration = 4200; r.handlers.dur();
+    assert.strictEqual(r.api.totalDuration(), 7200, 'the stream-relative receiver duration does not replace the title duration');
+    r.rp.currentTime = 120; r.rp.playerState = 'PLAYING'; r.api.onCastPlayerState();
+    assert.strictEqual(r.api.currentTime(), 3120);
+    assert.strictEqual(r.calls.end, 0);
+    r.rp.currentTime = 4198; r.rp.playerState = 'IDLE'; r.api.onCastPlayerState();
+    assert.strictEqual(r.calls.end, 1, 'the end of the title (title time vs title duration) ends the cast');
+  }
+  // Remux cast stopped mid-way: local playback resumes at the title time.
+  {
+    const r = rig({ item: { type: 'episode', title: 'Y' }, usingRemux: true, remuxUrl: '/api/remux/m2?t=b', startOffset: 3000, duration: 7200 }, 0);
+    r.api.castLoadCurrent(); await flush();
+    r.rp.currentTime = 60; r.handlers.time();
+    r.api.exitCastMode();
+    assert.deepStrictEqual(r.calls.start, [['remux', 3060]], 'local playback resumes near 51:00');
+    assert.ok(!r.S.playing.castBase, 'the cast base is cleared on exit');
+  }
+  // Direct play: no base, the receiver clock is already title time.
+  {
+    const r = rig({ item: { type: 'movie', title: 'Z' }, streamUrl: '/api/stream/s1?t=c', startOffset: 0, duration: 7200 }, 1500);
+    r.api.castLoadCurrent(); await flush();
+    assert.strictEqual(r.loads[0].currentTime, 1500, 'direct play seeks the receiver to the title time');
+    assert.strictEqual(r.api.currentTime(), 1500);
+    r.rp.currentTime = 1560; r.handlers.time();
+    assert.strictEqual(r.api.currentTime(), 1560, 'no base is added on direct play');
+  }
+  // A seek on a server-seek cast reloads the stream at the new minute instead of seeking the receiver.
+  assert.match(ui, /if \(p\.castBase \|\| p\.usingRemux \|\| p\.usingTranscode\) \{ p\.castPos = seconds; castLoadCurrent\(\); \}/);
+});
+
+test('B11B-02 W4-2: Back while casting saves the TV position before the cast flag is cleared', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('async function closePlayer(opts = {}) {');
+  const end = ui.indexOf('\nfunction ', start + 10);
+  assert.ok(start >= 0 && end > start, 'closePlayer should be extractable');
+  const body = ui.slice(start, end);
+  const save = body.indexOf('const finalWatch = saveWatch(true');
+  const clear = body.indexOf('S.playing.castingActive = false');
+  const remember = body.indexOf('rememberVodReturn(S.playing && S.playing.item, ');
+  assert.ok(save > 0 && clear > 0 && remember > 0);
+  assert.ok(save < clear, 'the final save reads currentTime() while it is still the TV clock');
+  assert.ok(remember < clear, 'the Live TV return target also keeps the TV position');
+  const block = body.slice(clear, body.indexOf('endSession(true)', clear));
+  assert.ok(block.length > 0 && block.length < 200, 'castingActive still goes false before endSession(true), so SESSION_ENDED -> exitCastMode returns early');
+  // Why the order matters: currentTime() reads the TV clock only while the flag is on.
+  const ct = ui.slice(ui.indexOf('function currentTime() {'), ui.indexOf('function totalDuration() {'));
+  const S = { playing: { castingActive: true, castPos: 3600, startOffset: 0 } };
+  const currentTime = new Function('S', '$', `${ct}\nreturn currentTime;`)(S, () => ({ currentTime: 1200 }));
+  assert.strictEqual(currentTime(), 3600);
+  S.playing.castingActive = false;
+  assert.strictEqual(currentTime(), 1200);
+});
+
+test('B12A-01 W5-1: a public-domain Continue Listening card resumes the free book instead of an empty Audible page', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const rs = ui.indexOf('async function renderAbContinue() {');
+  const re = ui.indexOf('// Continue Listening card menu', rs);
+  assert.ok(rs >= 0 && re > rs);
+  const render = ui.slice(rs, re);
+  assert.match(render, /el\.addEventListener\('click', \(\) => \{\s*const target = abContinueTarget\(el\.dataset\.asin, AB\.contMeta && AB\.contMeta\[el\.dataset\.asin\]\);\s*if \(target\.kind === 'pub'\) abPlayPubaudio\(target\);\s*else openAbDetail\(el\.dataset\.asin\);/,
+    'the card click branches on pub: before it opens the Audible detail route');
+  assert.match(ui, /if \(act === 'abinfo'\) \{ const target = abContinueTarget\(asin, meta\); if \(target\.kind === 'pub'\) abPlayPubaudio\(target\); else openAbDetail\(asin\); \}\s*else if \(act === 'abfin'\) abMarkFinished\(asin, meta\);\s*else if \(act === 'abrm'\) abRemoveContinue\(asin, meta\);/,
+    'Details on a free book plays it; finish/remove keep the full pub: id');
+  const hs = ui.indexOf('function abContinueTarget(asin, meta) {');
+  const he = ui.indexOf('\n}', hs);
+  assert.ok(hs >= 0 && he > hs, 'abContinueTarget should be extractable');
+  const target = new Function(`${ui.slice(hs, he + 2)}\nreturn abContinueTarget;`)();
+  assert.deepStrictEqual(target('pub:librivox:123', { title: 'Emma', cover: 'c', author: 'Jane Austen' }),
+    { kind: 'pub', source: 'librivox', id: '123', title: 'Emma', cover: 'c', authors: ['Jane Austen'] });
+  assert.deepStrictEqual(target('B0ABCDEFGH', { title: 'X' }), { kind: 'detail' });
+  assert.strictEqual(target('pub:archive:abc:def', {}).id, 'abc:def', 'the id may hold a colon after the source');
+  assert.deepStrictEqual(target('pub:archive:abc', undefined).authors, []);
+  // An empty title never reaches the server (no usenet search, no empty public-domain search).
+  const ps = ui.indexOf('async function abStartPlay(book, fallback, seekTo) {');
+  const pe = ui.indexOf('\n}', ps);
+  const calls = [];
+  const toasts = [];
+  const abStartPlay = new Function('api', 'toast', 'abPlayPubaudio', `${ui.slice(ps, pe + 2)}\nreturn abStartPlay;`)(
+    async (url) => { calls.push(url); throw new Error('no'); }, (m) => toasts.push(m), () => {});
+  await abStartPlay({}, undefined);
+  assert.deepStrictEqual(calls, [], 'an empty book makes no server call');
+  assert.ok(toasts.length === 1 && /title/i.test(toasts[0]), 'and says why');
+});
+
+test('B10B-01 W2-1: an unaired next episode is never offered, and a refused next-episode play closes the player', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('async function prepNextEpisodeJob(it)');
+  const end = ui.indexOf('// Lead time before the episode end', start);
+  assert.ok(start >= 0 && end > start, 'next-episode metadata helper should be extractable');
+  const prep = async (airDate) => {
+    const S = { playing: { item: { key: 'show:s1e1', type: 'episode' } } };
+    const fn = new Function('S', 'updateNextEpisodeButton', 'episodeKeyParts',
+      'getPlayerEpisodeContext', 'api', 'epItemOf', 'preferredQualityRankForItem', 'ensureLocalPlaybackForItem',
+      'playingFromLibraryFolder', 'prepLocalLibraryNextEpisode', 'enrichLibraryEpisodeContext',
+      'img', 'pad2', 'STILL_W', 'todayStr', `${ui.slice(start, end)}\nreturn prepNextEpisodeJob;`)(
+      S, () => {}, () => ({ tmdbId: 1, season: 1, episode: 1 }),
+      async () => ({
+        show: { id: 'show' },
+        seasons: [{ season_number: 1, episode_count: 2 }],
+        season: { season_number: 1, episodes: [{ episode_number: 2, name: 'next', ...(airDate === undefined ? {} : { air_date: airDate }) }] },
+      }),
+      () => Promise.reject(new Error('unexpected fetch')),
+      (show, _season, ep) => ({ key: `${show.id}:s1e${ep.episode_number}`, type: 'episode', airDate: ep.air_date || '' }),
+      () => null, () => Promise.resolve(null), () => false, async () => false, (it) => it,
+      (v) => v || '', (n) => String(n).padStart(2, '0'), 'w780', () => '2026-11-10');
+    await fn(S.playing.item);
+    return S;
+  };
+  assert.strictEqual((await prep('2026-11-11')).nextEp, null, 'next week\'s episode is not offered as Up Next');
+  assert.strictEqual((await prep('2026-11-09')).nextEp.item.key, 'show:s1e2', 'an aired episode is offered');
+  assert.strictEqual((await prep(undefined)).nextEp.item.key, 'show:s1e2', 'an episode with no air date stays playable');
+
+  const ps = ui.indexOf('function playNextEpisode() {');
+  const pe = ui.indexOf("$('unPlay').addEventListener('click', playNextEpisode);", ps);
+  assert.ok(ps >= 0 && pe > ps, 'playNextEpisode should be extractable');
+  const run = (airDate) => {
+    const calls = [];
+    const S = { playing: { item: { key: 'show:s1e1', type: 'episode' } },
+      nextEp: { item: { key: 'show:s1e2', type: 'episode', airDate } } };
+    const fn = new Function('S', 'play', 'closePlayer', 'toast', 'hideUpNextUi', 'updateNextEpisodeButton', 'ensureNextEpisode',
+      'todayStr', 'fmtDate', `${ui.slice(ps, pe)}\nreturn playNextEpisode;`)(
+      S, () => calls.push('play'), () => calls.push('close'), (m) => calls.push(`toast:${m}`), () => {}, () => {}, async () => false,
+      () => '2026-11-10', (d) => `on ${d}`);
+    fn();
+    return calls;
+  };
+  const refused = run('2026-11-17');
+  assert.ok(!refused.includes('play'), 'an unaired next episode is never played');
+  assert.strictEqual(refused.filter((c) => c === 'close').length, 1, 'the player closes, which also drops the native loader');
+  assert.ok(refused.indexOf('close') < refused.findIndex((c) => /hasn.t aired yet/.test(c)),
+    'the toast comes after the close so it is drawn on the visible page');
+  assert.deepStrictEqual(run('2026-11-01'), ['play'], 'an aired next episode plays as before');
+  assert.deepStrictEqual(run(''), ['play'], 'no air date: plays as before');
+
+  // D-04 (b): the Android shell's safety net for a loader the web never replaced (older server).
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(android, /private void triggerNativeUpNextPlay\(\) \{[\s\S]+silenceNativeVideoForHandoff\(\);[\s\S]+showNativeLoading\([\s\S]+true\);\s+armUpNextStuckLoaderNet\(\);\s+\}\s+if \(web != null\) web\.evaluateJavascript\("window\.__upNextPlayNative/,
+    'the net is armed right after the loader, before the web call, and the pinned order is kept');
+  assert.match(android, /private void armUpNextStuckLoaderNet\(\) \{[\s\S]+UpNextHandoff\.shouldCloseStuckLoader\(loaderToken, nativeLoadingToken, startSeq, nativePlaybackStartSeq, visible\)[\s\S]+closeNativePlayback\(true\);[\s\S]+UpNextHandoff\.STUCK_LOADER_TIMEOUT_MS\);/,
+    'when nothing replaced the loader, the shell does what Back does');
+  assert.match(android, /private void startNativePlayback\(String json, String mode\) \{\s+nativePlaybackStartSeq\+\+;/,
+    'any new native start disarms the net');
+  const handoff = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'UpNextHandoff.java'), 'utf8');
+  const netMs = Number((/STUCK_LOADER_TIMEOUT_MS = (\d+)L;/.exec(handoff) || [])[1]);
+  const webWatchdogs = ['PLAY_NEXT_HANDOFF_MS', 'PLAY_START_WATCHDOG_MS'].map((n) => Number((new RegExp(`const ${n} = (\\d+);`).exec(ui) || [])[1]));
+  assert.ok(webWatchdogs.every((ms) => ms > 0 && netMs > ms), 'the shell net outlasts both web watchdogs, so the web always decides first');
+});
+
+// Review R5 (B10B-01): the native Next button / media key silences the video and shows the "Next
+// episode" loader, then asks the web. When the web had no playable next episode (a finale, or the
+// next one has not aired) it only toasted in the hidden WebView: the loader stayed over a stopped
+// video. Now the web tells the shell (new APK), which drops the loader, shows the reason and gets
+// the same episode restarted where it was; an older shell gets the player closed instead.
+test('B10B-01 R5: a refused native Next never leaves a stuck loader', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const dir = path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv');
+  const android = fs.readFileSync(path.join(dir, 'MainActivity.java'), 'utf8');
+  const ps = ui.indexOf('function playNextEpisode() {');
+  const pe = ui.indexOf("$('unPlay').addEventListener('click', playNextEpisode);", ps);
+  assert.ok(ps >= 0 && pe > ps, 'playNextEpisode should be extractable');
+  const run = async ({ native = true, bridge = 'new', nextEp = null, unaired = null, found = false } = {}) => {
+    const calls = [];
+    const S = { view: 'player', playing: { item: { key: 'show:s1e9', type: 'episode' }, usingNative: native, playbackToken: 42 },
+      nextEp, nextEpUnaired: unaired, _shellNext: true }; // the shell's Next button started it (R10)
+    const TriboonTV = bridge === 'none' ? undefined : bridge === 'old' ? { closeVideo() {} }
+      : bridge === 'windows' ? { __triboonWindowsBridge: true, playVideo() {}, closeVideo() {} }
+        : { closeVideo() {}, nativeNextRefused: (msg, token) => calls.push(`shell:${msg}|${token}`) };
+    const window = { TriboonTV };
+    const fn = new Function('S', 'window', 'play', 'closePlayer', 'toast', 'hideUpNextUi', 'updateNextEpisodeButton', 'ensureNextEpisode',
+      'todayStr', 'fmtDate', `${ui.slice(ps, pe)}\nreturn playNextEpisode;`)(
+      S, window, () => calls.push('play'), () => calls.push('close'), (m) => calls.push(`toast:${m}`), () => {}, () => {},
+      async () => found, () => '2026-11-10', (d) => `on ${d}`);
+    await fn();
+    await new Promise((r) => setTimeout(r, 0));
+    return calls;
+  };
+  // Finale (no next episode) on a new shell: the shell gets the reason; the player stays open.
+  assert.deepStrictEqual(await run(), ['shell:No next episode|42'], 'the shell hears the reason; nothing closes');
+  // The next episode exists but has not aired: the reason names its date.
+  assert.deepStrictEqual(await run({ unaired: { key: 'show:s1e9', airDate: '2026-11-17' } }),
+    ['shell:This episode hasn’t aired yet — airs on 2026-11-17|42'], 'the not-aired reason with its date');
+  // A stale record for another episode is ignored.
+  assert.deepStrictEqual(await run({ unaired: { key: 'show:s1e3', airDate: '2026-11-17' } }), ['shell:No next episode|42']);
+  // A hand-set unaired S.nextEp (older prepared state) on a new shell: refused through the shell too.
+  assert.deepStrictEqual(await run({ nextEp: { item: { key: 'show:s1e10', type: 'episode', airDate: '2026-11-17' } } }),
+    ['shell:This episode hasn’t aired yet — airs on 2026-11-17|42']);
+  // An older shell has no nativeNextRefused: never call it; close first so the loader goes.
+  assert.deepStrictEqual(await run({ bridge: 'old' }), ['close', 'toast:No next episode'], 'old APK: close, then the visible toast');
+  // The Windows client's Next never silences mpv or shows a loader: a toast only, as before.
+  assert.deepStrictEqual(await run({ bridge: 'windows' }), ['toast:No next episode'], 'Windows: the episode keeps playing');
+  // The browser player is unchanged: a toast only.
+  assert.deepStrictEqual(await run({ native: false, bridge: 'none' }), ['toast:No next episode'], 'browser: toast only, as before');
+  // A found next episode still plays.
+  const playing = await run({ nextEp: { item: { key: 'show:s1e10', type: 'episode', airDate: '2026-11-01' } } });
+  assert.deepStrictEqual(playing, ['play']);
+
+  // The shell asks the web to restart the same source where it was.
+  assert.match(ui, /window\.__tvNativeNextResume = \(token\) => \{[\s\S]{0,400}nativePlaybackCallbackMatches\(p, token\)[\s\S]{0,400}tryNativeVideoPlayer\(currentPlayerKind\(p\), [^,]+, \{ quietSeek: true \}\)/,
+    'the web restarts the same source at its position (quiet, same surface)');
+  // prepNextEpisodeJob remembers an unaired next episode for the reason text.
+  assert.match(ui, /if \(ep\.air_date && ep\.air_date > todayStr\(\)\) \{ S\.nextEpUnaired = \{ key: it\.key, airDate: ep\.air_date \}; return; \}/);
+  assert.match(ui, /S\.nextEp = null; S\.nextEpUnaired = null;/, 'a new lookup clears the old record');
+
+  // Shell: the Next button arms the 75 s net and records the handoff; the bridge method restores
+  // sound, drops the loader, shows the reason and asks the web to resume.
+  const next = android.slice(android.indexOf('private void playNativeNextEpisode() {'), android.indexOf('private void startNativeProgress() {'));
+  assert.match(next, /nativeNextHandoffStartSeq = nativePlaybackStartSeq;[\s\S]+silenceNativeVideoForHandoff\(\);[\s\S]+armUpNextStuckLoaderNet\(\);[\s\S]+__tvNativeVideoNext/,
+    'the Next button records the handoff and arms the stuck-loader net before the web call');
+  assert.match(android, /public void nativeNextRefused\(String message, String token\) \{\s+if \(!trustedBridgeOrigin\(\)\) return;\s+runOnUiThread\(\(\) -> onNativeNextRefused\(message, token\)\);/);
+  const refused = android.slice(android.indexOf('private void onNativeNextRefused(String message, String token) {'), android.indexOf('private void armUpNextStuckLoaderNet() {'));
+  assert.match(refused, /UpNextHandoff\.shouldResumeAfterRefusal\([\s\S]+hideNativeLoading\(\);[\s\S]+setVolume\(1f\)[\s\S]+__tvNativeNextResume/, 'resume path');
+  assert.match(refused, /Toast\.makeText\(this, UpNextHandoff\.refusalText\(message\), Toast\.LENGTH_LONG\)\.show\(\);/, 'the reason is shown on the TV');
+});
+
+// Review R10 (re-check note 4 + suspected point 2): with an older Android app, only a Next the SHELL
+// started (Next button, media key, native Up Next card) silenced the video and put up a loader, so
+// only that refusal closes the player. The web's own autoplay countdown keeps playing with a toast,
+// as before this release. A lookup that throws after a shell Next still clears the loader at once.
+test('B10B-01 R10: only a shell-started Next closes on an older app, and a failed lookup still answers the shell', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const ps = ui.indexOf('function playNextEpisode() {');
+  const pe = ui.indexOf("$('unPlay').addEventListener('click', playNextEpisode);", ps);
+  assert.ok(ps >= 0 && pe > ps, 'playNextEpisode should be extractable');
+  const run = async ({ shell, bridge = 'old', nextEp = null, lookup = async () => false } = {}) => {
+    const calls = [];
+    const S = { view: 'player', playing: { item: { key: 'show:s1e9', type: 'episode' }, usingNative: true, playbackToken: 7 }, nextEp };
+    if (shell) S._shellNext = true;
+    const TriboonTV = bridge === 'old' ? { closeVideo() {}, playVideo() {} }
+      : { closeVideo() {}, playVideo() {}, nativeNextRefused: (msg, token) => calls.push(`shell:${msg}|${token}`) };
+    const fn = new Function('S', 'window', 'play', 'closePlayer', 'toast', 'hideUpNextUi', 'updateNextEpisodeButton', 'ensureNextEpisode',
+      'todayStr', 'fmtDate', `${ui.slice(ps, pe)}\nreturn playNextEpisode;`)(
+      S, { TriboonTV }, () => calls.push('play'), () => calls.push('close'), (m) => calls.push(`toast:${m}`), () => {}, () => {},
+      lookup, () => '2026-11-10', (d) => `on ${d}`);
+    await fn();
+    await new Promise((r) => setTimeout(r, 0));
+    return { calls, S };
+  };
+  const sameKey = { item: { key: 'show:s1e9', type: 'episode' } };
+  // Older app, web autoplay countdown (no shell flag): toast, keep playing.
+  assert.deepStrictEqual((await run({ nextEp: sameKey })).calls, ['toast:No next episode'], 'countdown, same-key next: no close');
+  assert.deepStrictEqual((await run({})).calls, ['toast:No next episode'], 'countdown, no next episode: no close');
+  // Older app, Next started by the shell: close first, so its loader goes.
+  assert.deepStrictEqual((await run({ shell: true, nextEp: sameKey })).calls, ['close', 'toast:No next episode']);
+  const shellNoNext = await run({ shell: true });
+  assert.deepStrictEqual(shellNoNext.calls, ['close', 'toast:No next episode']);
+  assert.ok(!shellNoNext.S._shellNext, 'the shell flag is used once');
+  // A lookup that throws after a shell Next: the shell still hears a refusal (new app) or the
+  // player closes (older app), instead of the loader waiting for the 75 s net.
+  const boom = async () => { throw new Error('network'); };
+  assert.deepStrictEqual((await run({ shell: true, bridge: 'new', lookup: boom })).calls, ['shell:Next episode unavailable right now|7']);
+  assert.deepStrictEqual((await run({ shell: true, lookup: boom })).calls, ['close', 'toast:Next episode unavailable right now']);
+  assert.deepStrictEqual((await run({ lookup: boom })).calls, [], 'a countdown lookup that throws stays quiet, as before');
+  // The two shell entry points mark the Next as shell-started.
+  assert.match(ui, /window\.__tvNativeVideoNext = \(pos, dur, token\) => \{[\s\S]{0,300}S\._shellNext = true;\s*playNextEpisode\(\);/);
+  assert.match(ui, /window\.__upNextPlayNative = \(\) => \{ S\._shellNext = true; playNextEpisode\(\); \};/);
 });

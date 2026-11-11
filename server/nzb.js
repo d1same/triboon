@@ -9,6 +9,26 @@ function decodeEntities(s) {
     .replace(/&amp;/g, '&');
 }
 
+// A reposted part can appear twice in one NZB: the same part number with a second message id.
+// Reads map file offsets to articles by list position, so the extra entry shifts every later
+// article by one whole piece, and the early grid check (D-02) refuses the release at mount
+// (review R1: "7 pieces of 1000 bytes cannot hold 5600 bytes"). Keep the first entry of each part
+// number; the sort above is stable, so that is the first one listed. An NZB whose numbering is
+// meaningless (most entries share a number) is left exactly as it was listed. Review R9: so is a
+// 2-entry file (two entries sharing a number say nothing), and only two EXPLICITLY numbered
+// entries count as a repeat: a segment with no `number` only got its list position.
+function dropRepeatedParts(segments, numbered) {
+  if (segments.length < 3) return segments;
+  const kept = [];
+  for (const seg of segments) {
+    const prev = kept[kept.length - 1];
+    if (prev && prev.number === seg.number && numbered.has(prev) && numbered.has(seg)) continue;
+    kept.push(seg);
+  }
+  if (kept.length === segments.length || kept.length * 2 < segments.length) return segments;
+  return kept;
+}
+
 function parseNzb(xml) {
   const files = [];
   const fileRe = /<file\b([^>]*)>([\s\S]*?)<\/file>/gi;
@@ -27,20 +47,23 @@ function parseNzb(xml) {
     while ((gm = groupRe.exec(body))) groups.push(decodeEntities(gm[1]).trim());
 
     const segments = [];
+    const numbered = new WeakSet(); // segments whose `number` came from the NZB (review R9)
     const segRe = /<segment\b([^>]*)>([\s\S]*?)<\/segment>/gi;
     let sm;
     while ((sm = segRe.exec(body))) {
       const bytesM = /bytes="(\d+)"/i.exec(sm[1]);
       const numM = /number="(\d+)"/i.exec(sm[1]);
-      segments.push({
+      const seg = {
         msgId: decodeEntities(sm[2]).trim(),
         bytes: bytesM ? parseInt(bytesM[1], 10) : 0,
         number: numM ? parseInt(numM[1], 10) : segments.length + 1,
-      });
+      };
+      if (numM) numbered.add(seg);
+      segments.push(seg);
     }
     segments.sort((a, b) => a.number - b.number);
     files.push({
-      subject, groups, segments,
+      subject, groups, segments: dropRepeatedParts(segments, numbered),
       poster: posterM ? decodeEntities(posterM[1]) : '',
       date: dateM ? parseInt(dateM[1], 10) : 0,
     });

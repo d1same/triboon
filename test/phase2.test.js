@@ -140,6 +140,25 @@ test('scoring: AV1 4K is de-ranked on a device without an AV1 hardware decoder (
   assert.ok(av1Hw.score > av1NoHw.score, 'AV1 is only de-ranked when the device lacks an AV1 hardware decoder');
 });
 
+test('scoring: a browser that said it cannot decode HEVC prefers the H.264 release, but HEVC stays playable (DEV-1)', () => {
+  const releases = [
+    { name: 'Movie.2022.2160p.WEB-DL.DDP5.1.x265-FLUX', sizeBytes: 16e9 },
+    { name: 'Movie.2022.2160p.WEB-DL.DDP5.1.x264-FLUX', sizeBytes: 16e9 },
+  ];
+  const noHevc = rankReleases(releases.map((r) => ({ ...r })), { maxResolutionRank: 4, browserHevc: false });
+  assert.ok(/x264/.test(noHevc[0].name), 'the H.264 release ranks first for a browser without HEVC');
+  const hevc = noHevc.find((r) => /x265/.test(r.name));
+  assert.ok(hevc && hevc.score > -5000, 'HEVC is a penalty, not a filter: an HEVC-only title still plays (via transcode)');
+  assert.ok((hevc.reasons || []).some((x) => String(x).startsWith('browser-no-hevc')), 'the reason is visible in Sources');
+  // No claim (native, Jellyfin, or a browser that decodes HEVC): no penalty.
+  const noClaim = rankReleases(releases.map((r) => ({ ...r })), { maxResolutionRank: 4 });
+  assert.ok(!(noClaim.find((r) => /x265/.test(r.name)).reasons || []).some((x) => String(x).startsWith('browser-no-hevc')));
+  // A title-prepare job made for one must not be joined by the other.
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(), indexers: () => [] });
+  assert.notStrictEqual(pipeline._prepareJobKey({ q: 'Movie 2022' }, { browserHevc: false }), pipeline._prepareJobKey({ q: 'Movie 2022' }, {}),
+    'the prepare/warm-up key separates a no-HEVC browser from a client that decodes HEVC');
+});
+
 test('scoring: soundtracks, bonus discs and bare audio rips are disqualified outright', () => {
   // Both top names are the REAL releases that bit users: the soundtrack album auto-played
   // for a film with no video releases yet, and the bonus disc outranked the actual movie.
@@ -2116,6 +2135,36 @@ test('newznab: fan-out keeps the fast indexer when another times out', async () 
   }
 });
 
+test('pipeline: indexers that all fail answer empty candidates WITH errors, and the next search asks again (SRC-1)', async () => {
+  // The web reads "no candidates + errors" as "indexers failed", not "no release exists".
+  let hits500 = 0, hitsDrop = 0;
+  const failing = http.createServer((req, res) => { hits500++; res.writeHead(500); res.end('boom'); });
+  const dropping = http.createServer((req) => { hitsDrop++; req.socket.destroy(); });
+  await new Promise((r) => failing.listen(0, '127.0.0.1', r));
+  await new Promise((r) => dropping.listen(0, '127.0.0.1', r));
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(),
+    indexers: () => [
+      { name: 'five-hundred', url: `http://127.0.0.1:${failing.address().port}`, apikey: 'k' },
+      { name: 'drops', url: `http://127.0.0.1:${dropping.address().port}`, apikey: 'k' },
+    ],
+  });
+  try {
+    const first = await pipeline.search({ q: 'Some Movie 2024' }, {}, { widenSearch: false });
+    assert.strictEqual(first.candidates.length, 0);
+    assert.strictEqual(first.errors.length, 2, 'both failed indexers are reported');
+    const before = hits500 + hitsDrop;
+    const second = await pipeline.search({ q: 'Some Movie 2024' }, {}, { widenSearch: false });
+    assert.strictEqual(second.candidates.length, 0);
+    assert.ok(hits500 + hitsDrop > before, 'a failed (empty + errors) answer is not cached; the next search asks again');
+  } finally {
+    if (typeof failing.closeAllConnections === 'function') failing.closeAllConnections();
+    if (typeof dropping.closeAllConnections === 'function') dropping.closeAllConnections();
+    failing.close();
+    dropping.close();
+  }
+});
+
 test('newznab: overlapping fan-outs can cap per-search indexer concurrency', async () => {
   let active = 0, peak = 0;
   const server = http.createServer((req, res) => {
@@ -3617,6 +3666,139 @@ test('pipeline: an ordinary exact-episode release still caches its blocked verdi
   assert.strictEqual(result.fail, 'health: blocked');
   assert.ok(verdicts.some(([, verdict]) => verdict === 'blocked'),
     'single-episode failures remain release-wide cache entries so later source walks skip them quickly');
+});
+
+// B06B-02 (owner answer D-02, early grid check): an NZB whose article list has a gap is refused at
+// mount time, even when the health STATs are slow enough that the bounded gate would time out.
+test('pipeline: an NZB with a gap in its article list is refused at mount, before the bounded gate', async () => {
+  const part = 16 * 1024;
+  const payload = seededPayload(4 * part, 0x6a90);
+  const articles = new Map();
+  const segs = [];
+  for (let p = 0; p < 4; p++) {
+    const id = `gap${p + 1}@x`;
+    articles.set(id, encodePart(payload, {
+      name: 'Gap.Movie.2020.mkv', partNum: p + 1, totalParts: 4,
+      begin: p * part, end: (p + 1) * part, totalSize: payload.length,
+    }));
+    if (p !== 2) segs.push(`<segment bytes="${part}" number="${p + 1}">${id}</segment>`);
+  }
+  const pool = {
+    stat: () => new Promise(() => {}), // health never answers: the gate would time out and play
+    body: async (msgId) => articles.get(String(msgId).replace(/[<>]/g, '')),
+  };
+  const pipeline = new Pipeline({ pool: () => pool, verdicts: { get: () => null, set: () => {} }, mounts: new Map() });
+  const xml = `<?xml version="1.0"?><nzb><file subject="a &quot;Gap.Movie.2020.mkv&quot; yEnc (1/4)"><segments>${segs.join('')}</segments></file></nzb>`;
+  const candidate = { name: 'Gap.Movie.2020.1080p.WEB-DL', nzbUrl: 'https://indexer.test/gap.nzb' };
+  pipeline.nzbCache.set(candidate.nzbUrl, xml);
+  const t0 = Date.now();
+  const result = await pipeline._tryCandidate(candidate, {});
+  assert.strictEqual(result.fail, 'health: blocked');
+  assert.ok(Date.now() - t0 < 400, 'refused before the bounded gate, not after it');
+});
+
+// Review R1 (B06B-02): a reposted last part listed twice is not a gap. The pre-gate refusal above
+// must not fire for it, and no house-wide `blocked` verdict may be written.
+test('pipeline: an NZB that lists its last part twice mounts and writes no blocked verdict', async () => {
+  const part = 16 * 1024;
+  const payload = seededPayload(3 * part + 4000, 0x6a91);
+  const articles = new Map();
+  const segs = [];
+  for (let p = 0; p < 4; p++) {
+    const id = `dup${p + 1}@x`;
+    const end = Math.min(payload.length, (p + 1) * part);
+    articles.set(id, encodePart(payload, {
+      name: 'Dup.Movie.2020.mkv', partNum: p + 1, totalParts: 4,
+      begin: p * part, end, totalSize: payload.length,
+    }));
+    segs.push(`<segment bytes="${end - p * part}" number="${p + 1}">${id}</segment>`);
+  }
+  articles.set('dup4b@x', articles.get('dup4@x'));
+  segs.push(`<segment bytes="4000" number="4">dup4b@x</segment>`);
+  const verdicts = [];
+  const pool = {
+    stat: async () => true,
+    body: async (msgId) => articles.get(String(msgId).replace(/[<>]/g, '')),
+  };
+  const pipeline = new Pipeline({ pool: () => pool, verdicts: { get: () => null, set: (...a) => verdicts.push(a) }, mounts: new Map() });
+  const xml = `<?xml version="1.0"?><nzb><file subject="a &quot;Dup.Movie.2020.mkv&quot; yEnc (1/4)"><segments>${segs.join('')}</segments></file></nzb>`;
+  const candidate = { name: 'Dup.Movie.2020.1080p.WEB-DL', nzbUrl: 'https://indexer.test/dup.nzb' };
+  pipeline.nzbCache.set(candidate.nzbUrl, xml);
+  const result = await pipeline._tryCandidate(candidate, {});
+  assert.ok(result.vf && !result.fail, `the release mounts (${result.fail || 'ok'})`);
+  assert.strictEqual(result.vf.deadPieceCount(), 0);
+  assert.ok(!verdicts.some(([, verdict]) => verdict === 'blocked'), 'no house-wide blocked verdict');
+  const parts = [];
+  for await (const c of result.vf.read(0, result.vf.size, { priority: 'playback' })) parts.push(c);
+  assert.ok(Buffer.concat(parts).equals(payload), 'byte-identical');
+});
+
+// B07A-01 (14-P1): Newznab NZB links often carry the user id and API key in the PATH
+// (.../getnzb/<id>.nzb&i=<uid>&r=<key>, no "?"), so `url.split('?')[0]` kept the key in every
+// fetchUrl error text, and those texts reached attempts[].fail in Play/prepare/advance answers.
+function nzbLeakServer(kind) {
+  const net = require('net');
+  const srv = net.createServer((sock) => {
+    sock.on('error', () => {});
+    sock.once('data', () => {
+      if (kind === 'early') { sock.write('HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n<nzb>'); sock.end(); }
+      else if (kind === 'loop') { sock.write('HTTP/1.1 302 Found\r\nLocation: /getnzb/abc.nzb&i=42&r=MARKERKEY\r\nContent-Length: 0\r\n\r\n'); sock.end(); }
+      // 'silent': accept and never answer
+    });
+  });
+  return new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
+}
+
+test('fetchUrl: error texts name only the host, never a path-style indexer key', async () => {
+  const { fetchUrl } = require('../server/newznab');
+  const runs = [
+    ['silent', { timeoutMs: 200, deadlineMs: 2000 }, /^timeout after 200ms: /],
+    ['silent', { timeoutMs: 2000, deadlineMs: 200 }, /^deadline after 200ms: /],
+    ['early', { timeoutMs: 1000, deadlineMs: 2000 }, /^connection closed before the response was complete: /],
+    ['loop', { timeoutMs: 1000, deadlineMs: 4000 }, /^too many redirects: /],
+  ];
+  for (const [kind, opts, words] of runs) {
+    const srv = await nzbLeakServer(kind);
+    const port = srv.address().port;
+    try {
+      const err = await fetchUrl(`http://127.0.0.1:${port}/getnzb/abc.nzb&i=42&r=MARKERKEY`, opts).then(() => null, (e) => e);
+      assert.ok(err, `${kind}: rejects`);
+      assert.match(err.message, words, `${kind}: the leading words stay (search errors are classified by them)`);
+      assert.ok(!/MARKERKEY|getnzb|&i=/.test(err.message), `${kind}: no key or path in "${err.message}"`);
+      assert.ok(err.message.includes(`127.0.0.1:${port}`), `${kind}: the host stays for the log`);
+    } finally { srv.close(); }
+  }
+  const big = http.createServer((req, res) => { res.writeHead(200); res.end(Buffer.alloc(4096)); });
+  await new Promise((r) => big.listen(0, '127.0.0.1', r));
+  try {
+    const err = await fetchUrl(`http://127.0.0.1:${big.address().port}/getnzb/abc.nzb&i=42&r=MARKERKEY`, { maxBytes: 1024 }).then(() => null, (e) => e);
+    assert.match(err.message, /^response too large \(>1024 bytes\): /);
+    assert.ok(!/MARKERKEY|getnzb/.test(err.message));
+  } finally { big.close(); }
+});
+
+test('pipeline: an NZB download failure gives a fixed nzb: reason without the link or its key', async () => {
+  for (const [kind, want] of [['early', /^nzb: connection closed early$/], ['loop', /^nzb: too many redirects$/]]) {
+    const srv = await nzbLeakServer(kind);
+    try {
+      const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map() });
+      const candidate = { name: 'Leak.Movie.2020.1080p.WEB-DL', indexer: 'idx', nzbUrl: `http://127.0.0.1:${srv.address().port}/getnzb/abc.nzb&i=42&r=MARKERKEY` };
+      const res = await pipeline._tryCandidate(candidate, {});
+      assert.match(String(res.fail), want);
+      assert.ok(!/http|MARKERKEY|getnzb/.test(res.fail), `no link in "${res.fail}"`);
+    } finally { srv.close(); }
+  }
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map() });
+  const refused = await pipeline._tryCandidate({ name: 'Leak.Movie.2020.1080p.WEB-DL', indexer: 'idx', nzbUrl: 'http://127.0.0.1:1/getnzb/abc.nzb&i=42&r=MARKERKEY' }, {});
+  assert.match(String(refused.fail), /^nzb: download failed \(ECONNREFUSED\)$/);
+  assert.ok(/couldn't reach a provider/.test(summarizeAttempts([refused])), 'a refused connection is still summarized as a connection problem');
+});
+
+test('debug.redact: path-style Newznab keys are masked', () => {
+  const debug = require('../server/debug');
+  const out = debug.redact('fetch x/getnzb/1.nzb&i=42&r=MARKERKEY failed; also /r=OTHERKEY/ and ?apikey=K');
+  assert.ok(!/MARKERKEY|OTHERKEY/.test(out), out);
+  assert.ok(!/&i=42/.test(out), out);
 });
 
 test('pipeline: a short upload is remembered for that NZB only, so a full re-post with the same name still plays', () => {

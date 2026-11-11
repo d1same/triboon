@@ -16,6 +16,12 @@ function articleKey(messageId) {
   return crypto.createHash('sha256').update(id).digest('hex');
 }
 
+// The =ypart origin of a post (review R7/R8): -1 counts from 0, 0 counts from 1, null = unknown
+// (a record from an older version, or a grid not decided yet). Unknown leaves the grid open.
+function knownOrigin(x) {
+  return x === -1 || x === 0 ? x : null;
+}
+
 class SegmentDiskCache {
   constructor(opts = {}) {
     this.dir = opts.dir || '';
@@ -77,7 +83,7 @@ class SegmentDiskCache {
       rec.at = Date.now();
       this.hits++;
       this._scheduleIndex();
-      return { data, size: rec.size, partSize: rec.partSize };
+      return { data, size: rec.size, partSize: rec.partSize, partOrigin: knownOrigin(rec.partOrigin) };
     } catch {
       await this._drop(key);
       this.misses++;
@@ -110,6 +116,7 @@ class SegmentDiskCache {
       prior.buf = buf;
       prior.size = meta.size;
       prior.partSize = meta.partSize;
+      prior.partOrigin = knownOrigin(meta.partOrigin);
       if (meta.pin === true) prior.pin = true;
       this.queuedBytes += buf.length;
     } else {
@@ -118,6 +125,8 @@ class SegmentDiskCache {
         buf,
         size: Number.isFinite(meta.size) ? meta.size : null,
         partSize: Number.isFinite(meta.partSize) ? meta.partSize : null,
+        // -1 for a post that counts =ypart offsets from 0 (review R7); the header is not kept.
+        partOrigin: knownOrigin(meta.partOrigin),
         pin: meta.pin === true,
       });
       this.queuedBytes += buf.length;
@@ -167,6 +176,7 @@ class SegmentDiskCache {
           bytes: rec.bytes,
           size: rec.size ?? null,
           partSize: rec.partSize ?? null,
+          partOrigin: knownOrigin(rec.partOrigin),
           at: rec.at || 0,
           pin: rec.pin === true,
           pinAt: rec.pinAt || 0,
@@ -204,6 +214,7 @@ class SegmentDiskCache {
           bytes: job.buf.length,
           size: job.size,
           partSize: job.partSize,
+          partOrigin: knownOrigin(job.partOrigin),
           at: Date.now(),
           pin: job.pin === true || priorPin,
           pinAt: job.pin === true ? Date.now() : ((prior && prior.pinAt) || 0),

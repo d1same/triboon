@@ -36,20 +36,42 @@ function request(path, { method = 'POST', body, token, clientId, deadlineMs = 15
       timeout: 10000,
     }, (res) => {
       const chunks = [];
-      res.on('data', (c) => chunks.push(c));
+      res.on('data', (c) => { if (!settled) chunks.push(c); });
       res.on('end', () => {
+        if (settled) return;
+        if (!res.complete) return fail(closedEarly());
+        settled = true;
         clearTimeout(deadline);
         let json = null;
         try { json = JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null'); } catch {}
         resolve({ status: res.statusCode, json });
       });
+      res.on('error', (e) => fail(e || closedEarly()));
+      res.on('aborted', () => fail(closedEarly()));
+      // `close` also fires after a normal `end`; only an incomplete body is a failure.
+      res.on('close', () => { if (!res.complete) fail(closedEarly()); });
     });
-    const deadline = setTimeout(() => req.destroy(new Error(`trakt deadline after ${deadlineMs}ms`)), deadlineMs);
-    req.on('timeout', () => req.destroy(new Error('trakt timeout')));
-    req.on('error', (e) => {
+    // One exit for every failure (G2-19): a reply cut off after its headers used to leave the
+    // promise unsettled past its own deadline. The deadline and idle timeout record their
+    // reason first so it wins over a generic "closed early".
+    let settled = false;
+    let failReason = null;
+    const closedEarly = () => new Error('trakt connection closed before the response was complete');
+    const fail = (cause) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(deadline);
+      const e = failReason || cause;
       reject(e && (e.message || e.code) ? e : Object.assign(new Error((e && e.code) || 'trakt socket error'), { cause: e }));
-    });
+    };
+    const stop = (reason) => {
+      if (!failReason) failReason = reason;
+      req.destroy(failReason);
+      fail(failReason);
+    };
+    const deadline = setTimeout(() => stop(new Error(`trakt deadline after ${deadlineMs}ms`)), deadlineMs);
+    req.on('timeout', () => stop(new Error('trakt timeout')));
+    req.on('error', (e) => fail(e));
     req.end(payload);
   });
 }

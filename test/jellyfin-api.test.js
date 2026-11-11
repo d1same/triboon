@@ -275,6 +275,13 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
     body: JSON.stringify({ Username: 'owner', Pw: 'nope' }),
   });
   assert.strictEqual(bad.status, 401);
+  // Audit S2-11 (B03-01): a huge sign-in name is refused before any throttle key is built.
+  const huge = await httpSend(srv.port, 'POST', '/Users/AuthenticateByName', {
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ Username: 'x'.repeat(100000), Pw: 'nope' }),
+  });
+  assert.strictEqual(huge.status, 400, 'an over-long Jellyfin sign-in name is refused');
+  assert.strictEqual(huge.json.error, 'invalid credentials');
 
   const anon = await httpSend(srv.port, 'GET', '/Users/Me');
   assert.strictEqual(anon.status, 401);
@@ -871,6 +878,21 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   });
   assert.strictEqual(vtt.status, 200);
   assert.match(vtt.raw, /Hello there/);
+  // F2-1: the caption address PlaybackInfo hands out carries its own mount-scoped login, so a
+  // player that fetches it with no auth header (an HTML <track>, a bare URL) still gets text.
+  const bare = await httpSend(srv.port, 'GET', sub.DeliveryUrl);
+  assert.strictEqual(bare.status, 200, `the caption address works without an auth header: ${bare.raw}`);
+  assert.match(bare.raw, /WEBVTT/);
+  const capKey = new URL(sub.DeliveryUrl, 'http://x').searchParams.get('api_key');
+  assert.ok(capKey && capKey !== authz, 'the address carries a scoped token, never the session token');
+  const flipped = capKey.slice(0, -1) + (capKey.slice(-1) === 'A' ? 'B' : 'A');
+  assert.strictEqual((await httpSend(srv.port, 'GET', sub.DeliveryUrl.replace(capKey, flipped))).status, 401, 'a changed key is refused');
+  const capPath = new URL(sub.DeliveryUrl, 'http://x').pathname.split('/');
+  const otherMount = capPath.map((part, i) => (i === 3 ? 'ffffffffffff' : part)).join('/');
+  assert.strictEqual((await httpSend(srv.port, 'GET', `${otherMount}?api_key=${capKey}`)).status, 401, 'the key is bound to one mount');
+  assert.strictEqual((await httpSend(srv.port, 'POST', `/Items/${aardvark.Id}/PlaybackInfo?api_key=${capKey}`, {
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ MediaSourceId: aardvark.Id }),
+  })).status, 401, 'the caption key is not a general login');
   assert.ok(homeResume.json.Items.some((row) => row.Id === localId), 'Home Continue Watching uses UserItems/Resume');
   const listening = await httpSend(srv.port, 'GET', `/UserItems/Resume?userId=${me.json.Id}&MediaTypes=Audio`, { headers: { authorization: authz } });
   assert.strictEqual(listening.status, 200);
@@ -1027,6 +1049,43 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   for (const route of JELLYFIN_ROUTES) {
     assert.ok(['public', 'user'].includes(route.auth), `jellyfin route ${route.re} declares auth`);
     assert.ok(srv.ROUTES.some((r) => r.re === route.re && r.m === route.m), 'the route table lists the jellyfin door');
+  }
+});
+
+test('jellyfin lists every episode of a long local show, in season and episode order (F2-2)', async () => {
+  assert.strictEqual((await httpJson(srv.port, 'POST', '/api/settings', { jellyfinApps: true }, admin)).status, 200);
+  try {
+  const lib = await httpJson(srv.port, 'POST', '/api/libraries', { name: 'Long Shows', kind: 'tv', path: 'C:\LongShows' }, admin);
+  assert.strictEqual(lib.status, 200);
+  const rows = [{ idx: 0, kind: 'show', title: 'Long Show', year: 2001 }];
+  for (let i = 0; i < 150; i++) {
+    const s = 1 + Math.floor(i / 22), e = (i % 22) + 1;
+    rows.push({ idx: i + 1, kind: 'episode', title: `Ep ${i + 1}`, showIdx: 0, s, e, file: `C:\LongShows\Long Show\S${s}E${e}.mkv` });
+  }
+  const catalog = new LibraryDb(process.env.TRIBOON_DATA);
+  catalog.replaceLibrary(lib.json.id, Date.now(), rows);
+  catalog.close();
+  const login = await httpSend(srv.port, 'POST', '/Users/AuthenticateByName', {
+    headers: { 'content-type': 'application/json', authorization: 'MediaBrowser Client="Test", Device="PC", DeviceId="pc-f22", Version="1"' },
+    body: JSON.stringify({ Username: 'owner', Pw: 'hunter22' }),
+  });
+  assert.strictEqual(login.status, 200);
+  const authz = `MediaBrowser Client="Test", Device="PC", DeviceId="pc-f22", Version="1", Token="${login.json.AccessToken}"`;
+  const me = await httpSend(srv.port, 'GET', '/Users/Me', { headers: { authorization: authz } });
+  const shelf = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Items?ParentId=l${lib.json.id}&IncludeItemTypes=Series&Recursive=true&Limit=10`, { headers: { authorization: authz } });
+  assert.strictEqual(shelf.status, 200);
+  const showId = shelf.json.Items[0].Id;
+  const episodes = await httpSend(srv.port, 'GET', `/Shows/${showId}/Episodes`, { headers: { authorization: authz } });
+  assert.strictEqual(episodes.status, 200);
+  assert.strictEqual(episodes.json.Items.length, 150, 'every episode is listed, not the first 100 by title');
+  const order = episodes.json.Items.map((row) => [row.ParentIndexNumber, row.IndexNumber]);
+  const sorted = [...order].sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+  assert.deepStrictEqual(order, sorted, 'episodes come in season, then episode, order');
+  const seasons = await httpSend(srv.port, 'GET', `/Shows/${showId}/Seasons`, { headers: { authorization: authz } });
+  assert.strictEqual(seasons.status, 200);
+  assert.strictEqual((seasons.json.Items || []).length, 7, 'all 7 seasons are listed');
+  } finally {
+    await httpJson(srv.port, 'POST', '/api/settings', { jellyfinApps: false }, admin);
   }
 });
 

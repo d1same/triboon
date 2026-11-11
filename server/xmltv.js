@@ -98,9 +98,20 @@ function parseXmltv(xml, carried = [], now = Date.now()) {
   const keepTo = now + 48 * 3600000;
   const byChannel = new Map();
   const programmeRe = /<programme\b([^>]*)>([\s\S]*?)<\/programme>/gi;
-  n = 0;
-  while ((m = programmeRe.exec(text)) && n < 200000) {
-    n++;
+  // Two caps (G2-1). `kept` bounds the rows we store (memory and the saved guide cache) and is
+  // counted only after the carried-channel, title and time-window filters, so filler channels
+  // and old rows early in a big guide no longer starve a carried channel late in the file.
+  // `scanned` is a high runaway bound on the scan itself; the 120 MB byte cut in
+  // fetchXmltvFresh keeps it inside the worker's time and heap limits.
+  const KEPT_CAP = 200000;
+  const SCAN_CAP = 2000000;
+  let scanned = 0;
+  let kept = 0;
+  let capHit = null;
+  while ((m = programmeRe.exec(text))) {
+    if (scanned >= SCAN_CAP) { capHit = 'scanned'; break; }
+    if (kept >= KEPT_CAP) { capHit = 'kept'; break; }
+    scanned++;
     const channelId = xmlAttr(m[1], 'channel');
     if (!channelId || (filterToCarried && !wanted.has(channelId))) continue;
     const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(m[2]);
@@ -110,10 +121,11 @@ function parseXmltv(xml, carried = [], now = Date.now()) {
     const stop = parseXmltvDate(xmlAttr(m[1], 'stop'));
     if (!start || !stop || stop < keepFrom || start > keepTo) continue;
     if (!byChannel.has(channelId)) byChannel.set(channelId, []);
+    kept++;
     byChannel.get(channelId).push({ start, stop, title });
   }
   for (const list of byChannel.values()) list.sort((a, b) => a.start - b.start);
-  return { byChannel: [...byChannel.entries()], byName: [...byName.entries()] };
+  return { byChannel: [...byChannel.entries()], byName: [...byName.entries()], capHit };
 }
 
 function xmltvCancellationError(message = 'XMLTV parse cancelled') {

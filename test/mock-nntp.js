@@ -93,6 +93,9 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
     connCount: () => state.connCount,                    // total connections ever accepted
     dropConnections: () => { for (const s of sockets) s.destroy(); }, // provider idle-kill (FIN), server stays up
     deauthSockets: () => { for (const s of sockets) if (s._deauth) s._deauth(); }, // live sockets now answer 480
+    // One line no command asked for, on every open socket (socket stays open): a provider notice
+    // or a late reply that would put an idle line out of step.
+    sendUnasked: (line) => { for (const s of sockets) if (!s.destroyed) s.write(`${line}\r\n`); },
     listen: () => new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port))),
     close: () => new Promise((r) => { for (const s of sockets) s.destroy(); server.close(r); }),
   };

@@ -749,6 +749,22 @@ function bookMatches(name, wanted) {
 // "all candidates failed" stops being a dead end. Most real failures are SOURCE health (removed
 // posts, password-protected RARs, incomplete/fake files) — those mean "try later / add indexers",
 // which is very different from a slow connection (timeouts) the user can act on differently.
+// The NZB download's own error text is never copied into attempts[].fail (14-P1): those reach any
+// signed-in user, and a link or an error text can carry the indexer key. A fixed reason instead;
+// the `nzb:` prefix stays on every text, and a network code (ECONNREFUSED…) stays so the summary
+// still calls it a connection problem.
+function nzbFailText(e) {
+  const msg = String((e && e.message) || '');
+  const http = /^nzb fetch HTTP (\d{3})\b/.exec(msg);
+  if (http) return `nzb: HTTP ${http[1]}`;
+  if (/^(timeout after|deadline after|deadline exceeded)\b/.test(msg)) return 'nzb: timeout';
+  if (/^response too large\b/.test(msg)) return 'nzb: too large';
+  if (/^too many redirects\b/.test(msg)) return 'nzb: too many redirects';
+  if (/^connection closed before the response was complete\b/.test(msg)) return 'nzb: connection closed early';
+  const code = e && typeof e.code === 'string' && /^E[A-Z0-9_]{2,30}$/.test(e.code) ? e.code : '';
+  return code ? `nzb: download failed (${code})` : 'nzb: download failed';
+}
+
 function summarizeAttempts(attempts = []) {
   if (!attempts.length) return 'No sources were available to try for this title.';
     const cats = { connection: 0, missing: 0, encrypted: 0, stub: 0, unsupported: 0, timeout: 0, blocked: 0, episode: 0, pending: 0, other: 0 };
@@ -1888,6 +1904,8 @@ class Pipeline {
       policy.lowPowerDevice ? 1 : 0,
       policy.dolbyVision === false ? 0 : (policy.dolbyVision === true ? 1 : null),
       policy.deviceClass || null,
+      // A browser without HEVC decode ranks differently (DEV-1): never share its pick with one that has it.
+      policy.browserHevc === false ? 0 : null,
     ]);
   }
 
@@ -2863,6 +2881,7 @@ class Pipeline {
       policy.lowPowerDevice ? 1 : 0,
       policy.dolbyVision === false ? 0 : (policy.dolbyVision === true ? 1 : null),
       policy.deviceClass || null,
+      policy.browserHevc === false ? 0 : null, // DEV-1: warm the top pick FOR this browser too
     ]);
     if (!hit.prefetchedKeys) hit.prefetchedKeys = new Set();
     if (!hit.prefetchedKeys.has(prefetchKey)) {
@@ -3178,7 +3197,7 @@ class Pipeline {
           xml = await this._startNzbFetch(candidate);
         } catch (e) {
           this._recordVerdict(candidate, 'fetch-failed');
-          return { fail: `nzb: ${e.message}` };
+          return { fail: nzbFailText(e) };
         }
       } else {
       // Daily grab limit: skipping is about the INDEXER's quota, not the release's health —
@@ -3191,7 +3210,7 @@ class Pipeline {
         this.usage.onGrab(candidate.indexer);
       } catch (e) {
         this._recordVerdict(candidate, 'fetch-failed');
-        return { fail: `nzb: ${e.message}` };
+        return { fail: nzbFailText(e) };
       }
       }
     }
@@ -3365,6 +3384,15 @@ class Pipeline {
     if (stub) {
       recordSelectionVerdict('unstreamable', { streamClass: 'stub', sizeGb: +((Number(vf.size) || 0) / 1e9).toFixed(3) });
       return { fail: stub, vf };
+    }
+
+    // A mount that already holds an unreadable piece or layout (the early grid check, owner answer
+    // D-02) is refused here, before the bounded gate: a gate timeout would otherwise play it up to
+    // the bad spot. Same answer as a blocked gate, so Play moves on to the next release.
+    if (typeof vf.deadPieceCount === 'function' && vf.deadPieceCount() > 0) {
+      this.metrics.healthGateBlocked++;
+      recordSelectionVerdict('blocked', { streamClass: vf.container === 'flat' ? 'flat' : vf.method });
+      return { fail: 'health: blocked', vf };
     }
 
     // Playback read-ahead: keep work ahead of the player, but bound retained decoded bytes.
