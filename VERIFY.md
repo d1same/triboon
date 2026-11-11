@@ -128,6 +128,23 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-11-11, v3.4.11 — Release gate for safer saves, steadier Live TV, fewer stuck or wrong Plays, and resume per profile:
+- Gate: `verify:full` passed 15 of 15 steps on 2026-11-11 on the QA emulator, an Android TV image with Android 16 (API 36). Node suite 1050 of 1050, 0 fail. 57 Android unit tests, 0 failures. The isolated server reported 3.4.11.
+- Household: the movie and the episode played direct with health verified (ready 115ms and 306ms, seek 127ms and 62ms, resume 12ms and 7ms). IPTV first byte and retune passed on two of 32 channels, web and native. Overlapping Play: both Plays returned in 18ms.
+- Android stress on the emulator: 0 failures, 0 warnings, server 3.4.11. It covered page churn, Live TV start on 32 video channels, 20 zaps, Multiview from Live TV and from the PiP guide, the native Multiview handoff, the PiP guide, native direct VOD play, Player About, the Continue Watching relaunch, 10 seeks, the HD and UHD Sources lists, and a log scan with no fatal line.
+- Emulator: three gate runs in the night ended 14 of 15 because the emulator process crashed (exit 139) right after the stress step installed and started the app, before any check ran. The same crash happened with the previous tested commit. A software GPU with audio off did not stop it. For the green run the emulator was restarted during the gate, late in the full Node suite, so it was freshly booted before the Android step. The cause of the crash is not known.
+- TMDB data came from a local stand-in. No subtitle provider was configured, so no real caption was shown; the CC check got `no_subtitles`.
+- Live smokes in a desktop browser (headless Edge) against the QA server, on this same commit:
+  - Web Player VOD: start, seek forward and back, pause, resume and close, with no console errors.
+  - Web Live TV: a channel starts and the in-player guide retunes to a second channel in about a second.
+  - Nested page Back: Movie, Related, Cast, Related, unwound one page per press with the visible Back, Escape and browser Back.
+  - Add a profile above the current level: the account password field is masked, a wrong password is refused, and the right one adds the profile.
+  - Profile switch: Continue Watching shows only the new profile's row, and switching back shows only the first profile's row.
+  - Sources with an unreachable indexer: the title is not marked unavailable, Play stays pressable, and the drawer says it could not reach the indexer and offers Retry.
+- Not run: Android Next on the last episode, Android hardware Back, the TV remote path in the password field.
+- NOT verified: real providers, real TV hardware, a real Chromecast, Android 9 and 10 devices, Safari, the Windows client, real subtitles, real TMDB data.
+- Version contract: `package.json` 3.4.11; Android `versionName` 3.4.11 / `versionCode` 439; Windows client package/Tauri/Cargo(.lock) 3.4.11.
+
 2026-11-02, v3.4.10 — Security hardening and log fixes:
 - Hardening across accounts, login limits, Live TV, profiles and quality caps. Every change has a test, and the tests that exercise the old behaviour fail on v3.4.9.
 - Live TV: a viewer of a source someone else set up now gets HLS through `/api/iptv/media`. Emulator, ExoPlayer, non-admin: switched between two HLS channels and back with a moving picture, 10 segments through the server per tune. `verify-live --iptv` passed as a non-admin. A real ffmpeg played a non-admin HLS channel in the Node suite.
