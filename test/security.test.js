@@ -2186,7 +2186,7 @@ test('speed test: kept idle lines and only a recent read: it logs them out, test
 // Review R6 (B04-01): a Play that lands while the pool is frozen for the speed test keeps the
 // full-capacity probe (no line is reserved), but its queued work must start as soon as the test
 // ends, without another read or save to wake the pool.
-test('speed test: work queued during the freeze starts when the test ends, with no other trigger (S3-1)', async () => {
+test('speed test: work queued during the freeze starts when the test ends, with no other trigger (S3-1)', async (t) => {
   const vf = await speedTestMount();
   const pl = srv.getPool();
   await settlePool(pl);
@@ -2194,6 +2194,11 @@ test('speed test: work queued during the freeze starts when the test ends, with 
   await warmSpeedTestEntry(entry, 4);
   const sizeBefore = entry.size;
   vf._activeStreamReads = 0; vf._playbackTouched = Date.now();
+  // Keep the speed test (and so the freeze) running until the queued read has been checked: against
+  // the local mock the whole test can end in ~15 ms (Linux), inside the 100 ms wait below. The mock
+  // holds the reply to the speed test's own first STAT; it is released right after the check.
+  const releaseSpeedTest = mockNntp.holdStatReply('triboon-speedtest@invalid');
+  t.after(releaseSpeedTest);
   const speedP = httpJson(srv.port, 'POST', '/api/test/provider-speed', { index: 0, maxConns: 2 }, admin);
   for (let i = 0; i < 400 && entry.size === sizeBefore; i++) await new Promise((r) => setTimeout(r, 5));
   assert.notStrictEqual(entry.size, sizeBefore, 'precondition: the pool is frozen for the test');
@@ -2202,6 +2207,7 @@ test('speed test: work queued during the freeze starts when the test ends, with 
   const bodyP = pl.body(msgId, 'playback').then((b) => { bodyAt = Date.now(); return b; });
   await new Promise((r) => setTimeout(r, 100));
   assert.ok(bodyAt === 0 && entry.queue.length >= 1, 'precondition: the read waits in the frozen pool\'s queue');
+  releaseSpeedTest();
   const speed = (await speedP).json;
   const speedAt = Date.now();
   assert.strictEqual(speed.ok, true, JSON.stringify(speed));

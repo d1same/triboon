@@ -2207,7 +2207,8 @@ test('nntp: an unasked line on an idle connection drops the line instead of shif
       await conn.connect();
       assert.strictEqual(await conn.stat('here@unasked'), true, `${parser}: precondition`);
       mock.sendUnasked('200 hello');
-      await new Promise((r) => setTimeout(r, 30));
+      // Wait for the stray line to arrive (Linux loopback can take ~40 ms), not a fixed time.
+      for (let i = 0; i < 200 && conn.alive; i++) await new Promise((r) => setTimeout(r, 10));
       assert.strictEqual(conn.alive, false, `${parser}: the out-of-step line is no longer used`);
       let missing = null; let present = null;
       try { missing = await conn.stat('gone@unasked'); } catch (e) { missing = e; }
@@ -2237,8 +2238,11 @@ test('nntp: pool STAT verdicts stay right after an unasked line on an idle conne
   const pool = new NntpPool([{ host: '127.0.0.1', port, tls: false }], 1);
   try {
     assert.strictEqual(await pool.stat('here@unasked'), true, 'precondition: the line is open and idle');
+    const line = pool.providers[0].conns[0];
     mock.sendUnasked('200 hello');
-    await new Promise((r) => setTimeout(r, 30));
+    // Wait for the stray line to reach the idle line (Linux loopback can take ~40 ms), not a fixed time.
+    for (let i = 0; i < 200 && line.alive; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.strictEqual(line.alive, false, 'the idle line that heard the unasked line is dropped');
     assert.strictEqual(await pool.stat('gone@unasked'), false);
     assert.strictEqual(await pool.stat('here@unasked'), true);
     assert.strictEqual(pool.missCache.has(pool.providers[0], 'here@unasked'), false, 'a present article is never remembered as missing');
@@ -2246,6 +2250,82 @@ test('nntp: pool STAT verdicts stay right after an unasked line on an idle conne
     pool.close();
     await mock.close();
   }
+});
+
+// The same stray line can also land just AFTER the client sent its next STAT: Linux loopback holds
+// a small second write ~40 ms for the ACK, and a real network can do the same on any system. That
+// STAT then read the stray "200" as its answer (an error, line kept), and its real 430 answered
+// the STAT after it: a present article read as missing.
+test('nntp: an unasked line that lands after the next STAT drops the line instead of shifting later answers', async () => {
+  const articles = new Map([['here@unasked', Buffer.from('x')]]);
+  for (const parser of ['chunked', 'legacy']) {
+    for (const stray of ['200 hello', '223 0 <other@unasked>']) {
+      const tag = `${parser} / "${stray}"`;
+      const old = process.env.TRIBOON_NNTP_PARSER;
+      if (parser === 'legacy') process.env.TRIBOON_NNTP_PARSER = 'legacy'; else delete process.env.TRIBOON_NNTP_PARSER;
+      const mock = createMockNntp({ articles });
+      const port = await mock.listen();
+      const conn = new NntpConnection({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 2000 });
+      try {
+        await conn.connect();
+        assert.strictEqual(await conn.stat('here@unasked'), true, `${tag}: precondition`);
+        mock.unaskedOnNextStat(stray);
+        let missing = null; let present = null;
+        try { missing = await conn.stat('gone@unasked'); } catch (e) { missing = e; }
+        assert.ok(missing instanceof Error && missing.code === 'NNTP_DESYNC', `${tag}: the STAT that read the stray line reports the line out of step (${missing && (missing.code || missing)})`);
+        assert.strictEqual(conn.alive, false, `${tag}: the out-of-step line is no longer used`);
+        try { present = await conn.stat('here@unasked'); } catch (e) { present = e; }
+        assert.notStrictEqual(present, false, `${tag}: a present article never reads as missing`);
+        if (present instanceof Error) assert.ok(!/^\d{3}$/.test(String(present.code || '')), `${tag}: a dropped line is not an NNTP answer (${present.code})`);
+      } finally {
+        if (old === undefined) delete process.env.TRIBOON_NNTP_PARSER; else process.env.TRIBOON_NNTP_PARSER = old;
+        try { conn.close(); } catch {}
+        await mock.close();
+      }
+    }
+  }
+});
+
+test('nntp: pool STAT verdicts stay right when an unasked line lands after the next STAT', async () => {
+  const articles = new Map([['here@unasked', Buffer.from('x')]]);
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool([{ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 2000 }], 1);
+  const within = (p, what) => {
+    let t;
+    return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what}: no verdict within 5s`)), 5000); })])
+      .finally(() => clearTimeout(t));
+  };
+  try {
+    assert.strictEqual(await within(pool.stat('here@unasked'), 'precondition'), true, 'precondition: the line is open and idle');
+    mock.unaskedOnNextStat('200 hello');
+    assert.strictEqual(await within(pool.stat('gone@unasked'), 'missing article'), false);
+    assert.strictEqual(await within(pool.stat('here@unasked'), 'present article'), true, 'a present article never reads as missing');
+    assert.strictEqual(pool.missCache.has(pool.providers[0], 'here@unasked'), false, 'a present article is never remembered as missing');
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('nntp: a 2xx reply to STAT other than 223 drops the line; 430 and error replies behave as before', async () => {
+  const conn = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
+  let destroyed = false;
+  conn.sock = { destroy() { destroyed = true; }, end() {} };
+  conn.alive = true;
+  conn._cmd = async () => ({ status: '200 hello' });
+  await assert.rejects(() => conn.stat('want@x'), (e) => e.code === 'NNTP_DESYNC');
+  assert.strictEqual(conn.alive, false, 'the out-of-step line is no longer used');
+  assert.ok(destroyed, 'and its socket is closed');
+  const miss = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
+  miss._cmd = async () => ({ status: '430 no such article' });
+  assert.strictEqual(await miss.stat('want@x'), false, 'a real 430 is still "missing"');
+  const fault = new NntpConnection({ host: '127.0.0.1', port: 1, tls: false });
+  fault.sock = { destroy() { throw new Error('a server error reply must not close the line'); }, end() {} };
+  fault.alive = true;
+  fault._cmd = async () => ({ status: '503 program fault' });
+  await assert.rejects(() => fault.stat('want@x'), (e) => e.code === '503');
+  assert.strictEqual(fault.alive, true, 'a 5xx reply is the server\'s answer and keeps the line, as before');
 });
 
 test('nntp: a STAT reply that names a different article drops the line; a reply without an id is trusted', async () => {

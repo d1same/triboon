@@ -18,7 +18,10 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
   const sockets = new Set();
   // stallNext: swallow N STAT/BODY commands (no response — wedged socket).
   // trickle: send the NEXT BODY in `pieces` chunks `gapMs` apart — a slow-but-ALIVE transfer.
-  const state = { stallNext: 0, connCount: 0, trickle: null, bodyCounts: new Map() };
+  // unaskedOnStat: on the next STAT, write this line at once and hold that STAT's real reply until
+  // the client sends its following command — a stray line that lands AFTER the client asked.
+  // statHolds: msgId → promise; that STAT's reply (and everything after it on that socket) waits.
+  const state = { stallNext: 0, connCount: 0, trickle: null, bodyCounts: new Map(), unaskedOnStat: null, statHolds: new Map() };
   const server = net.createServer((sock) => {
     state.connCount++;
     sockets.add(sock); sock.on('close', () => sockets.delete(sock));
@@ -38,6 +41,7 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
         // never interleave bytes on the wire even when the first one trickles out slowly.
         const enqueue = (fn) => { sock._sendChain = (sock._sendChain || Promise.resolve()).then(fn).catch(() => {}); };
         const respond = (out) => enqueue(() => new Promise((done) => setTimeout(() => { if (!sock.destroyed) sock.write(out); done(); }, latencyMs)));
+        if (sock._releaseOnNextCommand) { const go = sock._releaseOnNextCommand; sock._releaseOnNextCommand = null; go(); }
         const [cmd, ...rest] = line.split(' ');
         const C = cmd.toUpperCase();
         if (C === 'AUTHINFO') {
@@ -55,6 +59,13 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
         }
         else if (C === 'STAT') {
           const id = rest.join(' ').replace(/[<>]/g, '');
+          if (state.unaskedOnStat != null) {
+            const stray = state.unaskedOnStat; state.unaskedOnStat = null;
+            sock.write(`${stray}\r\n`);
+            enqueue(() => new Promise((go) => { sock._releaseOnNextCommand = go; }));
+          }
+          const hold = state.statHolds.get(id);
+          if (hold) { state.statHolds.delete(id); enqueue(() => hold); }
           if (articles.has(id) && !missing.has(id)) respond(`223 0 <${id}>\r\n`);
           else respond('430 no such article\r\n');
         } else if (C === 'BODY') {
@@ -96,6 +107,17 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
     // One line no command asked for, on every open socket (socket stays open): a provider notice
     // or a late reply that would put an idle line out of step.
     sendUnasked: (line) => { for (const s of sockets) if (!s.destroyed) s.write(`${line}\r\n`); },
+    // The same stray line, but it lands just after the client sent its next STAT (the order a
+    // real network or Linux loopback can produce): that STAT's real reply follows the client's
+    // next command.
+    unaskedOnNextStat: (line) => { state.unaskedOnStat = line; },
+    // Hold the reply to the next STAT for this message-id until the returned function is called.
+    holdStatReply: (id) => {
+      const key = String(id).replace(/[<>]/g, '');
+      let release;
+      state.statHolds.set(key, new Promise((r) => { release = r; }));
+      return () => { if (state.statHolds.get(key)) state.statHolds.delete(key); release(); };
+    },
     listen: () => new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port))),
     close: () => new Promise((r) => { for (const s of sockets) s.destroy(); server.close(r); }),
   };

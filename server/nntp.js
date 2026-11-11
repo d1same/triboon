@@ -577,6 +577,15 @@ class NntpConnection {
       if (named && named[1] !== want) throw this._desync('STAT', want, named[1]);
       return true;
     }
+    // STAT answers 223 or an error, never another 2xx. A "200"/"205"/"222" read here is a stray
+    // line that landed after this STAT was sent (a provider notice, or an idle-line reply that a
+    // slow ACK held back), and this STAT's real answer is still on the wire: kept, it answered the
+    // NEXT command, so a present article read as missing. Drop the line, like body() does; the
+    // pool asks again on a fresh line.
+    if (/^2\d\d/.test(r.status)) {
+      const named = /<([^<>\s]+)>/.exec(r.status);
+      throw this._desync('STAT', String(msgId).replace(/[<>]/g, ''), named ? named[1] : r.status.slice(0, 3));
+    }
     // Only "no such article" is a real "missing". Any other reply (500 command unknown, 503
     // fault, 400 shutting down) is the SERVER'S problem and must not be cached as a dead source.
     if (r.status.startsWith('430') || r.status.startsWith('423')) return false;
