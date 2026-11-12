@@ -203,6 +203,15 @@ function providerLabel(p) {
   const o = (p && p.opts) || {};
   return String(o.label || o.name || o.host || 'provider');
 }
+// STAT out of step this many times in a row on one account pauses STAT there (ProviderPool).
+const STAT_DESYNC_TRIP = 3;
+const STAT_DESYNC_QUIET_MS = 60000;
+// The account answered STAT, just not with 223/430: a numeric NNTP reply, or a reply out of step
+// (NNTP_DESYNC, also the paused answer). That is "inconclusive", never "unreachable".
+function accountAnswered(e) {
+  const code = String((e && e.code) || '');
+  return /^\d{3}$/.test(code) || code === 'NNTP_DESYNC';
+}
 function providerHostKey(p) {
   const o = (p && p.opts) || {};
   return `${String(o.host || '').toLowerCase()}:${o.port != null ? o.port : ''}`;
@@ -638,6 +647,36 @@ class ProviderPool {
     this.lastErr = null;   // most recent connect failure
     this.closed = false;
     this.authLostAt = [];  // recent 480-on-a-FRESH-login timestamps (account-level fault signal)
+    this.statDesyncRun = 0;     // STAT replies out of step in a row on this account
+    this.statPausedUntil = 0;   // STAT on this account answers "inconclusive" without a login until then
+  }
+
+  // A provider that answers EVERY STAT with a 2xx other than 223 (RFC 3977 forbids it) cost two
+  // new logins per check: the line is dropped (NNTP_DESYNC) and the pool asks once more on a
+  // fresh one. After a few in a row, STAT on this account stops for a quiet period and answers
+  // "inconclusive" at once (never "missing"); one more out-of-step reply after it pauses again.
+  // A real answer (223, 430, any numeric reply) ends the run. BODY is not affected.
+  statChecksPaused() {
+    return Date.now() < this.statPausedUntil;
+  }
+
+  _statPausedError() {
+    const err = new Error(`STAT on ${providerLabel(this)} paused: replies out of step`);
+    err.code = 'NNTP_DESYNC';
+    err.noRetry = true;
+    return err;
+  }
+
+  // Returns true when this desync started a pause (the caller then does not retry).
+  _noteStatDesync(e) {
+    this.statDesyncRun++;
+    if (this.statDesyncRun < STAT_DESYNC_TRIP) return false;
+    const quietMs = this.opts.statDesyncQuietMs > 0 ? this.opts.statDesyncQuietMs : STAT_DESYNC_QUIET_MS;
+    this.statPausedUntil = Date.now() + quietMs;
+    const got = /reply was for <([^<>]{1,24})>/.exec(String(e && e.message || ''));
+    // Fixed text per account: debug.fail writes it at most once a minute.
+    debug.fail('buffer', `${providerLabel(this)}: article checks (STAT) get replies out of step${got ? ` ("${got[1]}" instead of 223)` : ''}; lines dropped, checks on this account paused ${Math.round(quietMs / 1000)}s and counted as inconclusive, not missing`);
+    return true;
   }
 
   // A socket that logged in fine (281) and then got 480 on its first commands is not a stale
@@ -1319,7 +1358,7 @@ class ProviderPool {
         // A connection-level failure (timeout/closed/reset) gets ONE retry on a fresh
         // connection so a single dead socket can't sink a whole mount.
         if (e && e.code === 'NNTP_AUTH_LOST') this.noteAuthLost(c);
-        if (!isAbortError(e) && !task.retried && !isCorruptArticle(e) && !/^\d{3}$/.test(String(e && e.code || ''))) {
+        if (!isAbortError(e) && !task.retried && !(e && e.noRetry) && !isCorruptArticle(e) && !/^\d{3}$/.test(String(e && e.code || ''))) {
           // One dead socket must not sink a solo-provider mount. With a second provider ready,
           // leave immediately so the stall window is paid once, on the next host — not twice here.
           if (e && e.code === 'NNTP_STALL' && this.preferPeerFailover) task.reject(e);
@@ -1411,7 +1450,23 @@ class ProviderPool {
     return Number.isFinite(v) && v > 1 ? Math.min(4, v) : 0;
   }
 
-  stat(msgId, priority = 'health', opts = {}) { return this.run((c) => c.stat(msgId, opts), priority, opts); }
+  stat(msgId, priority = 'health', opts = {}) {
+    if (this.statChecksPaused()) return Promise.reject(this._statPausedError());
+    return this.run(async (c) => {
+      // Queued before the pause began: answer at once on the line already handed out.
+      if (this.statChecksPaused()) throw this._statPausedError();
+      try {
+        const ok = await c.stat(msgId, opts);
+        this.statDesyncRun = 0;
+        return ok;
+      } catch (e) {
+        if (e && e.code === 'NNTP_DESYNC') {
+          if (this._noteStatDesync(e) || this.statChecksPaused()) throw this._statPausedError();
+        } else if (/^\d{3}$/.test(String(e && e.code || ''))) this.statDesyncRun = 0;
+        throw e;
+      }
+    }, priority, opts);
+  }
   body(msgId, priority = 'playback', opts = {}) {
     return this.run(async (c) => {
       const buf = await c.body(msgId, opts);
@@ -1938,7 +1993,10 @@ class NntpPool {
       } catch (e) {
         if (isAbortError(e)) throw e;
         errored++;
-        note(p, `threw ${String((e && (e.code || e.message)) || 'error').slice(0, 24)}`);
+        // Out of step (or paused for it): the account answered, so this is not "unreachable".
+        // Other errors keep their old meaning here.
+        if (e && e.code === 'NNTP_DESYNC') reachedAny = true;
+        note(p,`threw ${String((e && (e.code || e.message)) || 'error').slice(0, 24)}`);
         /* provider down -> try next */
       }
     }
@@ -2004,7 +2062,7 @@ class NntpPool {
             } catch (e) {
               if (isAbortError(e)) return;
               errored++;
-              if (/^\d{3}$/.test(String(e && e.code || ''))) reachedAny = true;
+              if (accountAnswered(e)) reachedAny = true;
             }
           }
         }
@@ -2032,7 +2090,7 @@ class NntpPool {
           },
           (e) => {
             errored++;
-            if (/^\d{3}$/.test(String(e && e.code || ''))) reachedAny = true; // a real NNTP answer, just not 223/430
+            if (accountAnswered(e)) reachedAny = true; // a real NNTP answer (or out of step), just not 223/430
             if (--pending === 0) conclude();
           },
         );

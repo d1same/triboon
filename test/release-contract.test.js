@@ -82,6 +82,11 @@ test('release contract: every package verification/release entrypoint exists in 
     'npm test runs the Node test runner with forced process cleanup');
   assert.match(pkg.scripts.test, /--test-concurrency=1/,
     'top-level suites run sequentially because several integration suites own process-wide fetch/env state');
+  assert.match(pkg.scripts.test, / --require \.\/test\/support\/blocking-stdio\.js /,
+    'every test child writes its results with blocking stdio, so --test-force-exit cannot drop queued results on Linux');
+  assert.match(pkg.scripts.test,
+    / --test-reporter=spec --test-reporter-destination=stdout --test-reporter=\.\/test\/support\/complete-run-reporter\.js --test-reporter-destination=stderr /,
+    'npm test keeps the readable report and fails a run whose results from any file did not fully arrive');
   const listedTests = [...pkg.scripts.test.matchAll(/test\/[^\s]+\.test\.js/g)].map((match) => match[0]).sort();
   const expectedTests = fs.readdirSync(path.join(root, 'test'))
     .filter((name) => name.endsWith('.test.js'))

@@ -7613,3 +7613,462 @@ test('pipeline: "file died" always logs what the player said and the dying mount
   assert.match(line, /player: source health blocked \(picture waited; dead piece: piece 812\/1400\)/);
   assert.match(line, /server health: blocked, 0\/6 missing, dead pieces 1: piece 812\/1400 unreadable on every provider/);
 });
+
+// A viewer pressed Play on a title whose Details warm-up was still waiting for a start slot. The
+// Play joined that warm-up and so waited in the warm-up's place: behind every other warm-up, one at
+// a time while someone counted as watching. It waited ~2 minutes and then failed. A joined Play now
+// takes a Play's place in line.
+test('startup gate: a queued request raised to Play waits behind Plays already in line, never ahead', async () => {
+  const { StartupGate } = require('../server/pipeline');
+  const g = new StartupGate(2);
+  const a = await g.acquire({ priority: 'play' });
+  const b = await g.acquire({ priority: 'play' });
+  const order = [];
+  const firstPlay = g.acquire({ priority: 'play' }).then((t) => { order.push('first play'); return t; });
+  const req = {};
+  const warm = g.acquire({ priority: 'prepare', request: req }).then((t) => { order.push('joined warm-up'); return t; });
+  const hedge = g.acquire({ priority: 'hedge' }).then((t) => { order.push('hedge'); return t; });
+  assert.strictEqual(req.setPriority('play'), 'queued', 'the queued warm-up changes line');
+  assert.deepStrictEqual([g.playWait.length, g.hedgeWait.length, g.prepWait.length], [2, 1, 0]);
+  a.release();
+  const t1 = await firstPlay;
+  b.release();
+  const t2 = await warm;
+  assert.strictEqual(t2.priority, 'play', 'its slot is held as a Play slot, so no other Play can stop it');
+  t1.release();
+  const t3 = await hedge;
+  assert.deepStrictEqual(order, ['first play', 'joined warm-up', 'hedge']);
+  t2.release(); t3.release();
+  assert.strictEqual(g.active, 0, 'every slot came back exactly once');
+});
+
+test('startup gate: a raised request takes a free slot at once, or stops one warm-up like any Play', async () => {
+  const { StartupGate } = require('../server/pipeline');
+  // Parked only by the warm-up cap (someone counts as watching): a slot is free.
+  const capped = new StartupGate(3, { prepareLimit: () => 1 });
+  const running = await capped.acquire({ priority: 'prepare' });
+  const req = {};
+  let got = null;
+  const p = capped.acquire({ priority: 'prepare', request: req }).then((t) => { got = t; return t; });
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(got, null, 'a second warm-up waits while one runs');
+  req.setPriority('play');
+  const t = await p;
+  assert.strictEqual(t.priority, 'play');
+  assert.strictEqual(capped.active, 2);
+  t.release(); running.release();
+  assert.strictEqual(capped.active, 0);
+  // Every slot busy with warm-ups: the raised request stops exactly one of them.
+  const full = new StartupGate(2);
+  const stopped = [];
+  const w1 = await full.acquire({ priority: 'prepare', preempt: () => { stopped.push(1); w1.release(); } });
+  const w2 = await full.acquire({ priority: 'prepare', preempt: () => { stopped.push(2); } });
+  const req2 = {};
+  const joined = full.acquire({ priority: 'prepare', request: req2 });
+  req2.setPriority('play');
+  const t2 = await joined;
+  assert.deepStrictEqual(stopped, [1], 'one speculative warm-up stood down for the Play');
+  t2.release(); w2.release();
+  assert.strictEqual(full.active, 0);
+});
+
+test('startup gate: a request lowered back, aborted, or raised while held is counted exactly once', async () => {
+  const { StartupGate } = require('../server/pipeline');
+  const g = new StartupGate(1);
+  const held = await g.acquire({ priority: 'play' });
+  const order = [];
+  const early = g.acquire({ priority: 'prepare' }).then((t) => { order.push('earlier warm-up'); return t; });
+  const req = {};
+  const warm = g.acquire({ priority: 'prepare', request: req }).then((t) => { order.push('joined warm-up'); return t; });
+  assert.strictEqual(req.setPriority('play'), 'queued');
+  assert.deepStrictEqual([g.playWait.length, g.prepWait.length], [1, 1]);
+  // The Play leaves before a slot came: the warm-up goes back to the FRONT of the warm-up line.
+  assert.strictEqual(req.setPriority('prepare'), 'queued');
+  assert.deepStrictEqual([g.playWait.length, g.prepWait.length], [0, 2]);
+  held.release();
+  const w = await warm;
+  assert.strictEqual(w.priority, 'prepare');
+  w.release();
+  (await early).release();
+  assert.deepStrictEqual(order, ['joined warm-up', 'earlier warm-up']);
+  assert.strictEqual(g.active, 0);
+  // Raised, then the client goes away: it leaves the line it is in now, and no slot is lost.
+  const held2 = await g.acquire({ priority: 'play' });
+  const req2 = {};
+  const ac = new AbortController();
+  const gone = g.acquire({ priority: 'prepare', request: req2, signal: ac.signal });
+  req2.setPriority('play');
+  ac.abort();
+  await assert.rejects(() => gone, /aborted/);
+  assert.deepStrictEqual([g.playWait.length, g.prepWait.length], [0, 0]);
+  assert.strictEqual(req2.setPriority('prepare'), null, 'a gone request changes nothing');
+  held2.release();
+  assert.strictEqual(g.active, 0);
+  // A held warm-up slot that a Play joined is no longer a target for another Play.
+  const req3 = {};
+  const h = await g.acquire({ priority: 'prepare', request: req3, preempt: () => assert.fail('a joined slot must not be stopped') });
+  assert.strictEqual(req3.setPriority('play'), 'held');
+  const other = g.acquire({ priority: 'play' });
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(g.preemptions, 0);
+  h.release();
+  (await other).release();
+  assert.strictEqual(g.active, 0);
+  assert.strictEqual(g.holders.size, 0);
+});
+
+function joinedPlayRig({ watching, blockers, holdMs, preemptibleBlockers = false }) {
+  const payload = seededPayload(200 * 1024, 0x7a);
+  const good = nzbFor([{ name: 'Movie.2024.1080p.WEB-DL.H.264-NTb.mkv', data: payload }], 40000, 'jp');
+  const mock = createMockNntp({ articles: good.articles });
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/api') {
+      const port = server.address().port;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      return res.end(rssFor([{ name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', url: `http://127.0.0.1:${port}/nzb/0`, size: 5e9 }]));
+    }
+    if (u.pathname === '/nzb/0') { res.writeHead(200); return res.end(good.nzb); }
+    res.writeHead(404); res.end();
+  });
+  return {
+    async start() {
+      const nntpPort = await mock.listen();
+      this.pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 8);
+      const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+      this.store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-')));
+      const pool = this.pool;
+      this.pipeline = new Pipeline({
+        pool: () => pool, verdicts: new VerdictCache(this.store), mounts: new Map(),
+        indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+      });
+      if (watching) this.pipeline._hasActiveForeignPlayback = () => true; // a counted viewer elsewhere
+      // Other titles' warm-ups ahead in line (one runs, the rest wait), each holding its slot a while.
+      this.stopped = 0;
+      this.timers = [];
+      this.blockers = [];
+      for (let i = 0; i < blockers; i++) {
+        let ticket = null;
+        let done;
+        const finished = new Promise((r) => { done = r; });
+        const free = () => { if (ticket) { ticket.release(); ticket = null; } done(); };
+        this.blockers.push(finished);
+        this.pipeline._startupGate.acquire({
+          priority: 'prepare',
+          preempt: preemptibleBlockers ? () => { this.stopped++; free(); } : null,
+        }).then((t) => {
+          ticket = t;
+          if (this.done) return free();
+          const tm = setTimeout(free, holdMs);
+          if (tm.unref) tm.unref();
+          this.timers.push(tm);
+        });
+      }
+    },
+    async stop() {
+      this.done = true;
+      for (const t of this.timers) clearTimeout(t);
+      await Promise.race([Promise.all(this.blockers), new Promise((r) => setTimeout(r, 50))]);
+      this.pool.close(); await mock.close(); server.close(); this.store.close();
+    },
+  };
+}
+
+test('pipeline: a Play that joins a queued warm-up starts at once while someone counts as watching', async () => {
+  const rig = joinedPlayRig({ watching: true, blockers: 3, holdMs: 1500 });
+  await rig.start();
+  try {
+    const { pipeline } = rig;
+    assert.strictEqual(pipeline._startupGate.prepareLimit(), 1, 'one warm-up at a time beside a viewer');
+    const prepP = pipeline.prepare({ q: 'Movie 2024' });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(pipeline._startupGate.prepWait.length >= 3, 'the title warm-up waits behind the others');
+    const t0 = Date.now();
+    const play = await pipeline.play({ q: 'Movie 2024' });
+    const ms = Date.now() - t0;
+    assert.ok(play.vf && play.vf.streamable, 'the Play mounted the file');
+    assert.ok(ms < 1200, `the joined Play did not wait behind the warm-ups (${ms}ms, they hold 3 x 1500ms)`);
+    const prepared = await prepP;
+    assert.strictEqual(prepared.vf.id, play.vf.id, 'one shared mount, not a second copy');
+    assert.strictEqual(pipeline.metricsSnapshot().mount.successes, 1);
+  } finally { await rig.stop(); }
+});
+
+test('pipeline: a Play that joins a queued warm-up starts at once with every slot busy and nobody watching', async () => {
+  const rig = joinedPlayRig({ watching: false, blockers: 4, holdMs: 3000, preemptibleBlockers: true });
+  await rig.start();
+  try {
+    const { pipeline } = rig;
+    const prepP = pipeline.prepare({ q: 'Movie 2024' });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.strictEqual(pipeline._startupGate.active, 3, 'every start slot is held by another warm-up');
+    const t0 = Date.now();
+    const play = await pipeline.play({ q: 'Movie 2024' });
+    const ms = Date.now() - t0;
+    assert.ok(ms < 1200, `the joined Play took a slot like any Play (${ms}ms)`);
+    assert.strictEqual(rig.stopped, 1, 'exactly one speculative warm-up stood down');
+    assert.strictEqual((await prepP).vf.id, play.vf.id);
+  } finally { await rig.stop(); }
+});
+
+test('pipeline: a Play that leaves before a slot came gives the warm-up its old place back', async () => {
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map() });
+  pipeline._hasActiveForeignPlayback = () => true;
+  const gate = pipeline._startupGate;
+  const busy = await gate.acquire({ priority: 'play' });
+  const busy2 = await gate.acquire({ priority: 'play' });
+  const busy3 = await gate.acquire({ priority: 'play' });
+  let runs = 0;
+  pipeline._runCandidateFresh = async () => { runs++; return { fail: 'test: stop here' }; };
+  const candidate = { name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', nzbUrl: 'http://x.test/nzb/1' };
+  const warm = pipeline._tryCandidate(candidate, { startupPriority: 'prepare' });
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(gate.prepWait.length, 1);
+  const ac = new AbortController();
+  const play = pipeline._tryCandidate(candidate, { startupPriority: 'play', signal: ac.signal });
+  await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual([gate.playWait.length, gate.prepWait.length], [1, 0], 'the joined Play moved the request up');
+  ac.abort();
+  assert.deepStrictEqual(await play, { fail: 'cancelled: source race loser' });
+  assert.deepStrictEqual([gate.playWait.length, gate.prepWait.length], [0, 1], 'back in the warm-up line');
+  busy.release();
+  assert.deepStrictEqual(await warm, { fail: 'test: stop here' }, 'the warm-up itself still runs');
+  assert.strictEqual(runs, 1);
+  busy2.release(); busy3.release();
+  assert.strictEqual(gate.active, 0);
+});
+
+// The source walk only looked at its budget BETWEEN results. One source stuck behind the start gate
+// held the viewer 112 s against a 45 s budget, and when that source finally came back ready the walk
+// threw it away and said "No sources were available to try for this title".
+function walkRig({ maxAdvanceMs, candidates }) {
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(), maxAdvanceMs });
+  const calls = new Map();
+  pipeline._tryCandidate = (candidate, opts = {}) => new Promise((resolve) => {
+    const call = { resolve, opts };
+    calls.set(candidate.name, call);
+    if (opts.signal) opts.signal.addEventListener('abort', () => resolve({ fail: 'cancelled: source race loser' }), { once: true });
+  });
+  pipeline._commitMount = (session, candidate, vf, attempts) => ({ session, vf, candidate, attempts });
+  const session = { id: 'walk', query: {}, cursor: 0, history: [], candidates: candidates.map((name) => ({ name, nzbUrl: `http://x.test/${name}` })) };
+  return { pipeline, session, calls };
+}
+async function waitFor(fn, ms = 3000) {
+  const t0 = Date.now();
+  while (!fn()) {
+    if (Date.now() - t0 > ms) throw new Error('waitFor timed out');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+function withClock(fn) {
+  const realNow = Date.now;
+  const clock = { skew: 0 };
+  Date.now = () => realNow() + clock.skew;
+  return Promise.resolve().then(() => fn(clock)).finally(() => { Date.now = realNow; });
+}
+function captureDebug() {
+  const lines = [];
+  const prevEnv = process.env.TRIBOON_DEBUG;
+  const prevLog = console.log;
+  process.env.TRIBOON_DEBUG = '1';
+  console.log = (...a) => { lines.push(a.join(' ')); };
+  return { lines, restore() { console.log = prevLog; if (prevEnv === undefined) delete process.env.TRIBOON_DEBUG; else process.env.TRIBOON_DEBUG = prevEnv; } };
+}
+
+test('pipeline walk: a source that is ready when the budget ends is used, not thrown away', async () => {
+  await withClock(async (clock) => {
+    const { pipeline, session, calls } = walkRig({ maxAdvanceMs: 60000, candidates: ['Only.Copy.2024.1080p.WEB-DL-NTb'] });
+    const dbg = captureDebug();
+    try {
+      const walk = pipeline._advanceBody(session, {}, { width: 2 });
+      await waitFor(() => calls.size === 1);
+      clock.skew = 120000; // the source waited out the whole budget (it was stuck behind the start gate)
+      calls.get('Only.Copy.2024.1080p.WEB-DL-NTb').resolve({ vf: { id: 'late-vf', streamable: true } });
+      const r = await walk;
+      assert.strictEqual(r.vf.id, 'late-vf', 'the ready mount plays');
+      assert.strictEqual(r.candidate.name, 'Only.Copy.2024.1080p.WEB-DL-NTb');
+    } finally { dbg.restore(); }
+    assert.ok(dbg.lines.some((l) => /walk budget ran out, used the ready source at rank 1/.test(l)), dbg.lines.join('\n'));
+  });
+});
+
+test('pipeline walk: a ready lower rank is used at the budget even while a higher rank is still opening', async () => {
+  await withClock(async (clock) => {
+    const { pipeline, session, calls } = walkRig({ maxAdvanceMs: 60000, candidates: ['Top.2024.2160p.WEB-DL-NTb', 'Next.2024.2160p.WEB-DL-FLUX'] });
+    const walk = pipeline._advanceBody(session, {}, { width: 2 });
+    await waitFor(() => calls.size === 2); // the stalled top pick got its understudy after 800 ms
+    calls.get('Next.2024.2160p.WEB-DL-FLUX').resolve({ vf: { id: 'next-vf', streamable: true } });
+    await new Promise((r) => setTimeout(r, 20)); // the walk now gives the top pick a short last chance
+    clock.skew = 120000;
+    calls.get('Top.2024.2160p.WEB-DL-NTb').resolve({ fail: 'mount: mount timeout' });
+    const r = await walk;
+    assert.strictEqual(r.vf.id, 'next-vf');
+    assert.deepStrictEqual(r.attempts.map((a) => a.fail), ['mount: mount timeout'], 'the top pick\'s failure is written');
+  });
+});
+
+test('pipeline walk: a source still opening fails at the budget with the pending note, not after it', async () => {
+  const { pipeline, session } = walkRig({ maxAdvanceMs: 300, candidates: ['Only.Copy.2024.1080p.WEB-DL-NTb'] });
+  const dbg = captureDebug();
+  const t0 = Date.now();
+  let err = null;
+  try {
+    err = await Promise.race([
+      pipeline._advanceBody(session, {}, { width: 2 }).then(() => null, (e) => e),
+      new Promise((r) => setTimeout(() => r(new Error('the walk ignored its budget')), 3000)),
+    ]);
+  } finally { dbg.restore(); }
+  const ms = Date.now() - t0;
+  assert.strictEqual(err.message, 'all candidates failed', err.message);
+  assert.ok(ms < 1500, `ended at the budget (${ms}ms)`);
+  assert.strictEqual(err.attempts.length, 1);
+  assert.match(err.attempts[0].fail, /^pending: walk budget \(0s\) ran out first — startup gate 0\/3 busy, 0 waiting$/);
+  assert.match(err.summary, /still opening sources when the start budget ran out/);
+  assert.doesNotMatch(err.summary, /No sources were available/);
+  assert.ok(dbg.lines.some((l) => /walk failed attempts=1 .* why=walk budget 0s ran out, 1 still opening/.test(l)), dbg.lines.join('\n'));
+});
+
+test('pipeline walk: a hedge that failed while the top pick was still opening is written to attempts', async () => {
+  const { pipeline, session, calls } = walkRig({ maxAdvanceMs: 1300, candidates: ['Top.2024.1080p.WEB-DL-NTb', 'Next.2024.1080p.WEB-DL-FLUX'] });
+  const walk = pipeline._advanceBody(session, {}, { width: 2 }).then(() => null, (e) => e);
+  await waitFor(() => calls.size === 2);
+  calls.get('Next.2024.1080p.WEB-DL-FLUX').resolve({ fail: 'missing: first article unavailable' });
+  const err = await Promise.race([walk, new Promise((r) => setTimeout(() => r(new Error('the walk ignored its budget')), 4000))]);
+  assert.strictEqual(err.message, 'all candidates failed', err.message);
+  const byName = new Map(err.attempts.map((a) => [a.name, a.fail]));
+  assert.strictEqual(err.attempts.length, 2, 'both sources are named');
+  assert.match(byName.get('Top.2024.1080p.WEB-DL-NTb'), /^pending: walk budget/);
+  assert.strictEqual(byName.get('Next.2024.1080p.WEB-DL-FLUX'), 'missing: first article unavailable', 'the failed hedge is written');
+  assert.strictEqual(calls.get('Top.2024.1080p.WEB-DL-NTb').opts.signal.aborted, true, 'the still-opening source was detached');
+});
+
+test('pipeline walk: a one-at-a-time walk (Sources pick) also stops at its budget', async () => {
+  const { pipeline, session, calls } = walkRig({ maxAdvanceMs: 300, candidates: ['Picked.2024.1080p.WEB-DL-NTb'] });
+  const t0 = Date.now();
+  const err = await Promise.race([
+    pipeline._advanceBody(session, {}, { width: 1 }).then(() => null, (e) => e),
+    new Promise((r) => setTimeout(() => r(new Error('the walk ignored its budget')), 3000)),
+  ]);
+  assert.strictEqual(err.message, 'all candidates failed', err.message);
+  assert.ok(Date.now() - t0 < 1500);
+  assert.match(err.attempts[0].fail, /^pending: walk budget/);
+  assert.strictEqual(calls.get('Picked.2024.1080p.WEB-DL-NTb').opts.signal.aborted, true, 'its consumer detached; a shared mount lives on');
+});
+
+test('pipeline walk: an empty list still says no sources were available', async () => {
+  const { pipeline, session } = walkRig({ maxAdvanceMs: 300, candidates: [] });
+  const err = await pipeline._advanceBody(session, {}, { width: 2 }).then(() => null, (e) => e);
+  assert.strictEqual(err.attempts.length, 0);
+  assert.strictEqual(err.summary, 'No sources were available to try for this title.');
+});
+
+// A warm-up slot that a Play (or its hedge) joined and then left is labelled a warm-up again, but its
+// mount stays protected, so it cannot stand down. A second viewer's Play spent its one stop on it and
+// waited behind a real warm-up instead of stopping that one.
+test('startup gate: a holder that cannot stand down does not use up a Play\'s stop', async () => {
+  const { StartupGate } = require('../server/pipeline');
+  const g = new StartupGate(3);
+  const asked = [];
+  const stuck = await g.acquire({ priority: 'prepare', preempt: () => asked.push('stuck'), canPreempt: () => false });
+  let real = null;
+  real = await g.acquire({ priority: 'prepare', preempt: () => { asked.push('real'); setImmediate(() => real.release()); } }); // a real stop unwinds a moment later
+  const other = await g.acquire({ priority: 'play' });
+  const waiting = g.acquire({ priority: 'play' });
+  const t = await Promise.race([waiting, new Promise((r) => setTimeout(() => r(null), 500))]);
+  assert.ok(t, 'the Play got a slot: a real warm-up stood down');
+  assert.deepStrictEqual(asked, ['real'], 'the holder that cannot stand down was skipped, the next warm-up stopped');
+  assert.strictEqual(g.preemptions, 1, 'only the warm-up that really stopped is counted');
+  t.release(); other.release(); stuck.release();
+  assert.strictEqual(g.active, 0);
+  assert.strictEqual(g.holders.size, 0);
+});
+
+async function leftWarmUpRig(firstCaller) {
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map() });
+  const gate = pipeline._startupGate;
+  const running = new Map();
+  const finishes = [];
+  pipeline._runCandidateFresh = (candidate, opts) => new Promise((resolve) => {
+    running.set(candidate.name, resolve);
+    finishes.push(() => resolve({ fail: 'test: done' }));
+    opts.signal.addEventListener('abort', () => resolve({ fail: 'cancelled: source race loser' }), { once: true });
+  });
+  const c = (name) => ({ name, nzbUrl: `http://x.test/${name}` });
+  const settled = (p) => Promise.race([p.then(() => 'settled'), new Promise((r) => setTimeout(() => r('open'), 50))]);
+  // Slot 1: a mount that a Play's hedge (or a warm-up) started, which a title warm-up shares.
+  const ac = new AbortController();
+  const firstOpts = firstCaller === 'hedge' ? { startupPriority: 'hedge', signal: ac.signal } : { startupPriority: 'prepare' };
+  const first = pipeline._tryCandidate(c('Shared.2024.1080p.WEB-DL-NTb'), firstOpts);
+  await new Promise((r) => setImmediate(r));
+  const warm = pipeline._tryCandidate(c('Shared.2024.1080p.WEB-DL-NTb'), { startupPriority: 'prepare' });
+  let playOnShared = null;
+  const playAc = new AbortController();
+  if (firstCaller === 'prepare') {
+    // A viewer's Play joins the running warm-up, then goes back before it is ready.
+    playOnShared = pipeline._tryCandidate(c('Shared.2024.1080p.WEB-DL-NTb'), { startupPriority: 'play', signal: playAc.signal });
+    await new Promise((r) => setImmediate(r));
+    playAc.abort();
+  } else {
+    ac.abort(); // the hedge lost the rank race (or the viewer went back)
+  }
+  await new Promise((r) => setImmediate(r));
+  // Slot 2: a real warm-up of another title, free to stand down. Slot 3: another viewer's Play.
+  const realWarm = pipeline._tryCandidate(c('Other.2024.1080p.WEB-DL-NTb'), { startupPriority: 'prepare' });
+  await new Promise((r) => setImmediate(r));
+  const busyPlay = await gate.acquire({ priority: 'play' });
+  assert.strictEqual(gate.active, 3, 'every start slot is held');
+  const labels = [...gate.holders].map((h) => h.priority);
+  // A second viewer presses Play on a third file.
+  const t0 = Date.now();
+  const secondPlay = pipeline._tryCandidate(c('Third.2024.1080p.WEB-DL-NTb'), { startupPriority: 'play' });
+  await new Promise((r) => setTimeout(r, 50));
+  const result = {
+    labels,
+    realWarmStopped: await settled(realWarm) === 'settled' ? await realWarm : null,
+    secondPlayRunning: running.has('Third.2024.1080p.WEB-DL-NTb'),
+    waitedMs: Date.now() - t0,
+    preemptions: gate.preemptions,
+  };
+  // Clean up: free the held Play slot and finish every run (runs that start later included) until
+  // everything settled; every slot must come back.
+  busyPlay.release();
+  const all = Promise.all([first, warm, realWarm, secondPlay, playOnShared].filter(Boolean));
+  let done = false;
+  all.then(() => { done = true; });
+  for (let i = 0; i < 100 && !done; i++) {
+    for (const f of finishes) f();
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.ok(done, 'every run settled');
+  result.activeAfter = gate.active;
+  result.holdersAfter = gate.holders.size;
+  return result;
+}
+
+test('pipeline: a second viewer\'s Play stops a real warm-up, not the slot a hedge left to a warm-up', async () => {
+  const r = await leftWarmUpRig('hedge');
+  assert.deepStrictEqual(r.labels, ['prepare', 'prepare', 'play'], 'the hedge\'s slot is now a warm-up slot');
+  assert.deepStrictEqual(r.realWarmStopped, { fail: 'cancelled: source race loser' }, 'the real warm-up stood down');
+  assert.strictEqual(r.secondPlayRunning, true, `the second Play is running at once (${r.waitedMs}ms)`);
+  assert.strictEqual(r.preemptions, 1);
+  assert.strictEqual(r.activeAfter, 0, 'no slot leaked');
+  assert.strictEqual(r.holdersAfter, 0);
+});
+
+test('pipeline: a second viewer\'s Play stops a real warm-up, not a warm-up a Play joined and left', async () => {
+  const r = await leftWarmUpRig('prepare');
+  assert.deepStrictEqual(r.realWarmStopped, { fail: 'cancelled: source race loser' }, 'the real warm-up stood down');
+  assert.strictEqual(r.secondPlayRunning, true, `the second Play is running at once (${r.waitedMs}ms)`);
+  assert.strictEqual(r.preemptions, 1);
+  assert.strictEqual(r.activeAfter, 0, 'no slot leaked');
+  assert.strictEqual(r.holdersAfter, 0);
+});
+
+// The pending summary promised "the work already done is kept". That is false when this Play was the
+// only one opening the source: the walk lets it go at the budget.
+test('pipeline walk: the ran-out-of-time message promises nothing the server may not keep', () => {
+  const text = summarizeAttempts([{ fail: 'pending: walk budget (45s) ran out first — startup gate 3/3 busy, 2 waiting' }]);
+  assert.match(text, /still opening sources when the start budget ran out/);
+  assert.match(text, /Press Play again/);
+  assert.doesNotMatch(text, /kept|usually starts at once/i, text);
+});

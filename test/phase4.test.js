@@ -9446,6 +9446,351 @@ test('detail warm-ups: warm only on prepared:true, cancel on close, one id upgra
     'episode focus search warm-up settles too');
 });
 
+// Result 77 (3.4.13): the first detail warm-up left with no quality rank (4K) and Play sent the
+// toggle default (1080p) that availability set later, so Play dropped the warm mount. These run
+// the real detail functions: quality ranks, request bodies, warm-up timers and checkAvailability.
+function detailWarmHarness(opts = {}) {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const slice = (from, to) => {
+    const a = ui.indexOf(from);
+    const b = ui.indexOf(to, a);
+    assert.ok(a >= 0 && b > a, `extractable: ${from}`);
+    return ui.slice(a, b);
+  };
+  const src = [
+    slice('function normalizeQualityRank(v)', 'function sourceSearchQuery(it, opts = {})'),
+    slice('function playbackRequestBody(', 'function maybePrepareFocusedHomeCard()'),
+    slice('function playbackWarmKey(it, qRank)', '// Hand a prepared direct-play mount'),
+    slice('function effectiveDetailQualityPref(it)', 'function startOverItem(it)'),
+    slice('function episodeKeyParts(it)', 'async function getPlayerEpisodeContext(it)'),
+    slice('function availabilitySearchItem(it)', 'function closeDetail()'),
+  ].join('\n');
+  const store = new Map(Object.entries(opts.storage || {}));
+  const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+  const els = {};
+  const $ = (id) => (els[id] = els[id] || { id, style: {}, dataset: {}, textContent: '', disabled: false, classList: { add() {}, remove() {}, toggle() {} } });
+  const timers = [];
+  const setTimeout = (fn, delay) => { const t = { fn, delay }; timers.push(t); return t; };
+  const clearTimeout = (t) => { const i = timers.indexOf(t); if (i >= 0) timers.splice(i, 1); };
+  const S = { view: 'detail', detailReq: 1, profile: { id: 'p1' }, user: { policy: opts.userMax != null ? { maxResolutionRank: opts.userMax } : {} } };
+  const prepares = [];
+  const searches = [];
+  const api = (url, o = {}) => {
+    if (url.startsWith('/api/search')) {
+      return new Promise((resolve, reject) => searches.push({ url, resolve, reject }));
+    }
+    assert.strictEqual(url, '/api/prepare');
+    return new Promise((resolve, reject) => {
+      const c = { body: o.body, signal: o.signal, resolve, reject };
+      prepares.push(c);
+      if (o.signal) o.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    });
+  };
+  const caps = opts.native === false ? null : { native: true, mkv: true, hevc: false, deviceClass: 'android-tv', ramMb: 2048 };
+  const deps = {
+    S, $, api, setTimeout, clearTimeout, localStorage,
+    nativePlaybackCaps: () => caps,
+    clientCaps: () => (caps ? { ...caps } : { mp4: true }),
+    syncProfilePrefsUp: () => {},
+    queryFor: (it) => (it && (it.q || it.title)) || '',
+    sourceIdentityFor: (it) => ({ imdbid: it && it.imdbId, tvdbid: it && it.tvdbId, season: it && it.season, ep: it && it.episode }),
+    searchAliasesFor: () => [],
+    prefAudioLang: () => 'en',
+    releaseRankOfSource: () => null,
+    shouldReplayResumePin: () => false,
+    traktResumeFractionForItem: () => 0,
+    watchLooksFinished: () => false,
+    localTitleHasPlayback: () => false,
+    localPlaybackFitsQuality: () => true,
+    localPlaybackRankForItem: () => null,
+    ensureLocalPlaybackForItem: () => Promise.resolve(null),
+    maybeNativePrefetch: () => {},
+    paintQualityToggle: () => {},
+    sourceSearchQuery: (it) => `q=${encodeURIComponent(it.q || it.title)}`,
+  };
+  const names = Object.keys(deps);
+  const h = new Function(...names,
+    'let prepareTimer = null; let prefetchTimer = null; let prepareInflight = null; let detailEpisodeFocusWarm = false;\n'
+    + 'const DETAIL_EPISODE_FOCUS_WARM_MS = 1500; let detailPlayTarget = null;\n'
+    + `${src}\nreturn { preparePlaybackSource, checkAvailability, playbackRequestBody, qualityRankForItem, cancelDetailWarmups,`
+    + ' playbackIsWarmed, setTarget: (t) => { detailPlayTarget = t; }, episodeFocus: (v) => { detailEpisodeFocusWarm = v; } };')(...names.map((n) => deps[n]));
+  const flush = () => new Promise((r) => setImmediate(r));
+  const runTimers = () => { while (timers.length) timers.shift().fn(); };
+  // What play() sends: playStart builds playbackRequestBody(it, null, qualityRankForItem(it)).
+  const playBody = (it) => { const b = h.playbackRequestBody(it, null, h.qualityRankForItem(it)); b.why = 'viewer'; return b; };
+  // openDetail -> updateDetailPlayLabel: Play target set, warm-up waits DETAIL_WARM_DELAY_MS (350).
+  const open = (target) => { S.qualityPref = null; h.setTarget(target); h.preparePlaybackSource(target, 350); };
+  const answerSearch = async (resolutions, i = searches.length - 1) => {
+    searches[i].resolve({ candidates: resolutions.map((r) => ({ name: `x.${r}`, attributes: { resolution: r } })) });
+    await flush();
+  };
+  const live = () => prepares.filter((c) => !c.signal.aborted);
+  return { h, S, store, timers, prepares, searches, flush, runTimers, playBody, open, answerSearch, live, episodeFocus: h.episodeFocus };
+}
+const QA_MOVIE = () => ({ key: 'tmdb:movie:990001', type: 'movie', tmdbId: 990001, title: 'QA Movie', q: 'QA Movie 2025', imdbId: 'tt9900001', year: '2025' });
+
+test('detail warm-up (3.4.13): the live warm-up carries the rank Play sends, so Play joins it', async () => {
+  // Main case: native client, title with 4K + 1080p, 4K allowed, nothing saved. The first
+  // warm-up is in flight when availability answers.
+  {
+    const x = detailWarmHarness();
+    const movie = QA_MOVIE();
+    x.S.detailItem = movie;
+    x.open(movie);
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 1);
+    assert.strictEqual(x.prepares[0].body.maxResolutionRank, undefined, 'the first warm-up leaves before any toggle default exists');
+    const avail = x.h.checkAvailability(movie);
+    await x.answerSearch(['2160p', '1080p']);
+    await avail;
+    assert.strictEqual(x.S.qualityPref, 3, 'availability sets the 1080p toggle default');
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 2, 'exactly one warm-up is added for this detail open');
+    assert.ok(x.prepares[0].signal.aborted, 'the no-rank warm-up is no longer the live one');
+    const play = x.playBody(movie);
+    assert.strictEqual(play.maxResolutionRank, 3);
+    assert.deepStrictEqual(x.live().map((c) => c.body), [play],
+      'the live warm-up body equals the Play body field for field (same prepare key, so Play joins)');
+    // A second availability pass (ids landed) adds nothing and does not loop.
+    const again = x.h.checkAvailability(movie);
+    await x.answerSearch(['2160p', '1080p']);
+    await again;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 2, 'the second availability pass adds no prepare');
+    assert.strictEqual(x.searches.length, 2, 'the re-warm never starts another availability check');
+    x.h.preparePlaybackSource(movie, 0); x.runTimers();
+    assert.strictEqual(x.prepares.length, 2, 'a later focus on the same target is not repeated');
+  }
+  // The first warm-up already finished (prepared:true) before availability answered: the
+  // rank-blind _preparedAt mark must not hide the ranked re-warm.
+  {
+    const x = detailWarmHarness();
+    const movie = QA_MOVIE();
+    x.S.detailItem = movie;
+    x.open(movie); x.runTimers();
+    x.prepares[0].resolve({ prepared: true }); await x.flush();
+    const avail = x.h.checkAvailability(movie);
+    await x.answerSearch(['2160p', '1080p']); await avail;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 2);
+    assert.deepStrictEqual(x.prepares[1].body, x.playBody(movie), 'the ranked warm-up goes out after a finished no-rank one');
+    x.prepares[1].resolve({ prepared: true }); await x.flush();
+    // Re-open the page within the warm window: neither warm-up goes out again (as before the fix),
+    // so no no-rank prepare makes the server drop the ranked mount Play will join.
+    x.S.detailReq++;
+    const reopened = QA_MOVIE();
+    x.S.detailItem = reopened;
+    x.open(reopened); x.runTimers();
+    const r2 = x.h.checkAvailability(reopened);
+    await x.answerSearch(['2160p', '1080p']); await r2;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 2, 're-opened detail page: no new warm-up, Play joins the ranked mount');
+    assert.ok(x.h.playbackIsWarmed(reopened, x.h.qualityRankForItem(reopened)), 'Play sees the ranked warm-up as ready');
+  }
+  // Availability answers before the 350ms warm-up timer: only ONE warm-up leaves, already ranked.
+  {
+    const x = detailWarmHarness();
+    const movie = QA_MOVIE();
+    x.S.detailItem = movie;
+    x.open(movie);
+    const avail = x.h.checkAvailability(movie);
+    await x.answerSearch(['2160p', '1080p']); await avail;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 1, 'no wrong-rank warm-up goes out at all');
+    assert.deepStrictEqual(x.prepares[0].body, x.playBody(movie));
+  }
+});
+
+test('detail warm-up (3.4.13): paths that already joined send the same warm-ups as before', async () => {
+  const GLOBAL = 'triboon.quality.p1.__default';
+  const TITLE = 'triboon.quality.p1.' + encodeURIComponent('tmdb:movie:990001');
+  const cases = [
+    { name: '1080p-only title', res: ['1080p'] },
+    { name: '4K-only title', res: ['2160p'] },
+    { name: 'user with a saved 1080p default', res: ['2160p', '1080p'], storage: { [GLOBAL]: '3' } },
+    { name: 'user with a saved 4K default', res: ['2160p', '1080p'], storage: { [GLOBAL]: '4' } },
+    { name: 'title after a 4K toggle tap', res: ['2160p', '1080p'], storage: { [TITLE]: '4' } },
+    { name: 'title after a 1080p toggle tap', res: ['2160p', '1080p'], storage: { [TITLE]: '3' } },
+    { name: 'user capped at 1080p', res: ['2160p', '1080p'], userMax: 3 },
+    { name: 'browser', res: ['2160p', '1080p'], native: false },
+  ];
+  for (const c of cases) {
+    const x = detailWarmHarness(c);
+    const movie = QA_MOVIE();
+    x.S.detailItem = movie;
+    x.open(movie); x.runTimers();
+    const first = x.prepares[0].body;
+    const avail = x.h.checkAvailability(movie);
+    await x.answerSearch(c.res); await avail;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 1, `${c.name}: no warm-up added`);
+    assert.ok(!x.prepares[0].signal.aborted, `${c.name}: the first warm-up stays live`);
+    assert.deepStrictEqual(x.playBody(movie), first, `${c.name}: Play still sends the warm-up's body`);
+  }
+});
+
+test('detail warm-up (3.4.13): Continue Watching and next-up cards keep the warm mount they join', async () => {
+  const rankOf = (b) => [b.maxResolutionRank, b.preferResolutionRank];
+  // Home card built from the watch row (as the Continue Watching row does), played with no detail open.
+  const homePlay = (x, row, extra = {}) => {
+    const card = { key: row.key, ...row.meta, qualityRank: row.meta.qualityRank, resume: row.position || 0, _cw: true, ...extra };
+    const detail = x.S.detailItem;
+    x.S.detailItem = null;
+    try { return x.playBody(card); } finally { x.S.detailItem = detail; }
+  };
+  // Progress saved with no quality (Trakt import, Home-only plays): opening the details (also the
+  // page a Home-launched player closes to) must not swap the mount the Home card will join.
+  {
+    const x = detailWarmHarness();
+    const movie = QA_MOVIE();
+    const row = { key: movie.key, position: 600, meta: { title: movie.title, q: movie.q, type: 'movie', tmdbId: movie.tmdbId, imdbId: movie.imdbId, year: movie.year } };
+    x.S.watchMap = { [movie.key]: row };
+    x.S.detailItem = movie;
+    x.open(movie); x.runTimers();
+    const avail = x.h.checkAvailability(movie);
+    await x.answerSearch(['2160p', '1080p']); await avail;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 1, 'no-rank progress: no ranked warm-up');
+    assert.ok(!x.prepares[0].signal.aborted);
+    assert.deepStrictEqual(rankOf(homePlay(x, row)), rankOf(x.prepares[0].body),
+      'the Home Continue Watching Play keeps the warm-up\'s (no) rank');
+  }
+  {
+    const x = detailWarmHarness();
+    const show = { key: 'tmdb:tv:77', type: 'tv', tmdbId: 77, title: 'QA Show', imdbId: 'tt77', year: '2024' };
+    const e2 = { key: 'tmdb:tv:77:s1e2', type: 'episode', tmdbId: 77, title: 'QA Show S01E02', q: 'QA Show S01E02', imdbId: 'tt77', year: '2024', season: 1, episode: 2 };
+    x.S.watchMap = { 'tmdb:tv:77:s1e1': { key: 'tmdb:tv:77:s1e1', watched: true, meta: { title: 'QA Show S01E01', type: 'episode', tmdbId: 77 } } };
+    x.S.detailItem = show;
+    x.open(e2); x.runTimers();
+    const avail = x.h.checkAvailability(show);
+    await x.answerSearch(['2160p', '1080p']); await avail;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 1, 'a show whose watched episode has no rank: next-up stays as it was');
+  }
+  // Progress saved WITH the rank (a Play from the details stores 3): the ranked warm-up is the one
+  // the Home card joins too.
+  {
+    const x = detailWarmHarness();
+    const movie = QA_MOVIE();
+    const row = { key: movie.key, position: 600, meta: { title: movie.title, q: movie.q, type: 'movie', tmdbId: movie.tmdbId, imdbId: movie.imdbId, year: movie.year, qualityRank: 3 } };
+    x.S.watchMap = { [movie.key]: row };
+    x.S.detailItem = movie;
+    x.open(movie); x.runTimers();
+    const avail = x.h.checkAvailability(movie);
+    await x.answerSearch(['2160p', '1080p']); await avail;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 2, 'ranked progress: the ranked warm-up goes out');
+    assert.deepStrictEqual(rankOf(x.live()[0].body), [3, 3]);
+    assert.deepStrictEqual(rankOf(homePlay(x, row)), [3, 3], 'the Home Continue Watching Play sends the same rank');
+    assert.deepStrictEqual(rankOf(x.playBody(movie)), [3, 3], 'and so does Play on the details');
+  }
+});
+
+test('detail warm-up (3.4.13): no stale warm-up after leaving, a retarget, a profile switch or Play', async () => {
+  // Left the page (closeDetail / switchView bump detailReq and cancel warm-ups) before availability answered.
+  {
+    const x = detailWarmHarness();
+    const movie = QA_MOVIE();
+    x.S.detailItem = movie;
+    x.open(movie); x.runTimers();
+    const avail = x.h.checkAvailability(movie);
+    x.S.detailReq++; x.S.detailItem = null; x.S.qualityPref = null; x.h.cancelDetailWarmups();
+    await x.answerSearch(['2160p', '1080p']); await avail;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 1, 'left the page: no warm-up for the old title');
+    assert.strictEqual(x.timers.length, 0, 'left the page: no timer left behind');
+  }
+  // Moved to another title: the new title's own warm-up keeps its own rank.
+  {
+    const x = detailWarmHarness();
+    const movie = QA_MOVIE();
+    x.S.detailItem = movie;
+    x.open(movie); x.runTimers();
+    const avail = x.h.checkAvailability(movie);
+    x.S.detailReq++;
+    const other = { key: 'tmdb:movie:5', type: 'movie', tmdbId: 5, title: 'Other', q: 'Other 2020', imdbId: 'tt5', year: '2020' };
+    x.S.detailItem = other;
+    x.open(other);
+    await x.answerSearch(['2160p', '1080p']); await avail;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 2, 'only the new title warms');
+    assert.strictEqual(x.prepares[1].body.q, 'Other 2020');
+    assert.strictEqual(x.prepares[1].body.maxResolutionRank, undefined, 'the new title is not warmed with the old title\'s default');
+  }
+  // Moved to another episode of the show before availability (searched on S01E01) answered.
+  {
+    const x = detailWarmHarness();
+    const show = { key: 'tmdb:tv:77', type: 'tv', tmdbId: 77, title: 'QA Show', imdbId: 'tt77', year: '2024' };
+    const ep = (n) => ({ key: `tmdb:tv:77:s1e${n}`, type: 'episode', tmdbId: 77, title: `QA Show S01E0${n}`, q: `QA Show S01E0${n}`, imdbId: 'tt77', year: '2024', season: 1, episode: n });
+    x.S.detailItem = show;
+    x.open(ep(1)); x.runTimers();
+    const avail = x.h.checkAvailability(show);
+    assert.match(x.searches[0].url, /S01E01/, 'availability checks the next-up episode');
+    x.episodeFocus(true); x.h.setTarget(ep(2)); x.h.preparePlaybackSource(ep(2), 350); x.episodeFocus(false);
+    await x.answerSearch(['2160p', '1080p']); await avail;
+    assert.strictEqual(x.prepares.length, 1, 'no re-warm for the old episode');
+    assert.strictEqual(x.timers.length, 1, 'only the settled episode-focus warm-up is pending');
+    assert.ok(x.timers[0].delay >= 1500, 'the episode-focus settle is kept');
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 2);
+    assert.match(x.prepares[1].body.q, /S01E02/);
+    assert.strictEqual(x.prepares[1].body.maxResolutionRank, undefined, 'the new episode keeps the rank it was scheduled with');
+  }
+  // Profile switch: Preferences is a view change (detailReq bump + cancel); the new shell boots
+  // with S._booting, which blocks every warm-up. Sign-out reloads the page.
+  {
+    const x = detailWarmHarness();
+    const movie = QA_MOVIE();
+    x.S.detailItem = movie;
+    x.open(movie);
+    const avail = x.h.checkAvailability(movie);
+    x.S.detailReq++; x.h.cancelDetailWarmups(); x.S.profile = { id: 'p2' }; x.S._booting = true;
+    await x.answerSearch(['2160p', '1080p']); await avail;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 0, 'profile switch: no request for the old profile');
+    assert.strictEqual(x.timers.length, 0, 'profile switch: no timer left behind');
+  }
+  // Play pressed before availability answered: the player owns the start, nothing is re-warmed.
+  {
+    const x = detailWarmHarness();
+    const movie = QA_MOVIE();
+    x.S.detailItem = movie;
+    x.open(movie); x.runTimers();
+    const avail = x.h.checkAvailability(movie);
+    x.S.view = 'player';
+    await x.answerSearch(['2160p', '1080p']); await avail;
+    x.runTimers();
+    assert.strictEqual(x.prepares.length, 1, 'Play pressed: no re-warm');
+    assert.ok(!x.prepares[0].signal.aborted);
+  }
+});
+
+test('detail warm-up (3.4.13): the toggle still warms the tapped quality', async () => {
+  const x = detailWarmHarness();
+  const movie = QA_MOVIE();
+  x.S.detailItem = movie;
+  x.open(movie); x.runTimers();
+  const avail = x.h.checkAvailability(movie);
+  await x.answerSearch(['2160p', '1080p']); await avail;
+  x.runTimers();
+  const before = x.prepares.length;
+  // The qToggle click handler: S.qualityPref = tap; save; preparePlaybackSource(target, 0).
+  const tap = (q) => {
+    x.S.qualityPref = q;
+    x.store.set('triboon.quality.p1.' + encodeURIComponent('tmdb:movie:990001'), String(q));
+    movie.qualityRank = q;
+    x.h.preparePlaybackSource(movie, 0); x.runTimers();
+  };
+  tap(4);
+  assert.strictEqual(x.prepares.length, before + 1, 'a 4K tap warms 4K while the earlier warm-up is still in flight');
+  assert.deepStrictEqual(x.live().map((c) => c.body), [x.playBody(movie)], 'Play after the 4K tap sends the live warm-up body');
+  assert.strictEqual(x.live()[0].body.maxResolutionRank, 4);
+  tap(3);
+  assert.strictEqual(x.prepares.length, before + 2, 'a 1080p tap warms 1080p again');
+  assert.deepStrictEqual(x.live().map((c) => c.body), [x.playBody(movie)]);
+  assert.strictEqual(x.live()[0].body.maxResolutionRank, 3);
+});
+
 test('resume warm sends absolute resume seconds even when duration is unknown', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(ui, /if \(resumeSec > 0 && !userPicked\) \{[\s\S]{0,400}body\.resumeSeconds = Math\.round\(resumeSec\);\s*if \(dur > 0\) body\.resumeFrac = /,
@@ -11030,4 +11375,184 @@ test('B10B-01 R10: only a shell-started Next closes on an older app, and a faile
   // The two shell entry points mark the Next as shell-started.
   assert.match(ui, /window\.__tvNativeVideoNext = \(pos, dur, token\) => \{[\s\S]{0,300}S\._shellNext = true;\s*playNextEpisode\(\);/);
   assert.match(ui, /window\.__upNextPlayNative = \(\) => \{ S\._shellNext = true; playNextEpisode\(\); \};/);
+});
+
+test('Live TV category menu: D-pad keeps the highlighted category inside the menu and the list still', () => {
+  // TV remote report: Back from a lower category to ★ Favorites parked the highlight above the menu
+  // (out of sight) until the list re-rendered and jumped; Up slid the list under the highlight. The
+  // rows' offsetTop counts from #browse (128px above the menu), not from the menu itself.
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function focusLiveCategory(idx, select = false)');
+  const end = ui.indexOf('function applyLiveCatRender()');
+  assert.ok(start >= 0 && end > start, 'focusLiveCategory should be extractable');
+  const ROW = 58, MENU_TOP = 128, MENU_H = 412, ABOVE_MENU = 128;
+  const pane = {
+    scrollTop: 0, clientHeight: MENU_H,
+    getBoundingClientRect() { return { top: MENU_TOP, bottom: MENU_TOP + MENU_H, height: MENU_H }; },
+    scrollTo({ top }) { this.scrollTop = Math.max(0, Math.min(37 * ROW - MENU_H, top)); },
+  };
+  const cats = Array.from({ length: 37 }, (_, i) => ({
+    dataset: { grid: String(i), liveCat: i ? `Group ${i}` : '★ Favorites' },
+    classList: { contains: (c) => c === 'sel' && i === 0 },
+    offsetTop: ABOVE_MENU + i * ROW, // measured from #browse, the positioned ancestor
+    offsetHeight: ROW,
+    getBoundingClientRect() { const top = MENU_TOP + i * ROW - pane.scrollTop; return { top, bottom: top + ROW, height: ROW }; },
+    closest: (sel) => (sel === '#chCats' ? pane : null),
+  }));
+  const S = { gridItems: [], liveCat: '★ Favorites' };
+  const focusLiveCategory = new Function('S', 'document', 'leaveRail', 'applyFocus', 'applyLiveCatRender', 'LIVE_GUIDE_BATCH', 'setTimeout', 'clearTimeout',
+    `${ui.slice(start, end)}\nreturn focusLiveCategory;`)(
+    S, { querySelectorAll: () => cats }, () => {}, () => {}, () => {}, 24, () => 0, () => {});
+  const visible = (i) => {
+    const r = cats[i].getBoundingClientRect();
+    return r.top >= MENU_TOP && r.bottom <= MENU_TOP + MENU_H;
+  };
+  // Down to a category below the fold: the menu scrolls just enough to show it at the bottom edge.
+  pane.scrollTop = 0;
+  focusLiveCategory(14, true);
+  assert.ok(visible(14), 'a category below the fold scrolls into the menu');
+  assert.strictEqual(pane.scrollTop, 15 * ROW - MENU_H + 10, 'it lands on the bottom edge (10px pad), not ~128px higher');
+  // Up onto a category that is already on screen: the list must not move.
+  const before = pane.scrollTop;
+  focusLiveCategory(12, true);
+  assert.strictEqual(pane.scrollTop, before, 'Up onto a visible category leaves the list where it is');
+  assert.ok(visible(12));
+  // Back from a lower category steps to ★ Favorites: it must be visible at the top of the menu.
+  pane.scrollTop = 596;
+  focusLiveCategory(0, true);
+  assert.strictEqual(pane.scrollTop, 0, 'Back to the first category scrolls the menu to its top');
+  assert.ok(visible(0), 'the highlighted ★ Favorites is inside the menu, not above it');
+  // LEFT from the channels returns to the remembered category without moving a visible list.
+  pane.scrollTop = 468;
+  S.liveCatNavIdx = 11;
+  focusLiveCategory();
+  assert.strictEqual(pane.scrollTop, 468, 'LEFT back to a visible remembered category keeps the list still');
+  assert.ok(visible(11));
+});
+
+test('Live TV category menu keeps its scroll position when the guide body is rebuilt', () => {
+  // A category change (150ms after the key), a guide refresh, or an unstar in ★ Favorites rebuilds the
+  // whole body; a fresh menu starts at scrollTop 0, which made the list jump under the highlight.
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function renderLiveTvBody() {');
+  const end = ui.indexOf('function liveTvGroup(', start);
+  assert.ok(start >= 0 && end > start, 'renderLiveTvBody should be extractable');
+  const body = ui.slice(start, end);
+  const keep = body.indexOf("const oldCats = $('chCats');");
+  const wipe = body.indexOf("body.innerHTML = '';");
+  const restore = body.indexOf('if (keepCatsTop) bar.scrollTop = keepCatsTop;');
+  const attach = body.indexOf('body.appendChild(catPane);');
+  assert.ok(keep >= 0 && keep < wipe, 'the old menu scroll is read before the body is cleared');
+  assert.match(body, /const keepCatsTop = oldCats \? oldCats\.scrollTop : 0;/);
+  assert.ok(restore > attach && attach > 0, 'the new menu gets that scroll back once it is in the page');
+});
+
+test('Music and Audiobooks shelves: D-pad Down/Up scrolls the page so the focused shelf stays on screen', () => {
+  // TV remote report: on the Music home, Down moved the highlight onto shelves below the screen
+  // and the page never followed (applyFocus only slid the shelf sideways). Audiobooks share it.
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function applyFocus(el, scroll = true) {');
+  const end = ui.indexOf('function focusCard(ri, ci, opts = {}) {');
+  assert.ok(start >= 0 && end > start, 'applyFocus should be extractable');
+  const run = (pageSel, cardTop, opts = {}) => {
+    const calls = [];
+    const page = {
+      scrollTop: opts.pageTop || 0,
+      getBoundingClientRect: () => ({ top: 110, bottom: 528, height: 418 }),
+      scrollTo({ top }) { calls.push(top); this.scrollTop = top; },
+    };
+    const shelfBox = { top: cardTop - 38, bottom: cardTop + 165, height: 203 };
+    const shelf = { getBoundingClientRect: () => shelfBox };
+    const el = {
+      id: '', tagName: 'BUTTON', classList: { add() {} },
+      getBoundingClientRect: () => ({ top: cardTop, bottom: cardTop + 165, height: 165 }),
+      closest: (sel) => {
+        if (/#musicBrowse|#audiobooks/.test(sel)) return pageSel ? page : null;
+        if (/\.musicShelf|\.abRow/.test(sel)) return pageSel ? shelf : null;
+        return null;
+      },
+      focus() {}, scrollIntoView() { calls.push('scrollIntoView'); },
+    };
+    const doc = { activeElement: null, body: { classList: { contains: (c) => c === 'tv' } } };
+    const S = { view: pageSel === '#audiobooks' ? 'audiobooks' : 'music' };
+    const applyFocus = new Function('S', 'document', 'cwMenuOwnsFocus', 'searchInputBusy', 'clearFocus', 'signalTvReadyOnce',
+      'scrollSectionTabIntoView', 'scrollHorizontalRowIntoView', 'focusScrollBehavior',
+      `${ui.slice(start, end)}\nreturn applyFocus;`)(
+      S, doc, () => false, () => false, () => {}, () => {}, () => false, () => true, () => 'auto');
+    applyFocus(el, opts.scroll !== false);
+    return { calls, page };
+  };
+  // Down onto a shelf below the screen: the page scrolls until the shelf bottom sits 16px inside.
+  const down = run('#musicBrowse', 874);
+  assert.deepStrictEqual(down.calls, [874 + 165 - (528 - 16)], 'Music page follows the focus down');
+  // Up onto a shelf above the screen: the page scrolls back so the shelf title shows.
+  const up = run('#musicBrowse', 60, { pageTop: 1000 });
+  assert.deepStrictEqual(up.calls, [1000 + (60 - 38) - (110 + 16)], 'Music page follows the focus up, title included');
+  // Same fault, same cure on the Audiobooks rows.
+  assert.strictEqual(run('#audiobooks', 821).calls.length, 1, 'Audiobooks page follows the focus too');
+  // A shelf already on screen (Left/Right inside a row): no vertical scroll.
+  assert.deepStrictEqual(run('#musicBrowse', 200).calls, [], 'Left/Right on a visible shelf leaves the page still');
+  // Mouse hover passes scroll=false: never moves the page under the pointer.
+  assert.deepStrictEqual(run('#musicBrowse', 874, { scroll: false }).calls, [], 'hover does not scroll');
+  // Rows outside Music/Audiobooks (Home, Detail) keep their own vertical handling: untouched here.
+  assert.deepStrictEqual(run(null, 874).calls, [], 'Home/Detail rows are not scrolled by this helper');
+});
+
+test('Live TV guide inside the player: the category menu keeps a visible highlight still and keeps its scroll on rebuild', () => {
+  // TV remote report: Left back from a channel row to the guide's category menu jumped the list
+  // (offsetTop counts from #pGuide, ~257px above the menu), and every Up/Down rebuilt the guide with
+  // the menu back at scrollTop 0, so the list slid under the highlight.
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function focusPlayerGuideCategory(idx, select = false, opts = {})');
+  const end = ui.indexOf('function playerGuideBackToCategory()');
+  assert.ok(start >= 0 && end > start, 'focusPlayerGuideCategory should be extractable');
+  const ROW = 58, MENU_TOP = 257, MENU_H = 324, ABOVE_MENU = 257;
+  const pane = {
+    scrollTop: 0, clientHeight: MENU_H,
+    getBoundingClientRect() { return { top: MENU_TOP, bottom: MENU_TOP + MENU_H, height: MENU_H }; },
+    scrollTo({ top }) { this.scrollTop = Math.max(0, Math.min(37 * ROW - MENU_H, top)); },
+  };
+  const cats = Array.from({ length: 37 }, (_, i) => ({
+    dataset: { pgCatName: i ? `Group ${i}` : '★ Favorites' },
+    classList: { contains: (c) => c === 'sel' && i === 7 },
+    offsetTop: ABOVE_MENU + i * ROW, // measured from #pGuide, the positioned ancestor
+    offsetHeight: ROW,
+    getBoundingClientRect() { const top = MENU_TOP + i * ROW - pane.scrollTop; return { top, bottom: top + ROW, height: ROW }; },
+    closest: (sel) => (sel === '.pgCats' ? pane : null),
+    focus() {},
+  }));
+  const S = { pgLiveCat: 'Group 7' };
+  const focusPlayerGuideCategory = new Function('S', 'document', 'clearPlayerGuideVisualFocus', 'renderPlayerGuideTimeline', '$',
+    `${ui.slice(start, end)}\nreturn focusPlayerGuideCategory;`)(
+    S, { querySelectorAll: () => cats }, () => {}, () => {}, () => ({}));
+  const visible = (i) => {
+    const r = cats[i].getBoundingClientRect();
+    return r.top >= MENU_TOP && r.bottom <= MENU_TOP + MENU_H;
+  };
+  // Left back from a channel onto a category that is on screen: the list must not move.
+  pane.scrollTop = 344;
+  focusPlayerGuideCategory(7);
+  assert.strictEqual(pane.scrollTop, 344, 'Left back to a visible category keeps the list still');
+  assert.ok(visible(7));
+  // A category below the fold scrolls in at the bottom edge; one above it at the top edge.
+  pane.scrollTop = 0;
+  focusPlayerGuideCategory(12);
+  assert.strictEqual(pane.scrollTop, 13 * ROW - MENU_H + 10, 'lands on the bottom edge (10px pad)');
+  assert.ok(visible(12));
+  pane.scrollTop = 1000;
+  focusPlayerGuideCategory(3);
+  assert.strictEqual(pane.scrollTop, 3 * ROW - 10, 'lands on the top edge, inside the menu');
+  assert.ok(visible(3), 'never parked above the menu');
+  // The guide rebuild (every category Up/Down) keeps the menu's scroll position.
+  const rs = ui.indexOf('async function renderPlayerGuideTimeline(pg, list) {');
+  const re = ui.indexOf('async function togglePlayerGuide()', rs);
+  assert.ok(rs >= 0 && re > rs, 'renderPlayerGuideTimeline should be extractable');
+  const body = ui.slice(rs, re);
+  const keep = body.indexOf("const oldPgCats = lp.querySelector('.pgCats');");
+  const wipe = body.indexOf("lp.innerHTML = '';");
+  const attach = body.indexOf('lp.appendChild(shell);');
+  const restore = body.indexOf('if (keepPgCatsTop) catList.scrollTop = keepPgCatsTop;');
+  assert.ok(keep >= 0 && keep < wipe, 'the old menu scroll is read before the guide is cleared');
+  assert.match(body, /const keepPgCatsTop = oldPgCats \? oldPgCats\.scrollTop : 0;/);
+  assert.ok(restore > attach && attach > 0, 'the new menu gets that scroll back once it is in the page');
 });

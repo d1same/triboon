@@ -4077,6 +4077,193 @@ test('back to details parks a watched mount so it is not an active 4K viewer', (
   srv.pipeline.titlePreparedReady.delete('park-key');
 });
 
+// The old player's last range often closes a moment after Stop parked its mount. Stamping that
+// close re-armed the 120 s "still watching" grace with nobody watching: for 2 minutes every warm-up
+// ran one at a time on the lowest lane, and a Play that joined one waited behind them all.
+test('a read that closes after Stop parked the mount does not count as a viewer; real reads still do', () => {
+  const { mountHasActivePlayback } = require('../server/pipeline');
+  const vf = {
+    id: 'late-close', _touched: Date.now(), _playbackTouched: 0, _activeStreamReads: 0,
+    name: 'Late.mkv', size: 2e9, streamable: true, tags: [], _preparedOnly: true,
+  };
+  srv.mounts.set('late-close', vf);
+  try {
+    srv.beginMountPlayerRead(vf);
+    assert.strictEqual(mountHasActivePlayback(vf), true, 'a real player read counts');
+    assert.strictEqual(vf._preparedOnly, false);
+    srv.pipeline.sessions.set('late-s', { id: 'late-s', uid: 'user-a', createdAt: Date.now(), currentMountId: 'late-close' });
+    const r = srv.releasePlaySession(srv.pipeline.sessions.get('late-s'), 'user-a', { keepPrepared: true });
+    assert.ok(r.ok && !r.evicted, 'Back to Details keeps the file');
+    srv.endMountPlayerRead(vf); // the old player's range closes after the Stop
+    assert.strictEqual(vf._playbackTouched, 0, 'the closing read does not re-arm the grace');
+    assert.strictEqual(mountHasActivePlayback(vf), false, 'nobody counts as watching');
+    // A second device (or the same viewer pressing Play again) reading the same file is a viewer.
+    srv.beginMountPlayerRead(vf);
+    srv.endMountPlayerRead(vf);
+    assert.ok(vf._playbackTouched > 0 && mountHasActivePlayback(vf), 'a new read after the park counts, and its end keeps the grace');
+    // Pause on a live session: the read ends, the 120 s grace holds the viewer's share as before.
+    vf._playbackTouched = 0;
+    srv.beginMountPlayerRead(vf);
+    srv.beginMountPlayerRead(vf); // a seek opens the new range before the old one closes
+    srv.endMountPlayerRead(vf);
+    assert.strictEqual(mountHasActivePlayback(vf), true, 'the newer range is still open');
+    srv.endMountPlayerRead(vf);
+    assert.strictEqual(mountHasActivePlayback(vf), true, 'paused: still watching inside the grace');
+  } finally {
+    srv.mounts.delete('late-close');
+    srv.pipeline.sessions.delete('late-s');
+  }
+});
+
+// Back to Details, then Play again on the same file: the new player's range opens before the old
+// player's last range closes. The park had zeroed the open-read count, so the old range's end took the
+// NEW read off it, and ~120 s later the viewer was no longer counted while still watching.
+test('Play again on a parked file before the old read closes keeps the new viewer counted', () => {
+  const { mountHasActivePlayback, ACTIVE_PLAYBACK_GRACE_MS } = require('../server/pipeline');
+  const vf = {
+    id: 'replay-park', _touched: Date.now(), _playbackTouched: 0, _activeStreamReads: 0,
+    name: 'Replay.mkv', size: 2e9, streamable: true, tags: [], _preparedOnly: true,
+  };
+  srv.mounts.set('replay-park', vf);
+  const later = () => Date.now() + ACTIVE_PLAYBACK_GRACE_MS + 1000;
+  try {
+    srv.beginMountPlayerRead(vf); // the first player's range
+    srv.pipeline.sessions.set('replay-s', { id: 'replay-s', uid: 'user-a', createdAt: Date.now(), currentMountId: 'replay-park' });
+    srv.releasePlaySession(srv.pipeline.sessions.get('replay-s'), 'user-a', { keepPrepared: true }); // Back to Details
+    assert.strictEqual(mountHasActivePlayback(vf), false, 'parked: not a viewer');
+    srv.beginMountPlayerRead(vf); // Play again: the new range opens first
+    srv.endMountPlayerRead(vf); // then the old player's range closes
+    assert.strictEqual(vf._activeStreamReads, 1, 'the new read is still counted');
+    assert.strictEqual(mountHasActivePlayback(vf, later()), true, 'two minutes on, the viewer still counts while the read is open');
+    srv.endMountPlayerRead(vf); // the viewer stops or pauses
+    assert.strictEqual(vf._activeStreamReads, 0);
+    assert.strictEqual(mountHasActivePlayback(vf), true, 'the normal grace starts at the end of the read');
+    assert.strictEqual(mountHasActivePlayback(vf, later()), false, 'and ends after it');
+  } finally {
+    srv.mounts.delete('replay-park');
+    srv.pipeline.sessions.delete('replay-s');
+  }
+});
+
+// The device pre-cache reads on the read-ahead lane, so a viewer of the same file takes its line
+// (VFS _yieldReadAhead) and its body ends short. That cut is expected and must not read as an error.
+test('a read-ahead reader that gives way to a viewer is not logged as a stream error', async () => {
+  const vf = {
+    id: 'cutra', name: 'Cut.mkv', size: 4096, streamable: true, tags: [], _touched: Date.now(),
+    async *read() {
+      yield Buffer.alloc(1024);
+      throw Object.assign(new Error('fetch aborted'), { code: 'ABORT_ERR' });
+    },
+    cancelReadAhead() {},
+  };
+  srv.mounts.set('cutra', vf);
+  const lines = [];
+  const orig = console.error;
+  console.error = (...a) => { lines.push(a.join(' ')); };
+  const get = (q) => httpRaw(srv.port, `/api/stream/cutra${q}`, { token: admin, range: 'bytes=0-4095' }).catch(() => null);
+  try {
+    await get('?priority=read-ahead');
+    assert.ok(!lines.some((l) => l.includes('[stream cutra]')), `the expected cut stays quiet: ${lines.join(' | ')}`);
+    await get('?priority=background'); // the same failure on any other reader is still reported
+    assert.ok(lines.some((l) => l.includes('[stream cutra]')), 'other readers that fail are still logged');
+  } finally {
+    console.error = orig;
+    srv.mounts.delete('cutra');
+  }
+});
+
+// Device pre-cache: /api/prepare offers the opening bytes to the Android box. As a plain range from
+// byte 0 that read counted as a player read, so every warmed title looked "watched" for 2 minutes.
+test('device pre-cache read of a warmed file is not a viewer; a real Play read still is', async () => {
+  const { mountHasActivePlayback } = require('../server/pipeline');
+  const caps = { mkv: true, ac3: true, eac3: true };
+  const prep = await httpJson(srv.port, 'POST', '/api/prepare', { q: 'Sec Test 2024', caps }, admin);
+  assert.strictEqual(prep.status, 200, prep.raw);
+  assert.ok(prep.json.prepared, 'the title warmed');
+  assert.ok(prep.json.prefetch, 'a direct-play mount is offered for device pre-cache');
+  const url = prep.json.prefetch.streamUrl;
+  assert.match(url, /^\/api\/stream\/[^?]+\?t=[^&]+&priority=read-ahead$/, 'the offer rides read-ahead');
+  assert.strictEqual(url.split('?')[0], `/api/stream/${prep.json.prefetch.id}`,
+    'the shell keys its cache on the path alone, so the later Play URL still hits these bytes');
+  const vf = srv.mounts.get(prep.json.prefetch.id);
+  // A warm file nobody watches (earlier tests in this file may have played it).
+  vf._preparedOnly = true; vf._activeStreamReads = 0; vf._playbackTouched = 0;
+  const others = [...srv.mounts.values()].filter((m) => m !== vf);
+  const saved = others.map((m) => [m, m._playbackTouched, m._activeStreamReads]);
+  for (const m of others) { m._playbackTouched = 0; m._activeStreamReads = 0; }
+  try {
+    assert.strictEqual(srv.pipeline._startupGate.prepareLimit(), 3, 'nobody watches: every start slot may warm');
+    const bytes = await httpRaw(srv.port, url, { range: 'bytes=0-65535' });
+    assert.strictEqual(bytes.status, 206);
+    assert.ok(bytes.body.equals(PAYLOAD.subarray(0, 65536)), 'the pre-cache gets the real opening bytes');
+    assert.strictEqual(mountHasActivePlayback(vf), false, 'the pre-cache read is not a viewer');
+    assert.strictEqual(vf._preparedOnly, true, 'the file stays a warm-up');
+    assert.strictEqual(srv.pipeline._startupGate.prepareLimit(), 3, 'the warm-up limit stays at its normal value');
+    // The viewer presses Play: the player's own read counts at once.
+    const play = await httpJson(srv.port, 'POST', '/api/play', { q: 'Sec Test 2024', caps }, admin);
+    assert.strictEqual(play.status, 200, play.raw);
+    assert.strictEqual(play.json.id, vf.id, 'Play joined the warmed file');
+    const first = await httpRaw(srv.port, play.json.streamUrl, { range: 'bytes=0-1023' });
+    assert.strictEqual(first.status, 206);
+    assert.strictEqual(mountHasActivePlayback(vf), true, 'a real Play read is a viewer');
+    assert.strictEqual(srv.pipeline._startupGate.prepareLimit(), 1, 'beside a viewer, one warm-up at a time');
+    // A client asking for MORE than a player gets is ignored: unknown names fall back to the normal rule.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+    assert.match(src, /const readPriority = \['background', 'readAhead', 'health'\]\.includes\(explicitPriority\)\s*\? explicitPriority\s*: \(start === 0 \? 'startup'/,
+      'only the three lower priorities can be asked for');
+    await httpJson(srv.port, 'POST', '/api/play/stop', { sessionId: play.json.sessionId, keepPrepared: true }, admin);
+  } finally {
+    for (const [m, t, n] of saved) { m._playbackTouched = t; m._activeStreamReads = n; }
+  }
+});
+
+// 3.4.13 (result 77): on a title with 4K and 1080p, the detail page's live warm-up now carries the
+// toggle default that Play sends. These are the exact bodies the fixed page sends on an Android TV
+// (pick/pickKey null, as playbackRequestBody builds them); Play must join that warm mount.
+test('detail warm-up with the toggle default and Play with it share one mount (4K + 1080p title, TV caps)', async () => {
+  const ix = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const port = ix.address().port;
+    if (u.pathname === '/api') {
+      res.writeHead(200);
+      return res.end(`<?xml version="1.0"?><rss xmlns:newznab="http://x"><channel>
+        <item><title>Warm.Rank.2025.2160p.WEB-DL.H.264-NTb</title><enclosure url="http://127.0.0.1:${port}/nzb-2160" length="9000000000" type="application/x-nzb"/></item>
+        <item><title>Warm.Rank.2025.1080p.WEB-DL.H.264-NTb</title><enclosure url="http://127.0.0.1:${port}/nzb-1080" length="4000000000" type="application/x-nzb"/></item>
+        </channel></rss>`);
+    }
+    if (u.pathname.startsWith('/nzb-')) { res.writeHead(200); return res.end(RELEASE.nzb); }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((r) => ix.listen(0, '127.0.0.1', r));
+  const prevIx = (await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json.indexers;
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    indexers: [{ name: 'warmrank', url: `http://127.0.0.1:${ix.address().port}`, apikey: 'x' }],
+  }, admin);
+  try {
+    const caps = { mkv: true, mp4: true, h264: true, hevc: false, dovi: false, av1: false, aac: true, ac3: true, eac3: true,
+      native: true, passthrough: false, deviceClass: 'android-tv', ramMb: 2048 };
+    const body = {
+      q: 'Warm Rank 2025', pick: null, pickKey: null, caps, imdbid: 'tt9900010', year: 2025,
+      tmdbId: 990010, mediaType: 'movie', preferredAudioLanguage: 'en',
+      maxResolutionRank: 3, preferResolutionRank: 3, why: 'viewer',
+    };
+    const prep = await httpJson(srv.port, 'POST', '/api/prepare', body, admin);
+    assert.strictEqual(prep.status, 200, prep.raw);
+    assert.ok(prep.json.prepared, 'the ranked warm-up is ready');
+    assert.match(prep.json.candidate.name, /1080p/, 'the toggle default warms the 1080p file');
+    assert.ok(prep.json.prefetch, 'the warm mount is offered for the device pre-cache');
+    const play = await httpJson(srv.port, 'POST', '/api/play', { ...body }, admin);
+    assert.strictEqual(play.status, 200, play.raw);
+    assert.strictEqual(play.json.id, prep.json.prefetch.id,
+      'Play joins the warm mount: same mount id, so the shell pre-cache keyed on it is used');
+    assert.ok(srv.mounts.has(prep.json.prefetch.id), 'the warm mount was not dropped');
+    await httpJson(srv.port, 'POST', '/api/play/stop', { sessionId: play.json.sessionId }, admin);
+  } finally {
+    await httpJson(srv.port, 'POST', '/api/settings', { indexers: prevIx }, admin);
+    ix.close();
+  }
+});
+
 test('a double-tapped Play shares one start; another user or another title does not', async () => {
   let runs = 0;
   let finish;

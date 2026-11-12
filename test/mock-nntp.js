@@ -21,7 +21,9 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
   // unaskedOnStat: on the next STAT, write this line at once and hold that STAT's real reply until
   // the client sends its following command — a stray line that lands AFTER the client asked.
   // statHolds: msgId → promise; that STAT's reply (and everything after it on that socket) waits.
-  const state = { stallNext: 0, connCount: 0, trickle: null, bodyCounts: new Map(), unaskedOnStat: null, statHolds: new Map() };
+  // statReplyAll: when set, EVERY STAT is answered with this line instead of 223/430 (a provider
+  // that breaks RFC 3977 by answering STAT with another 2xx). Off unless armed.
+  const state = { stallNext: 0, connCount: 0, trickle: null, bodyCounts: new Map(), unaskedOnStat: null, statHolds: new Map(), statReplyAll: null, statCount: 0 };
   const server = net.createServer((sock) => {
     state.connCount++;
     sockets.add(sock); sock.on('close', () => sockets.delete(sock));
@@ -66,7 +68,9 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
           }
           const hold = state.statHolds.get(id);
           if (hold) { state.statHolds.delete(id); enqueue(() => hold); }
-          if (articles.has(id) && !missing.has(id)) respond(`223 0 <${id}>\r\n`);
+          state.statCount++;
+          if (state.statReplyAll != null) respond(`${state.statReplyAll}\r\n`);
+          else if (articles.has(id) && !missing.has(id)) respond(`223 0 <${id}>\r\n`);
           else respond('430 no such article\r\n');
         } else if (C === 'BODY') {
           const id = rest.join(' ').replace(/[<>]/g, '');
@@ -111,6 +115,9 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
     // real network or Linux loopback can produce): that STAT's real reply follows the client's
     // next command.
     unaskedOnNextStat: (line) => { state.unaskedOnStat = line; },
+    // Answer every later STAT with this line (e.g. '200 x'); null goes back to 223/430.
+    answerEveryStat: (line) => { state.statReplyAll = line == null ? null : String(line); },
+    statCount: () => state.statCount,                    // STAT commands received (all sockets)
     // Hold the reply to the next STAT for this message-id until the returned function is called.
     holdStatReply: (id) => {
       const key = String(id).replace(/[<>]/g, '');

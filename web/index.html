@@ -11405,6 +11405,30 @@ function availabilitySearchItem(it) {
   }
   return it;
 }
+// The detail warm-up leaves ~350ms after open, before availability sets the 1080p/4K toggle
+// default. A native viewer with no saved quality warmed with NO rank (4K) while Play sends the
+// default rank, so Play dropped that warm mount and started cold. Re-warm ONCE per detail open,
+// only for that no-rank -> rank change, only while Play still targets the title that was checked.
+function rewarmDetailForQualityDefault(rankBefore, searchItem) {
+  const target = detailPlayTarget;
+  if (!target || rankBefore != null || S.view === 'player' || S._qualityRewarmReq === S.detailReq) return;
+  const a = episodeKeyParts(target), b = episodeKeyParts(searchItem);
+  if (!!a !== !!b || (a && (a.season !== b.season || a.episode !== b.episode))) return;
+  if (qualityRankForItem(target) == null) return;
+  // Progress saved with no quality (Trakt import, Home-only plays) keeps its Continue Watching and
+  // next-up cards on no rank; a ranked warm-up would drop the mount those cards join. Leave them.
+  const titleKey = qualityTitleKey(target);
+  if (Object.entries(S.watchMap || {}).some(([key, w]) => qualityTitleKey({ key, ...(w && w.meta) }) === titleKey
+    && !normalizeQualityRank(w && w.meta && w.meta.qualityRank))) return;
+  S._qualityRewarmReq = S.detailReq;
+  const warmed = resolvePlaybackResume(target);
+  // The no-rank warm-up is superseded: a re-open must not send it again (the server would drop
+  // the ranked mount for it), and the rank-blind _preparedAt mark must not hide the new rank.
+  S._preparedWarm = S._preparedWarm || {};
+  S._preparedWarm[playbackWarmKey(warmed, null)] = Date.now();
+  target._preparedAt = 0;
+  preparePlaybackSource(target, 0);
+}
 async function checkAvailability(it) {
   const reqId = S.detailReq;
   const searchItem = availabilitySearchItem(it) || it;
@@ -11427,6 +11451,7 @@ async function checkAvailability(it) {
     const hadStrongIds = !!(ids.imdbid || ids.tvdbid);
     const r = await api('/api/search?' + sourceSearchQuery(searchItem, { includeQuality: false }));
     if (reqId !== S.detailReq) return; // user moved on
+    const rankBefore = detailPlayTarget ? qualityRankForItem(detailPlayTarget) : null;
     // "Unplayable — no source yet" while Play actually WORKS (owner report): openDetail runs this
     // check TWICE — once immediately (title+year only, before /api/tmdb resolves imdb/tvdb) and
     // again with the ids. The weak first pass often finds nothing, and its verdict used to be
@@ -11468,6 +11493,7 @@ async function checkAvailability(it) {
     $('qToggle').style.display = offer ? '' : 'none';
     S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || globalQualityPref() || 3) : null;
     if (offer) paintQualityToggle(effectiveDetailQualityPref(it));
+    rewarmDetailForQualityDefault(rankBefore, searchItem);
     // Indexers that timed out, cooled down or refused the key answer "no releases" too. That is
     // not proof the title has none: keep Play pressable with a soft hint (rebuilt from the
     // remembered label so it cannot stack) and never show the raw error text (it can carry a key).
@@ -23183,6 +23209,10 @@ function liveChannelSubtitle(ch) {
 }
 function renderLiveTvBody() {
   const body = $('chBody'); if (!body) return;
+  // The category list is rebuilt below; keep where it was scrolled (a fresh list starts at 0,
+  // so every category change or guide refresh made the menu jump under the highlight).
+  const oldCats = $('chCats');
+  const keepCatsTop = oldCats ? oldCats.scrollTop : 0;
   $('grid').classList.remove('liveGuideGrid');
   body.classList.remove('liveGuideShell');
   body.innerHTML = ''; S.gridItems = [];
@@ -23245,6 +23275,7 @@ function renderLiveTvBody() {
   bindEdgeScroll(bar);
   catPane.appendChild(bar);
   body.appendChild(catPane);
+  if (keepCatsTop) bar.scrollTop = keepCatsTop;
   const host = document.createElement('div');
   host.className = S.liveGuide && S.liveEpg ? 'liveGuidePane' : 'liveChannelPane';
   body.appendChild(host);
@@ -23984,7 +24015,9 @@ function focusPlayerGuideCategory(idx, select = false, opts = {}) {
   const pane = cat.closest('.pgCats');
   if (pane) {
     const pad = 10;
-    const top = cat.offsetTop;
+    // Measure inside the pane: offsetTop counts from #pGuide, which made Left back from a
+    // channel jump the list even when the category was already on screen.
+    const top = cat.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
     const bottom = top + cat.offsetHeight;
     const viewTop = pane.scrollTop + pad;
     const viewBottom = pane.scrollTop + pane.clientHeight - pad;
@@ -24134,7 +24167,12 @@ function scheduleNativeGuidePipSync() {
 }
 async function renderPlayerGuideTimeline(pg, list) {
   const renderToken = S._playerGuideRenderToken = (S._playerGuideRenderToken || 0) + 1;
-  const lp = $('pgList'); lp.innerHTML = ''; lp.className = 'pgGuideBody';
+  const lp = $('pgList');
+  // Every Up/Down on a category rebuilds the guide; keep the category list where it was scrolled
+  // (a fresh list starts at 0, so the list slid under the highlight on every press).
+  const oldPgCats = lp.querySelector('.pgCats');
+  const keepPgCatsTop = oldPgCats ? oldPgCats.scrollTop : 0;
+  lp.innerHTML = ''; lp.className = 'pgGuideBody';
   const now = Date.now();
   const w0 = now - (now % 1800000) - 1800000, w1 = now + 2 * 3600000;
   const pct = (t) => Math.max(0, Math.min(100, ((t - w0) / (w1 - w0)) * 100));
@@ -24376,6 +24414,7 @@ async function renderPlayerGuideTimeline(pg, list) {
   shell.appendChild(catPane);
   shell.appendChild(main);
   lp.appendChild(shell);
+  if (keepPgCatsTop) catList.scrollTop = keepPgCatsTop;
   $('player').classList.add('guideMode');
   pg.classList.remove('ready');
   pg.classList.add('open');
@@ -30612,7 +30651,24 @@ function applyFocus(el, scroll = true) {
   // when Dashboard (tall) swapped to Profile (short). Scroll only the tab column.
   if (scroll && !scrollSectionTabIntoView(el) && !scrollHorizontalRowIntoView(el)) {
     el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: focusScrollBehavior() });
-  }
+  } else if (scroll) scrollShelfPageIntoView(el);
+}
+// Music and Audiobooks shelves: the row helper above only slides the shelf sideways, and these
+// pages have no row window of their own (Home and Detail do), so Down walked the highlight off
+// the bottom of the page. Keep the focused shelf (title + covers) inside the page, measured by
+// rects like scrollMusicRowIntoView (scrollIntoView is unreliable in the TV WebView).
+function scrollShelfPageIntoView(el) {
+  const page = el && el.closest && el.closest('#musicBrowse, #audiobooks');
+  if (!page) return;
+  const shelf = el.closest('.musicShelf, .abRow') || el;
+  const pr = page.getBoundingClientRect();
+  const pad = 16;
+  let box = shelf.getBoundingClientRect();
+  if (box.height > pr.height - pad * 2) box = el.getBoundingClientRect();
+  let delta = 0;
+  if (box.top < pr.top + pad) delta = box.top - (pr.top + pad);
+  else if (box.bottom > pr.bottom - pad) delta = box.bottom - (pr.bottom - pad);
+  if (Math.abs(delta) > 1) page.scrollTo({ top: Math.max(0, page.scrollTop + delta), behavior: focusScrollBehavior() });
 }
 function focusCard(ri, ci, opts = {}) {
   const view = S.rowsView; if (!view) return;
@@ -30686,7 +30742,10 @@ function focusLiveCategory(idx, select = false) {
   const pane = cats[i].closest('#chCats');
   if (pane) {
     const pad = 10;
-    const top = cats[i].offsetTop;
+    // Measure the row INSIDE the pane. offsetTop counts from the positioned ancestor (#browse),
+    // which put every row ~128px too low: the list slid under the highlight on Up, and Back to the
+    // first category parked it above the pane, out of sight, until the re-render jumped it back.
+    const top = cats[i].getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
     const bottom = top + cats[i].offsetHeight;
     const viewTop = pane.scrollTop + pad;
     const viewBottom = pane.scrollTop + pane.clientHeight - pad;

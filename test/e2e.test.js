@@ -3253,3 +3253,171 @@ test('yenc: the zlib.crc32 decoder matches the table decoder on every field (dif
     }
   }
 });
+
+// A provider that answers EVERY STAT with a 2xx other than 223 (RFC 3977 forbids it; none is
+// known). Since 3.4.12 each such reply drops the line and the pool asks once more on a fresh one.
+// The account did answer, just out of step: that is "inconclusive", never "unreachable" (which
+// ended every Play candidate at once) and never "missing". After a few in a row the account stops
+// paying two new logins per check for a quiet period, and one log line names the cause.
+function statDesyncWithin(p, ms, what) {
+  let t;
+  return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what}: not settled within ${ms}ms`)), ms); })])
+    .finally(() => clearTimeout(t));
+}
+async function statDesyncCode(p, what) {
+  try { return { ok: await statDesyncWithin(p, 5000, what) }; } catch (e) { return { code: e && e.code, message: e && e.message }; }
+}
+function statDesyncLogs() {
+  const lines = [];
+  const orig = console.error;
+  console.error = (...a) => { lines.push(a.map(String).join(' ')); };
+  return { lines, restore: () => { console.error = orig; } };
+}
+
+test('nntp: accounts that answer every STAT out of step make the startup probe inconclusive, not unreachable', async () => {
+  const mocks = [createMockNntp({ articles: new Map() }), createMockNntp({ articles: new Map() })];
+  const ports = [];
+  for (const m of mocks) { ports.push(await m.listen()); m.answerEveryStat('200 x'); }
+  const cap = statDesyncLogs();
+  const two = new NntpPool(ports.map((port, i) => ({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 2000, label: `desync-probe-${i}` })), 2);
+  const one = new NntpPool([{ host: '127.0.0.1', port: ports[0], tls: false, commandTimeoutMs: 2000, label: 'desync-probe-solo' }], 2);
+  try {
+    // The exact call of pipeline.js probeFirstArticle. NO_PROVIDER there ends the candidate with
+    // "provider unreachable"; any other error lets the mount decide (the Play goes on).
+    const r2 = await statDesyncCode(two.stat('first@probe', 'startup', { throwIfUnreachable: true, parallel: true }), 'two accounts');
+    assert.strictEqual(r2.code, 'PROBE_INCONCLUSIVE', `two accounts: inconclusive, the mount goes on (got ${r2.code || r2.ok})`);
+    const r1 = await statDesyncCode(one.stat('first@probe', 'startup', { throwIfUnreachable: true, parallel: true }), 'one account');
+    assert.strictEqual(r1.code, 'PROBE_INCONCLUSIVE', `one account: inconclusive, the mount goes on (got ${r1.code || r1.ok})`);
+    for (const pool of [two, one]) {
+      for (const p of pool.providers) assert.strictEqual(pool.missCache.has(p, 'first@probe'), false, 'never remembered as missing');
+    }
+  } finally {
+    cap.restore();
+    two.close(); one.close();
+    for (const m of mocks) await m.close();
+  }
+});
+
+test('nntp: health triage never counts an account that answers STAT out of step as missing', async () => {
+  const { statSample, healthFromSamples } = require('../server/vfs');
+  const mocks = [createMockNntp({ articles: new Map() }), createMockNntp({ articles: new Map() })];
+  const ports = [];
+  for (const m of mocks) { ports.push(await m.listen()); m.answerEveryStat('200 x'); }
+  const cap = statDesyncLogs();
+  const pool = new NntpPool(ports.map((port, i) => ({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 2000, label: `desync-triage-${i}` })), 2);
+  try {
+    const samples = [];
+    for (let i = 0; i < 6; i++) samples.push(await statDesyncWithin(statSample(pool, `seg${i}@triage`), 5000, `sample ${i}`));
+    for (const s of samples) assert.strictEqual(s.state, 'inconclusive', `out of step is inconclusive, not ${s.state}`);
+    const h = healthFromSamples({ verdict: 'verified' }, samples);
+    assert.strictEqual(h.verdict, 'verified', 'nothing conclusive: the previous verdict stands');
+    assert.strictEqual(h.missing, 0);
+    assert.strictEqual(h.inconclusive, samples.length);
+    assert.ok(!h.unreachable, 'the accounts answered, so this is not "no provider answered"');
+    for (const p of pool.providers) for (let i = 0; i < 6; i++) assert.strictEqual(pool.missCache.has(p, `seg${i}@triage`), false);
+  } finally {
+    cap.restore();
+    pool.close();
+    for (const m of mocks) await m.close();
+  }
+});
+
+test('nntp: STAT out of step on every reply pauses checks on that account instead of logging in twice per check, then asks again', async () => {
+  const mock = createMockNntp({ articles: new Map([['here@loop', Buffer.from('x')]]) });
+  const port = await mock.listen();
+  mock.answerEveryStat('200 x');
+  const cap = statDesyncLogs();
+  const quietMs = 400;
+  const pool = new NntpPool([{ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 2000, label: 'desync-loop', statDesyncQuietMs: quietMs }], 1);
+  try {
+    for (let i = 0; i < 10; i++) {
+      const r = await statDesyncCode(pool.stat(`a${i}@loop`, 'health', { throwIfUnreachable: true }), `check ${i}`);
+      assert.strictEqual(r.code, 'PROBE_INCONCLUSIVE', `check ${i}: inconclusive (got ${r.code || r.ok})`);
+    }
+    // 3.4.12: 2 logins per check = 20. Now a few in a row, then the account rests.
+    const loginsBurst = mock.connCount();
+    assert.ok(loginsBurst <= 4, `10 out-of-step checks cost ${loginsBurst} logins (at most 4)`);
+    assert.ok(pool.providers[0].statChecksPaused(), 'checks on this account are paused');
+    const named = cap.lines.filter((l) => /desync-loop/.test(l) && /out of step/i.test(l));
+    assert.strictEqual(named.length, 1, `one log line names the cause (got ${named.length}: ${cap.lines.join(' | ')})`);
+    assert.match(named[0], /STAT/);
+    // The quiet period ends on its own. Still broken: one check, at most one login, paused again.
+    await new Promise((r) => setTimeout(r, quietMs + 100));
+    assert.strictEqual(pool.providers[0].statChecksPaused(), false, 'the pause ends after the quiet period');
+    for (let i = 0; i < 5; i++) {
+      const r = await statDesyncCode(pool.stat(`b${i}@loop`, 'health', { throwIfUnreachable: true }), `late check ${i}`);
+      assert.strictEqual(r.code, 'PROBE_INCONCLUSIVE');
+    }
+    assert.ok(mock.connCount() - loginsBurst <= 1, `after the pause a still-broken account costs at most 1 login (got ${mock.connCount() - loginsBurst})`);
+    assert.ok(pool.providers[0].statChecksPaused(), 'one more out-of-step reply pauses it again at once');
+    assert.strictEqual(cap.lines.filter((l) => /desync-loop/.test(l)).length, 1, 'the log line is rate-limited');
+    // The provider is fixed: after the quiet period the account answers normally again.
+    mock.answerEveryStat(null);
+    await new Promise((r) => setTimeout(r, quietMs + 100));
+    assert.strictEqual(await statDesyncWithin(pool.stat('here@loop'), 5000, 'recovered present'), true);
+    assert.strictEqual(await statDesyncWithin(pool.stat('gone@loop'), 5000, 'recovered missing'), false);
+    assert.strictEqual(pool.providers[0].statChecksPaused(), false);
+  } finally {
+    cap.restore();
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('nntp: a single stray line, or stray lines between good answers, never pauses STAT on an account', async () => {
+  const mock = createMockNntp({ articles: new Map([['here@single', Buffer.from('x')]]) });
+  const port = await mock.listen();
+  const cap = statDesyncLogs();
+  const pool = new NntpPool([{ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 2000, label: 'desync-single' }], 1);
+  try {
+    assert.strictEqual(await statDesyncWithin(pool.stat('here@single'), 5000, 'precondition'), true);
+    for (let round = 0; round < 4; round++) {
+      mock.unaskedOnNextStat('200 hello');
+      assert.strictEqual(await statDesyncWithin(pool.stat('gone@single'), 5000, `round ${round} missing`), false, `round ${round}: missing stays missing`);
+      assert.strictEqual(await statDesyncWithin(pool.stat('here@single'), 5000, `round ${round} present`), true, `round ${round}: present stays present`);
+      assert.strictEqual(pool.providers[0].statChecksPaused(), false, `round ${round}: a stray line between good answers does not pause the account`);
+    }
+    assert.strictEqual(pool.missCache.has(pool.providers[0], 'here@single'), false);
+  } finally {
+    cap.restore();
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('nntp: while STAT is paused on an account, checks settle at once even with its only line wedged (stall)', async () => {
+  const id = 'wedge@pause';
+  const mock = createMockNntp({ articles: new Map([[id, Buffer.from('=ybegin line=128 size=1 name=a\r\nx\r\n=yend size=1\r\n')]]) });
+  const port = await mock.listen();
+  mock.answerEveryStat('200 x');
+  const cap = statDesyncLogs();
+  const pool = new NntpPool([{ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 1500, label: 'desync-stall', statDesyncQuietMs: 60000 }], 1);
+  let wedged = null;
+  try {
+    for (let i = 0; i < 3 && !pool.providers[0].statChecksPaused(); i++) {
+      await statDesyncCode(pool.stat(`t${i}@pause`, 'health', { throwIfUnreachable: true }), `trip ${i}`);
+    }
+    assert.ok(pool.providers[0].statChecksPaused(), 'precondition: checks on this account are paused');
+    // The only line now hangs on a BODY that never answers.
+    mock.stallNext(1);
+    wedged = pool.body(id, 'background').catch((e) => e);
+    for (let i = 0; i < 50 && !pool.providers[0].busy.size; i++) await new Promise((r) => setTimeout(r, 10));
+    const logins = mock.connCount();
+    const stats = mock.statCount();
+    const t0 = Date.now();
+    for (let i = 0; i < 5; i++) {
+      const r = await statDesyncCode(pool.stat(`p${i}@pause`, 'health', { throwIfUnreachable: true }), `paused check ${i}`);
+      assert.strictEqual(r.code, 'PROBE_INCONCLUSIVE', `paused check ${i}: inconclusive (got ${r.code || r.ok})`);
+    }
+    const tookMs = Date.now() - t0;
+    assert.ok(tookMs < 500, `paused checks do not wait behind the wedged line (${tookMs}ms)`);
+    assert.strictEqual(pool.providers[0].queue.length, 0, 'nothing left waiting in the queue');
+    assert.strictEqual(mock.connCount(), logins, 'no new login while paused');
+    assert.strictEqual(mock.statCount(), stats, 'no STAT sent while paused');
+  } finally {
+    cap.restore();
+    if (wedged) await statDesyncWithin(wedged, 10000, 'wedged BODY settles').catch(() => {});
+    pool.close();
+    await mock.close();
+  }
+});

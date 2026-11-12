@@ -43,7 +43,7 @@ Settings -> Streaming performance owns the capacity profile:
 | 1080p / 4K read-ahead goals | Owner-facing server-side read-ahead goal | Saved as seconds, translated into bounded article windows by the engine. |
 | Per-stream 1080p / 4K connections | Maximum article window for one active stream | Used as the hard ceiling in Custom. Auto sizes from bandwidth + who is behind, but still honors these numbers as a ceiling when set. |
 | Startup reserve | Percentage of usable connections held back | Keeps new starts and seeks responsive. |
-| Device preload | MB of opening bytes an Android TV may pre-cache ahead of press-play (detail open + Up Next) | Direct-play mounts only; `/api/prepare` offers a tokened prefetch target within this budget, the shell stores it in a 100MB on-device LRU, and press-play buffers its first seconds from disk. 0 disables. |
+| Device preload | MB of opening bytes an Android TV may pre-cache ahead of press-play (detail open + Up Next) | Direct-play mounts only; `/api/prepare` offers a tokened prefetch target within this budget, the shell stores it in a 100MB on-device LRU, and press-play buffers its first seconds from disk. The offered URL carries `priority=read-ahead`: the pre-cache read rides the read-ahead lane and is NOT a player read, so a warmed title never counts as a viewer (it used to, for 120 s after every pre-cache). The shell keys its cache on the path alone, so the Play URL still hits. The pre-cache read yields to a viewer's reads of the same file: it may end short, which is expected and logged only as a debug line; the shell keeps the bytes it got. 0 disables. |
 | Segment cache | Off, or on with a GB lid (default 10) | Off until the owner turns it on. When on, opening a title saves the start, the end, and the Continue Watching spot under `TRIBOON_DATA/segment-cache`, plus any article already fetched. The spot you stopped, and a skip, stay until newer spots push them out (about a fifth of the lid). RAM still holds the playhead. Oldest unpinned pieces are deleted when the lid is crossed. Clear wipes the folder. A healthy search stays for 2 hours. A missing or blocked release is still ignored for 6 hours and can still appear in Sources. |
 | NNTP pipelining | Article requests each provider connection keeps on the wire for read-ahead/background work | Low lanes only — startup/seek/playback/health never share a socket, and stacking stands down while player work is queued. Rides provider pool opts; saving rebuilds pools live. Bench: ~2.2x per-connection read-ahead throughput at depth 4 on a latency-dominated provider. |
 
@@ -296,7 +296,12 @@ Rules:
 must not keep the old stream in the 120s "still watching" grace. That grace is
 for pause/seek on a live session. After stop, either evict the mount or park it
 as prepared-only (Back on details): zero playback touch, no 4K read-ahead, no
-active-viewer share. A same-title quality change also drops the other quality's
+active-viewer share. The old player's last range often closes a moment after that
+Stop; its end does not stamp the playback touch of a parked mount (`endMountPlayerRead`),
+or the grace would come back for 120 s with nobody watching. A new real read un-parks it. The park
+remembers how many reads were still open (`_parkedReads`); their late ends use up that memory, not
+the open-read count, so Play again on the same file (its range opens before the old one closes)
+keeps the new viewer counted while the read is open, with the normal grace at its end. A same-title quality change also drops the other quality's
 warm mount. Without this, leftover 4K sockets 502 the next 1080 Play and cut
 Sources fan-out in half. A live provider `502 too many connections` follows the
 InfiniDysk model: Play does not wait. The pool learns the real cap, shrinks
@@ -548,7 +553,16 @@ prepares hold the mount, its header/sidecar BODYs ride the `background` lane ins
 `startup`/`playback` (`NzbFileStream` `startupLane`), so a guess never outranks a viewer's
 playback or read-ahead bytes (Unraid 3.4.1: six warm-ups after a restart, every line busy and five
 player reads waiting at 3:40). A Play that joins the prepare lifts later fetches back to
-`startup`; a yielded prepare that hits the mount deadline records no verdict. Fast home/card focus still uses cheap `/api/search` warming only;
+`startup`; a yielded prepare that hits the mount deadline records no verdict. A Play that joins a
+prepare still WAITING for its start slot also takes a Play's place in that line: behind Plays already
+waiting, ahead of hedges and warm-ups, and like any Play it may stop one speculative warm-up to get a
+slot (`StartupGate` `request.setPriority`, `Pipeline._retargetRecordGate`). If that Play leaves before
+a slot came, the request goes back to the front of the warm-up line. A Play stops only a warm-up that
+can really stand down (`canPreempt`): a warm-up slot that a Play or its hedge joined and then left
+keeps its mount protected, so it is skipped and the next real warm-up stops instead; only a real stop
+counts in `preemptions`. Before this a joined Play waited
+in the warm-up's place, behind every other warm-up one at a time (Unraid 2026-11-11: about 2 minutes,
+then a false "no sources"). Fast home/card focus still uses cheap `/api/search` warming only;
 it does not mount every title the user scrolls past.
 
 TV playback applies the same rule late, not at episode start: once the exact
@@ -603,6 +617,22 @@ ranking. Warmed NZB downloads are joinable: if Play arrives while the top
 candidate NZB is still downloading, it waits on that in-flight fetch instead of
 starting a duplicate grab.
 
+The detail warmup must carry the quality rank Play will send. It leaves about
+350 ms after the page opens, before the availability check sets the 1080p/4K
+toggle default. Up to 3.4.12 a native viewer with no saved quality warmed with
+no rank while Play sent the default rank 3; the prepare keys differed, so Play
+dropped the warm mount (and the Android pre-cache keyed on its id) and started
+cold. Since 3.4.13, when availability turns a no-rank Play target into a ranked
+one, the page sends one ranked warmup for that detail open
+(`rewarmDetailForQualityDefault`) and marks the no-rank one superseded, so a
+re-open does not send it again. That is at most one extra prepare per detail
+open of such a title; titles, users and clients whose rank was already known
+send the same warmups as before. A title with progress saved without a quality
+(Trakt import, Home-only plays) is left alone too: its Continue Watching and
+next-up cards still send no rank, so a ranked warmup would drop the mount they
+join. Tests: `test/phase4.test.js` "detail warm-up
+(3.4.13)" and `test/security.test.js` "detail warm-up with the toggle default".
+
 ## Health Checks
 
 The upfront health gate remains bounded. Healthy releases usually answer STAT
@@ -625,6 +655,12 @@ a refused login) and none answered 223, the pool raises `PROBE_INCONCLUSIVE`: tr
 that piece out of the verdict and out of retry-only-missing, and a pass where nothing was
 conclusive keeps the previous verdict. All accounts remembered as missing is "missing", not
 "unreachable". Flat and archive mounts share this rule (`statSample` / `healthFromSamples`).
+A STAT reply out of step (a 2xx other than 223, `NNTP_DESYNC`) drops the line and the pool asks
+once more on a fresh one; if that also fails, the account still *answered*, so the result is
+`PROBE_INCONCLUSIVE`, never `NO_PROVIDER` (which ends a Play candidate as "provider unreachable").
+After 3 such replies in a row on one account, STAT there answers inconclusive at once, with no
+login, for 60s (`statDesyncQuietMs`); one more out-of-step reply after that pauses it again, any
+real answer ends the run. One `[fail:buffer]` line names the cause. BODY is not affected.
 Unraid 3.4.3: The Good Doctor S05E15 went blocked at 10:11 with every line busy.
 
 Every switch to `blocked` is logged, always (not only with debug on): the triage rule that fired
@@ -648,6 +684,18 @@ healthy next release remains a single grab, while a replacement still pending
 after 800ms gets one understudy instead of another full mount-deadline wait. Fast
 missing-probe and mount-deadline exits likewise abort their underlying startup
 BODY before the failure is returned.
+
+**Walk budget.** One Play or switch walk has `MAX_ADVANCE_MS` (45 s). Every wait in the walk races
+that budget with a timer, in the raced walk and in the one-at-a-time walk of a Sources pick (it was
+checked only between results, so one source stuck behind the start gate held a viewer 112 s). When
+the budget ends, a source that is ready by then is used, in rank order, even if a higher rank is
+still opening; a source still opening is detached (a warm-up or another Play sharing that mount keeps
+it) and named with the `pending: walk budget … ran out first` note, so the viewer reads "press Play
+again", not "no sources". A source that already failed while a higher rank was still opening (a
+failed hedge) is written to `attempts` too. "No sources were available to try for this title" is
+left only for a walk that had nothing to try. A walk that times out records no verdict: a detached
+source returns `cancelled` before any verdict is written. Debug lines: `walk budget ran out, used
+the ready source at rank N` and `walk failed attempts=N ms=T gate=a/3 why=…`.
 
 ## Recommendation Flow
 

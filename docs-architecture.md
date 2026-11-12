@@ -145,7 +145,9 @@ Rules that must not drift:
   in-flight NZB prefetch instead of repeating source finding, first-article
   probe, mount, or health-gate work. Smash Play while prepare is still running
   joins that title-level job with a narrow race instead of a second full-width
-  walk.   Details must not prepare a bare TV show — the Play target is the next
+  walk. The warmup carries the quality rank Play will send: when the
+  availability check sets the 1080p/4K toggle default after a no-rank warmup
+  left, the page warms once more with that rank (3.4.13). Details must not prepare a bare TV show — the Play target is the next
   episode. Opening a trailer keeps preparing that same Play target so
   trailer Play joins the live mount. Details Play, trailer Play, and
   Play Next in the last two minutes must stay on that same warm mount:

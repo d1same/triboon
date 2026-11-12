@@ -799,7 +799,8 @@ function summarizeAttempts(attempts = []) {
   let head, tail = ' Try again later, pick another release in Sources, or add more indexers.';
   if (cats.pending >= half) {
     head = 'The server was still opening sources when the start budget ran out — it is busy or the provider is slow right now';
-    tail = ' Press Play again; the work already done is kept and the next try usually starts at once.';
+    // Not "the work already done is kept": a source only this Play was opening is let go at the budget.
+    tail = ' Press Play again in a moment; if it fails again, pick another release in Sources.';
   } else if (cats.connection >= half) {
     head = "Couldn't reach your usenet provider(s) — this is a connection problem, not a missing release";
     tail = ' Check that the server can reach your providers (VPN on? ports/credentials right in Settings → Providers), then retry.';
@@ -1394,6 +1395,11 @@ const RACE_HEDGE_MS = 800;
 // into a 30-second wait behind its mount deadline.
 const RACE_COMMIT_GRACE_MS = 250;
 
+const GATE_RANK = { prepare: 0, hedge: 1, play: 2 };
+function gatePriorityOf(startupPriority) {
+  return startupPriority === 'prepare' || startupPriority === 'hedge' ? startupPriority : 'play';
+}
+
 // Fair startup limiter: Play front-runners beat hedges, hedges beat prepare.
 // A Play that finds every slot busy also PREEMPTS one speculative prepare holder: browsing three
 // detail pages used to park three background prepares on the gate for up to 45s each (15s NZB
@@ -1421,9 +1427,14 @@ class StartupGate {
     if (priority === 'hedge') return this.hedgeWait;
     return this.playWait;
   }
+  // A preemption counts only when something really stops. A holder whose canPreempt() says no
+  // cannot stand down right now (a warm-up a Play or hedge joined and then left: its mount stays
+  // protected), so the Play looks at the next warm-up instead of spending its one stop on it and
+  // waiting behind a real warm-up.
   _preemptOnePrepare() {
     for (const h of this.holders) {
       if (h.priority === 'prepare' && typeof h.preempt === 'function' && !h.preempted) {
+        if (typeof h.canPreempt === 'function' && !h.canPreempt()) continue;
         h.preempted = true;
         this.preemptions++;
         try { h.preempt(); } catch {}
@@ -1458,11 +1469,16 @@ class StartupGate {
     }
     this._schedulePrepDrain();
   }
-  acquire({ signal, priority = 'play', preempt = null } = {}) {
+  // `request` (optional) is a caller-owned object. The gate gives it setPriority(p) so the caller
+  // can change who it is waiting for after the fact: a viewer's Play that joins a queued warm-up
+  // must not keep waiting in the warm-up's place (it waited out every warm-up ahead of it, one
+  // 30 s mount at a time, while nobody was watching anything).
+  acquire({ signal, priority = 'play', preempt = null, canPreempt = null, request = null } = {}) {
     const abortErr = () => Object.assign(new Error('request aborted'), { code: 'ABORT_ERR' });
-    const ticket = () => {
+    const held = { rec: null, ticket: null };
+    const ticket = (p) => {
       let released = false;
-      const t = { priority, preempt, preempted: false };
+      const t = { priority: p, preempt, canPreempt, preempted: false };
       this.holders.add(t);
       t.release = () => {
         if (released) return;
@@ -1470,19 +1486,23 @@ class StartupGate {
         this.holders.delete(t);
         this.release();
       };
+      held.ticket = t;
       return t;
     };
+    if (request) request.setPriority = (p) => this._retarget(held, p);
     if (signal && signal.aborted) return Promise.reject(abortErr());
     const prepCapped = priority === 'prepare' && !this._prepareAllowed();
     if (this.active < this.max && !prepCapped) {
       this.active++;
       this.peak = Math.max(this.peak, this.active);
-      return Promise.resolve(ticket());
+      return Promise.resolve(ticket(priority));
     }
     if (priority === 'play') this._preemptOnePrepare();
     return new Promise((resolve, reject) => {
-      const q = this._queue(priority);
-      const rec = { resolve, reject, settled: false };
+      // The ticket is cut at the moment of the grant (not a microtask later), so a priority change
+      // that lands right after the grant still reaches the slot holder.
+      const rec = { priority, queue: this._queue(priority), resolve: () => resolve(ticket(rec.priority)), reject, settled: false };
+      held.rec = rec;
       rec.finish = (fn) => {
         if (rec.settled) return;
         rec.settled = true;
@@ -1490,15 +1510,51 @@ class StartupGate {
         fn();
       };
       rec.onAbort = () => {
-        const i = q.indexOf(rec);
+        const i = rec.queue.indexOf(rec);
         if (i < 0) return; // already granted a slot
-        q.splice(i, 1);
+        rec.queue.splice(i, 1);
         rec.finish(() => reject(abortErr()));
       };
       if (signal) signal.addEventListener('abort', rec.onAbort, { once: true });
-      q.push(rec);
+      rec.queue.push(rec);
       if (prepCapped) this._schedulePrepDrain();
-    }).then(() => ticket());
+    });
+  }
+  // Move one request to another priority. A held slot only changes its label (a warm-up a Play
+  // joined is no longer a speculative holder another Play may stop). A queued request changes line:
+  // a raised one goes to the BACK of its new line (a Play already waiting keeps its place), a lowered
+  // one to the FRONT of the warm-up line (it has waited longest). Returns 'held', 'queued' or null.
+  _retarget(held, p) {
+    if (held.ticket) {
+      if (held.ticket.preempted || held.ticket.priority === p) return null;
+      held.ticket.priority = p;
+      this._drainPrep(); // the warm-up count changed, so the warm-up cap may now let one more in
+      return 'held';
+    }
+    const rec = held.rec;
+    if (!rec || rec.settled || rec.priority === p) return null;
+    const from = rec.priority;
+    const i = rec.queue.indexOf(rec);
+    if (i < 0) return null;
+    rec.queue.splice(i, 1);
+    rec.priority = p;
+    rec.queue = this._queue(p);
+    if (GATE_RANK[p] < GATE_RANK[from]) rec.queue.unshift(rec);
+    else rec.queue.push(rec);
+    if (p === 'prepare') {
+      this._drainPrep();
+    } else if (this.active < this.max) {
+      // Parked only by the warm-up cap: a free slot is there, take it now.
+      const j = rec.queue.indexOf(rec);
+      if (j >= 0) rec.queue.splice(j, 1);
+      this.active++;
+      this.peak = Math.max(this.peak, this.active);
+      rec.finish(() => rec.resolve());
+    } else if (p === 'play') {
+      // Same as a Play's own acquire: stop one speculative warm-up to make room.
+      this._preemptOnePrepare();
+    }
+    return 'queued';
   }
   release() {
     const next = this.playWait.shift() || this.hedgeWait.shift()
@@ -1723,6 +1779,7 @@ class Pipeline {
   constructor({
     pool, verdicts, mounts, indexers = () => [], usage = {}, performance = () => null,
     enforceFeatureSize = false, mountDeadlineMs = MOUNT_DEADLINE_MS, totalMemMb = TOTAL_MEM_MB,
+    maxAdvanceMs = MAX_ADVANCE_MS,
   }) {
     this.pool = pool;             // () => NntpPool (lazy, settings-driven)
     this.verdicts = verdicts;     // VerdictCache
@@ -1742,6 +1799,7 @@ class Pipeline {
     this.standbyRetryMs = STANDBY_RETRY_MS;
     this.mountDeadlineMs = Number.isFinite(mountDeadlineMs) && mountDeadlineMs > 0
       ? mountDeadlineMs : MOUNT_DEADLINE_MS;
+    this.maxAdvanceMs = Number.isFinite(maxAdvanceMs) && maxAdvanceMs > 0 ? maxAdvanceMs : MAX_ADVANCE_MS;
     this.totalMemMb = Number.isFinite(totalMemMb) && totalMemMb > 0 ? totalMemMb : TOTAL_MEM_MB;
     this._playbackExpiryTimer = null;
     this._playbackExpiryAt = 0;
@@ -3089,13 +3147,20 @@ class Pipeline {
     }
     if (!record) {
       const controller = new AbortController();
-      record = { controller, consumers: 0, settled: false, promise: null, preemptible: mountOpts.startupPriority === 'prepare' };
+      record = {
+        controller, consumers: 0, settled: false, promise: null, preemptible: mountOpts.startupPriority === 'prepare',
+        // Who waits on this mount, by start-slot priority. Its gate request carries the highest one.
+        wants: { prepare: 0, hedge: 0, play: 0 },
+        gate: { priority: gatePriorityOf(mountOpts.startupPriority), setPriority: null },
+      };
       // A Play stuck behind a full startup gate may cancel this run — but only while every caller
       // still attached is a background prepare. Once a real Play joins the record it is protected.
       const runOpts = {
         ...mountOpts,
         signal: controller.signal,
+        gateRequest: record.gate,
         preempt: () => { if (record.preemptible && !record.settled) controller.abort(); },
+        canPreempt: () => record.preemptible && !record.settled, // false once a Play or hedge joined it
         // While only background prepares hold this mount and someone else is watching, its BODYs
         // ride the background lane: a guess must never outrank a viewer's playback or read-ahead.
         // A Play that joins (preemptible goes false) lifts every later fetch back to startup.
@@ -3125,6 +3190,9 @@ class Pipeline {
     // prepared mount.
     record.consumers++;
     if (mountOpts.startupPriority !== 'prepare') record.preemptible = false;
+    const want = gatePriorityOf(mountOpts.startupPriority);
+    record.wants[want]++;
+    this._retargetRecordGate(record);
     let released = false;
     let removeAbort = () => {};
     const release = () => {
@@ -3132,6 +3200,8 @@ class Pipeline {
       released = true;
       removeAbort();
       record.consumers = Math.max(0, record.consumers - 1);
+      record.wants[want] = Math.max(0, record.wants[want] - 1);
+      if (!record.settled && record.consumers > 0) this._retargetRecordGate(record);
       if (!record.settled && record.consumers === 0 && !record.controller.signal.aborted) {
         record.controller.abort();
       }
@@ -3154,14 +3224,36 @@ class Pipeline {
     finally { release(); }
   }
 
+  // A shared mount waits for a start slot at the priority of the most urgent caller attached to it.
+  // A viewer's Play that joins a Details/next-episode warm-up still waiting in line takes the Play's
+  // place in line (and, like any Play, may stop one speculative warm-up to get a slot). When that
+  // Play leaves again before a slot came, the request drops back to the front of the warm-up line.
+  _retargetRecordGate(record) {
+    const w = record.wants;
+    const top = w.play > 0 ? 'play' : (w.hedge > 0 ? 'hedge' : (w.prepare > 0 ? 'prepare' : null));
+    if (!top || top === record.gate.priority) return;
+    const was = record.gate.priority;
+    record.gate.priority = top;
+    const moved = typeof record.gate.setPriority === 'function' ? record.gate.setPriority(top) : null;
+    if (moved === 'queued' && GATE_RANK[top] > GATE_RANK[was]) {
+      const g = this._startupGate;
+      const waiting = g.playWait.length + g.hedgeWait.length + g.prepWait.length;
+      debug.log('play', `joined warm-up moved up: it waited for a start slot as ${was}, now ${top}`
+        + ` (gate ${g.active}/${g.max} busy, ${waiting} waiting)`);
+    }
+  }
+
   async _tryCandidateFresh(candidate, mountOpts = {}) {
     let ticket;
     const gateWaitT0 = Date.now();
     try {
       ticket = await this._startupGate.acquire({
         signal: mountOpts && mountOpts.signal,
-        priority: (mountOpts && mountOpts.startupPriority) || 'play',
+        priority: (mountOpts && mountOpts.gateRequest && mountOpts.gateRequest.priority)
+          || (mountOpts && mountOpts.startupPriority) || 'play',
         preempt: (mountOpts && mountOpts.preempt) || null,
+        canPreempt: (mountOpts && mountOpts.canPreempt) || null,
+        request: (mountOpts && mountOpts.gateRequest) || null,
       });
     } catch (e) {
       if ((e && e.code === 'ABORT_ERR') || (mountOpts && mountOpts.signal && mountOpts.signal.aborted)) {
@@ -3968,12 +4060,53 @@ class Pipeline {
   async _advanceBody(session, mountOpts = {}, { width = 1 } = {}) {
     const attempts = [];
     const started = Date.now();
-    const budgetLeft = () => Date.now() - started < MAX_ADVANCE_MS;
+    const budgetMs = this.maxAdvanceMs;
+    const budgetLeft = () => Date.now() - started < budgetMs;
+    const budgetRemaining = () => Math.max(0, budgetMs - (Date.now() - started));
+    // Every wait below races the walk budget. It used to be checked only BETWEEN results, so one
+    // source stuck behind the start gate held the viewer for 112 s against a 45 s budget.
+    const raceWithTimer = async (racers, label, delayMs) => {
+      let timer = null;
+      if (Number.isFinite(delayMs) && delayMs >= 0) {
+        racers = [...racers, new Promise((resolve) => {
+          timer = setTimeout(() => resolve(label), delayMs);
+          if (timer.unref) timer.unref();
+        })];
+      }
+      try { return await Promise.race(racers); }
+      finally { if (timer) clearTimeout(timer); }
+    };
+    const pendingNoteText = () => {
+      const gate = this._startupGate || {};
+      return `pending: walk budget (${Math.round(budgetMs / 1000)}s) ran out first`
+        + ` — startup gate ${gate.active || 0}/${gate.max || STARTUP_SLOTS} busy,`
+        + ` ${(gate.playWait || []).length + (gate.hedgeWait || []).length + (gate.prepWait || []).length} waiting`;
+    };
     if (width <= 1) {
       while (session.cursor < session.candidates.length && attempts.length < MAX_ATTEMPTS && budgetLeft()) {
         const candidate = this._nextWalkCandidate(session);
         if (!candidate) break;
-        const res = await this._tryCandidate(candidate, mountOpts);
+        const controller = new AbortController();
+        const parentSignal = mountOpts && mountOpts.signal;
+        const onParentAbort = () => controller.abort();
+        if (parentSignal) {
+          if (parentSignal.aborted) controller.abort();
+          else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+        }
+        let res;
+        try {
+          res = await raceWithTimer([this._tryCandidate(candidate, { ...mountOpts, signal: controller.signal })],
+            'budget', budgetRemaining());
+        } finally {
+          if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+        }
+        if (res === 'budget') {
+          controller.abort(); // detach; a warm-up or another Play sharing this mount keeps it
+          const note = pendingNoteText();
+          session.history.push({ name: candidate.name, outcome: note });
+          attempts.push({ name: candidate.name, fail: note });
+          break;
+        }
         if (res.vf && !res.fail) return this._commitMount(session, candidate, res.vf, attempts, mountOpts);
         session.history.push({ name: candidate.name, outcome: res.fail });
         attempts.push({ name: candidate.name, fail: res.fail });
@@ -4047,17 +4180,6 @@ class Pipeline {
         for (let i = from; i < results.length; i++) if (results[i].state === 'ok') return i;
         return -1;
       };
-      const raceWithTimer = async (racers, label, delayMs) => {
-        let timer = null;
-        if (Number.isFinite(delayMs) && delayMs >= 0) {
-          racers = [...racers, new Promise((resolve) => {
-            timer = setTimeout(() => resolve(label), delayMs);
-            if (timer.unref) timer.unref();
-          })];
-        }
-        try { return await Promise.race(racers); }
-        finally { if (timer) clearTimeout(timer); }
-      };
       launchOne('play');
       while (budgetLeft()) {
         // Commit the longest decided prefix, in rank order.
@@ -4116,22 +4238,48 @@ class Pipeline {
         const canHedge = !walking && !initialHedgeLaunched && inflight.size < width
           && session.cursor < session.candidates.length && results.length < MAX_ATTEMPTS;
         const racers = [...inflight.values()];
-        const w = await raceWithTimer(racers, 'hedge', canHedge ? RACE_HEDGE_MS : NaN);
+        const left = budgetRemaining();
+        const hedgeNow = canHedge && RACE_HEDGE_MS < left;
+        const w = await raceWithTimer(racers, hedgeNow ? 'hedge' : 'budget', hedgeNow ? RACE_HEDGE_MS : left);
         if (w === 'hedge') {
           initialHedgeLaunched = true;
           launchOne();
           continue;
         } // front-runner is stalling — widen the race once
+        if (w === 'budget') continue; // the loop test ends the walk
         inflight.delete(w);
+      }
+      // The budget ran out. A source that is READY now is used, in rank order, even when a higher
+      // rank is still opening: the viewer waited the whole budget already. Throwing it away showed
+      // "No sources were available" while the very same file finished mounting in that second.
+      const lateReady = firstHealthyFrom(committed);
+      if (lateReady >= 0) {
+        for (let i = committed; i < lateReady; i++) {
+          const r = results[i];
+          if (r.state === 'fail') {
+            session.history.push({ name: r.candidate.name, outcome: r.fail });
+            attempts.push({ name: r.candidate.name, fail: r.fail });
+          } else {
+            session.history.push({ name: r.candidate.name, outcome: 'skipped: walk budget ran out first' });
+          }
+        }
+        debug.log('play', `walk budget ran out, used the ready source at rank ${lateReady + 1}`
+          + ` (ms=${Date.now() - started}, ${results.length - committed} still open or settled)`);
+        return commitAt(lateReady);
       }
       cancelLosers();
       // Budget ran out with sources still in flight: say so per source. "all candidates failed"
       // with an EMPTY attempts list hid a 48s FROM S01E01 failure whose five hedges never finished
-      // (waiting on the startup gate / a slow NZB fetch / a 30s mount deadline).
-      const gate = this._startupGate || {};
-      const pendingNote = `pending: walk budget (${Math.round(MAX_ADVANCE_MS / 1000)}s) ran out first`
-        + ` — startup gate ${gate.active || 0}/${gate.max || STARTUP_SLOTS} busy,`
-        + ` ${(gate.playWait || []).length + (gate.hedgeWait || []).length + (gate.prepWait || []).length} waiting`;
+      // (waiting on the startup gate / a slow NZB fetch / a 30s mount deadline). A source that
+      // already failed while a higher rank was still opening (a failed hedge) is written first: the
+      // decided-prefix loop above never reached it.
+      for (let i = committed; i < results.length; i++) {
+        const r = results[i];
+        if (r.state !== 'fail') continue;
+        session.history.push({ name: r.candidate.name, outcome: r.fail });
+        attempts.push({ name: r.candidate.name, fail: r.fail });
+      }
+      const pendingNote = pendingNoteText();
       for (const r of results) {
         if (r.state !== 'pending') continue;
         session.history.push({ name: r.candidate.name, outcome: pendingNote });
@@ -4141,7 +4289,12 @@ class Pipeline {
     const err = new Error('all candidates failed');
     err.attempts = attempts;
     err.summary = summarizeAttempts(attempts);
-    debug.log('play', `walk failed attempts=${attempts.length} ms=${Date.now() - started} gate=${(this._startupGate && this._startupGate.active) || 0}/${STARTUP_SLOTS}`);
+    const stillOpen = attempts.filter((a) => /^pending:/.test(String(a.fail || ''))).length;
+    const why = !attempts.length ? 'no source left to try'
+      : (stillOpen ? `walk budget ${Math.round(budgetMs / 1000)}s ran out, ${stillOpen} still opening`
+        : `all ${attempts.length} tried sources failed`);
+    debug.log('play', `walk failed attempts=${attempts.length} ms=${Date.now() - started}`
+      + ` gate=${(this._startupGate && this._startupGate.active) || 0}/${STARTUP_SLOTS} why=${why}`);
     throw err;
   }
 

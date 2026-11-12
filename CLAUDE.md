@@ -66,7 +66,10 @@ Always follow the owner's method:
 
 - `npm.cmd test` - explicitly enumerated top-level Node suites, run sequentially
   because integration suites share process-wide state (and with
-  `--test-force-exit`; node:test otherwise hangs after the run completes). The
+  `--test-force-exit`; node:test otherwise hangs after the run completes). A
+  `--require` preload makes test stdio blocking so force-exit cannot drop a
+  file's queued results on Linux, and `test/support/complete-run-reporter.js`
+  fails any run where a file's results did not all arrive. The
   release contract keeps the list aligned with `test/*.test.js` and excludes
   fixture generators. Put exact pass counts only in dated `VERIFY.md` evidence.
 - `npm run release:apk` - require the dedicated release keystore, run the full

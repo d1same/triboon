@@ -309,6 +309,22 @@ them when the table is reorganized:
   `NzbFileStream._fetchSegment`. Verification: the understudy, rank-grace,
   loser-cleanup, deadline/probe-cleanup, post-abort-join, and shared-consumer
   tests in `test/phase2.test.js`.
+- **P14 - a joined Play keeps a Play's place, and the walk keeps its budget.** A
+  Play that joins a warm-up still waiting for a start slot moves that request into
+  the Play line (behind Plays already waiting; it may stop one speculative
+  warm-up that can really stand down, never a slot a Play or hedge joined and
+  left), and it goes back to the front of the warm-up line if the Play leaves
+  first. Every wait in a source walk races `MAX_ADVANCE_MS`; at the budget a
+  ready source is used in rank order, a still-opening one is detached and named
+  `pending: walk budget …`, a failed hedge is written to `attempts`, and "No
+  sources were available" means only an empty list. A device pre-cache read
+  (`priority=read-ahead`) and a read that closes after Stop parked its mount
+  never count as a viewer. Code: `server/pipeline.js` `StartupGate`
+  (`request.setPriority`), `Pipeline._retargetRecordGate`, `Pipeline._advanceBody`;
+  `server/index.js` `endMountPlayerRead`, `/api/prepare` prefetch URL.
+  Verification: the startup-gate, joined-Play and `pipeline walk:` tests in
+  `test/phase2.test.js`; the parked-close and device pre-cache tests in
+  `test/security.test.js`.
 - **P6 - obfuscated volume sets mount.** Reposts commonly give every RAR slice
   its own random name (`h9yS….part01.rar`, `ORuE….part02.rar`, or no extension),
   or number `hash.10/.11/…` slices in an order that is not the volume order.

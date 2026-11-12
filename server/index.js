@@ -4537,9 +4537,19 @@ function beginMountPlayerRead(vf, now = Date.now()) {
 }
 function endMountPlayerRead(vf, now = Date.now()) {
   if (!vf) return;
-  vf._playbackTouched = now;
+  // Reads that were open when Stop parked this mount were already taken off the count by the park.
+  // Their late ends must not take a NEW viewer's read off it (Play again on the same file opens its
+  // range before the old one closes): the count fell one short and ~120 s later that viewer was no
+  // longer counted while watching. Such an end is the old player hanging up: no count, no stamp.
+  if ((Number(vf._parkedReads) || 0) > 0) { vf._parkedReads -= 1; return; }
+  // Stop with the mount kept (Back to Details) parks it: no playback touch, no viewer share. The
+  // old player's last range often closes a moment AFTER that Stop. Stamping it here re-armed the
+  // 120 s "still watching" grace with nobody watching, and for those 2 minutes every warm-up ran
+  // one at a time on the lowest lane. A new real read un-parks the mount (beginMountPlayerRead).
+  const parked = !!vf._preparedOnly && Math.max(0, (Number(vf._activeStreamReads) || 1) - 1) <= 0;
+  if (!parked) vf._playbackTouched = now;
   vf._activeStreamReads = Math.max(0, (Number(vf._activeStreamReads) || 1) - 1);
-  pipeline.schedulePlaybackExpiryRebalance(now);
+  if (!parked) pipeline.schedulePlaybackExpiryRebalance(now);
 }
 const USER_MOUNT_CAP = 8;
 const SESSION_TTL_MS = 12 * 3600000;
@@ -4588,6 +4598,7 @@ function forgetPreparedMount(vf) {
 function parkMountForPrepare(vf) {
   if (!vf) return;
   vf._preparedOnly = true;
+  vf._parkedReads = (Number(vf._parkedReads) || 0) + Math.max(0, Number(vf._activeStreamReads) || 0);
   vf._activeStreamReads = 0;
   vf._playbackTouched = 0;
   try { pipeline.cancelPlaybackWarmups(vf); } catch {}
@@ -6812,7 +6823,11 @@ const H = {
       let prefetch = null;
       const preloadMb = streamingRuntimeProfile().devicePreloadMb;
       if (vf && prepared && preloadMb > 0 && decidePlayback(vf.name, parseCaps(body.caps)).method === 'direct') {
-        prefetch = { id: vf.id, streamUrl: `/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}`, size: vf.size, budgetMb: preloadMb };
+        // The device pre-cache is not a viewer. As a plain range from byte 0 it was read on the
+        // startup lane and counted as a player read, so every warm title on an Android box looked
+        // "watched" for 2 minutes and every other warm-up stood aside. read-ahead is one of the
+        // three lower priorities the stream route accepts; the shell's cache key drops the query.
+        prefetch = { id: vf.id, streamUrl: `/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}&priority=read-ahead`, size: vf.size, budgetMb: preloadMb };
       }
       send(ctx.res, 200, {
         prepared: !!prepared,
@@ -9959,6 +9974,7 @@ Object.assign(H, {
     const readController = new AbortController();
     const readSignal = readController.signal;
     let completedRead = false;
+    let gaveWay = false; // a read-ahead reader that yielded its line to a viewer (expected cut)
     const requestedPriority = String(ctx.url.searchParams.get('priority') || '').toLowerCase();
     const explicitPriority = requestedPriority === 'read-ahead' ? 'readAhead' : requestedPriority;
     const highWaterEnd = Number(vf._streamHighWaterEnd || 0);
@@ -10024,8 +10040,16 @@ Object.assign(H, {
       if (completedRead) vf._streamHighWaterEnd = Math.max(Number(vf._streamHighWaterEnd || 0), end);
     } catch (e) {
       if (!readSignal.aborted) {
-        console.error(`[stream ${vf.id}]`, e.message);
-        story.noteMount(vf.id, e.message);
+        // A read-ahead reader (the device pre-cache) gives way when a viewer of the same file needs
+        // the line (VFS _yieldReadAhead), so its body ends short. That cut is expected: no error
+        // line, no playback note.
+        if (readPriority === 'readAhead' && e && e.code === 'ABORT_ERR') {
+          gaveWay = true;
+          debug.log('stream', `read-ahead reader of ${vf.id} gave way to a viewer after ${sentBytes} bytes`);
+        } else {
+          console.error(`[stream ${vf.id}]`, e.message);
+          story.noteMount(vf.id, e.message);
+        }
       }
     } finally {
       ctx.req.off('close', stopReqRead);
@@ -10039,7 +10063,7 @@ Object.assign(H, {
     // Ending a body short of its Content-Length leaves the socket open and ExoPlayer waits out its
     // 30s read timeout for bytes that will never come. Drop the connection so it reopens at once.
     if (sentBytes < end - start) {
-      console.error(`[stream ${vf.id}] sent ${sentBytes} of ${end - start} bytes; closing so the player reopens`);
+      if (!gaveWay) console.error(`[stream ${vf.id}] sent ${sentBytes} of ${end - start} bytes; closing so the player reopens`);
       try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
       return;
     }
@@ -12750,6 +12774,7 @@ async function shutdown() {
 
 module.exports = {
   server, mounts, pipeline, getPool, shutdown, sweep, releasePlaySession, releaseUserPlaySessions, sharedUserPlay, resumeFracFromBody,
+  beginMountPlayerRead, endMountPlayerRead,
   playbackPolicyFor,
   ROUTES: ROUTES.concat(JELLYFIN_ROUTES), auth, settings, store,
   warmIptvCaches, msUntilNextIptvWarm, rewriteIptvHlsPlaylist,
