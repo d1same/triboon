@@ -699,7 +699,14 @@ function makeThumb(file, out, atSeconds = 120) {
       '-frames:v', '1', '-vf', 'scale=480:-2', '-q:v', '5', '-y', out], { stdio: 'ignore', windowsHide: true });
     const t = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, 20000);
     p.on('error', () => { clearTimeout(t); resolve(false); });
-    p.on('close', (c) => { clearTimeout(t); resolve(c === 0); });
+    // ffmpeg 5.x exits 0 without writing a frame when -ss is past the end of a short video; only
+    // a written, non-empty picture counts, so the caller's earlier-second retry still runs.
+    p.on('close', (c) => {
+      clearTimeout(t);
+      let size = 0;
+      try { size = require('fs').statSync(out).size; } catch {}
+      resolve(c === 0 && size > 0);
+    });
   });
 }
 

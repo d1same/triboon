@@ -8991,8 +8991,8 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
     'a movie NFO without a TMDB uniqueid stays on folder info and does not reuse a Hollywood id');
   assert.match(server, /const nfoLocalShow = libraryNfoPrefersLocal\(nfo, ovS\);[\s\S]+const localMetaShow = libraryScanUsesLocalMetaOnly\(lib, ovS, nfoLocalShow\);[\s\S]+if \(localMetaShow\) \{ show\.tmdbId = null/,
     'a tvshow.nfo without a TMDB uniqueid stays on folder info');
-  assert.match(server, /if \(!\(nfo && nfo\.title\)\) item\.title = hit\.title \|\| hit\.name \|\| item\.title/,
-    'TMDB must not overwrite an NFO title with a close English Hollywood name');
+  assert.match(server, /: \{ title: libraryNameParts\(label, opts\)\.display, titleSource: 'folder' \};[\s\S]+const applyHit = \(item, found, nfo\) => \{(?:(?!item\.title\b)[^}])*item\.matchTitle = hit\.title \|\| hit\.name \|\| null;(?:(?!item\.title\b)[^}])*\};/,
+    'a local item keeps its folder title; the TMDB title goes into matchTitle, never over the title');
   assert.match(server, /libraryItemMatchesTmdb\(/,
     'local-lookup refuses a stored TMDB id whose file title does not match');
   assert.match(server, /const byLocalKey = \/\^local:\/i\.test\(key\);[\s\S]+if \(!byLocalKey && !libraryItemMatchesTmdb\(row\.item\)\) continue/,

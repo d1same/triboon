@@ -17,7 +17,7 @@ const { Store, VerdictCache, scrubOrphanTempDirs } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
-const { parseLibraryName, pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryAutoTmdbMatch, libraryScanUsesLocalMetaOnly, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt } = require('./library-match');
+const { pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryAutoTmdbMatch, libraryScanUsesLocalMetaOnly, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt, libraryNameParts, libraryTmdbQueries, isLibrarySeasonDir, librarySeasonFromDir, libraryEpisodeNumber, solarToGregorian, foldPersian } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter, SIGN_IN_NAME_MAX } = require('./auth');
 const {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
@@ -5719,13 +5719,18 @@ function localItemPayload(ctx, libId, item) {
     ctx.directFileLevel = profileLevelFor(ctx.user, proof && proof.pid, ctx);
   }
   const fileToken = ctx.directFileLevel >= 4 ? `?t=${auth.stableStreamToken(ctx.user.id, `local:${libId}:${rest.idx}`)}` : '';
+  // Pictures are cached by the browser for a day or a week under their URL. The URL names the
+  // item position, which a rescan can give to another title; `v` names the file, so the browser
+  // never shows the old title's picture on the new one.
+  const artVer = artFile ? `&v=${idHash(artFile)}` : '';
+  const thumbVer = `&v=${idHash(file || dir || '')}`;
   return {
     ...rest,
     streamUrl: file ? `/api/local/${libId}/${rest.idx}${fileToken}` : null,
     playUrl: file ? `/api/local/${libId}/${rest.idx}/play` : null,
-    artUrl: artFile ? `/api/local/${libId}/art/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `art:${libId}:${rest.idx}`)}` : null,
+    artUrl: artFile ? `/api/local/${libId}/art/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `art:${libId}:${rest.idx}`)}${artVer}` : null,
     thumbUrl: (file || item.kind === 'show')
-      ? `/api/local/${libId}/thumb/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `thumb:${libId}:${rest.idx}`)}`
+      ? `/api/local/${libId}/thumb/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `thumb:${libId}:${rest.idx}`)}${thumbVer}`
       : null,
   };
 }
@@ -5740,11 +5745,19 @@ function libraryThumbSourceFile(libId, item) {
   const ep = ((rec && rec.items) || []).find((x) => x.kind === 'episode' && x.showIdx === item.idx && x.file);
   return ep ? existingMediaPath(ep.file) : null;
 }
+// The cached frame is named after the SOURCE FILE (path, size, mtime), not the item's position:
+// a rescan that adds or removes one folder shifts every position, and an index-named cache then
+// served another title's picture (a new film showed a deleted film's frame).
+function libraryThumbName(libId, sourceFile) {
+  let st = null;
+  try { st = fs.statSync(sourceFile); } catch {}
+  return `${libId}-f${idHash(`${path.resolve(sourceFile)}|${st ? st.size : 0}|${st ? Math.round(st.mtimeMs) : 0}`)}.jpg`;
+}
 function queueLibraryThumb(libId, idx, sourceFile) {
   if (!sourceFile || !detectFfmpeg()) return Promise.resolve(null);
   const dir = path.join(DATA_DIR, 'thumbs');
   try { fs.mkdirSync(dir, { recursive: true }); } catch {}
-  const file = path.join(dir, `${libId}-${idx}.jpg`);
+  const file = path.join(dir, libraryThumbName(libId, sourceFile));
   if (fs.existsSync(file) && fs.statSync(file).size > 0) return Promise.resolve(file);
   if (!thumbJobs.has(file)) {
     thumbJobs.set(file, runThumbSlot(() => makeThumb(sourceFile, file, 120).then((ok) => ok || makeThumb(sourceFile, file, 5)))
@@ -8132,7 +8145,6 @@ async function performScan(lib, state, mode = 'scan') {
     const AUDIO = /\.(mp3|flac|m4a|ogg|opus|wav)$/i;
     const wantAudio = lib.kind === 'music';
     const MEDIA = wantAudio ? AUDIO : VIDEO;
-    const EP = /S(\d{1,2})[ ._-]?E(\d{1,3})/i;
     const items = [];
     // Previous scan, keyed by file path (movies/episodes) or folder (shows): known items
     // keep their TMDB match + addedAt, so a rescan only hits TMDB for genuinely NEW files.
@@ -8153,16 +8165,82 @@ async function performScan(lib, state, mode = 'scan') {
     // 'none' = never TMDB-match this item (folder/NFO info only); a number = ALWAYS match
     // that exact TMDB id (fixes "wrong cover/info" picks for good).
     const ovOf = (key) => (prevBy.get(key) || {}).matchOverride;
+    // A renamed or moved folder is a new path, so its admin pick (Fix match / use folder info)
+    // used to be lost. Only MANUAL picks follow the file: a movie by the same file name whose old
+    // path is gone, a show by its episode file names. Automatic matches are looked up again.
+    // "The same file" also means the same modified time (a rename keeps it; addedAt holds it):
+    // generic names like video.mp4 or S01E01.mp4 alone must not hand a deleted title's pick to
+    // a new one.
+    const gone = (p) => { try { return !fs.existsSync(p); } catch { return false; } };
+    const baseKey = (f) => path.basename(String(f || '')).toLowerCase();
+    const fileTime = (f) => { try { return Math.round(fs.statSync(f).mtimeMs); } catch { return null; } };
+    const pickedMovies = new Map();
+    const pickedShows = [];
+    for (const p of prevItems) {
+      if (!p || p.matchOverride === undefined) continue;
+      if (p.kind === 'movie' && p.file) {
+        if (!pickedMovies.has(baseKey(p.file))) pickedMovies.set(baseKey(p.file), []);
+        pickedMovies.get(baseKey(p.file)).push(p);
+      } else if (p.kind === 'show' && p.dir) {
+        const eps = new Map(prevItems.filter((e) => e && e.kind === 'episode' && e.showIdx === p.idx).map((e) => [baseKey(e.file), e.addedAt]));
+        pickedShows.push({ p, eps });
+      }
+    }
+    const adoptMoved = (key, kind, file, epFiles) => {
+      if (prevBy.has(key)) return;
+      let found = [];
+      if (kind === 'movie') {
+        const t = fileTime(file);
+        found = (pickedMovies.get(baseKey(file)) || []).filter((p) => p.file !== file && t !== null && p.addedAt === t && gone(p.file));
+      } else {
+        const mine = new Map((epFiles || []).map((e) => [baseKey(e.file), fileTime(e.file)]));
+        found = pickedShows.filter(({ p, eps }) => {
+          if (!mine.size || !gone(p.dir)) return false;
+          let same = 0;
+          for (const [b, t] of mine) if (t !== null && eps.get(b) === t) same++;
+          return same * 2 >= mine.size;
+        }).map(({ p }) => p);
+      }
+      if (found.length === 1) prevBy.set(key, found[0]);
+    };
     // A failed lookup (TMDB down, no key) must never WIPE a previously good match — a
     // metadata refresh degrades to "keep what we had" instead of unmatching the library.
+    // Title rule (owner, 2026-11-14): a local item shows its FOLDER name (a loose file: its name
+    // without release tags). A match only supplies poster, plot, year, rating and episode data; its
+    // own title is kept as matchTitle (the read-time check and "Fix match" use it). A hand-written
+    // NFO <title> (no scraper id in it) still wins: it is the owner's own text.
+    const titleOf = (nfo, label, opts) => (nfo && nfo.title && !nfo.scraped)
+      ? { title: cleanTitle(nfo.title), titleSource: 'nfo' }
+      : { title: libraryNameParts(label, opts).display, titleSource: 'folder' };
+    // Rows scanned before matchTitle existed carried the TMDB title in `title`.
+    const prevMatchTitle = (p) => p.matchTitle || (p.titleSource ? null
+      : (p.kind === 'episode' ? String(p.title || '').split(' · ')[0] : p.title)) || null;
+    const copyMatch = (item, p) => {
+      item.tmdbId = p.tmdbId; item.poster = p.poster; item.backdrop = p.backdrop;
+      item.genres = p.genres || [];
+      item.matchTitle = prevMatchTitle(p);
+      item.originalTitle = p.originalTitle || null;
+      item.matchSource = typeof item.matchOverride === 'number' ? 'manual'
+        : (item.matchSource === 'nfo' ? 'nfo' : (p.matchSource || 'auto'));
+      item.overview = item.overview || p.overview; item.rating = item.rating || p.rating;
+      if (!item.year && p.year) item.year = p.year;
+    };
+    const applyHit = (item, found, nfo) => {
+      const hit = found.hit;
+      item.tmdbId = hit.id; item.poster = hit.poster_path; item.backdrop = hit.backdrop_path;
+      item.genres = genresOf(hit);
+      item.matchTitle = hit.title || hit.name || null;
+      item.originalTitle = hit.original_title || hit.original_name || null;
+      item.matchSource = found.source;
+      if (!(nfo && nfo.plot)) item.overview = item.overview || hit.overview || '';
+      if (!(nfo && nfo.rating)) item.rating = item.rating || hit.vote_average || null;
+      if (!item.year) item.year = String(hit.release_date || hit.first_air_date || '').slice(0, 4) || null;
+    };
     const keepPrev = (item, key) => {
       const p = prevBy.get(key);
       if (!p || !p.tmdbId) return;
       if (typeof p.matchOverride !== 'number' && !libraryItemMatchesTmdb(p)) return;
-      item.tmdbId = p.tmdbId; item.poster = p.poster; item.backdrop = p.backdrop;
-      item.genres = p.genres || []; item.title = p.title;
-      item.originalTitle = p.originalTitle || null;
-      item.overview = item.overview || p.overview; item.rating = item.rating || p.rating;
+      copyMatch(item, p);
     };
     const mtimeOf = (f) => { try { return Math.round(fs.statSync(f).mtimeMs); } catch { return Date.now(); } };
     // addedAt = when this file FIRST appeared (drives "Recently added" + new-episode bumps):
@@ -8170,8 +8248,7 @@ async function performScan(lib, state, mode = 'scan') {
     const addedAtOf = (key, file) => { const p = prevBy.get(key); return (p && p.addedAt) || mtimeOf(file); };
     // TMDB genre ids — search results carry genre_ids, direct /movie/<id> fetches genres[].
     const genresOf = (hit) => hit.genre_ids || (hit.genres || []).map((g) => g.id);
-    // Folder/file title+year parse lives in library-match.js (last year token, same as usenet).
-    const parseName = parseLibraryName;
+    // Folder/file title+year parse lives in library-match.js (libraryNameParts, libraryTmdbQueries).
     const lsDir = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
     // The walk is sync fs, and on an Unraid user share (shfs) every readdir/stat is slow. Run in one
     // go it froze the whole server for a minute 1 min after boot and every 15 min after that: no
@@ -8183,36 +8260,53 @@ async function performScan(lib, state, mode = 'scan') {
     // Display titles: NFO titles often embed the year ("High Copy (2025)") — strip it.
     const cleanTitle = (t) => String(t || '').replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').trim();
     const findArt = (dir) => findLibraryArt(dir);
-    // Tiny Kodi-NFO reader — title/year/plot/rating plus the TMDB id when present.
+    // NFO year: Persian digits and a Solar Hijri year (1382 -> 2003) count too.
+    const nfoYear = (s) => {
+      const m = /(?:^|\D)((?:19|20)\d{2}|1[34]\d{2})(?!\d)/.exec(foldPersian(s || ''));
+      return m ? String(solarToGregorian(m[1])) : null;
+    };
+    // Tiny Kodi-NFO reader — title/year/plot/rating plus the TMDB id when present. `scraped` marks
+    // an NFO written by a scraper (it names a TMDB/IMDb id): its <title> is the scraper's catalog
+    // title, so it never replaces the folder name.
     const readNfo = (file) => {
       try {
         const xml = fs.readFileSync(file, 'utf8').slice(0, 200000);
         const tag = (t) => { const m = new RegExp(`<${t}[^>]*>([\\s\\S]*?)</${t}>`, 'i').exec(xml); return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim() : null; };
         const uid = /<uniqueid[^>]*type="tmdb"[^>]*>(\d+)<\/uniqueid>/i.exec(xml);
-        return { title: tag('title'), year: ((tag('year') || tag('premiered') || '').match(/(19|20)\d{2}/) || [])[0] || null,
-          plot: tag('plot'), rating: parseFloat(tag('rating')) || null,
-          tmdbId: uid ? +uid[1] : (parseInt(tag('tmdbid'), 10) || null) };
+        const tmdbId = uid ? +uid[1] : (parseInt(tag('tmdbid'), 10) || null);
+        const scraped = !!(tmdbId || /<uniqueid[^>]*type="(?:imdb|tvdb)"[^>]*>\s*\w+/i.test(xml) || /<imdbid>\s*tt\d+/i.test(xml));
+        return { title: tag('title'), year: nfoYear(tag('year') || tag('premiered') || ''),
+          plot: tag('plot'), rating: parseFloat(tag('rating')) || null, tmdbId, scraped };
       } catch { return null; }
     };
     const nfoBeside = (file) => readNfo(file.replace(/\.[a-z0-9]+$/i, '.nfo'));
+    // Returns { hit, source } or null. source: 'manual' (admin Fix match), 'nfo' (NFO id), 'auto'.
+    // A search hit is taken only when the folder name AGREES with it (library-match.js); a near
+    // name (Kaval vs Kavalda) or a same-year Persian title with other words stays unmatched.
     const tmdbLookup = async (kind, name) => {
-      // Prefer an explicit NFO tmdb id; else search by parsed title+year.
       try {
         if (name.tmdbId) {
           const d = await tmdb.get(`/${kind}/${name.tmdbId}`);
-          if (d && d.id) return d;
+          if (d && d.id) return { hit: d, source: name.manual ? 'manual' : 'nfo' };
         }
-        const q = `/search/${kind}?query=${encodeURIComponent(name.title)}${name.year ? `&year=${name.year}` : ''}`;
-        let hit = pickLibraryTmdbHit((await tmdb.get(q)).results || [], name.title, name.year, kind);
+        const opts = { file: !!name.file };
+        const queries = libraryTmdbQueries(name.label, opts);
+        name = { ...name, title: queries[0] || '' }; // the whole cleaned name
+        let hit = null;
+        for (const text of queries) {
+          const q = `/search/${kind}?query=${encodeURIComponent(text)}${name.year ? `&year=${name.year}` : ''}`;
+          hit = pickLibraryTmdbHit((await tmdb.get(q)).results || [], name.label, name.year, kind, opts);
+          if (hit) break;
+        }
         // Year-in-title fallback: "Blade Runner 2049.mkv" (no separate release year) parses as
         // title "Blade Runner" + year 2049 → zero results. Fold the year back into the query
         // before giving up — misses only, so the common case costs nothing extra.
         if (!hit && name.year) {
           hit = pickLibraryTmdbHit(
             (await tmdb.get(`/search/${kind}?query=${encodeURIComponent(`${name.title} ${name.year}`)}`)).results || [],
-            name.title, name.year, kind);
+            name.label, name.year, kind, opts);
         }
-        return hit;
+        return hit ? { hit, source: 'auto' } : null;
       } catch { return null; }
     };
     const wantTmdb = autoTmdb;
@@ -8225,6 +8319,34 @@ async function performScan(lib, state, mode = 'scan') {
     // so the old 1000-item ceiling silently dropped every show after the first ~60 — the
     // owner's "not all my TV shows appear". Sized for real archives with headroom.
     const MAX_ITEMS = 25000, MAX_TOP = 5000, MAX_DIR = 2000, MAX_EPS = 1000;
+    // Episodes of one show folder: S01E02 / 1x02 files in the folder; inside a season folder
+    // ("Season 01", "فصل ۱") also E001 / EP001 / قسمت ۱ / bare "10.mp4"; and a folder holding
+    // several such numbered files with no S01E02 at all is a show too (season 1), instead of one
+    // "movie" that kept only its largest file. Persian digits count as digits.
+    const showEpisodesIn = async (dir, entries) => {
+      const eps = [];
+      const weak = [];
+      let videos = 0;
+      for (const f of entries.slice(0, MAX_DIR)) {
+        if (f.isFile() && MEDIA.test(f.name)) {
+          videos++;
+          const n = libraryEpisodeNumber(f.name);
+          if (n && n.strong) eps.push({ file: path.join(dir, f.name), s: n.s, e: n.e });
+          else if (n) weak.push({ file: path.join(dir, f.name), s: n.s, e: n.e });
+        } else if (f.isDirectory() && isLibrarySeasonDir(f.name)) {
+          await breathe(); // one turn per season folder read (sync fs, slow on a user share)
+          const season = librarySeasonFromDir(f.name);
+          for (const g of lsDir(path.join(dir, f.name)).slice(0, MAX_DIR)) {
+            if (!g.isFile() || !MEDIA.test(g.name)) continue;
+            const n = libraryEpisodeNumber(g.name, { season: season === null ? 1 : season });
+            if (n) eps.push({ file: path.join(dir, f.name, g.name), s: n.s, e: n.e });
+          }
+        }
+      }
+      const distinct = new Set(weak.map((w) => w.e)).size;
+      if (!eps.length && weak.length >= 2 && distinct >= 2 && weak.length * 5 >= videos * 4) eps.push(...weak);
+      return eps;
+    };
     const scanMovieDir = async (dir, label) => {
       let best = null;
       for (const f of lsDir(dir).slice(0, MAX_DIR)) {
@@ -8234,78 +8356,70 @@ async function performScan(lib, state, mode = 'scan') {
         if (!best || st.size > best.size) best = { file: path.join(dir, f.name), size: st.size };
       }
       if (!best) return;
+      adoptMoved(best.file, 'movie', best.file);
       const nfo = nfoBeside(best.file) || readNfo(path.join(dir, 'movie.nfo'));
-      const parsed = parseName(label);
+      const named = titleOf(nfo, label);
       const item = pushItem({
         kind: 'movie', file: best.file, artFile: findArt(dir),
-        title: cleanTitle((nfo && nfo.title) || parsed.title), year: (nfo && nfo.year) || parsed.year,
-        overview: (nfo && nfo.plot) || '', rating: (nfo && nfo.rating) || null,
+        title: named.title, titleSource: named.titleSource, year: (nfo && nfo.year) || libraryNameParts(label).year,
+        overview: (nfo && nfo.plot) || '', overviewSource: nfo && nfo.plot ? 'nfo' : undefined,
+        rating: (nfo && nfo.rating) || null,
         tmdbId: (nfo && nfo.tmdbId) || null, poster: null, backdrop: null,
         genres: [], addedAt: addedAtOf(best.file, best.file),
       });
       const ov = ovOf(best.file);
       if (ov !== undefined) item.matchOverride = ov;
+      if (nfo && nfo.tmdbId && typeof ov !== 'number') item.matchSource = 'nfo';
       const nfoLocal = libraryNfoPrefersLocal(nfo, ov);
       const localMeta = libraryScanUsesLocalMetaOnly(lib, ov, nfoLocal);
       const prev = localMeta ? null : reuse(best.file);
-      if (localMeta) { item.tmdbId = null; item.poster = null; item.backdrop = null; }
-      else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
-        item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
-        item.genres = prev.genres || [];
-        if (!(nfo && nfo.title)) item.title = prev.title;
-        item.originalTitle = prev.originalTitle || null;
-        item.overview = item.overview || prev.overview; item.rating = item.rating || prev.rating;
-      } else if (wantTmdb) lookupJobs.push(async () => {
+      if (localMeta) { item.tmdbId = null; item.poster = null; item.backdrop = null; delete item.matchSource; }
+      else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) copyMatch(item, prev);
+      else if (wantTmdb) lookupJobs.push(async () => {
         // A "tv"-kind library searches TV even for season-less folders (mini-series etc.).
         const kind = lib.kind === 'tv' ? 'tv' : 'movie';
-        const hit = await tmdbLookup(kind, { title: parsed.title, year: item.year, tmdbId: typeof ov === 'number' ? ov : item.tmdbId });
-        if (hit) {
-          item.tmdbId = hit.id; item.poster = hit.poster_path; item.backdrop = hit.backdrop_path;
-          item.genres = genresOf(hit);
-          if (!(nfo && nfo.title)) item.title = hit.title || hit.name || item.title;
-          item.originalTitle = hit.original_title || hit.original_name || null;
-          if (!(nfo && nfo.plot)) item.overview = item.overview || hit.overview || '';
-          if (!(nfo && nfo.rating)) item.rating = item.rating || hit.vote_average || null;
-        } else keepPrev(item, best.file);
+        const found = await tmdbLookup(kind, { label, year: item.year, manual: typeof ov === 'number', tmdbId: typeof ov === 'number' ? ov : item.tmdbId });
+        if (found) applyHit(item, found, nfo);
+        else keepPrev(item, best.file);
       });
     };
 
+    // Episodes carry their show's match identity, so the read-time check judges an episode by the
+    // SHOW folder name and the show's match (and an admin or NFO pick on the show covers them).
+    const showMatchFields = (show) => ({
+      tmdbId: show.tmdbId, poster: show.poster, backdrop: show.backdrop, genres: show.genres,
+      matchTitle: show.tmdbId ? (show.matchTitle || null) : null,
+      originalTitle: show.tmdbId ? (show.originalTitle || null) : null,
+      matchSource: show.tmdbId ? show.matchSource : undefined,
+    });
     const scanShowDir = async (dir, label, epFiles) => {
+      adoptMoved(`show:${dir}`, 'show', null, epFiles);
       const nfo = readNfo(path.join(dir, 'tvshow.nfo'));
-      const parsed = parseName(label);
+      const named = titleOf(nfo, label);
       const show = pushItem({
         kind: 'show', file: null, artFile: findArt(dir), dir, // dir = the reuse key across scans
-        title: cleanTitle((nfo && nfo.title) || parsed.title), year: (nfo && nfo.year) || parsed.year,
-        overview: (nfo && nfo.plot) || '', rating: (nfo && nfo.rating) || null,
+        title: named.title, titleSource: named.titleSource, year: (nfo && nfo.year) || libraryNameParts(label).year,
+        overview: (nfo && nfo.plot) || '', overviewSource: nfo && nfo.plot ? 'nfo' : undefined,
+        rating: (nfo && nfo.rating) || null,
         tmdbId: (nfo && nfo.tmdbId) || null, poster: null, backdrop: null, genres: [],
       });
       const ovS = ovOf(`show:${dir}`);
       if (ovS !== undefined) show.matchOverride = ovS;
+      if (nfo && nfo.tmdbId && typeof ovS !== 'number') show.matchSource = 'nfo';
       const nfoLocalShow = libraryNfoPrefersLocal(nfo, ovS);
       const localMetaShow = libraryScanUsesLocalMetaOnly(lib, ovS, nfoLocalShow);
       const prevShow = localMetaShow ? null : reuse(`show:${dir}`);
-      if (localMetaShow) { show.tmdbId = null; show.poster = null; show.backdrop = null; }
-      else if (prevShow && (typeof ovS !== 'number' || prevShow.tmdbId === ovS)) {
-        show.tmdbId = prevShow.tmdbId; show.poster = prevShow.poster; show.backdrop = prevShow.backdrop;
-        show.genres = prevShow.genres || [];
-        if (!(nfo && nfo.title)) show.title = prevShow.title;
-        show.originalTitle = prevShow.originalTitle || null;
-        show.overview = show.overview || prevShow.overview; show.rating = show.rating || prevShow.rating;
-      } else if (wantTmdb) lookupJobs.push(async () => {
-        const hit = await tmdbLookup('tv', { title: parsed.title, year: show.year, tmdbId: typeof ovS === 'number' ? ovS : show.tmdbId });
-        if (hit) {
-          show.tmdbId = hit.id; show.poster = hit.poster_path; show.backdrop = hit.backdrop_path;
-          show.genres = genresOf(hit);
-          if (!(nfo && nfo.title)) show.title = hit.name || show.title;
-          show.originalTitle = hit.original_name || hit.original_title || null;
-          if (!(nfo && nfo.plot)) show.overview = show.overview || hit.overview || '';
-          if (!(nfo && nfo.rating)) show.rating = show.rating || hit.vote_average || null;
-        } else keepPrev(show, `show:${dir}`);
+      if (localMetaShow) { show.tmdbId = null; show.poster = null; show.backdrop = null; delete show.matchSource; }
+      else if (prevShow && (typeof ovS !== 'number' || prevShow.tmdbId === ovS)) copyMatch(show, prevShow);
+      else if (wantTmdb) lookupJobs.push(async () => {
+        const found = await tmdbLookup('tv', { label, year: show.year, manual: typeof ovS === 'number', tmdbId: typeof ovS === 'number' ? ovS : show.tmdbId });
+        if (found) applyHit(show, found, nfo);
+        else keepPrev(show, `show:${dir}`);
         if (!show.tmdbId) return;
         // Episodes were created before the lookup resolved — sync their show-derived fields.
         for (const it of items) {
           if (it.kind !== 'episode' || it.showIdx !== show.idx) continue;
-          it.tmdbId = show.tmdbId; it.poster = show.poster; it.backdrop = show.backdrop; it.genres = show.genres;
+          Object.assign(it, showMatchFields(show));
           it.title = `${show.title} · S${String(it.s).padStart(2, '0')}E${String(it.e).padStart(2, '0')}`;
         }
       });
@@ -8317,9 +8431,10 @@ async function performScan(lib, state, mode = 'scan') {
         eps.push(pushItem({
           kind: 'episode', file: ep.file, artFile: show.artFile, showIdx: show.idx,
           title: `${show.title} · S${String(ep.s).padStart(2, '0')}E${String(ep.e).padStart(2, '0')}`,
+          titleSource: show.titleSource,
           epTitle: (epNfo && epNfo.title) || null, s: ep.s, e: ep.e,
           year: show.year, overview: (epNfo && epNfo.plot) || '', rating: null,
-          tmdbId: show.tmdbId, poster: show.poster, backdrop: show.backdrop, genres: show.genres,
+          ...showMatchFields(show),
           addedAt: addedAtOf(ep.file, ep.file),
         }));
       }
@@ -8345,8 +8460,10 @@ async function performScan(lib, state, mode = 'scan') {
         await breathe();
         const full = path.join(scanRoot, e.name);
         if (e.isFile() && MEDIA.test(e.name)) {
-          const parsed = parseName(e.name);
-          const item = pushItem({ kind: 'movie', file: full, artFile: null, title: parsed.title, year: parsed.year,
+          adoptMoved(full, 'movie', full);
+          const looseName = libraryNameParts(e.name, { file: true });
+          const item = pushItem({ kind: 'movie', file: full, artFile: null, title: looseName.display, titleSource: 'folder',
+            year: looseName.year,
             overview: '', rating: null, tmdbId: null, poster: null, backdrop: null,
             genres: [], addedAt: addedAtOf(full, full) });
           const ov = ovOf(full);
@@ -8354,56 +8471,27 @@ async function performScan(lib, state, mode = 'scan') {
           const localMetaLoose = libraryScanUsesLocalMetaOnly(lib, ov, false);
           const prev = localMetaLoose ? null : reuse(full);
           if (localMetaLoose) { item.tmdbId = null; item.poster = null; item.backdrop = null; }
-          else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
-            item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
-            item.genres = prev.genres || []; item.title = prev.title;
-            item.originalTitle = prev.originalTitle || null;
-            item.overview = prev.overview || ''; item.rating = prev.rating || null;
-          } else if (wantTmdb) lookupJobs.push(async () => {
-            const hit = await tmdbLookup(lib.kind === 'tv' ? 'tv' : 'movie', { ...parsed, tmdbId: typeof ov === 'number' ? ov : null });
-            if (hit) { item.tmdbId = hit.id; item.poster = hit.poster_path; item.backdrop = hit.backdrop_path;
-              item.genres = genresOf(hit);
-              item.originalTitle = hit.original_title || hit.original_name || null;
-              item.overview = hit.overview || ''; item.rating = hit.vote_average || null; item.title = hit.title || hit.name || item.title; }
+          else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) copyMatch(item, prev);
+          else if (wantTmdb) lookupJobs.push(async () => {
+            const found = await tmdbLookup(lib.kind === 'tv' ? 'tv' : 'movie', { label: e.name, file: true, year: item.year, manual: typeof ov === 'number', tmdbId: typeof ov === 'number' ? ov : null });
+            if (found) applyHit(item, found, null);
             else keepPrev(item, full);
           });
           continue;
         }
         if (!e.isDirectory()) continue;
-        // Collect episode files (Season subdirs or SxxEyy files in the folder itself).
+        // Collect episode files (season subdirs or numbered files in the folder itself).
         const sub = lsDir(full);
-        const epFiles = [];
+        const epFiles = await showEpisodesIn(full, sub);
         for (const f of sub.slice(0, MAX_DIR)) {
           if (f.isDirectory()) await breathe();
-          if (f.isFile() && MEDIA.test(f.name) && EP.test(f.name)) {
-            const m = EP.exec(f.name);
-            epFiles.push({ file: path.join(full, f.name), s: +m[1], e: +m[2] });
-          } else if (f.isDirectory() && /season|specials/i.test(f.name)) {
-            for (const g of lsDir(path.join(full, f.name)).slice(0, MAX_DIR)) {
-              if (!g.isFile() || !MEDIA.test(g.name)) continue;
-              const m = EP.exec(g.name);
-              if (m) epFiles.push({ file: path.join(full, f.name, g.name), s: +m[1], e: +m[2] });
-            }
-          }
+          if (!f.isDirectory() || isLibrarySeasonDir(f.name)) continue; // season folders: collected above
           // Media folders nest one more level (Movies/<title>/file.mkv under a kind root).
-          else if (f.isDirectory() && !/season|specials/i.test(f.name)) {
-            const inner = lsDir(path.join(full, f.name));
-            const innerEps = inner.filter((g) => g.isFile() && MEDIA.test(g.name) && EP.test(g.name));
-            const innerSeasons = inner.filter((g) => g.isDirectory() && /season|specials/i.test(g.name));
-            if (innerEps.length || innerSeasons.length) {
-              const eps2 = [];
-              for (const g of innerEps) { const m = EP.exec(g.name); eps2.push({ file: path.join(full, f.name, g.name), s: +m[1], e: +m[2] }); }
-              for (const sd of innerSeasons) {
-                for (const g of lsDir(path.join(full, f.name, sd.name)).slice(0, MAX_DIR)) {
-                  if (!g.isFile() || !MEDIA.test(g.name)) continue;
-                  const m = EP.exec(g.name);
-                  if (m) eps2.push({ file: path.join(full, f.name, sd.name, g.name), s: +m[1], e: +m[2] });
-                }
-              }
-              await scanShowDir(path.join(full, f.name), f.name, eps2);
-            } else if (inner.some((g) => g.isFile() && MEDIA.test(g.name))) {
-              await scanMovieDir(path.join(full, f.name), f.name);
-            }
+          const inner = lsDir(path.join(full, f.name));
+          const eps2 = await showEpisodesIn(path.join(full, f.name), inner);
+          if (eps2.length) await scanShowDir(path.join(full, f.name), f.name, eps2);
+          else if (inner.some((g) => g.isFile() && MEDIA.test(g.name))) {
+            await scanMovieDir(path.join(full, f.name), f.name);
           }
         }
         if (epFiles.length) await scanShowDir(full, e.name, epFiles);
@@ -8418,6 +8506,12 @@ async function performScan(lib, state, mode = 'scan') {
       state.progress = Math.min(items.length, state.progress + 6);
     }
     saveLibraryScan(lib.id, Date.now(), items);
+    // Frames cached under the old position names (<libId>-<idx>.jpg) are never read again.
+    try {
+      const thumbDir = path.join(DATA_DIR, 'thumbs');
+      const legacy = new RegExp(`^${lib.id.replace(/[^\w-]/g, '')}-\\d+\\.jpg$`);
+      for (const f of fs.readdirSync(thumbDir)) if (legacy.test(f)) { try { fs.unlinkSync(path.join(thumbDir, f)); } catch {} }
+    } catch { /* no thumbs yet */ }
     return { ok: true, count: items.length,
       shows: items.filter((i) => i.kind === 'show').length,
       matched: items.filter((i) => i.tmdbId).length,
@@ -8830,6 +8924,19 @@ function searchLibraryTitleMatch(query, title) {
 function searchLibraryItemMatch(query, item) {
   if (!item) return false;
   if (searchLibraryTitleMatch(query, item.title) || searchLibraryTitleMatch(query, item.originalTitle)) return true;
+  // A local item shows its folder name; the matched catalog title still finds it ("Capital").
+  if (searchLibraryTitleMatch(query, item.matchTitle)) return true;
+  // Persian text: compare spelling-folded letters (Arabic/Persian Yeh and Kaf, ZWNJ, spaces), so
+  // "درباره الی" finds a folder spelled "درباره الي" and a 2-letter word like "سگ" or "فصل" works.
+  if (/[؀-ۿ]/.test(String(query || ''))) {
+    const squash = (s) => foldPersian(s).replace(/[^\p{L}\p{N}]+/gu, '');
+    const q = squash(query);
+    if (q.length >= 2) {
+      const names = [item.title, item.originalTitle, item.matchTitle,
+        item.dir ? path.basename(item.dir) : '', item.file ? path.basename(path.dirname(item.file)) : ''];
+      if (names.some((t) => t && squash(t).includes(q))) return true;
+    }
+  }
   const raw = String(query || '').trim().toLowerCase();
   if (raw.length < 4) return false;
   const blob = `${item.file || ''} ${item.dir || ''}`.toLowerCase();

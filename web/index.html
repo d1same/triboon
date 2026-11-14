@@ -22051,6 +22051,7 @@ function mapLocal(lib, x, titleOverride) {
     key: matched && type ? `tmdb:${type}:${x.tmdbId}` : `local:${lib.id}:${x.idx}`,
     title: titleOverride || x.title, year: x.year || '', genre: lib.name,
     _added: x.addedAt || 0, _genres: x.genres || [], _lib: lib, _idx: x.idx, _matchOv: x.matchOverride,
+    _matchTitle: matched ? (x.matchTitle || '') : '', // the catalog title behind a folder-named card
     _kind: x.kind,
     rating: x.rating ? Number(x.rating).toFixed(1) : '—', overview: x.overview || '',
     poster: cover.poster || procBackdrop(180 + (x.idx % 14) * 17, 320, (x.idx % 12) + 5),
@@ -22329,7 +22330,9 @@ function syncFixMatchBtn(it) {
 function openMatchModal(it) {
   captureOverlayReturn('matchModal');
   S.matchItem = it;
+  // Local cards show the folder name; the catalog title they are matched to stays visible here.
   $('matchSub').textContent = `“${it.title}” in ${it._lib.name}`
+    + (it._matchTitle && it._matchTitle !== it.title ? ` · matched to “${it._matchTitle}”` : '')
     + (it._matchOv === 'none' ? ' · currently using folder info' : it._matchOv ? ' · manual match active' : '');
   $('matchQ').value = String(it.title || '').replace(/\s*\(\d{4}\)\s*$/, '');
   $('matchResults').innerHTML = '';
@@ -28464,6 +28467,12 @@ function tmdbSearchRank(x, q) {
   }
   return score;
 }
+// The page's own word check is Latin-only, so it dropped every Persian library hit the server had
+// already matched (spelling-folded, 2-letter words). A Persian query keeps the server's hits.
+function libraryHitShown(q, it) {
+  if (/[؀-ۿ]/.test(String(q || ''))) return true;
+  return searchLibraryTitleMatch(q, (it && (it.title || it.name)) || '');
+}
 async function searchLibrary(q) {
   if (!q || String(q).trim().length < 2) return [];
   try {
@@ -28536,7 +28545,7 @@ async function doSearch() {
       hydrateSearchLibrary(shows, lib);
       tagSameTitleYear(movies);
       tagSameTitleYear(shows);
-      const libHits = lib.filter((it) => searchLibraryTitleMatch(q, it.title || it.name || ''));
+      const libHits = lib.filter((it) => libraryHitShown(q, it));
       const catalogSecs = showLead > movieLead
         ? [{ name: 'TV Shows', items: shows }, { name: 'Movies', items: movies }]
         : [{ name: 'Movies', items: movies }, { name: 'TV Shows', items: shows }];
@@ -28551,7 +28560,7 @@ async function doSearch() {
   }
   // Raw usenet search has no ratings at all — restricted profiles never get the fallback.
   if (!current()) return;
-  const lib = (await libJob.catch(() => [])).filter((it) => searchLibraryTitleMatch(q, it.title || it.name || ''));
+  const lib = (await libJob.catch(() => [])).filter((it) => libraryHitShown(q, it));
   if (!current()) return; // the library wait can lose to a newer keystroke too
   if ((S.maxLevel ?? 4) < 4) {
     if (lib.length) return renderSearchSections([{ name: 'Library', items: lib }]);
