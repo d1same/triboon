@@ -54,6 +54,25 @@ function hasArabicScript(s) {
 
 // Release/quality and country tags that are not part of a title: [1080p], [4K], (IR), (TR).
 const NAME_TAG = /\[\s*(?:\d{3,4}[pi]|4k|uhd|fhd|hd|sd)\s*\]|\((?:[A-Z]{2})\)/g;
+// A provider's country prefix at the very start of a name: "IR - Show", "|IR| Show".
+const NFO_PREFIX = /^\s*(?:\|\s*IR\s*\||IR\s*[-–—]\s)\s*/;
+// A hand-written NFO <title> is shown as written (owner rule 2026-11-14), but a downloader writes
+// the provider's raw name there ("IR - Show شو [1080p]"). Clean it like a folder name: drop the
+// release and country tags and a leading IR prefix, keep every word. The year is left in place for
+// the caller. An empty result means the NFO gave no title.
+function cleanNfoTitle(title) {
+  const raw = String(title || '');
+  const digits = asciiDigits(raw); // same UTF-16 length as raw (one digit for one digit)
+  let out = '';
+  let from = 0;
+  for (const m of digits.matchAll(NAME_TAG)) {
+    out += raw.slice(from, m.index) + ' ';
+    from = m.index + m[0].length;
+  }
+  out += raw.slice(from);
+  return out.replace(NFO_PREFIX, '').replace(/\(\s*\)|\[\s*\]/g, ' ').replace(/\s+/g, ' ')
+    .replace(/^[\s\-–—|,;:]+|[\s\-–—|,;:]+$/g, '').trim();
+}
 // A year token: Gregorian 19xx/20xx or a Solar Hijri 13xx/14xx (Iranian calendar), bare or in ().
 const YEAR_TOKEN = /(^|[\s._(\[-])\(?((?:19|20)\d{2}|1[34]\d{2})\)?(?=$|[\s._)\]-])/g;
 
@@ -429,7 +448,9 @@ function nfoImageValue(xml, wide) {
   return '';
 }
 
-function resolveNfoImage(dir, value) {
+// `entries` (optional): the folder's listing (Dirent[]) from the caller's scan. A picture that sits
+// in the folder itself is then looked up in that listing instead of asking the disk again.
+function resolveNfoImage(dir, value, entries = null) {
   const rel = String(value || '').trim().replace(/[\\/]/g, path.sep);
   if (!rel) return null;
   const root = path.resolve(dir);
@@ -440,30 +461,47 @@ function resolveNfoImage(dir, value) {
   const candidates = ART_EXT.has(path.extname(full).toLowerCase())
     ? [full]
     : ['.jpg', '.jpeg', '.png', '.webp'].map((ext) => full + ext);
+  const fold = process.platform === 'win32' ? (s) => s.toLowerCase() : (s) => s;
   return candidates.find((file) => {
+    if (Array.isArray(entries) && path.dirname(file) === root) {
+      const want = fold(path.basename(file));
+      const ent = entries.find((e) => fold(e.name) === want);
+      if (!ent) return false;
+      if (!ent.isSymbolicLink()) return ent.isFile();
+    }
     try { return fs.existsSync(file) && fs.statSync(file).isFile(); } catch { return false; }
   }) || null;
 }
 
-function findNfoArt(dir, videoBase, wide) {
-  let names = [];
-  try { names = fs.readdirSync(dir); } catch { return null; }
+const readNfoText = (file) => {
+  try { return fs.readFileSync(file, 'utf8').slice(0, 200000); } catch { return null; }
+};
+
+function folderNames(dir, entries) {
+  if (Array.isArray(entries)) return entries.map((e) => e.name);
+  try { return fs.readdirSync(dir); } catch { return null; }
+}
+
+function findNfoArt(dir, videoBase, wide, names, readText = readNfoText, entries = null) {
+  if (!names) return null;
   const wanted = new Set(['movie.nfo', 'tvshow.nfo']);
   if (videoBase) wanted.add(`${String(videoBase).toLowerCase()}.nfo`);
   const nfo = names.find((name) => wanted.has(name.toLowerCase()))
     || names.find((name) => name.toLowerCase().endsWith('.nfo'));
   if (!nfo) return null;
-  let xml = '';
-  try { xml = fs.readFileSync(path.join(dir, nfo), 'utf8').slice(0, 200000); } catch { return null; }
-  return resolveNfoImage(dir, nfoImageValue(xml, wide));
+  const xml = readText(path.join(dir, nfo));
+  if (xml === null || xml === undefined) return null;
+  return resolveNfoImage(dir, nfoImageValue(xml, wide), entries);
 }
 
 // Kodi and Emby drop a jpg next to the video. It is often not named poster.jpg.
-function findLibraryArt(dir, { videoBase = '', wide = false } = {}) {
-  const fromNfo = findNfoArt(dir, videoBase, wide);
+// A library scan passes the folder listing it already has (`entries`) and its NFO reader
+// (`readText`), so the folder is listed once and each NFO read once per pass.
+function findLibraryArt(dir, { videoBase = '', wide = false, entries = null, readText = readNfoText } = {}) {
+  const names = folderNames(dir, entries);
+  if (!names) return null;
+  const fromNfo = findNfoArt(dir, videoBase, wide, names, readText, entries);
   if (fromNfo) return fromNfo;
-  let names = [];
-  try { names = fs.readdirSync(dir); } catch { return null; }
   const images = names
     .filter((name) => ART_EXT.has(path.extname(name).toLowerCase()))
     .map((name) => ({ name, base: artBase(name) }));
@@ -484,6 +522,7 @@ function findLibraryArt(dir, { videoBase = '', wide = false } = {}) {
 }
 
 module.exports = {
+  cleanNfoTitle,
   foldPersian,
   libraryNameParts,
   libraryNameAgrees,

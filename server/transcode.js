@@ -632,6 +632,9 @@ function probeLiveVideoCodec(url, { headers = null, userAgent = null, signal = n
   });
 }
 
+// Live TV audio for the browser's MSE: AAC in a standard channel layout (see the remux args).
+const LIVE_AUDIO_LAYOUTS = 'aformat=channel_layouts=5.1|stereo|mono';
+
 function spawnLiveRemux(url, { hlsFriendly = true, headers = null, transcodeVideo = false } = {}) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
@@ -659,6 +662,10 @@ function spawnLiveRemux(url, { hlsFriendly = true, headers = null, transcodeVide
     '-map', '0:v:0?', '-map', '0:a:0?',
     ...liveVideoArgs(transcodeVideo),
     '-c:a', 'aac', '-b:a', '384k',
+    // AC-3 5.1(side), 5.0, quad, 3.1 and 4.1 kept their layout and became AAC with channel
+    // configuration 0 (a PCE), which Chrome's MP4 parser refuses ("stream parsing failed" at 0:00).
+    // Standard layouts only: 5.1 stays 5.1 (configuration 6), the rest map onto 5.1, stereo or mono.
+    '-af', LIVE_AUDIO_LAYOUTS,
     '-fflags', '+genpts',
     '-flush_packets', '1', '-muxdelay', '0', '-muxpreload', '0',
     '-frag_duration', '250000',
@@ -682,6 +689,10 @@ function spawnLiveRemuxStdin({ transcodeVideo = false } = {}) {
     '-map', '0:v:0?', '-map', '0:a:0?',
     ...liveVideoArgs(transcodeVideo),
     '-c:a', 'aac', '-b:a', '384k',
+    // AC-3 5.1(side), 5.0, quad, 3.1 and 4.1 kept their layout and became AAC with channel
+    // configuration 0 (a PCE), which Chrome's MP4 parser refuses ("stream parsing failed" at 0:00).
+    // Standard layouts only: 5.1 stays 5.1 (configuration 6), the rest map onto 5.1, stereo or mono.
+    '-af', LIVE_AUDIO_LAYOUTS,
     '-fflags', '+genpts',
     '-flush_packets', '1', '-muxdelay', '0', '-muxpreload', '0',
     '-frag_duration', '250000',
@@ -797,4 +808,4 @@ function probeCacheKey(name, size) {
   return `${label}|${bytes}`;
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, LIVE_AUDIO_LAYOUTS };

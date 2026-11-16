@@ -60,6 +60,12 @@ does not hold the picture. While a movie or show is playing, open sockets across
 together stay at that stream share. A local library file is read from disk
 and does not open usenet lines or take a share.
 
+The library auto-scan is sync disk work on the same thread that sends video bytes.
+A due pass therefore waits while any VOD stream or Live TV viewer plays and runs
+on the first minute tick after playback stops, or after 2 hours anyway. A manual
+Scan now runs at once. A pass lists each folder once, opens only NFO files the
+listing shows, and skips the database rewrite when nothing changed.
+
 ## Runtime Flow
 
 ```mermaid

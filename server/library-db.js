@@ -95,6 +95,15 @@ class LibraryDb {
     return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   }
 
+  // An unchanged scan keeps its rows: only the scan time moves.
+  touchLibrary(libId, scannedAt) {
+    if (!this.available || !this.db) return false;
+    try {
+      const r = this.db.prepare('UPDATE library_meta SET scanned_at = ? WHERE lib_id = ?').run(scannedAt, libId);
+      return !!(r && r.changes);
+    } catch (e) { this.error = e; return false; }
+  }
+
   replaceLibrary(libId, scannedAt, items = []) {
     if (!this.available || !this.db) return false;
     const insert = this.db.prepare(`
@@ -337,6 +346,13 @@ class LibraryDb {
       LIMIT ? OFFSET ?
     `).all(...args, limit, offset);
     const items = rows.map((r) => this._parsePayload(r)).filter(Boolean);
+    // Library grid: a show card says which of its episodes are new (see newEpisodeInfo).
+    if (showIdx === null) {
+      for (const item of items) {
+        const info = item.kind === 'show' ? this.newEpisodeInfo(libId, item) : null;
+        if (info) Object.assign(item, info);
+      }
+    }
     return {
       scannedAt: meta.scannedAt,
       offset,
@@ -394,6 +410,25 @@ class LibraryDb {
       const item = this._parsePayload(row);
       return item && this._titleMatches(raw, item.title) ? { libId: row.lib_id, item } : null;
     }).filter(Boolean);
+  }
+
+  // New episodes of a show, for the "S01E05 new" / "3 new episodes" line on library cards: the
+  // episodes that arrived together with its newest one (within `batchMs`), and which is newest.
+  // Only when that newest episode came in the last `recentMs`; otherwise nothing is new.
+  newEpisodeInfo(libId, show, { batchMs = 3 * 24 * 60 * 60 * 1000, recentMs = 30 * 24 * 60 * 60 * 1000, now = Date.now() } = {}) {
+    if (!this.available || !this.db || !show || show.kind !== 'show') return null;
+    const newest = Number(show.addedAt) || 0;
+    if (!newest || now - newest > recentMs) return null;
+    if (!this._newEpisodesStmt) {
+      this._newEpisodesStmt = this.db.prepare(`
+        SELECT season, episode FROM library_items
+        WHERE lib_id = ? AND kind = 'episode' AND show_idx = ? AND added_at >= ?
+        ORDER BY added_at DESC, season DESC, episode DESC
+      `);
+    }
+    const eps = this._newEpisodesStmt.all(libId, parseInt(show.idx, 10), newest - batchMs);
+    if (!eps.length) return null;
+    return { newEpisodes: eps.length, latestEpisode: { s: eps[0].season, e: eps[0].episode } };
   }
 
   lookup(keys = [], allowedLibIds = []) {

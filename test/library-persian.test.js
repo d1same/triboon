@@ -508,3 +508,55 @@ test('web search: a Persian query keeps the library hits the server found', () =
   assert.match(ui, /const libHits = lib\.filter\(\(it\) => libraryHitShown\(q, it\)\);/);
   assert.match(ui, /const lib = \(await libJob\.catch\(\(\) => \[\]\)\)\.filter\(\(it\) => libraryHitShown\(q, it\)\);/);
 });
+
+test('library page: show cards come with their new episodes, through a real scan', async () => {
+  const tv = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-newep-tv-'));
+  const day = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const putAt = (rel, when) => { put(tv, rel); const t = new Date(when); fs.utimesSync(path.join(tv, rel), t, t); };
+  putAt('Kuh کوه/Season 01/Kuh کوه - S01E01.mp4', now - 300 * day);
+  putAt('Darya دریا/Season 01/Darya دریا - S01E01.mp4', now - 200 * day);
+  putAt('Darya دریا/Season 01/Darya دریا - S01E02.mp4', now - 2 * day);
+  putAt('Jangal جنگل/Season 02/Jangal جنگل - S02E04.mp4', now - 100 * day);
+  putAt('Jangal جنگل/Season 02/Jangal جنگل - S02E05.mp4', now - 3 * 60 * 60 * 1000);
+  putAt('Jangal جنگل/Season 02/Jangal جنگل - S02E06.mp4', now - 2 * 60 * 60 * 1000);
+  putAt('Jangal جنگل/Season 02/Jangal جنگل - S02E07.mp4', now - 1 * 60 * 60 * 1000);
+  const { port, shutdown } = await bootServer({ TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(port);
+    const lib = await httpJson(port, 'POST', '/api/libraries', { name: 'Series', kind: 'tv', path: tv, tmdbMatch: 'local' }, admin);
+    await runScan(port, lib.json.id, admin);
+    const items = await itemsOf(port, lib.json.id, admin, '?limit=20&sort=added.desc');
+    assert.deepStrictEqual(items.map((x) => x.title), ['Jangal جنگل', 'Darya دریا', 'Kuh کوه'], 'Recently added: a show rises with its newest episode');
+    assert.strictEqual(items[0].newEpisodes, 3, 'E05-E07 arrived together; E04 is old');
+    assert.deepStrictEqual(items[0].latestEpisode, { s: 2, e: 7 });
+    assert.strictEqual(items[1].newEpisodes, 1);
+    assert.deepStrictEqual(items[1].latestEpisode, { s: 1, e: 2 });
+    assert.strictEqual(items[2].newEpisodes, undefined, 'Kuh: nothing new in months');
+    for (const x of items) assert.strictEqual(x.file, undefined, 'no disk path leaves the server');
+  } finally {
+    await shutdown();
+  }
+});
+
+test('web: library show cards get a "new episodes" second line', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const hint = /function newEpisodesHint\(x\) \{[\s\S]+?\n\}/.exec(ui);
+  const map = /function mapLocalPageItems\(lib, r, showIdx\) \{[\s\S]+?\n\}/.exec(ui);
+  assert.ok(hint && map);
+  const mapLocal = (lib, x, title) => ({ title: title || x.title });
+  const build = new Function('mapLocal', `${hint[0]}\n${map[0]}\nreturn mapLocalPageItems;`)(mapLocal);
+  const cards = build({ id: 'tv' }, { items: [
+    { kind: 'show', title: 'Jangal جنگل', newEpisodes: 3, latestEpisode: { s: 2, e: 7 } },
+    { kind: 'show', title: 'Darya دریا', newEpisodes: 1, latestEpisode: { s: 1, e: 2 } },
+    { kind: 'show', title: 'Kuh کوه' },
+    { kind: 'movie', title: 'Sahra صحرا' },
+  ] });
+  assert.deepStrictEqual(cards.map((c) => [c.title, c.subHint || '']), [
+    ['Jangal جنگل', '3 new episodes'], ['Darya دریا', 'S01E02 new'], ['Kuh کوه', ''], ['Sahra صحرا', ''],
+  ], 'the show keeps its own title; the news is the second line');
+  const eps = build({ id: 'tv' }, { items: [{ kind: 'episode', s: 2, e: 7, title: 'x' }] }, 3);
+  assert.deepStrictEqual(eps.map((c) => c.title), ['S02E07'], 'episode lists are unchanged');
+  // The home page is not touched by this.
+  assert.doesNotMatch(ui, /api\/libraries\/recent/);
+});

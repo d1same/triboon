@@ -17,7 +17,7 @@ const { Store, VerdictCache, scrubOrphanTempDirs } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
-const { pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryAutoTmdbMatch, libraryScanUsesLocalMetaOnly, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt, libraryNameParts, libraryTmdbQueries, isLibrarySeasonDir, librarySeasonFromDir, libraryEpisodeNumber, solarToGregorian, foldPersian } = require('./library-match');
+const { pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryAutoTmdbMatch, libraryScanUsesLocalMetaOnly, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt, libraryNameParts, libraryTmdbQueries, isLibrarySeasonDir, librarySeasonFromDir, libraryEpisodeNumber, solarToGregorian, foldPersian, cleanNfoTitle } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter, SIGN_IN_NAME_MAX } = require('./auth');
 const {
   JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
@@ -5273,6 +5273,33 @@ function libraryItemByIndex(libId, idx) {
   const rec = store.read('libitems', {})[libId];
   return rec && rec.items ? rec.items[parseInt(idx, 10)] : null;
 }
+// True when a new scan's items equal the stored ones: same count and order, and every field equal
+// as stored (JSON drops undefined, so an undefined field equals a missing one).
+// The client kinds a page may name (anything else is dropped: it lands in the log).
+function playbackClientKind(v) {
+  const s = String(v || '').toLowerCase();
+  return s === 'web' || s === 'android' || s === 'windows' ? s : '';
+}
+function sameLibraryItems(prev, next) {
+  if (!Array.isArray(prev) || !Array.isArray(next) || prev.length !== next.length || !next.length) return false;
+  const val = (v) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : v);
+  for (let i = 0; i < next.length; i++) {
+    const a = prev[i] || {};
+    const b = next[i] || {};
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const k of keys) {
+      const x = a[k];
+      const y = b[k];
+      if (x === undefined && y === undefined) continue;
+      if (val(x) !== val(y)) return false;
+    }
+  }
+  return true;
+}
+function touchLibraryScan(libId, scannedAt) {
+  if (libraryDb.available && libraryDb.touchLibrary(libId, scannedAt)) return true;
+  return false; // the JSON fallback keeps its rows and the time of the last change
+}
 function saveLibraryScan(libId, scannedAt, items) {
   if (libraryDb.available && libraryDb.replaceLibrary(libId, scannedAt, items)) {
     store.update('libitems', {}, (s) => { delete s[libId]; return s; });
@@ -6657,7 +6684,7 @@ const H = {
     const t0 = Date.now();
     const playWhy = String(body.why || '-').replace(/[^\w-]/g, '').slice(0, 24) || '-';
     const playReason = String(body.reason || '').replace(/[^\w .:-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
-    debug.log('play', `request q=${body.q} tmdb=${body.tmdbId || '-'} s${body.season || '-'}e${body.ep || '-'} why=${playWhy}${playReason ? ` reason="${playReason}"` : ''}`);
+    debug.log('play', `request q=${body.q} tmdb=${body.tmdbId || '-'} s${body.season || '-'}e${body.ep || '-'} why=${playWhy}${playReason ? ` reason="${playReason}"` : ''} client=${playbackClientKind(body.client) || '-'}`);
     // HD/UHD toggle: a per-play resolution preference may tighten the cap DOWNWARD, never
     // above the admin-set cap (Plex semantics — user picks within their ceiling).
     Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType, body.season, body.ep));
@@ -6749,6 +6776,7 @@ const H = {
       trace: 'playback note',
       audio: 'audio',
       ui: 'app error',
+      end: 'playback ended',
     };
     if (!Object.hasOwn(allowed, kind)) return send(ctx.res, 400, { error: 'kind required' });
     if (throttleUserRoute(ctx, 'playback-issue', { max: 40, windowMs: 60000 })) return;
@@ -6763,10 +6791,12 @@ const H = {
     const howLong = sec > 0 ? ` ${sec}s` : '';
     const name = file || title || (kind === 'ui' ? clip(body.screen, 40) || 'app' : 'playback');
     const who = title && file ? ` (${title})` : '';
+    // Which client wrote it: a Windows and an Android box run the same page, only this tells them apart.
+    const client = playbackClientKind(body.client);
     // A stall line without the usenet picture cannot be explained later. Add
     // the per-account line counts (host + numbers only, never credentials).
     const lines = (kind === 'buffer' || kind === 'seek' || kind === 'drop' || kind === 'source') ? usenetLinesSnapshot() : '';
-    const line = `${allowed[kind]}${howLong}${where} — "${name}"${who} — reason: ${reason}${lines ? ` — lines: ${lines}` : ''}`;
+    const line = `${allowed[kind]}${howLong}${where} — "${name}"${who}${client ? ` [${client}]` : ''} — reason: ${reason}${lines ? ` — lines: ${lines}` : ''}`;
     // A crashed player or a JavaScript error in the app is a failure, not play-by-play:
     // it is written even with debug logging off (deduped a minute at a time).
     if (kind === 'ui' || kind === 'crash') debug.fail(kind === 'ui' ? 'ui' : 'player', `${clip(body.device, 40) || 'client'}: ${line}`);
@@ -6786,14 +6816,14 @@ const H = {
     if (!id) return send(ctx.res, 400, { error: 'sessionId required' });
     const session = pipeline.sessions.get(id);
     if (!session || (session.uid && session.uid !== ctx.user.id)) {
-      debug.log('play', `stop session=${id} missing=true`);
+      debug.log('play', `stop session=${id} missing=true client=${playbackClientKind(body.client) || '-'}`);
       return send(ctx.res, 200, { ok: true, evicted: false });
     }
     const result = releasePlaySession(session, ctx.user.id, { keepPrepared: !!body.keepPrepared });
     story.note(ctx.user.id, id, `stop evicted=${!!result.evicted} keepPrepared=${!!body.keepPrepared}`);
     story.markStopped(ctx.user.id, id);
     console.log('[play] stop evicted=' + !!result.evicted);
-    debug.log('play', `stop session=${id} evicted=${!!result.evicted} keepPrepared=${!!body.keepPrepared} live=${mounts.size}`);
+    debug.log('play', `stop session=${id} evicted=${!!result.evicted} keepPrepared=${!!body.keepPrepared} live=${mounts.size} client=${playbackClientKind(body.client) || '-'}`);
     send(ctx.res, 200, { ok: true, evicted: !!result.evicted });
   },
 
@@ -7874,7 +7904,12 @@ const H = {
           // stdin-fed ffmpeg never sees the provider URL, so its stderr tail is safe to log and is
           // the only way to tell a codec ffmpeg rejects from a TS that simply never carried video.
           if (!wrote) {
-            const tail = errBuf.replace(/\r/g, '\n').split('\n').map((l) => l.trim()).filter(Boolean).slice(-2).join(' | ').slice(0, 240);
+            // The last two lines are often only the echo ("[af#0:1] … -22", "Nothing was written"):
+            // keep the line that says what failed (a start mid-GOP: "dimensions not set", "Could
+            // not write header") in front of them.
+            const all = errBuf.replace(/\r/g, '\n').split('\n').map((l) => l.trim()).filter(Boolean);
+            const cause = all.filter((l) => /dimensions not set|could not write header|could not find codec parameters|invalid data found/i.test(l)).slice(0, 2);
+            const tail = [...new Set([...cause, ...all.slice(-2)])].join(' | ').slice(0, 360);
             return giveUp(`ffmpeg exited before output (code ${code}${tail ? `: ${tail}` : ''})`);
           }
           settled = true;
@@ -8186,14 +8221,24 @@ async function performScan(lib, state, mode = 'scan') {
         pickedShows.push({ p, eps });
       }
     }
+    // File names of every episode of a picked show: only those episodes need a modified time.
+    const pickedEpNames = new Set();
+    for (const { eps } of pickedShows) for (const b of eps.keys()) pickedEpNames.add(b);
     const adoptMoved = (key, kind, file, epFiles) => {
       if (prevBy.has(key)) return;
       let found = [];
       if (kind === 'movie') {
+        // No manual pick has this file name: nothing can follow it, so ask the disk nothing.
+        const picks = pickedMovies.get(baseKey(file));
+        if (!picks) return;
         const t = fileTime(file);
-        found = (pickedMovies.get(baseKey(file)) || []).filter((p) => p.file !== file && t !== null && p.addedAt === t && gone(p.file));
+        found = picks.filter((p) => p.file !== file && t !== null && p.addedAt === t && gone(p.file));
       } else {
-        const mine = new Map((epFiles || []).map((e) => [baseKey(e.file), fileTime(e.file)]));
+        if (!pickedShows.length) return;
+        const mine = new Map((epFiles || []).map((e) => {
+          const b = baseKey(e.file);
+          return [b, pickedEpNames.has(b) ? fileTime(e.file) : null];
+        }));
         found = pickedShows.filter(({ p, eps }) => {
           if (!mine.size || !gone(p.dir)) return false;
           let same = 0;
@@ -8209,7 +8254,8 @@ async function performScan(lib, state, mode = 'scan') {
     // without release tags). A match only supplies poster, plot, year, rating and episode data; its
     // own title is kept as matchTitle (the read-time check and "Fix match" use it). A hand-written
     // NFO <title> (no scraper id in it) still wins: it is the owner's own text.
-    const titleOf = (nfo, label, opts) => (nfo && nfo.title && !nfo.scraped)
+    // An NFO title that is only tags ("[1080p]") cleans to nothing: the folder name is shown then.
+    const titleOf = (nfo, label, opts) => (nfo && nfo.title && !nfo.scraped && cleanTitle(nfo.title))
       ? { title: cleanTitle(nfo.title), titleSource: 'nfo' }
       : { title: libraryNameParts(label, opts).display, titleSource: 'folder' };
     // Rows scanned before matchTitle existed carried the TMDB title in `title`.
@@ -8249,7 +8295,42 @@ async function performScan(lib, state, mode = 'scan') {
     // TMDB genre ids — search results carry genre_ids, direct /movie/<id> fetches genres[].
     const genresOf = (hit) => hit.genre_ids || (hit.genres || []).map((g) => g.id);
     // Folder/file title+year parse lives in library-match.js (libraryNameParts, libraryTmdbQueries).
-    const lsDir = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
+    // Each folder is LISTED ONCE per pass and the listing is passed down: the art lookup and the
+    // NFO reads use it instead of listing the folder again, and an NFO is opened only when the
+    // listing has it. On a user share every listing and every failed open is a slow round trip
+    // (result 89: 3 listings per film folder, and 3 of 4 file opens were for NFOs that do not exist).
+    const listed = new Map(); // dir -> Dirent[] of this pass
+    const lsDir = (dir) => {
+      let ents;
+      try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { ents = []; }
+      listed.set(dir, ents);
+      return ents;
+    };
+    const foldName = process.platform === 'win32' ? (s) => s.toLowerCase() : (s) => s;
+    const listedFiles = new Map(); // dir -> Map(folded name -> name as listed), built on demand
+    // undefined: the folder was not listed this pass (read blind, as before); null: not there;
+    // a string: the name as listed (the file to open).
+    const listedName = (file) => {
+      const dir = path.dirname(file);
+      const ents = listed.get(dir);
+      if (!ents) return undefined;
+      let names = listedFiles.get(dir);
+      if (!names) {
+        names = new Map(ents.filter((f) => !f.isDirectory()).map((f) => [foldName(f.name), f.name]));
+        listedFiles.set(dir, names);
+      }
+      return names.get(foldName(path.basename(file))) || null;
+    };
+    // One read per NFO per pass: the art lookup and readNfo share the text.
+    const nfoText = new Map();
+    const readText = (file) => {
+      if (nfoText.has(file)) return nfoText.get(file);
+      let text = null;
+      try { text = fs.readFileSync(file, 'utf8').slice(0, 200000); } catch {}
+      if (nfoText.size >= 32) nfoText.clear();
+      nfoText.set(file, text);
+      return text;
+    };
     // The walk is sync fs, and on an Unraid user share (shfs) every readdir/stat is slow. Run in one
     // go it froze the whole server for a minute 1 min after boot and every 15 min after that: no
     // stream bytes, no usenet logins, Docker health checks timing out (2026-10-11 10:36). Give the
@@ -8258,8 +8339,9 @@ async function performScan(lib, state, mode = 'scan') {
     const breathe = () => new Promise((resolve) => setImmediate(resolve));
     const maybeBreathe = async () => { if ((++scanOps & 3) === 0) await breathe(); };
     // Display titles: NFO titles often embed the year ("High Copy (2025)") — strip it.
-    const cleanTitle = (t) => String(t || '').replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').trim();
-    const findArt = (dir) => findLibraryArt(dir);
+    // Release and country tags ([1080p], (IR)) and a leading "IR - " / "|IR|" go first (result 88 T1).
+    const cleanTitle = (t) => cleanNfoTitle(t).replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').trim();
+    const findArt = (dir) => findLibraryArt(dir, { entries: listed.get(dir), readText });
     // NFO year: Persian digits and a Solar Hijri year (1382 -> 2003) count too.
     const nfoYear = (s) => {
       const m = /(?:^|\D)((?:19|20)\d{2}|1[34]\d{2})(?!\d)/.exec(foldPersian(s || ''));
@@ -8269,8 +8351,11 @@ async function performScan(lib, state, mode = 'scan') {
     // an NFO written by a scraper (it names a TMDB/IMDb id): its <title> is the scraper's catalog
     // title, so it never replaces the folder name.
     const readNfo = (file) => {
+      const name = listedName(file);
+      if (name === null) return null; // the folder listing has no such NFO: no blind open
+      const xml = readText(name ? path.join(path.dirname(file), name) : file);
+      if (xml === null) return null;
       try {
-        const xml = fs.readFileSync(file, 'utf8').slice(0, 200000);
         const tag = (t) => { const m = new RegExp(`<${t}[^>]*>([\\s\\S]*?)</${t}>`, 'i').exec(xml); return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim() : null; };
         const uid = /<uniqueid[^>]*type="tmdb"[^>]*>(\d+)<\/uniqueid>/i.exec(xml);
         const tmdbId = uid ? +uid[1] : (parseInt(tag('tmdbid'), 10) || null);
@@ -8347,9 +8432,9 @@ async function performScan(lib, state, mode = 'scan') {
       if (!eps.length && weak.length >= 2 && distinct >= 2 && weak.length * 5 >= videos * 4) eps.push(...weak);
       return eps;
     };
-    const scanMovieDir = async (dir, label) => {
+    const scanMovieDir = async (dir, label, entries = null) => {
       let best = null;
-      for (const f of lsDir(dir).slice(0, MAX_DIR)) {
+      for (const f of (entries || lsDir(dir)).slice(0, MAX_DIR)) {
         if (!f.isFile() || !MEDIA.test(f.name)) continue;
         await maybeBreathe();
         const st = fs.statSync(path.join(dir, f.name));
@@ -8491,11 +8576,11 @@ async function performScan(lib, state, mode = 'scan') {
           const eps2 = await showEpisodesIn(path.join(full, f.name), inner);
           if (eps2.length) await scanShowDir(path.join(full, f.name), f.name, eps2);
           else if (inner.some((g) => g.isFile() && MEDIA.test(g.name))) {
-            await scanMovieDir(path.join(full, f.name), f.name);
+            await scanMovieDir(path.join(full, f.name), f.name, inner);
           }
         }
         if (epFiles.length) await scanShowDir(full, e.name, epFiles);
-        else if (sub.some((f) => f.isFile() && MEDIA.test(f.name))) await scanMovieDir(full, e.name);
+        else if (sub.some((f) => f.isFile() && MEDIA.test(f.name))) await scanMovieDir(full, e.name, sub);
       }
     } catch (e) {
       throw e; // surfaces as the generic scan-failed state (path details stay in the log)
@@ -8505,7 +8590,12 @@ async function performScan(lib, state, mode = 'scan') {
       await Promise.all(lookupJobs.slice(i, i + 6).map((j) => j().catch(() => {})));
       state.progress = Math.min(items.length, state.progress + 6);
     }
-    saveLibraryScan(lib.id, Date.now(), items);
+    // An unchanged pass (the common 15-minute case) rewrote every row in one sync SQLite
+    // transaction: 350-450 ms of frozen event loop for 20,000 items (result 89). Same items, same
+    // order, same fields (addedAt and art included): keep the rows, refresh only the scan time.
+    // No SQLite row to touch (the rows sit in the JSON store, e.g. SQLite could not open when
+    // they were written): write them, so the library moves into SQLite as before.
+    if (!(sameLibraryItems(prevItems, items) && touchLibraryScan(lib.id, Date.now()))) saveLibraryScan(lib.id, Date.now(), items);
     // Frames cached under the old position names (<libId>-<idx>.jpg) are never read again.
     try {
       const thumbDir = path.join(DATA_DIR, 'thumbs');
@@ -8524,11 +8614,40 @@ async function performScan(lib, state, mode = 'scan') {
 // exactly where media lives on Unraid). A no-change pass reuses every TMDB match, so it costs
 // one disk walk and zero network. setInterval is unref'd: it must never keep a dying process
 // (or a test run) alive.
+// A pass is sync disk work on the main thread (a user share answers each call slowly), and the
+// same thread sends the video. So a due pass WAITS while anything plays — a usenet or local stream,
+// or a Live TV viewer — and runs on the first tick after playback stops, or after 2 h anyway so a
+// day of watching still finds new files. "Scan now" (the route) never waits.
+const AUTO_SCAN_DEFER_CAP_MS = 2 * 3600 * 1000;
 let lastAutoScanAt = 0;
-function autoScanTick() {
+let autoScanDueSince = 0;
+let autoScanWaitLogged = false;
+function playbackActiveForAutoScan(now = Date.now()) {
+  let vod = 0;
+  for (const m of mounts.values()) if (mountHasActivePlayback(m, now)) vod++;
+  let live = activeIptvLiveStreams.size;
+  if (!live) for (const hub of iptvSharedHubs.values()) if (hub && hub.subs && hub.subs.size) live++;
+  return { vod, live };
+}
+function autoScanTick(now = Date.now()) {
   const mins = Number(settings.get().libAutoScanMin ?? 15);
-  if (!mins || Date.now() - lastAutoScanAt < mins * 60000) return;
-  lastAutoScanAt = Date.now();
+  if (!mins || now - lastAutoScanAt < mins * 60000) return 'not-due';
+  if (!autoScanDueSince) autoScanDueSince = now;
+  const busy = playbackActiveForAutoScan(now);
+  const waited = now - autoScanDueSince;
+  if ((busy.vod || busy.live) && waited < AUTO_SCAN_DEFER_CAP_MS) {
+    if (!autoScanWaitLogged) {
+      autoScanWaitLogged = true;
+      debug.log('library', `auto-scan waits: ${busy.vod} stream(s) and ${busy.live} Live TV viewer(s) playing`);
+    }
+    return 'deferred';
+  }
+  if (autoScanWaitLogged) {
+    debug.log('library', `auto-scan runs after waiting ${Math.round(waited / 60000)} min${busy.vod || busy.live ? ' (2 h cap, still playing)' : ''}`);
+  }
+  autoScanDueSince = 0;
+  autoScanWaitLogged = false;
+  lastAutoScanAt = now;
   for (const lib of store.read('libraries', { list: [] }).list) {
     if (!lib.path) continue;
     const st = scanStates.get(lib.id);
@@ -8545,8 +8664,9 @@ function autoScanTick() {
         scanStates.set(lib.id, { running: false, error: 'auto-scan failed — check the library path' });
       });
   }
+  return 'started';
 }
-setInterval(autoScanTick, 60000).unref(); // checks the admin-set cadence every minute
+setInterval(() => autoScanTick(), 60000).unref(); // checks the admin-set cadence every minute
 
 function importTraktWatchlist(uid, items) {
   let added = 0;
@@ -8965,6 +9085,16 @@ function searchLibraryRecords(query, allowedLibIds = [], limit = 24) {
   return out;
 }
 
+// New episodes of a show from the stored record (no SQLite): same answer as libraryDb.newEpisodeInfo.
+function jsonNewEpisodeInfo(rec, show, { batchMs = 3 * 24 * 60 * 60 * 1000, recentMs = 30 * 24 * 60 * 60 * 1000, now = Date.now() } = {}) {
+  const newest = Number(show && show.addedAt) || 0;
+  if (!show || show.kind !== 'show' || !newest || now - newest > recentMs) return null;
+  const eps = ((rec && rec.items) || [])
+    .filter((e) => e && e.kind === 'episode' && e.showIdx === show.idx && (Number(e.addedAt) || 0) >= newest - batchMs)
+    .sort((x, y) => (y.addedAt - x.addedAt) || ((+y.s || 0) - (+x.s || 0)) || ((+y.e || 0) - (+x.e || 0)));
+  return eps.length ? { newEpisodes: eps.length, latestEpisode: { s: eps[0].s, e: eps[0].e } } : null;
+}
+
 Object.assign(H, {
   librarySearch: async (ctx) => {
     const q = String(ctx.url.searchParams.get('q') || '').trim();
@@ -9071,7 +9201,11 @@ Object.assign(H, {
         items = items.slice().sort(localItemSorter(sort));
       }
       const total = items.length;
-      const page = items.slice(offset, offset + limit).map((item) => localItemPayload(ctx, libId, item));
+      const page = items.slice(offset, offset + limit).map((item) => {
+        // Library grid: a show card says which of its episodes are new.
+        const info = Number.isFinite(showIdx) ? null : jsonNewEpisodeInfo(rec, item);
+        return localItemPayload(ctx, libId, info ? { ...item, ...info } : item);
+      });
       return send(ctx.res, 200, {
         scannedAt: rec.scannedAt,
         offset,
@@ -10293,9 +10427,26 @@ Object.assign(H, {
     ff.stdout.pipe(ctx.res);
     let err = '';
     ff.stderr.on('data', (d) => { err = (err + d).slice(-4000); }); // keep the TAIL: the reason is the last line
+    // A response that closes while ffmpeg still runs: the viewer left (Back, a seek) or the link was
+    // cut (a proxy that drops an idle connection during a long pause). The kill below gives no exit
+    // code, so nothing else would say it. Idle = seconds since the viewer last took bytes.
+    let sentBytes = 0;
+    let lastSentAt = Date.now();
+    let ffDone = false;
+    ff.stdout.on('data', (c) => { sentBytes += c.length; lastSentAt = Date.now(); });
     ff.on('close', (codeNum) => {
+      ffDone = true;
       if (codeNum && !ctx.res.writableEnded) noteFfmpegDeath('remux', vf, codeNum, err, { startSeconds, audio: audioMode });
       ctx.res.end();
+    });
+    ctx.res.once('close', () => {
+      if (ffDone) return;
+      const dur = vf._tracks && Number(vf._tracks.duration) > 0 ? Number(vf._tracks.duration) : 0;
+      const perSec = dur && vf.size ? vf.size / dur : 0;
+      const at = perSec ? `~${Math.round(startSeconds + sentBytes / perSec)}s` : `${Math.round(startSeconds)}s+`;
+      const line = `remux viewer left at ${at} after ${Math.round((Date.now() - lastSentAt) / 1000)}s idle (${(sentBytes / 1048576).toFixed(1)} MB sent from ${Math.round(startSeconds)}s) — "${String(vf.name || '').slice(0, 80)}"`;
+      debug.log('remux', `${vf.id} ${line}`);
+      story.noteMount(vf.id, line);
     });
     ctx.req.on('close', () => ff.kill('SIGKILL'));
   },
@@ -12886,4 +13037,5 @@ module.exports = {
   ROUTES: ROUTES.concat(JELLYFIN_ROUTES), auth, settings, store,
   warmIptvCaches, msUntilNextIptvWarm, rewriteIptvHlsPlaylist,
   normalizeIp, isPrivateIp, clientIpForGeo, geoLocate, geoCacheKey, viewerGeolocationEnabled,
+  autoScanTick, playbackActiveForAutoScan, liveStreamsForTest: () => activeIptvLiveStreams,
 };

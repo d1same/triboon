@@ -5891,7 +5891,7 @@ function hideToast() {
 }
 function releasePlaybackSession(sessionId, opts = {}) {
   if (!sessionId) return Promise.resolve();
-  return api('/api/play/stop', { method: 'POST', body: { sessionId, keepPrepared: !!opts.keepPrepared } }).catch(() => {});
+  return api('/api/play/stop', { method: 'POST', body: { sessionId, keepPrepared: !!opts.keepPrepared, client: typeof playbackClientKind === 'function' ? playbackClientKind() : undefined } }).catch(() => {});
 }
 let bdFlip = false, bdCurrent = '';
 let _bdPendingUrl = null, _bdTimer = null;
@@ -8761,7 +8761,7 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
       pinnedResume = true;
     }
   }
-  const body = { q: queryFor(it) || queryFor(S.detailItem) || queryFor(S.playing && S.playing.item), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
+  const body = { q: queryFor(it) || queryFor(S.detailItem) || queryFor(S.playing && S.playing.item), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps(), client: typeof playbackClientKind === 'function' ? playbackClientKind() : undefined };
   if (pinnedResume) body.pinnedResume = true;
   if (S.sourceSort === 'largest' || S.sourceSort === 'smallest') body.sourceSort = S.sourceSort;
   if (ids.imdbid) body.imdbid = ids.imdbid;
@@ -9628,6 +9628,10 @@ function localPlaybackRankForItem(it) {
 function localPlaybackFitsQuality(it, qRank) {
   if (qRank === null || qRank === undefined) return true;
   const rank = localPlaybackRankForItem(it);
+  // A file whose name gives no resolution (folder titles drop "[1080p]") is not known to be below
+  // the wanted class: never skip an owned file on a guess. A file KNOWN to be 1080p still lets a
+  // 4K Play look on usenet first (and falls back to it when usenet finds nothing).
+  if (rank === null || rank === undefined) return true;
   if (qRank === 4) return rank === 4;
   if (qRank === 3) return rank !== 4;
   return true;
@@ -9843,7 +9847,25 @@ async function playStart(it, pick, opts, playIntent) {
     if (S._playTicket !== playTicket || S.view !== 'player') return;
     if (localExact && !picked && /no playable|no .*candidate|all candidates failed/i.test(String(e && e.message || ''))) {
       // Library file is the successful fallback — no toast.
+      if (typeof postPlayNote === 'function') postPlayNote('trace', `usenet found nothing (${String(e && e.message || '').slice(0, 80)}) — playing the library file instead`, it);
       return playLocal(localExact, { replacementStarted: true, nativeFirst, playTicket });
+    }
+    // Any other usenet failure for a title you own: play the file on disk too. One fallback,
+    // never a loop back to usenet. Not for an age-gate refusal. The local lookup may still be
+    // running (a warm Play waits only 50 ms for it), so finish it first.
+    const restricted = !!(e && e.detail && e.detail.restricted);
+    if (!picked && !restricted && !it._usenetFellBackToLocal) {
+      let fallback = localExact;
+      if (!fallback && it._localLookupPromise) {
+        const loc = await Promise.race([it._localLookupPromise.catch(() => null), new Promise((resolve) => setTimeout(() => resolve(null), 4000))]);
+        if (S._playTicket !== playTicket || S.view !== 'player') return;
+        if (loc) fallback = { ...it, _local: loc };
+      }
+      if (fallback) {
+        const why = String((e && e.detail && e.detail.summary) || (e && e.message) || 'usenet Play failed').slice(0, 120);
+        if (typeof postPlayNote === 'function') postPlayNote('trace', `usenet Play failed (${why}) — playing the library file instead`, it);
+        return playLocal({ ...fallback, _usenetFellBackToLocal: true }, { replacementStarted: true, nativeFirst, playTicket });
+      }
     }
     closePlayer();
     // Server age gate (403): a restricted profile tried a title above its maturity level.
@@ -11504,6 +11526,15 @@ async function checkAvailability(it) {
       $('dSources').style.display = '';
       $('dPlayLabel').textContent = playBtn.dataset.availPrevLabel + ' · indexers did not answer';
       return;
+    }
+    // A movie you own keeps Play: its Play falls back to the file on disk when usenet finds
+    // nothing. `hasLocal` was read before the search; the library lookup may finish during it (a
+    // fast empty answer beat it and disabled Play on an owned film), so finish it and look again.
+    if (!playable && !hasLocal && it.type === 'movie') {
+      startLocalPlaybackLookup(searchItem);
+      const owned = await Promise.race([Promise.resolve(searchItem._localLookupPromise || null), waitMs(3000, null)]);
+      if (reqId !== S.detailReq) return;
+      if (owned || localTitleHasPlayback(searchItem) || localTitleHasPlayback(it)) return;
     }
     // An id-less pass on a TMDB title is only the FIRST of two checks — never let it condemn a
     // title whose imdb/tvdb ids (and the sources they find) are still on the way.
@@ -13572,6 +13603,29 @@ function webVodStallRecoveryMs(p, established) {
   if (!established) return webVodHeavy(p) ? 18000 : 10000;
   return webVodHeavy(p) ? 45000 : 30000;
 }
+// A playback note before (or without) an open player: the Play path itself, e.g. a usenet Play
+// that fell back to the library file.
+function postPlayNote(kind, detail, item) {
+  const title = (item && (item.title || item.name)) || '';
+  api('/api/playback-issue', {
+    method: 'POST',
+    body: { kind, detail: String(detail || '').slice(0, 160), title: String(title).slice(0, 80), client: playbackClientKind() },
+  }).catch(() => {});
+}
+// web, android or windows: the Windows app and an Android box load this same page, and the server
+// log cannot tell their sessions apart without it.
+function playbackClientKind() {
+  if (S._clientKind) return S._clientKind;
+  let kind = 'web';
+  try {
+    if (window.TriboonTV) {
+      const app = TriboonTV.appVersion ? JSON.parse(TriboonTV.appVersion() || '{}') : {};
+      kind = app && app.platform === 'windows' ? 'windows' : 'android';
+    }
+  } catch { kind = window.TriboonTV ? 'android' : 'web'; }
+  S._clientKind = kind;
+  return kind;
+}
 function notePlaybackIssue(kind, detail, sec) {
   const p = S.playing;
   if (!p) return;
@@ -13590,6 +13644,7 @@ function notePlaybackIssue(kind, detail, sec) {
       kind, detail: String(detail || '').slice(0, 160), sec: Math.round(Number(sec) || 0),
       title: String(title).slice(0, 80), file: String(file).slice(0, 140), at,
       sessionId: String(p.sessionId || '').slice(0, 40),
+      client: typeof playbackClientKind === 'function' ? playbackClientKind() : undefined,
     },
   }).catch(() => {});
 }
@@ -14748,7 +14803,9 @@ async function prepareNativeStartKindForAudio(startKind) {
     if (nativeDirectAudioNeedsSafeRemux(selectedPlayerAudioTrack(p))) {
       p.forceAacRemux = true;
       p.nativeStartKind = 'remux';
-      notePlaybackIssue('audio', 'this device cannot play ' + (audioDescriptorForClient(selectedPlayerAudioTrack(p)) || 'this audio') + ' natively — server remux to AAC instead of direct play', 0);
+      // A native player's remux address asks for no audio change, so the server decides: it copies
+      // the audio when this device decodes it (the remux line then says audio=copy), else AAC.
+      notePlaybackIssue('audio', 'this device cannot play ' + (audioDescriptorForClient(selectedPlayerAudioTrack(p)) || 'this audio') + ' natively as direct play — server remux instead (the server copies the audio or makes AAC, see its remux line)', 0);
       return 'remux';
     }
     return startKind;
@@ -14756,7 +14813,7 @@ async function prepareNativeStartKindForAudio(startKind) {
   if (nativeDirectAudioNameRisk(p)) {
     p.forceAacRemux = true;
     p.nativeStartKind = 'remux';
-    notePlaybackIssue('audio', 'tracks unknown and the release name says surround audio — server remux to AAC instead of direct play', 0);
+    notePlaybackIssue('audio', 'tracks unknown and the release name says surround audio — server remux instead of direct play (the server copies the audio or makes AAC, see its remux line)', 0);
     return 'remux';
   }
   return startKind;
@@ -15596,14 +15653,59 @@ function isGenuineEpisodeEof(p, pos, dur) {
   if (d <= 0) return false;
   return t >= Math.max(20, d * 0.85);
 }
+// The file's real length for a stream-end decision: the server's probe of the WHOLE file, a direct
+// file's own player clock, else the catalog runtime. Never a remux's duration-so-far.
+function streamRuntimeSeconds(p) {
+  const probe = Number(p && p.tracks && p.tracks.duration) || 0;
+  if (probe >= 30) return { sec: probe, from: 'probe' };
+  if (p && p.usingNative && currentPlayerKind(p) === 'direct' && Number(p.nativeDuration) >= 30) {
+    return { sec: Number(p.nativeDuration), from: 'player' };
+  }
+  const catalog = catalogRuntimeSeconds(p && p.item);
+  if (catalog >= 60) return { sec: catalog, from: 'catalog' };
+  return { sec: 0, from: '' };
+}
+// A native stream that ends is the real end only within 60 s of the known runtime. Earlier it is a
+// cut stream (a proxy dropped an idle link, the remux died): the same file reopens at the same
+// second, also past 88 %. A second end at the same spot means the file really ends there (a cut
+// shorter than the catalog says). null: no known runtime, so the older rule decides.
+const STREAM_END_SLACK_SEC = 60;
+function nativeStreamEndIsRealEnd(p, pos) {
+  const t = Math.max(0, Number(pos) || Number(p && p.nativePos) || 0);
+  const rt = streamRuntimeSeconds(p);
+  if (!rt.sec) return null;
+  if (t >= rt.sec - STREAM_END_SLACK_SEC) return true;
+  const prev = Number(p && p._earlyStreamEndAt);
+  if (Number.isFinite(prev) && prev > 0 && Math.abs(prev - t) < 30) return true;
+  return false;
+}
 function handleVodPlaybackEnded(pos, dur) {
   const p = S.playing;
   if (!p || (p.item && p.item.type === 'live')) return false;
-  if (playbackSourceSwapPending(p)) return true;
-  if (isGenuineEpisodeEof(p, pos, dur)) {
+  // The reopen after an early end past 88 % ended again at that spot. It plays at most the last
+  // GOP, so it often ends inside the 8 s swap window, which used to swallow this end and leave the
+  // last frame up for good (no finish, no next episode). The file really ends here.
+  const endPos = Math.max(0, Number(pos) || Number(p.nativePos) || 0);
+  const tailEndedAgain = !!(p.usingNative && Number(p._earlyTailEndAt) > 0
+    && Math.abs(Number(p._earlyTailEndAt) - endPos) < 30 && !p._sourceAdvancePending && !p._reMounting);
+  if (!tailEndedAgain && playbackSourceSwapPending(p)) return true;
+  const atEnd = tailEndedAgain || isGenuineEpisodeEof(p, pos, dur);
+  const nativeStarted = !!(p.usingNative && vodPlaybackStarted(p));
+  const realEnd = nativeStarted ? nativeStreamEndIsRealEnd(p, pos) : null;
+  const finished = atEnd && realEnd !== false;
+  {
+    const rt = streamRuntimeSeconds(p);
+    const t = Math.max(0, Number(pos) || Number(p.nativePos) || 0);
+    notePlaybackIssue('end', `stream ended at ${Math.round(t)}s of ${rt.sec ? Math.round(rt.sec) + 's (' + rt.from + ')' : 'unknown'} — player ${p.usingNative ? 'native ' : ''}${currentPlayerKind(p)} — treated as finished: ${finished ? 'yes' : 'no'}${atEnd && !finished ? ' (early end past 88 %, reopening)' : ''}`, 0);
+  }
+  if (finished) {
     if (finishEpisodeToNext()) return true;
     closePlayer({ ended: true });
     return true;
+  }
+  if (realEnd === false) {
+    p._earlyStreamEndAt = endPos;
+    if (atEnd) p._earlyTailEndAt = endPos;
   }
   const at = !vodPlaybackStarted(p)
     ? Math.max(0, Number(p.item && p.item.resume) || Number(p.startOffset) || 0)
@@ -15613,7 +15715,11 @@ function handleVodPlaybackEnded(pos, dur) {
     // A remux pipe often ENDED on pause/resume or a wifi blip while the movie is
     // still in the middle. That is the same file, not a new release.
     if (vodPlaybackStarted(p)) {
-      recoverSamePlaybackSource('source ended mid-title');
+      // Past 88 % with the reopen declined (a guard said no): finish as before rather than leave
+      // the last frame up with nothing left to end it.
+      if (!recoverSamePlaybackSource('source ended mid-title') && atEnd) {
+        if (!finishEpisodeToNext()) closePlayer({ ended: true });
+      }
       return true;
     }
     // First bytes of a remux can ENDED before PLAYING. Walking remux→transcode→direct
@@ -15767,6 +15873,16 @@ function clearStaleResumeFlags(p) {
   p._webResuming = false; p._nativeResuming = false; p._resumingSince = 0;
   return true;
 }
+// One trace line per guard and reason, at most every 30 s (a stalled shell re-reports each window).
+function noteRecoveryDeclined(p, guard, reason) {
+  if (!p) return;
+  const key = `${guard}|${reason}`;
+  const now = appMs();
+  if (!p._recoveryDeclinedAt) p._recoveryDeclinedAt = {};
+  if (p._recoveryDeclinedAt[key] && now - p._recoveryDeclinedAt[key] < 30000) return;
+  p._recoveryDeclinedAt[key] = now;
+  if (typeof notePlaybackTrace === 'function') notePlaybackTrace(`recovery declined: ${guard} (after: ${String(reason || 'playback interrupted').slice(0, 80)})`);
+}
 function recoverSamePlaybackSource(reason = '') {
   const p = S.playing; if (!vodPlaybackStarted(p)) return false;
   const kind = currentPlayerKind(p);
@@ -15778,11 +15894,16 @@ function recoverSamePlaybackSource(reason = '') {
   const contentError = PLAYBACK_CONTENT_ERROR_RE.test(String(reason || ''));
   // Next-episode startup often wobbles once (new remux, new Exo). Remounting that
   // replayed the opening. Stay put unless the source is actually dead, or a direct file is unreadable.
+  // Each refusal below says which guard declined, so a frozen picture with no retry is visible in
+  // the log (result 89 Part C). The guard lines themselves stay as they were.
+  if (!sourceDead && !(contentError && kind === 'direct') && S._handoffQuietUntil && now < S._handoffQuietUntil) noteRecoveryDeclined(p, 'next-episode handoff window', reason);
   if (!sourceDead && !(contentError && kind === 'direct') && S._handoffQuietUntil && now < S._handoffQuietUntil) return false;
   // A user pause is not a dead source. Remounting here rebuilds 4K from scratch (~30s).
+  if (p.usingNative && p.nativePaused && !sourceDead && !decoderFailure) noteRecoveryDeclined(p, 'the player is paused', reason);
   if (p.usingNative && p.nativePaused && !sourceDead && !decoderFailure) return false;
   // A desktop pause is not a dead movie. Reopening it here is what pressed Play
   // by itself a couple of minutes later.
+  if (!p.usingNative && $('video') && $('video').paused && !sourceDead && !decoderFailure) noteRecoveryDeclined(p, 'the video is paused', reason);
   if (!p.usingNative && $('video') && $('video').paused && !sourceDead && !decoderFailure) return false;
   // Play already asked for a quiet remount. A second recovery on top freezes the picture. Unreadable
   // bytes are the exception: that remount is what just failed, and returning here froze the viewer
@@ -15791,7 +15912,9 @@ function recoverSamePlaybackSource(reason = '') {
   // generic "playback interrupted" that every web failover sends.
   if (/HTTP 404|mount not found|session expired/i.test(String(reason || ''))) { p._webResuming = false; p._nativeResuming = false; p._resumingSince = 0; }
   clearStaleResumeFlags(p);
+  if (p.usingNative && p._nativeResuming && !sourceDead && !decoderFailure && !contentError) noteRecoveryDeclined(p, 'a native restart is in flight', reason);
   if (p.usingNative && p._nativeResuming && !sourceDead && !decoderFailure && !contentError) return false;
+  if (p._webResuming && !sourceDead && !decoderFailure && !contentError) noteRecoveryDeclined(p, 'a web restart is in flight', reason);
   if (p._webResuming && !sourceDead && !decoderFailure && !contentError) return false;
   // Server restart / swept mount: do not replay the dead URL (that flickers Preparing).
   // Wait, remount the same title, resume. Decoder failures stay on the codec path.
@@ -22199,12 +22322,27 @@ function agoStr(ts) {
   if (m < 48 * 60) return `${Math.round(m / 60)}h ago`;
   return `${Math.round(m / 1440)}d ago`;
 }
+// Second line under a library show card when episodes arrived recently: "S01E05 new" for one,
+// "3 new episodes" for several (the server only sends this for the last 30 days).
+function newEpisodesHint(x) {
+  if (!x || x.kind !== 'show' || !(x.newEpisodes > 0)) return '';
+  const ep = x.latestEpisode;
+  if (x.newEpisodes === 1 && ep && Number.isFinite(+ep.s) && Number.isFinite(+ep.e)) {
+    return `S${String(ep.s).padStart(2, '0')}E${String(ep.e).padStart(2, '0')} new`;
+  }
+  return `${x.newEpisodes} new episodes`;
+}
 function mapLocalPageItems(lib, r, showIdx) {
   if (showIdx !== undefined) {
     return (r.items || []).map((x) => mapLocal(lib, x,
       `S${String(x.s).padStart(2, '0')}E${String(x.e).padStart(2, '0')}${x.epTitle ? ` - ${x.epTitle}` : ''}`));
   }
-  return (r.items || []).map((x) => mapLocal(lib, x));
+  return (r.items || []).map((x) => {
+    const card = mapLocal(lib, x);
+    const hint = newEpisodesHint(x);
+    if (hint) card.subHint = hint;
+    return card;
+  });
 }
 function paintLibraryCardCover(idx, poster, backdrop) {
   if (idx === undefined || idx === null) return;

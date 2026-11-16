@@ -167,3 +167,39 @@ test('library firstEpisodeFile picks the earliest season/episode file', () => {
     db.close();
   }
 });
+
+test('library page: a show card says which of its episodes are new', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-library-newep-'));
+  const db = new LibraryDb(dir);
+  if (!db.available) return;
+  const day = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  try {
+    db.replaceLibrary('tv', 1, [
+      { idx: 0, kind: 'show', title: 'Daily Show', addedAt: now - 1 * day, dir: '/tv/daily' },
+      { idx: 1, kind: 'episode', showIdx: 0, s: 1, e: 1, addedAt: now - 90 * day, file: '/tv/daily/e1.mkv' },
+      { idx: 2, kind: 'episode', showIdx: 0, s: 1, e: 2, addedAt: now - 3 * day, file: '/tv/daily/e2.mkv' },
+      { idx: 3, kind: 'episode', showIdx: 0, s: 1, e: 3, addedAt: now - 1 * day, file: '/tv/daily/e3.mkv' },
+      { idx: 4, kind: 'show', title: 'One New', addedAt: now - 5 * day, dir: '/tv/one' },
+      { idx: 5, kind: 'episode', showIdx: 4, s: 2, e: 4, addedAt: now - 60 * day, file: '/tv/one/e4.mkv' },
+      { idx: 6, kind: 'episode', showIdx: 4, s: 2, e: 5, addedAt: now - 5 * day, file: '/tv/one/e5.mkv' },
+      { idx: 7, kind: 'show', title: 'Quiet Show', addedAt: now - 200 * day, dir: '/tv/quiet' },
+      { idx: 8, kind: 'episode', showIdx: 7, s: 1, e: 1, addedAt: now - 200 * day, file: '/tv/quiet/e1.mkv' },
+      { idx: 9, kind: 'movie', title: 'A Film', addedAt: now, file: '/films/a.mkv' },
+    ]);
+    const page = db.page('tv', { offset: 0, limit: 10, sort: 'added.desc' });
+    const by = Object.fromEntries(page.items.map((i) => [i.title, i]));
+    assert.deepStrictEqual(page.items.map((i) => i.title), ['A Film', 'Daily Show', 'One New', 'Quiet Show']);
+    assert.strictEqual(by['Daily Show'].newEpisodes, 2, 'E2 and E3 came within three days of each other; E1 is old');
+    assert.deepStrictEqual(by['Daily Show'].latestEpisode, { s: 1, e: 3 });
+    assert.strictEqual(by['One New'].newEpisodes, 1);
+    assert.deepStrictEqual(by['One New'].latestEpisode, { s: 2, e: 5 });
+    assert.strictEqual(by['Quiet Show'].newEpisodes, undefined, 'nothing new in the last 30 days');
+    assert.strictEqual(by['A Film'].newEpisodes, undefined, 'films carry no episode info');
+    const eps = db.page('tv', { offset: 0, limit: 10, showIdx: 0 });
+    assert.ok(eps.items.every((i) => i.newEpisodes === undefined), 'the episode list of a show is unchanged');
+  } finally {
+    db.close && db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
