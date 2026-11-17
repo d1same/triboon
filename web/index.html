@@ -7090,7 +7090,8 @@ function cwNextFingerprint(cw) {
   const now = new Date();
   const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   return day + ':' + (S.profile && S.profile.id || 'default') + ':' + (cw || [])
-    .filter((w) => /^tmdb:tv:\d+:s\d+e\d+$/i.test(String(w.key || '')))
+    .filter((w) => /^tmdb:tv:\d+:s\d+e\d+$/i.test(String(w.key || ''))
+      || (parseStableLocalKey(w.key) || {}).season != null) // a library show's episode (3.4.16)
     // Minute bucket, not the raw clock. Art repair and a 10s progress save used to
     // change this key, drop the next-episode list, and redraw the row over and over.
     .map((w) => [w.key, w.watched ? 1 : 0, Math.floor((+w.position || 0) / 60)].join('@'))
@@ -7113,7 +7114,9 @@ function resetHomeTvNextFor(cw) {
 }
 async function prepareHomeTvNext(cw, timeoutMs = HOME_NEXT_WAIT_MS) {
   const fp = resetHomeTvNextFor(cw);
-  if (!S.serverInfo.tmdb || !String(fp).includes('tmdb:tv:')) {
+  // Library shows get their next episode from the server's library (no TMDB key needed).
+  const libraryNext = String(fp).includes('local:');
+  if ((!S.serverInfo.tmdb || !String(fp).includes('tmdb:tv:')) && !libraryNext) {
     S._homeTvNext = [];
     return true;
   }

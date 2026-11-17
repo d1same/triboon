@@ -6123,6 +6123,63 @@ function deleteWatchKeyForProfile(all, uid, profile, key) {
   const fallbackKey = `${uid}:default:${key}`;
   if (active !== 'default' && all[fallbackKey] && all[fallbackKey].fromTrakt) delete all[fallbackKey];
 }
+// Up next for shows saved under local keys (an unmatched show, or a show whose catalog id two of
+// its library's folders share): straight from the library, so it needs no TMDB key and no warm page
+// (result 85 S-3). A show with an episode in progress gets none, as for catalog shows.
+function nextLocalEpisodes(ctx, profile = 'default') {
+  const uid = ctx.user.id;
+  // A restricted profile cannot play an unmatched library title (owner decision): no card for it.
+  const prof = ((ctx.user && ctx.user.profiles) || []).find((p) => p && p.id === profile);
+  if (prof && (prof.level ?? (prof.kid ? 0 : 4)) < 4) return [];
+  const all = store.read('watch', {});
+  const rows = watchRowsForProfileFromAll(all, uid, profile);
+  const allowed = new Set(allowedLocalLibraryIds(ctx));
+  const byShow = new Map();
+  const busy = new Set();
+  for (const w of rows) {
+    const lk = parseLocalKey(w.key);
+    if (!lk || lk.legacy || lk.season === undefined || !allowed.has(String(lk.libId))) continue;
+    const showKey = `local:${lk.libId}:${lk.id}`;
+    if (!w.watched && (w.position || 0) > 30) { busy.add(showKey); continue; }
+    if (!w.watched) continue;
+    const cur = byShow.get(showKey);
+    if (!cur || lk.season > cur.s || (lk.season === cur.s && lk.episode > cur.e)) {
+      byShow.set(showKey, { libId: lk.libId, s: lk.season, e: lk.episode, w });
+    }
+  }
+  const out = [];
+  for (const [showKey, top] of [...byShow].slice(0, 20)) {
+    if (busy.has(showKey)) continue;
+    const show = libraryItemByKey(top.libId, showKey);
+    if (!show || show.kind !== 'show') continue;
+    let eps = libraryDb.available ? libraryDb.showEpisodes(top.libId, show.idx) : null;
+    if (!eps) {
+      const rec = store.read('libitems', {})[top.libId];
+      eps = ((rec && rec.items) || []).filter((it) => it && it.kind === 'episode' && it.showIdx === show.idx)
+        .sort((a, b) => a.s - b.s || a.e - b.e);
+    }
+    const next = eps.find((ep) => {
+      if (!ep || !ep.file || !(ep.s > top.s || (ep.s === top.s && ep.e > top.e))) return false;
+      const rec = watchRowForKeyFromAll(all, uid, profile, libraryWatchKeyOf(ep));
+      return !(rec && (rec.hidden || rec.watched || (rec.position || 0) > 30));
+    });
+    if (!next) continue;
+    const payload = localItemPayload(ctx, top.libId, next);
+    const title = show.title || String(next.title || '').split(' · ')[0];
+    const tag = `S${String(next.s).padStart(2, '0')}E${String(next.e).padStart(2, '0')}`;
+    out.push({
+      key: payload.watchKey || libraryWatchKeyOf(next),
+      title, q: `${title} ${tag}`, year: show.year || '', genre: 'Episode', rating: '—',
+      overview: next.overview || show.overview || '',
+      backdrop: payload.thumbUrl || payload.artUrl || '', poster: payload.artUrl || payload.thumbUrl || undefined,
+      type: 'episode', season: next.s, episode: next.e, progress: 0, resume: 0,
+      _local: payload.streamUrl ? { streamUrl: payload.streamUrl, playUrl: payload.playUrl, name: title } : null,
+      _libId: top.libId, _localNext: true,
+      updatedAt: top.w.updatedAt || 0,
+    });
+  }
+  return out;
+}
 async function nextWatchEpisodes(uid, profile = 'default') {
   if (!settings.get().tmdbKey) return [];
   const all = store.read('watch', {});
@@ -9538,7 +9595,9 @@ Object.assign(H, {
 
   watchNext: async (ctx) => {
     const profile = ctx.url.searchParams.get('profile') || 'default';
-    send(ctx.res, 200, await nextWatchEpisodes(ctx.user.id, profile));
+    let local = [];
+    try { local = nextLocalEpisodes(ctx, profile); } catch (e) { console.error('[watch next local]', e && e.message); }
+    send(ctx.res, 200, [...await nextWatchEpisodes(ctx.user.id, profile), ...local]);
   },
 
   watchStatsGet: async (ctx) => {
