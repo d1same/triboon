@@ -137,11 +137,27 @@ async function collect(stream) {
 const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
 
 // Pure, so the wording of the answer is testable. fault is 'file', 'triboon' or 'unknown'.
-function byteCheckVerdict({ served, fresh, pieces, mkv, edges }) {
+// The first byte where the two differ, leaving out the window ranges that were not re-read (their
+// zeros never came from the file).
+function firstDifferenceOutside(a, b, unread) {
+  if (!Array.isArray(unread) || !unread.length) return firstDifference(a, b);
+  const n = Math.min(a.length, b.length);
+  let at = 0;
+  for (const [from, to] of [...mergeRanges(unread, n), [n, n]]) {
+    for (let i = at; i < from; i++) if (a[i] !== b[i]) return i;
+    at = Math.max(at, to);
+  }
+  return a.length === b.length ? -1 : n;
+}
+
+function byteCheckVerdict({ served, fresh, pieces, mkv, edges, unread = [] }) {
   const failed = pieces.filter((p) => p.error);
   if (failed.length) return { fault: 'unknown', text: `could not re-read ${failed.length} of ${pieces.length} pieces (${failed[0].error})` };
-  const corrupt = pieces.filter((p) => !p.crcOk || !p.intact);
-  const diff = firstDifference(served, fresh);
+  // A whole article that fails its own checksum is the file's; a copy that came back cut (no end
+  // line) says nothing about the file, and the part of its slot it lacks was not re-read.
+  const corrupt = pieces.filter((p) => !p.crcOk && p.intact);
+  const cut = pieces.filter((p) => !p.intact);
+  const diff = firstDifferenceOutside(served, fresh, unread);
   if (diff >= 0) {
     const off = pieces.filter((p) => p.offGrid);
     return {
@@ -150,6 +166,7 @@ function byteCheckVerdict({ served, fresh, pieces, mkv, edges }) {
     };
   }
   if (corrupt.length) return { fault: 'file', text: `FILE damaged: ${corrupt.length} pieces fail their own checksum` };
+  if (cut.length) return { fault: 'unknown', text: `bytes match the articles, but ${cut.length} of ${pieces.length} pieces came back cut on the re-read: not judged` };
   if (mkv && mkv.broken != null) {
     const near = edges.some((e) => Math.abs(e - mkv.broken) <= 4096);
     return near
@@ -175,7 +192,7 @@ async function runByteCheck(vf, { name = '', log = (line) => debug.fail('play', 
     const served = await collect(vf.read(start, end, { priority: 'background', signal: controller.signal }));
     const { buf: fresh, pieces, edges = [], unread } = await vf.freshBytes(start, end, { signal: controller.signal });
     const mkv = /\.mkv$/i.test(String(vf.name || '')) ? walkMkv(fresh, start) : null;
-    const verdict = byteCheckVerdict({ served, fresh, pieces, mkv, edges });
+    const verdict = byteCheckVerdict({ served, fresh, pieces, mkv, edges, unread });
     const missing = rangeBytes(unread, fresh.length);
     // A short article is served as posted and the rest of its slot is padded with zeros on play.
     const short = pieces.filter((p) => p.short > 0);

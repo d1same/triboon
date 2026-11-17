@@ -284,3 +284,32 @@ test('byte check: through a store-RAR, a slot not re-read sits at the right wind
     else assert.strictEqual(lost.buf[i], payload[start + i], `a byte outside the unread slot at window +${i} must be the file's byte`);
   }
 });
+
+test('byte check: a cut re-read never blames Triboon or the file for the part it did not get back', async () => {
+  // Second check (brief 100): the player got the exact bytes; only the check's own re-read of one
+  // piece came back cut. The verdict compared the zero tail of that re-read with the served bytes
+  // and said "TRIBOON served different bytes".
+  const partSize = 96 * 1024;
+  const data = Buffer.alloc(8 * partSize);
+  for (let i = 0; i < data.length; i++) data[i] = 1 + (i % 251);
+  const vf = memoryStream(data, partSize, {
+    reread: (id, n, good) => (id === 'q3@t' && n > 1 ? good.subarray(0, Math.floor(good.length / 2)) : null),
+  });
+  await vf.mount('startup');
+  vf._lastServedEnd = data.length;
+  const lines = [];
+  const verdict = await runByteCheck(vf, { log: (l) => lines.push(l), name: 'Cut.Reread' });
+  assert.notStrictEqual(verdict.fault, 'triboon', lines[0]);
+  assert.notStrictEqual(verdict.fault, 'file', lines[0]);
+  assert.doesNotMatch(lines[0], /TRIBOON|FILE damaged/);
+  // A real difference outside the part not re-read is still Triboon's.
+  const v2 = byteCheckVerdict({
+    served: Buffer.from([1, 2, 3, 4, 9, 6]), fresh: Buffer.from([1, 2, 0, 0, 5, 6]),
+    pieces: [{ crcOk: false, intact: false }], unread: [[2, 4]], mkv: null, edges: [],
+  });
+  assert.strictEqual(v2.fault, 'triboon');
+  assert.strictEqual(v2.at, 4);
+  // A whole article with a bad checksum is still the file's.
+  const v3 = byteCheckVerdict({ served: Buffer.from([1, 2]), fresh: Buffer.from([1, 2]), pieces: [{ crcOk: false, intact: true }], unread: [], mkv: null, edges: [] });
+  assert.strictEqual(v3.fault, 'file');
+});
