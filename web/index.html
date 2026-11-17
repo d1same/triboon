@@ -7784,6 +7784,28 @@ function paintHomeWatchNow(opts = {}) {
     focusSnapshot: snap,
   });
 }
+// Continue Watching cards of library titles take their picture (and play URL) from the page's local
+// map. A TV that opens on Home never loads a library page, and enrichHome only runs when a library
+// cache or the Live TV favorites are pending, so those cards stayed on the plain gradient (result 98
+// F-4). After Home paints its watch rows, look up once the card keys the map does not have yet.
+function warmContinueWatchingArt(cw) {
+  const tried = S._cwArtTried || (S._cwArtTried = new Set());
+  const keys = [];
+  for (const w of cw || []) {
+    const key = String((w && w.key) || '');
+    if (!key || w.watched || /^(live|audiobook):/i.test(key)) continue;
+    for (const k of [key, w.meta && w.meta.localKey]) {
+      if (!k || tried.has(k) || (S.localMap && S.localMap[k])) continue;
+      tried.add(k);
+      keys.push(k);
+    }
+  }
+  if (!keys.length) return Promise.resolve(false);
+  return fetchLocalPlaybackKeys(keys.slice(0, 100)).then(() => {
+    if (keys.some((k) => S.localMap && S.localMap[k])) paintHomeWatchNow();
+    return true;
+  }).catch(() => false);
+}
 async function warmLocalPlaybackForWatch(cw) {
   const keys = (cw || cachedWatchRowsForHome() || []).map((w) => w && w.key).filter(Boolean);
   if (!keys.length) return;
@@ -7831,6 +7853,7 @@ async function loadRows(opts = {}) {
   if (S.view !== 'home' && !opts.catalogOnly) return;
   perfMark(opts.catalogOnly ? 'home-catalog-render' : 'home-render');
   publishHomeRows(homeRowsFromWatch(cw, false), { preserveFocus: !!opts.preserveFocus, focusSnapshot: opts.focusSnapshot }); // First public paint waits for real rows; local/live enrichment stays off-path.
+  if (!opts.catalogOnly && cw.length) (window.requestIdleCallback || ((f) => setTimeout(f, 200)))(() => warmContinueWatchingArt(cw));
   if (!opts.catalogOnly && opts.watchReady && cw.length) {
     backfillContinueWatchingArt(cw).then((ok) => {
       if (!ok || S.view !== 'home') return;

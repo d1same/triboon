@@ -99,3 +99,29 @@ test('web keys: library cards save under the server\'s watch key and send the li
   assert.match(ui, /if \(p\.item\._localKey && p\.item\._localKey !== payload\.key\) payload\.localKey = p\.item\._localKey;/);
   assert.match(fn('buildCwItems'), /_localKey: \(w\.meta && w\.meta\.localKey\) \|\| undefined/);
 });
+
+test('web keys: Home looks up the pictures of library cards once when the page map is cold (F-4)', async () => {
+  const asked = [];
+  let painted = 0;
+  const S = { localMap: { 'tmdb:movie:9001': { name: 'Copper Lantern' } } };
+  const deps = {
+    S,
+    fetchLocalPlaybackKeys: async (keys) => { asked.push(...keys); for (const k of keys) if (!/missing/.test(k)) S.localMap[k] = { name: k }; },
+    paintHomeWatchNow: () => { painted++; },
+  };
+  const { warmContinueWatchingArt } = load(['warmContinueWatchingArt'], deps);
+  const cw = [
+    { key: 'tmdb:movie:9001', meta: {} }, // already in the map
+    { key: `local:${LIB}:${H}`, meta: {} },
+    { key: 'tmdb:tv:9101:s1e2', meta: { localKey: `local:${LIB}:bbbbbbbbbbbb:s1e2` } },
+    { key: `local:${LIB}:missing00000`, meta: {} },
+    { key: 'live:1', meta: {} },
+    { key: `local:${LIB}:cccccccccccc`, watched: true, meta: {} },
+  ];
+  assert.strictEqual(await warmContinueWatchingArt(cw), true);
+  assert.deepStrictEqual(asked.sort(), [`local:${LIB}:${H}`, `local:${LIB}:bbbbbbbbbbbb:s1e2`, `local:${LIB}:missing00000`, 'tmdb:tv:9101:s1e2'].sort());
+  assert.strictEqual(painted, 1, 'Home repaints once the pictures are known');
+  assert.strictEqual(await warmContinueWatchingArt(cw), false, 'a key that found nothing is not asked again');
+  assert.strictEqual(asked.length, 4);
+  assert.match(fn('loadRows'), /publishHomeRows\(homeRowsFromWatch\(cw, false\)[^\n]+\n\s*if \(!opts\.catalogOnly && cw\.length\) \(window\.requestIdleCallback \|\| \(\(f\) => setTimeout\(f, 200\)\)\)\(\(\) => warmContinueWatchingArt\(cw\)\);/);
+});
