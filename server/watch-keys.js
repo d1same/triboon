@@ -274,7 +274,20 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
   const note = (entry) => { if (stats.log.length < 2000) stats.log.push(entry); };
   const prev = makeIndex(prevItems);
   const next = makeIndex(items);
-  const moveMap = new Map(moves.map((m) => [m.from, m]));
+  // One catalog key can leave several copies at once (a 1080p and a 2160p folder of one film, both
+  // switched to "Folder & NFO only"): each row goes with the copy its stamp or file name names.
+  const moveMap = new Map();
+  for (const m of moves) { if (!moveMap.has(m.from)) moveMap.set(m.from, []); moveMap.get(m.from).push(m); }
+  const moveFor = (list, row) => {
+    if (list.length === 1) return list[0];
+    const meta = (row && row.meta) || {};
+    if (meta.localKey) return list.find((m) => m.item && m.item.key === meta.localKey) || list[list.length - 1];
+    const src = meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
+    const named = src ? list.filter((m) => m.item && m.item.file && baseName(m.item.file) === src) : [];
+    // No stamp and no file name of one copy: the last copy, as before (the owner's answer 4 carries
+    // progress over; which copy of the same title cannot be told).
+    return named.length === 1 ? named[0] : list[list.length - 1];
+  };
   const targetFor = (it) => {
     if (!it) return null;
     // The item's counterpart in this pass (same stable key), else the key it had.
@@ -311,7 +324,8 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
       const parts = split(fullKey);
       if (!parts) continue;
       const { prefix, key } = parts;
-      const mv = moveMap.get(key);
+      const mvs = moveMap.get(key);
+      const mv = mvs ? moveFor(mvs, row) : null;
       if (mv) {
         // A catalog row leaves its catalog key with this copy unless it is shown to be another copy
         // (another item's stamp, a Usenet release as its source, a Trakt import) or its user cannot

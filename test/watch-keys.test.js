@@ -364,6 +364,21 @@ test('watch keys: twins with one title and one file name are not told apart by a
   assert.deepStrictEqual(Object.keys(watch), []);
 });
 
+test('watch keys: two copies of one matched film lose the match: each stamped row follows its own copy', () => {
+  const before = pass([film('Film (2010) 1080p', 'a.mkv', { tmdbId: 77, title: 'Film' }), film('Film (2010) 2160p', 'b.mkv', { tmdbId: 77, title: 'Film' })]);
+  const after = pass([film('Film (2010) 1080p', 'a.mkv', { title: 'Film' }), film('Film (2010) 2160p', 'b.mkv', { title: 'Film' })]);
+  const watch = {
+    'u1:p1:tmdb:movie:77': row('Film', { position: 300, meta: { title: 'Film', type: 'movie', localKey: before[0].key } }),
+    'u1:p2:tmdb:movie:77': row('Film', { position: 600, meta: { title: 'Film', type: 'movie', localKey: before[1].key } }),
+    'u1:p3:tmdb:movie:77': row('Film', { position: 900, meta: { title: 'Film', type: 'movie', source: { name: 'a.mkv' } } }),
+  };
+  run(before, after, watch);
+  assert.strictEqual(watch[`u1:p1:${after[0].key}`].position, 300, 'the 1080p copy');
+  assert.strictEqual(watch[`u1:p2:${after[1].key}`].position, 600, 'the 2160p copy');
+  assert.strictEqual(watch[`u1:p3:${after[0].key}`].position, 900, 'its file name names the 1080p copy');
+  assert.ok(!Object.keys(watch).some((k) => k.endsWith('tmdb:movie:77')), 'nothing is left on a catalog key no copy uses');
+});
+
 test('watch keys: a doubled episode file removed: the other copy takes the S/E key and keeps its own progress', () => {
   const show = { kind: 'show', dir: at('Kuh'), title: 'Kuh' };
   const a = { kind: 'episode', file: at('Kuh', 'Kuh S01E01 (1080p).mkv'), fileSize: 50, showIdx: 0, s: 1, e: 1, title: 'Kuh · S01E01' };
