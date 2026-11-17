@@ -290,6 +290,68 @@ test('resume keys: the boot pass keys a library stored by 3.4.15 and moves its r
   }
 });
 
+test('resume keys: a Jellyfin app and the pages share one row through the stable key, also after a rescan', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-keys-jf-'));
+  put(root, 'Alpha Film/alpha.mkv');
+  put(root, 'Bravo Film/bravo.mkv');
+  const srv = await bootServer({ TMDB_BASE: null });
+  const send = (method, p, headers, body) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: srv.port, path: p, method, headers: headers || {} }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        let json = null;
+        try { json = raw ? JSON.parse(raw) : null; } catch { /* text */ }
+        resolve({ status: res.statusCode, json });
+      });
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+  try {
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings', { jellyfinApps: true }, admin);
+    const lib = (await httpJson(srv.port, 'POST', '/api/libraries', { name: 'Films', kind: 'movie', path: root }, admin)).json;
+    await runScan(srv.port, lib.id, admin);
+    const items = await allItems(srv.port, lib.id, admin);
+    const alpha = find(items, /^Alpha/, 'movie');
+    const bravo = find(items, /^Bravo/, 'movie');
+    const login = await send('POST', '/Users/AuthenticateByName', { 'content-type': 'application/json', authorization: 'MediaBrowser Client="Test", Device="PC", DeviceId="pc-keys", Version="1"' },
+      JSON.stringify({ Username: 'owner', Pw: 'hunter22' }));
+    assert.strictEqual(login.status, 200);
+    const authz = { authorization: `MediaBrowser Client="Test", Device="PC", DeviceId="pc-keys", Version="1", Token="${login.json.AccessToken}"` };
+    const me = (await send('GET', '/Users/Me', authz)).json;
+    const shelf = (await send('GET', `/Users/${me.Id}/Items?ParentId=l${lib.id}&IncludeItemTypes=Movie&Recursive=true&Limit=10`, authz)).json.Items;
+    const jfBravo = shelf.find((row) => row.Name === 'Bravo Film');
+    assert.ok(jfBravo, JSON.stringify(shelf.map((r) => r.Name)));
+    const played = await send('POST', `/Users/${me.Id}/PlayedItems/${jfBravo.Id}`, authz);
+    assert.strictEqual(played.json.Played, true);
+    // Jellyfin saves into the account's first profile (it has no profile picker): read every row.
+    const allRows = () => Object.entries(srv.store.read('watch', {})).map(([k, v]) => ({ key: k.split(':').slice(2).join(':'), ...v }));
+    const rows = allRows();
+    assert.ok(rows.some((w) => w.key === bravo.watchKey && w.watched), `the app's tick lands on the stable key (${rows.map((w) => w.key)})`);
+    assert.ok(!rows.some((w) => /^local:[^:]+:\d{1,5}$/.test(w.key)), 'not on a position');
+    // A pause saved by a page under the stable key shows on the app's Continue Watching row.
+    await save(srv.port, admin, { key: alpha.watchKey, position: 90, duration: 3600, meta: { title: 'Alpha Film', type: 'movie' } });
+    let resume = (await send('GET', `/Users/${me.Id}/Items/Resume`, authz)).json.Items;
+    assert.strictEqual((resume.find((r) => r.Name === 'Alpha Film') || {}).UserData?.PlaybackPositionTicks, 90 * 10000000);
+    // A folder that sorts first moves every position; the app still sees the same title and minute.
+    put(root, 'Aaa Film/aaa.mkv');
+    await runScan(srv.port, lib.id, admin);
+    resume = (await send('GET', `/Users/${me.Id}/Items/Resume`, authz)).json.Items;
+    const again = resume.find((r) => r.Name === 'Alpha Film');
+    assert.ok(again && again.UserData.PlaybackPositionTicks === 90 * 10000000, 'same title, same minute after the shift');
+    assert.ok(!resume.some((r) => r.Name === 'Aaa Film'), 'the new first folder did not take Alpha\'s minute');
+    const shelf2 = (await send('GET', `/Users/${me.Id}/Items?ParentId=l${lib.id}&IncludeItemTypes=Movie&Recursive=true&Limit=10`, authz)).json.Items;
+    assert.strictEqual(shelf2.find((row) => row.Name === 'Bravo Film').UserData.Played, true, 'the tick stays on Bravo');
+    assert.ok(!shelf2.find((row) => row.Name === 'Aaa Film').UserData.Played);
+  } finally {
+    await srv.shutdown();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('resume keys: Fix match works in a "Folder & NFO only" library, and switching modes carries progress both ways (S-4, M-3, S-1)', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-keys-mode-'));
   put(root, 'Copper Lantern (2010)/Copper Lantern.mkv');
