@@ -223,14 +223,18 @@ function planMoves({ prevItems, items, watchKeyOf, claimedElsewhere = () => fals
   return moves;
 }
 
-// Was this row played from this library item? The server's stamp says so; a 3.4.15 row says so by
-// its file name.
+// May a catalog row follow this library item when its match changes? The owner's rule (answer 4):
+// progress carries over, so a row goes along unless something says it is NOT this copy: the
+// server's stamp names another item, the saved source is another file (a Usenet release), or the
+// row was imported from Trakt. Rows saved before 3.4.16 rarely carry a stamp or a file name (a card
+// resume drops it), so requiring one would carry almost nothing.
 function rowFromCopy(row, item) {
   const meta = (row && row.meta) || {};
-  if (!item) return false;
+  if (!item || (row && row.fromTrakt)) return false;
   if (meta.localKey) return meta.localKey === item.key;
   const src = meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
-  return !!(src && item.file && baseName(item.file) === src);
+  if (src) return !!(item.file && baseName(item.file) === src);
+  return true;
 }
 
 function stampFor(item, libId) {
@@ -242,7 +246,7 @@ function stampFor(item, libId) {
 //   watch:     { "<uid>:<profile>:<key>": row }
 //   watchlist: { "<uid>:<key>": row }
 //   orphans:   { "<original full key>": { row, table, at, reason, libId } }
-function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items, moves, watchKeyOf, now = Date.now() }) {
+function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items, moves, watchKeyOf, now = Date.now(), userSees = () => true }) {
   const stats = { moved: 0, merged: 0, parked: 0, legacy: 0, purged: 0, log: [] };
   const note = (entry) => { if (stats.log.length < 2000) stats.log.push(entry); };
   const prev = makeIndex(prevItems);
@@ -258,7 +262,14 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
     const have = doc[toFull];
     const meta = stamp ? { ...(row.meta || {}), ...stamp } : row.meta;
     const moved = { ...row, meta };
-    if (!have || (row.updatedAt || row.addedAt || 0) > (have.updatedAt || have.addedAt || 0)) doc[toFull] = moved;
+    const at = (r) => r.updatedAt || r.addedAt || 0;
+    // The newer row wins, except that a watched tick is not lost to a newer row that only started
+    // the episode again (the catalog page's "Play S01E01" wrote 2 s over a finished episode).
+    const replay = (newer, older) => older.watched && !newer.watched && (Number(newer.position) || 0) <= 30;
+    let keepMoved = !have || at(row) > at(have);
+    if (have && keepMoved && replay(row, have)) keepMoved = false;
+    else if (have && !keepMoved && replay(have, row)) keepMoved = true;
+    if (keepMoved) doc[toFull] = moved;
     else stats.merged++;
     if (fromFull !== toFull) delete doc[fromFull];
     stats.moved++;
@@ -279,10 +290,10 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
       const { prefix, key } = parts;
       const mv = moveMap.get(key);
       if (mv) {
-        // A catalog row is shared with the Usenet copy, Trakt and other users' history: it leaves its
-        // catalog key only when it was played from THIS library copy (the server's stamp, or the
-        // 3.4.15 file name). Rows imported from Trakt never move.
-        if (/^tmdb:/i.test(key) && (row.fromTrakt || !rowFromCopy(row, mv.item))) continue;
+        // A catalog row leaves its catalog key with this copy unless it is shown to be another copy
+        // (another item's stamp, a Usenet release as its source, a Trakt import) or its user cannot
+        // see this library.
+        if (/^tmdb:/i.test(key) && (!rowFromCopy(row, mv.item) || !userSees(prefix.split(':')[0]))) continue;
         put(doc, fullKey, prefix + mv.to, row, stampFor(mv.item, libId));
         continue;
       }

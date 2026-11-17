@@ -136,10 +136,49 @@ test('watch keys: a gained, lost or changed match moves the rows; a still-claime
   const other = pass([film('Romeo', 'r.mkv', { tmdbId: 681, matchOverride: 681, matchTitle: 'Other' })]);
   const fix = {
     'u1:default:tmdb:movie:680': row('Romeo', { meta: mine }),
-    'u2:default:tmdb:movie:680': row('Pulp Fiction', { meta: { title: 'Pulp Fiction' } }),
+    'u2:default:tmdb:movie:680': row('Pulp Fiction', { meta: { title: 'Pulp Fiction', source: { name: 'Pulp.Fiction.1994.WEB' } } }),
   };
   run(after, other, fix);
   assert.ok(fix['u1:default:tmdb:movie:681'] && fix['u2:default:tmdb:movie:680']);
+});
+
+test('watch keys: a mode switch carries rows saved before 3.4.16 (no stamp, no file name), unless they are shown to be another copy', () => {
+  // Owner answer 4: progress carries over when a library switches to "Folder & NFO only". Rows saved
+  // before 3.4.16 rarely name their file (a card resume drops it), so the rule is "carry unless shown
+  // otherwise".
+  const before = pass([film('Romeo', 'r.mkv', { tmdbId: 680, matchOverride: 680, matchTitle: 'Pulp Fiction' })]);
+  const after = pass([film('Romeo', 'r.mkv')]);
+  const watch = {
+    'u1:default:tmdb:movie:680': row('Romeo', { meta: { title: 'Romeo', type: 'movie' } }), // plain old row: carried
+    'u1:p2:tmdb:movie:680': row('Pulp Fiction', { meta: { title: 'Pulp Fiction', source: { name: 'Pulp.Fiction.1994.WEB' } } }), // a Usenet release
+    'u1:p3:tmdb:movie:680': row('Romeo', { meta: { title: 'Romeo', localKey: 'local:other:aaaaaaaaaaaa' } }), // another library copy
+    'u1:p4:tmdb:movie:680': row('Romeo', { fromTrakt: true }),
+    'u9:default:tmdb:movie:680': row('Romeo'), // a user who cannot see this library
+  };
+  const moves = planMoves({ prevItems: before, items: after, watchKeyOf: wk });
+  applyLibraryMoves({ libId: LIB, watch, watchlist: {}, orphans: {}, prevItems: before, items: after, moves, watchKeyOf: wk, userSees: (uid) => uid !== 'u9' });
+  assert.ok(watch[`u1:default:${after[0].key}`], 'the plain row followed the folder');
+  for (const k of ['u1:p2:tmdb:movie:680', 'u1:p3:tmdb:movie:680', 'u1:p4:tmdb:movie:680', 'u9:default:tmdb:movie:680']) assert.ok(watch[k], `${k} stays`);
+});
+
+test('watch keys: a merge keeps a watched tick over a newer row that only started the episode again', () => {
+  const prev = pass([
+    { kind: 'show', dir: at('Iron Harbor (2015)'), title: 'Iron Harbor', tmdbId: 9101, matchTitle: 'Iron Harbor', matchSource: 'nfo' },
+    { kind: 'episode', file: at('Iron Harbor (2015)', 'S01E01.mkv'), showIdx: 0, s: 1, e: 1, title: 'Iron Harbor · S01E01', tmdbId: 9101, matchTitle: 'Iron Harbor', matchSource: 'nfo' },
+  ]);
+  const watch = {
+    [`u1:default:local:${LIB}:1`]: row('Iron Harbor — S01E01', { watched: true, position: 121, updatedAt: 100, meta: { title: 'Iron Harbor — S01E01', type: 'episode' } }),
+    'u1:default:tmdb:tv:9101:s1e1': row('Iron Harbor', { watched: false, position: 2, updatedAt: 200, meta: { title: 'Iron Harbor', type: 'episode' } }),
+  };
+  run(prev, prev, watch);
+  assert.strictEqual(watch['u1:default:tmdb:tv:9101:s1e1'].watched, true, 'the 2 s replay from "Play S01E01" does not undo the finished episode');
+  // A newer row with real progress still wins.
+  const w2 = {
+    [`u1:default:local:${LIB}:1`]: row('Iron Harbor — S01E01', { watched: true, position: 121, updatedAt: 100, meta: { title: 'Iron Harbor — S01E01', type: 'episode' } }),
+    'u1:default:tmdb:tv:9101:s1e1': row('Iron Harbor', { watched: false, position: 90, updatedAt: 200, meta: { title: 'Iron Harbor', type: 'episode' } }),
+  };
+  run(prev, prev, w2);
+  assert.strictEqual(w2['u1:default:tmdb:tv:9101:s1e1'].position, 90);
 });
 
 test('watch keys: a generic file name names the file only together with the saved title and kind', () => {

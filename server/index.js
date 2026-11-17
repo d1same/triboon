@@ -5313,7 +5313,23 @@ function saveLibraryScan(libId, scannedAt, items) {
 // ---- Stable watch keys (brief 99): progress follows the item on disk, not its scan position ----
 // The key progress is saved under, from the read-time view (a match that fails the read-time check
 // counts as none, as everywhere else).
-function libraryWatchKeyOf(item) { return watchKeyFor(unboundLibraryItem(item)); }
+// The read-time match check parses names, a pass asks for every item, and each pass builds new item
+// objects: memoised across passes by every field the check reads (bounded). An item without a
+// catalog id needs no check at all.
+const watchKeyMemo = new Map();
+function libraryWatchKeyOf(item) {
+  if (!item || typeof item !== 'object') return watchKeyFor(unboundLibraryItem(item));
+  if (!item.tmdbId) return item.key || '';
+  const sig = [item.key, item.kind, item.tmdbId, item.matchOverride, item.matchSource, item.matchTitle, item.originalTitle,
+    item.title, item.titleSource, item.year, item.file || item.dir, item.s, item.e, item.tmdbShared ? 1 : 0].join('\u0001');
+  let k = watchKeyMemo.get(sig);
+  if (k === undefined) {
+    if (watchKeyMemo.size >= 100000) watchKeyMemo.clear();
+    k = watchKeyFor(unboundLibraryItem(item));
+    watchKeyMemo.set(sig, k);
+  }
+  return k;
+}
 // Copies of stored items with their stable keys. A stored key always wins: it is the key the rows
 // were saved under. When the library path changes to a parent or child folder the new pass computes
 // other keys, so those items look vanished and appeared, and the name + size pairing carries their
@@ -5330,8 +5346,10 @@ function keyedLibraryCopy(lib, items) {
   return copy;
 }
 // A catalog key that another library item still owns keeps its rows when this item loses the match.
-function tmdbWatchKeyClaimed(key, libId, items) {
-  for (const it of items || []) if (it && it.tmdbId && libraryWatchKeyOf(it) === key) return true;
+// `liveKeys`: the watch keys of this library's current items, built once per pass by the caller
+// (a pass can ask about thousands of keys).
+function tmdbWatchKeyClaimed(key, libId, liveKeys) {
+  if (liveKeys && liveKeys.has(key)) return true;
   const others = store.read('libraries', { list: [] }).list
     .filter((l) => l && l.path && String(l.id) !== String(libId)).map((l) => String(l.id));
   if (!others.length) return false;
@@ -5366,9 +5384,13 @@ function reconcileLibraryWatch(lib, prevItems, items, opts = {}) {
     const libRe = String(lib.id).replace(/[^\w-]/g, '');
     const legacy = new RegExp(`:local:${libRe}:\\d{1,5}$`);
     const hasLegacy = Object.keys(watch).some((k) => legacy.test(k)) || Object.keys(watchlist).some((k) => legacy.test(k));
+    let liveKeys = null;
     const moves = opts.unchanged ? [] : planMoves({
       prevItems, items, watchKeyOf: libraryWatchKeyOf,
-      claimedElsewhere: (key) => tmdbWatchKeyClaimed(key, lib.id, items),
+      claimedElsewhere: (key) => {
+        if (!liveKeys) liveKeys = new Set(items.filter((it) => it && it.tmdbId).map((it) => libraryWatchKeyOf(it)));
+        return tmdbWatchKeyClaimed(key, lib.id, liveKeys);
+      },
     });
     const orphans = store.read('watchOrphans', {});
     const parkedHere = Object.values(orphans).some((v) => v && v.key && String(v.libId) === String(lib.id));
@@ -5379,8 +5401,12 @@ function reconcileLibraryWatch(lib, prevItems, items, opts = {}) {
     if (!hasLegacy && !moves.length && !anyVanished && !parkedHere) return null;
     // Rows only move after a copy of them is on disk.
     backupWatchBeforeKeys();
+    // A catalog row of a user who cannot see this library never follows its library copy.
+    const users = store.read('users', { list: [] }).list || [];
+    const userSees = (uid) => !(lib.users && lib.users.length) || lib.users.includes(uid)
+      || users.some((u) => u && u.id === uid && u.role === 'admin');
     const stats = applyLibraryMoves({
-      libId: lib.id, watch, watchlist, orphans, prevItems, items, moves, watchKeyOf: libraryWatchKeyOf,
+      libId: lib.id, watch, watchlist, orphans, prevItems, items, moves, watchKeyOf: libraryWatchKeyOf, userSees,
     });
     stats.restored = restoreReturned({ libId: lib.id, watch, watchlist, orphans, items, watchKeyOf: libraryWatchKeyOf });
     stats.gone = anyVanished ? parkVanished({
