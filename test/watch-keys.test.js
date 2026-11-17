@@ -401,3 +401,25 @@ test('watch keys: a doubled episode file removed: the other copy takes the S/E k
   run(one, two, w2);
   assert.strictEqual(w2[`u1:default:${one[1].key}`].position, 400, 'the S/E row is not moved off its key');
 });
+
+test('watch keys: a row imported from Trakt never wins a merge over the user\'s own row', () => {
+  const before = pass([film('Copper', 'c.mkv', { title: 'Copper' })]);
+  const after = pass([film('Copper', 'c.mkv', { title: 'Copper', tmdbId: 9001 })]);
+  const watch = {
+    [`u1:default:${before[0].key}`]: row('Copper', { position: 300, updatedAt: 100, meta: { title: 'Copper', type: 'movie', localKey: before[0].key } }),
+    'u1:default:tmdb:movie:9001': { position: 0, duration: 0, watched: true, fromTrakt: true, meta: { title: 'Copper', type: 'movie' }, updatedAt: 200 },
+  };
+  run(before, after, watch);
+  const r = watch['u1:default:tmdb:movie:9001'];
+  assert.strictEqual(r.position, 300, 'the user\'s 300 s stays');
+  assert.ok(!r.fromTrakt);
+});
+
+test('watch keys: a row that changes catalog title is sent to Trakt again under the new title', () => {
+  const before = pass([film('Romeo', 'r.mkv', { title: 'Romeo', tmdbId: 680 })]);
+  const after = pass([film('Romeo', 'r.mkv', { title: 'Romeo', tmdbId: 681 })]);
+  const watch = { 'u1:default:tmdb:movie:680': row('Romeo', { watched: true, traktExportedAt: 50, meta: { title: 'Romeo', type: 'movie' } }) };
+  run(before, after, watch);
+  assert.ok(watch['u1:default:tmdb:movie:681']);
+  assert.strictEqual(watch['u1:default:tmdb:movie:681'].traktExportedAt, undefined);
+});

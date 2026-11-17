@@ -298,6 +298,11 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
     const have = doc[toFull];
     const meta = stamp ? { ...(row.meta || {}), ...stamp } : row.meta;
     const moved = { ...row, meta };
+    // Sent to Trakt under another catalog title (a match changed from one id to another): send it
+    // again under this one.
+    if (fromFull !== toFull && /:tmdb:/i.test(toFull) && fromFull.slice(fromFull.indexOf(':tmdb:')) !== toFull.slice(toFull.indexOf(':tmdb:'))) {
+      delete moved.traktExportedAt;
+    }
     const at = (r) => r.updatedAt || r.addedAt || 0;
     // The newer row wins, except that a watched tick is not lost to a newer row that only started
     // the episode again (the catalog page's "Play S01E01" wrote 2 s over a finished episode).
@@ -305,6 +310,10 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
     let keepMoved = !have || at(row) > at(have);
     if (have && keepMoved && replay(row, have)) keepMoved = false;
     else if (have && !keepMoved && replay(have, row)) keepMoved = true;
+    // A row imported from Trakt (stamped with the time of the sync) never replaces the user's own
+    // row: after a mode switch and back, the import sits on the catalog key the user's row returns to.
+    if (have && have.fromTrakt && !row.fromTrakt) keepMoved = true;
+    else if (have && !have.fromTrakt && row.fromTrakt) keepMoved = false;
     if (keepMoved) doc[toFull] = moved;
     else stats.merged++;
     if (fromFull !== toFull) delete doc[fromFull];
