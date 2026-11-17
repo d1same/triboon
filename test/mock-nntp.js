@@ -23,7 +23,7 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
   // statHolds: msgId → promise; that STAT's reply (and everything after it on that socket) waits.
   // statReplyAll: when set, EVERY STAT is answered with this line instead of 223/430 (a provider
   // that breaks RFC 3977 by answering STAT with another 2xx). Off unless armed.
-  const state = { stallNext: 0, connCount: 0, trickle: null, bodyCounts: new Map(), unaskedOnStat: null, statHolds: new Map(), statReplyAll: null, statCount: 0 };
+  const state = { stallNext: 0, connCount: 0, trickle: null, bodyCounts: new Map(), unaskedOnStat: null, statHolds: new Map(), statReplyAll: null, statCount: 0, cuts: [] };
   const server = net.createServer((sock) => {
     state.connCount++;
     sockets.add(sock); sock.on('close', () => sockets.delete(sock));
@@ -78,6 +78,22 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
           if (articles.has(id) && !missing.has(id)) {
             const body = dotStuff(articles.get(id));
             const full = Buffer.concat([Buffer.from(`222 0 <${id}>\r\n`), body, Buffer.from('.\r\n')]);
+            // cutNextBody: the next BODY (or the next one for `id`) stops after `keepBytes` of its
+            // body. then 'end': the provider closes the reply anyway ('.' line), a short body that
+            // looks complete to NNTP. then 'destroy': the socket dies mid-transfer.
+            const cut = state.cuts.find((c) => !c.id || c.id === id);
+            if (cut) {
+              state.cuts.splice(state.cuts.indexOf(cut), 1);
+              const head = Buffer.concat([Buffer.from(`222 0 <${id}>\r\n`), body.subarray(0, Math.min(cut.keepBytes, body.length))]);
+              enqueue(() => new Promise((done) => setTimeout(() => {
+                if (!sock.destroyed) {
+                  if (cut.then === 'destroy') { sock.write(head); setTimeout(() => { sock.destroy(); done(); }, 5); return; }
+                  sock.write(Buffer.concat([head, Buffer.from('\r\n.\r\n')]));
+                }
+                done();
+              }, latencyMs)));
+              continue;
+            }
             if (state.trickle) {
               const { pieces, gapMs } = state.trickle; state.trickle = null;
               const size = Math.max(1, Math.ceil(full.length / pieces));
@@ -105,6 +121,11 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0, authThen
     bodyCount: (id) => state.bodyCounts.get(String(id).replace(/[<>]/g, '')) || 0,
     stallNext: (n) => { state.stallNext = n; },          // next n STAT/BODY commands get NO response
     trickleNext: (pieces, gapMs) => { state.trickle = { pieces, gapMs }; }, // next BODY dribbles in slowly-but-alive
+    // The next BODY (any, or the one for `id`) is cut after `keepBytes`: then 'end' closes the reply
+    // normally (short body), 'destroy' kills the socket mid-transfer.
+    cutNextBody: ({ keepBytes = 1000, then = 'end', id = null } = {}) => { state.cuts.push({ keepBytes, then, id: id ? String(id).replace(/[<>]/g, '') : null }); },
+    pendingCuts: () => state.cuts.length,                // cuts armed but not yet used
+    pendingStalls: () => state.stallNext,                // stalls armed but not yet used
     connCount: () => state.connCount,                    // total connections ever accepted
     dropConnections: () => { for (const s of sockets) s.destroy(); }, // provider idle-kill (FIN), server stays up
     deauthSockets: () => { for (const s of sockets) if (s._deauth) s._deauth(); }, // live sockets now answer 480
