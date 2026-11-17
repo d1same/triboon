@@ -17,7 +17,7 @@ const { Store, VerdictCache, scrubOrphanTempDirs } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
-const { assignStableKeys, watchKeyFor, parseLocalKey } = require('./library-keys');
+const { assignStableKeys, watchKeyFor, parseLocalKey, itemRelPath } = require('./library-keys');
 const { planMoves, applyLibraryMoves, parkVanished, restoreReturned, parkLibraryRows, rowConfirms } = require('./watch-keys');
 const { pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryAutoTmdbMatch, libraryScanUsesLocalMetaOnly, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt, libraryNameParts, libraryTmdbQueries, isLibrarySeasonDir, librarySeasonFromDir, libraryEpisodeNumber, solarToGregorian, foldPersian, cleanNfoTitle } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter, SIGN_IN_NAME_MAX } = require('./auth');
@@ -5290,6 +5290,7 @@ function sameLibraryItems(prev, next) {
     const b = next[i] || {};
     const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
     for (const k of keys) {
+      if (k === 'relPath') continue; // recomputed each pass, never stored (library-db storedPayload)
       const x = a[k];
       const y = b[k];
       if (x === undefined && y === undefined) continue;
@@ -5455,7 +5456,10 @@ function localWatchStamp(ctx, key, hint) {
     const item = libraryItemByKey(lk.libId, k);
     if (!item || !item.key) return null;
     if (viaHint && libraryWatchKeyOf(item) !== key) return null;
-    return { localKey: item.key, relPath: item.relPath || undefined };
+    // The relative path is not stored with the item: recompute it from the library folder.
+    const lib = store.read('libraries', { list: [] }).list.find((l) => l && String(l.id) === String(lk.libId));
+    const rel = item.relPath || (lib ? itemRelPath(resolveLibraryPath(lib.path), item) : null);
+    return { localKey: item.key, relPath: rel || undefined };
   } catch { return null; }
 }
 // A legacy position key -> the stable watch key of the item at that position NOW, when that item has
