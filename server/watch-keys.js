@@ -345,6 +345,9 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
       }
       const lk = parseLocalKey(key);
       if (!lk || !lk.legacy || String(lk.libId) !== String(libId)) continue;
+      // No previous pass (the library database could not open): a position names nothing yet, and
+      // a row kept aside now would never come back. It waits for a pass that knows its position.
+      if (!prev.items.length) continue;
       stats.legacy++;
       const owner = resolveLegacyRow(row, lk.pos, prev);
       const target = targetFor(owner);

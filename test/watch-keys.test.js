@@ -423,3 +423,13 @@ test('watch keys: a row that changes catalog title is sent to Trakt again under 
   assert.ok(watch['u1:default:tmdb:movie:681']);
   assert.strictEqual(watch['u1:default:tmdb:movie:681'].traktExportedAt, undefined);
 });
+
+test('watch keys: with no previous pass to read positions from, old rows wait; none is kept aside', () => {
+  // The library database could not open, so the scan had no stored items: a position names nothing.
+  const items = pass([film('Bravo', 'b.mkv'), film('Delta', 'd.mkv')]);
+  const watch = { [`u1:default:local:${LIB}:1`]: row('Delta') };
+  const { stats, orphans } = run([], items, watch);
+  assert.strictEqual(stats.parked, 0);
+  assert.deepStrictEqual(orphans, {});
+  assert.ok(watch[`u1:default:local:${LIB}:1`], 'the row waits for a pass that knows its position');
+});
