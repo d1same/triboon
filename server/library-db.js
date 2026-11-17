@@ -177,6 +177,15 @@ class LibraryDb {
     return this._parsePayload(this._byKeyStmt.get(String(libId), String(key)));
   }
 
+  // How many stored items of a library have no stable key yet (null when the library is not stored).
+  unkeyedCount(libId) {
+    if (!this.available || !this.db) return null;
+    const meta = this.db.prepare('SELECT 1 AS hit FROM library_meta WHERE lib_id = ?').get(String(libId));
+    if (!meta) return null;
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM library_items WHERE lib_id = ? AND json_extract(payload, '$.key') IS NULL").get(String(libId));
+    return row ? row.n : 0;
+  }
+
   // Every episode of one show, in season and episode order.
   showEpisodes(libId, showIdx) {
     if (!this.available || !this.db) return null;

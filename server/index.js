@@ -5489,6 +5489,15 @@ function keyStoredLibraries() {
     if (!lib || !lib.path) continue;
     const st = scanStates.get(lib.id);
     if (st && st.running) continue;
+    // Already keyed and no position rows left: nothing to do. Reading and re-keying 20,000 stored
+    // items held the server for over a second on every start (real setup, brief 101).
+    const legacy = new RegExp(`:local:${String(lib.id).replace(/[^\w-]/g, '')}:\\d{1,5}$`);
+    const hasLegacy = Object.keys(store.read('watch', {})).some((k) => legacy.test(k))
+      || Object.keys(store.read('watchlist', {})).some((k) => legacy.test(k));
+    if (!hasLegacy && libraryDb.available && libraryDb.unkeyedCount(lib.id) === 0) {
+      out.push({ lib: lib.id, stats: null, skipped: true });
+      continue;
+    }
     const rec = libraryRecord(lib.id);
     if (!rec || !Array.isArray(rec.items) || !rec.items.length) continue;
     const keyed = keyedLibraryCopy(lib, rec.items);
