@@ -336,3 +336,20 @@ test('watch keys: thousands of old rows on a large library move in well under se
   assert.strictEqual(stats.parked, 0);
   assert.ok(ms < 3000, `took ${ms} ms`);
 });
+
+// ---- Second check (brief 100) ----
+
+test('watch keys: an episode row resumed from a Continue Watching card (show title only) is placed by its saved S/E, not by its position', () => {
+  // 3.4.13 to 3.4.15 cards drop "— S01E02" from the title, and a save in the first 30 s has no file
+  // name; the row still carries the episode in q and genre. An S01E00 file added later moved E01
+  // onto the position E02 was saved at.
+  const show = { kind: 'show', dir: at('Iron Harbor'), title: 'Iron Harbor' };
+  const ep = (e) => ({ kind: 'episode', file: at('Iron Harbor', `Iron Harbor S01E0${e}.mkv`), showIdx: 0, s: 1, e, title: `Iron Harbor · S01E0${e}` });
+  const prev = pass([show, ep(0), ep(1), ep(2)]);
+  const meta = { title: 'Iron Harbor', type: 'episode', _kind: 'episode', q: 'Iron Harbor S01E02', genre: 'S01E02' };
+  const watch = { [`u1:default:local:${LIB}:2`]: row('Iron Harbor', { meta }) };
+  run(prev, prev, watch);
+  assert.deepStrictEqual(Object.keys(watch), [`u1:default:${prev[0].key}:s1e2`], 'E02, never the E01 now at its position');
+  // A film's genre ("Drama") or a film title that is its q never reads as an episode.
+  assert.strictEqual(savedTitleParts({ title: 'Baran', genre: 'Drama', q: 'Baran' }).s, null);
+});

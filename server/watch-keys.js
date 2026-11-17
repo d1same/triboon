@@ -45,6 +45,14 @@ function savedTitleParts(meta) {
   const ms = meta && Number.isInteger(+meta.season) ? +meta.season : null;
   const me = meta && Number.isInteger(+meta.episode) ? +meta.episode : null;
   if (out.s === null && ms !== null && me !== null) { out.s = ms; out.e = me; }
+  // A Continue Watching card (3.4.13 to 3.4.15) drops "— S01E02" from the title it saves, but a
+  // library episode row keeps its code in `genre` ("S01E02") and `q` ("Show S01E02"). Without it
+  // the row could only be placed by a position that may have shifted inside its show.
+  if (out.s === null && meta && meta._kind !== 'movie' && meta.type !== 'movie') {
+    const code = /^\s*S(\d{1,3})\s*E(\d{1,4})\s*$/i.exec(String(meta.genre || ''))
+      || /\bS(\d{1,3})\s*E(\d{1,4})\s*$/i.exec(String(meta.q || ''));
+    if (code) { out.s = parseInt(code[1], 10); out.e = parseInt(code[2], 10); }
+  }
   return out;
 }
 
