@@ -183,6 +183,7 @@ test('zero bytes: a player that reconnects mid-piece at the next byte, again and
       const parts = [];
       let pos = 0;
       let round = 0;
+      let errors = 0;
       while (pos < rel.size) {
         round++;
         if (round % 4 === 0) mock.trickleNext(5, 10);
@@ -201,7 +202,12 @@ test('zero bytes: a player that reconnects mid-piece at the next byte, again and
             if (got >= stopAfter) { ctl.abort(); vf.cancelReadAhead(); break; }
           }
         } catch (e) {
-          if (!ctl.signal.aborted) throw e;
+          // Two faults can land on one piece and use up its one retry: the stream then ends with an
+          // error (never filler), and the player reconnects at the next byte, as it does here.
+          if (!ctl.signal.aborted) {
+            errors++;
+            if (errors > 20) throw e;
+          }
         }
         pos += got;
         if (round > 400) throw new Error('too many rounds');
