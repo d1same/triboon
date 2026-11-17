@@ -308,12 +308,13 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
     // the episode again (the catalog page's "Play S01E01" wrote 2 s over a finished episode).
     const replay = (newer, older) => older.watched && !newer.watched && (Number(newer.position) || 0) <= 30;
     let keepMoved = !have || at(row) > at(have);
-    if (have && keepMoved && replay(row, have)) keepMoved = false;
-    else if (have && !keepMoved && replay(have, row)) keepMoved = true;
     // A row imported from Trakt (stamped with the time of the sync) never replaces the user's own
     // row: after a mode switch and back, the import sits on the catalog key the user's row returns to.
+    // The replay rule below still keeps a watched tick, the import's included.
     if (have && have.fromTrakt && !row.fromTrakt) keepMoved = true;
     else if (have && !have.fromTrakt && row.fromTrakt) keepMoved = false;
+    if (have && keepMoved && replay(row, have)) keepMoved = false;
+    else if (have && !keepMoved && replay(have, row)) keepMoved = true;
     if (keepMoved) doc[toFull] = moved;
     else stats.merged++;
     if (fromFull !== toFull) delete doc[fromFull];

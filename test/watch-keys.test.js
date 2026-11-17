@@ -433,3 +433,17 @@ test('watch keys: with no previous pass to read positions from, old rows wait; n
   assert.deepStrictEqual(orphans, {});
   assert.ok(watch[`u1:default:local:${LIB}:1`], 'the row waits for a pass that knows its position');
 });
+
+test('watch keys: a watched tick imported from Trakt is not lost to the user\'s own replay of 30 s or less', () => {
+  // The matched show's "Play S01E01" wrote 0 s over an episode Trakt says is watched.
+  const show = (extra) => ({ kind: 'show', dir: at('Iron Harbor'), title: 'Iron Harbor', ...extra });
+  const ep = (extra) => ({ kind: 'episode', file: at('Iron Harbor', 'Iron Harbor S01E02.mkv'), showIdx: 0, s: 1, e: 2, title: 'Iron Harbor · S01E02', ...extra });
+  const before = pass([show({}), ep({})]);
+  const after = pass([show({ tmdbId: 9101 }), ep({ tmdbId: 9101 })]);
+  const watch = {
+    [`u1:default:${before[1].key}`]: row('Iron Harbor — S01E02', { position: 0, updatedAt: 300, meta: { title: 'Iron Harbor — S01E02', type: 'episode' } }),
+    'u1:default:tmdb:tv:9101:s1e2': { position: 0, duration: 0, watched: true, fromTrakt: true, meta: { title: 'Iron Harbor', type: 'episode' }, updatedAt: 200 },
+  };
+  run(before, after, watch);
+  assert.strictEqual(watch['u1:default:tmdb:tv:9101:s1e2'].watched, true);
+});
