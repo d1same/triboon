@@ -528,7 +528,9 @@ definitions stay in JSON.
 | `secret` | `server/auth.js` | Generated app secret when `TRIBOON_SECRET` is not supplied. |
 | `settings` | `SecureSettings` | Encrypted admin settings: providers, indexers, TMDB, subtitles, Trakt app and linked Trakt OAuth tokens, Live TV sources, streaming performance profile. |
 | `users`, `invites` | `server/auth.js`, `server/index.js` | Accounts, roles, profile policy, session epoch, invites, encrypted admin TOTP secret, hashed recovery codes. |
-| `watch`, `watchlist` | `server/index.js`, `server/trakt.js` | Per-profile progress, watched state, watchlist, Trakt-imported fallback rows. |
+| `watch`, `watchlist` | `server/index.js`, `server/trakt.js` | Per-profile progress, watched state, watchlist, Trakt-imported fallback rows. Keys are described under "Watch keys of library items" below. |
+| `watchOrphans` | `server/watch-keys.js`, `server/index.js` | Saved rows kept aside for 30 days: rows the 3.4.16 migration could not confirm, rows of files that left the library, rows of a deleted library. Each keeps its original key and table; undo is a move back. |
+| `watchKeyState` | `server/index.js` | Path of the one-time `watch.json`/`watchlist.json` backup (`backups/watch-keys-<time>/`), per-library counts of the last pass, and the last 3000 row moves. |
 | `activityHistory` | `server/index.js` | Admin-only, at most 60 movie/TV playback rows from the last three days; Live TV/IPTV rows and location are not retained. |
 | `trakt`, `traktOutbox` | `server/trakt.js` | Legacy migration/sync marker bucket and queued scrobble/export operations. OAuth tokens must live encrypted inside `settings.traktTokens`, not plaintext `trakt.json`. |
 | `libraries` | `server/index.js` | Attached local folders, owner visibility, kind, path, and display metadata. |
@@ -538,6 +540,47 @@ definitions stay in JSON.
 | `iptvcaches`, `epgcaches`, `xtreamepgcaches` | `server/index.js` | Source-scoped channel, XMLTV, and Xtream guide caches. |
 | `iptvfavs`, `iptvgroups` | `server/index.js` | Per-user Live TV favorites and hidden groups. |
 | Android `personalIptvSources` | `MainActivity.java` | Device-local IPTV sources saved through Android Keystore-backed private preferences, redacted before the web UI reads them. |
+
+### Watch keys of library items (3.4.16)
+
+Progress, watched ticks, the watchlist and Continue Watching name a library item by its place on
+disk, never by its scan position (`server/library-keys.js`):
+
+- A film in its own folder: `local:<library>:<12 hex>` hashed from the folder path relative to the
+  library folder. A loose film file: the file path without its extension. A show: its folder.
+  An episode: its show's key plus `:s<N>e<M>`; when two files of one show carry the same season and
+  episode, the first by path keeps that key and the others are keyed by their file path.
+- Paths are Unicode NFC with `/` separators and no case folding, so Windows, Docker and a changed
+  library path give the same keys.
+- A matched title saves under its catalog key (`tmdb:movie:<id>`, `tmdb:tv:<id>`,
+  `tmdb:tv:<id>:s<S>e<E>` for episodes of a matched show), shared with the Usenet copy and Trakt.
+  Two show folders of one library on one TMDB id keep local episode keys.
+- The scan stores `key` (and server-only `relPath`, `fileSize`) in each item payload; pages get
+  `watchKey` (the key to save under) from `localItemPayload`. A legacy key `local:<lib>:<position>`
+  has at most 5 digits; a stable id is always 12 characters.
+- The server stamps `meta.localKey` and `meta.relPath` on every save it can tie to a library item
+  (the page's `localKey` hint for catalog keys is checked, client-sent values are dropped).
+
+Every library pass (a scan, and a boot pass over the stored items a few seconds after start) runs
+`reconcileLibraryWatch` (`server/watch-keys.js`), for every user and profile:
+
+1. Legacy position rows move to the item that position named in the previous pass when the saved
+   title (or the 3.4.15 file name in `meta.source.name`) confirms it; else to the one item of that
+   pass with that title; else they are kept aside in `watchOrphans`. A title that appears twice in
+   the library is only carried by file name.
+2. When an item's watch key changes (a match gained, lost or changed: Fix match, a switch to
+   "Folder & NFO only"), its rows move with it. A catalog key another library item still owns stays,
+   and rows imported from Trakt never leave their catalog key.
+3. A file that vanished and one that appeared with the same name and size (never the modified time)
+   carry the rows; a show folder follows when half its episodes pair.
+4. Rows of files that left the library are kept aside (not on a pass that lost half the library),
+   come back when the file returns, and are deleted after 30 days.
+
+Before the first move, `watch.json` and `watchlist.json` are copied to
+`backups/watch-keys-<time>/` (path in `watchKeyState`). Up next for local shows is built from the
+library database (`nextLocalEpisodes`), so it needs no TMDB key. Jellyfin item ids stay
+`l<lib>i<pos>`; its reads and writes map them to the item's stable key. `/api/local/<lib>/<pos>`
+URLs and their token scopes are still positional.
 
 When changing persistence, update:
 

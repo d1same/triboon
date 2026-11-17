@@ -12,6 +12,7 @@ const path = require('path');
 const zlib = require('zlib');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const debug = require('./debug');
+const { parseLocalKey } = require('./library-keys');
 
 // Longest sign-in name accepted before any throttle key is built; the same constant caps account
 // creation (server/auth.js), so the two cannot drift apart.
@@ -1617,7 +1618,16 @@ function itemFromWatchRow(ctx, row) {
       },
     });
   }
-  const local = /^local:([a-f0-9]{8,40}):(\d+)$/.exec(row.key);
+  // A stable library key (3.4.16) names the item on disk: resolve it to today's position id.
+  const stable = parseLocalKey(row.key);
+  if (stable && !stable.legacy && typeof deps.localByKey === 'function') {
+    const hit = deps.localByKey(ctx, row.key);
+    const item = hit ? localJellyItem(hit.item, hit.libId) : null;
+    if (!item) return null;
+    item.UserData = userDataFromRow(row, duration || (item.RunTimeTicks / 10000000), item.Id);
+    return item;
+  }
+  const local = /^local:([a-f0-9]{8,40}):(\d{1,5})$/.exec(row.key);
   if (local && typeof deps.localOne === 'function') {
     const item = localJellyItem(deps.localOne(ctx, local[1], Number(local[2])), local[1]);
     if (!item) return null;
@@ -1733,9 +1743,18 @@ function diskPlayNext(ctx) {
   const busy = new Set();
   const byShow = new Map();
   for (const row of rows) {
-    const match = /^local:([a-f0-9]{8,40}):(\d+)$/.exec(row && row.key || '');
-    if (!match || typeof deps.localOne !== 'function') continue;
-    const disk = deps.localOne(ctx, match[1], Number(match[2]));
+    const key = String(row && row.key || '');
+    const stable = parseLocalKey(key);
+    let match = null;
+    let disk = null;
+    if (stable && !stable.legacy && typeof deps.localByKey === 'function') {
+      const hit = deps.localByKey(ctx, key);
+      if (hit) { match = [key, hit.libId]; disk = hit.item; }
+    } else {
+      match = /^local:([a-f0-9]{8,40}):(\d{1,5})$/.exec(key);
+      if (match && typeof deps.localOne === 'function') disk = deps.localOne(ctx, match[1], Number(match[2]));
+    }
+    if (!match) continue;
     if (!disk || disk.kind !== 'episode') continue;
     const showKey = `${match[1]}:${disk.showIdx}`;
     if (!row.watched && Number(row.position) > 30) { busy.add(showKey); continue; }

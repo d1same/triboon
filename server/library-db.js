@@ -48,6 +48,8 @@ class LibraryDb {
           ON library_items(tmdb_id, kind, season, episode);
         CREATE INDEX IF NOT EXISTS library_items_title_idx
           ON library_items(lib_id, title_key);
+        CREATE INDEX IF NOT EXISTS library_items_key_idx
+          ON library_items(lib_id, json_extract(payload, '$.key'));
       `);
       try { this.db.exec('PRAGMA optimize;'); } catch {}
       this.available = true;
@@ -164,6 +166,33 @@ class LibraryDb {
     const row = this.db.prepare('SELECT payload FROM library_items WHERE lib_id = ? AND idx = ?')
       .get(libId, parseInt(idx, 10));
     return this._parsePayload(row);
+  }
+
+  // An item by its stable key (`local:<lib>:<id>` or `local:<lib>:<show id>:s<N>e<M>`).
+  itemByKey(libId, key) {
+    if (!this.available || !this.db || !key) return null;
+    if (!this._byKeyStmt) {
+      this._byKeyStmt = this.db.prepare("SELECT payload FROM library_items WHERE lib_id = ? AND json_extract(payload, '$.key') = ? LIMIT 1");
+    }
+    return this._parsePayload(this._byKeyStmt.get(String(libId), String(key)));
+  }
+
+  // Every episode of one show, in season and episode order.
+  showEpisodes(libId, showIdx) {
+    if (!this.available || !this.db) return null;
+    return this.db.prepare(`
+      SELECT payload FROM library_items WHERE lib_id = ? AND kind = 'episode' AND show_idx = ?
+      ORDER BY season ASC, episode ASC, idx ASC
+    `).all(String(libId), parseInt(showIdx, 10)).map((r) => this._parsePayload(r)).filter(Boolean);
+  }
+
+  // True when a show in one of `libIds` is stored with this TMDB id.
+  hasShowTmdb(tmdbId, libIds = []) {
+    if (!this.available || !this.db || !libIds.length) return false;
+    const marks = libIds.map(() => '?').join(',');
+    const row = this.db.prepare(`SELECT 1 AS hit FROM library_items WHERE tmdb_id = ? AND kind = 'show' AND lib_id IN (${marks}) LIMIT 1`)
+      .get(parseInt(tmdbId, 10), ...libIds.map(String));
+    return !!row;
   }
 
   // One episode file for a show cover. Never readLibrary() — a 20K catalog on every
@@ -445,8 +474,14 @@ class LibraryDb {
         m = /^tmdb:tv:(\d+):s(\d+)e(\d+)$/i.exec(key);
         if (m) rows = allForEpisode.all(parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10));
         else {
-          m = /^local:([^:]+):(\d+)$/i.exec(key);
-          if (m && libs.has(String(m[1]))) {
+          // A stable key (12 hex, maybe :s<N>e<M>) names the item on disk; a legacy key (at most 5
+          // digits) names a scan position and is still read for rows saved before 3.4.16.
+          const stable = /^local:([^:]+):[0-9a-f]{12}(?::s\d+e\d+)?$/i.exec(key);
+          m = stable ? null : /^local:([^:]+):(\d{1,5})$/i.exec(key);
+          if (stable && libs.has(String(stable[1]))) {
+            const item = this.itemByKey(stable[1], key);
+            if (item) out[key] = { libId: stable[1], item };
+          } else if (m && libs.has(String(m[1]))) {
             const item = this.item(m[1], m[2]);
             if (item) out[key] = { libId: m[1], item };
           }

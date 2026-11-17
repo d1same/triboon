@@ -17,6 +17,8 @@ const { Store, VerdictCache, scrubOrphanTempDirs } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
+const { assignStableKeys, watchKeyFor, parseLocalKey } = require('./library-keys');
+const { planMoves, applyLibraryMoves, parkVanished, restoreReturned, parkLibraryRows, rowConfirms } = require('./watch-keys');
 const { pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryAutoTmdbMatch, libraryScanUsesLocalMetaOnly, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt, libraryNameParts, libraryTmdbQueries, isLibrarySeasonDir, librarySeasonFromDir, libraryEpisodeNumber, solarToGregorian, foldPersian, cleanNfoTitle } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter, SIGN_IN_NAME_MAX } = require('./auth');
 const {
@@ -5308,6 +5310,160 @@ function saveLibraryScan(libId, scannedAt, items) {
   store.update('libitems', {}, (s) => { s[libId] = { scannedAt, items }; return s; });
   return false;
 }
+// ---- Stable watch keys (brief 99): progress follows the item on disk, not its scan position ----
+// The key progress is saved under, from the read-time view (a match that fails the read-time check
+// counts as none, as everywhere else).
+function libraryWatchKeyOf(item) { return watchKeyFor(unboundLibraryItem(item)); }
+// Copies of stored items with their stable keys. A stored key is kept when the path no longer
+// lies under the library folder (the library path was changed).
+function keyedLibraryCopy(lib, items) {
+  const copy = (items || []).map((it) => (it ? { ...it } : it));
+  assignStableKeys(lib.id, resolveLibraryPath(lib.path), copy);
+  copy.forEach((it, i) => { if (it && !it.key && items[i] && items[i].key) it.key = items[i].key; });
+  return copy;
+}
+// A catalog key that another library item still owns keeps its rows when this item loses the match.
+function tmdbWatchKeyClaimed(key, libId, items) {
+  for (const it of items || []) if (it && it.tmdbId && libraryWatchKeyOf(it) === key) return true;
+  const others = store.read('libraries', { list: [] }).list
+    .filter((l) => l && l.path && String(l.id) !== String(libId)).map((l) => String(l.id));
+  if (!others.length) return false;
+  const show = /^tmdb:tv:(\d+)$/i.exec(key);
+  if (libraryDb.available) {
+    if (show) return libraryDb.hasShowTmdb(show[1], others);
+    const row = libraryDb.lookup([key], others)[key];
+    return !!(row && libraryItemMatchesTmdb(row.item));
+  }
+  const all = store.read('libitems', {});
+  return others.some((id) => ((all[id] && all[id].items) || []).some((it) => it && it.tmdbId && libraryWatchKeyOf(it) === key));
+}
+// One copy of watch.json and watchlist.json before the first move of saved rows (brief 99).
+function backupWatchBeforeKeys() {
+  const st = store.read('watchKeyState', {});
+  if (st.backupDir && fs.existsSync(st.backupDir)) return st.backupDir;
+  const dir = path.join(DATA_DIR, 'backups', `watch-keys-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const t of ['watch', 'watchlist']) {
+    fs.writeFileSync(path.join(dir, `${t}.json`), JSON.stringify(store.read(t, {})), { mode: 0o600 });
+  }
+  store.update('watchKeyState', {}, (s) => { s.backupDir = dir; s.backupAt = Date.now(); return s; });
+  return dir;
+}
+// After a library pass: move saved rows of this library onto stable keys (legacy positions, a
+// changed match, a rename or move), park what cannot be confirmed. Never throws into the scan.
+function reconcileLibraryWatch(lib, prevItems, items, opts = {}) {
+  try {
+    if (store.readFailed('watch') || store.readFailed('watchlist')) return null;
+    const watch = store.read('watch', {});
+    const watchlist = store.read('watchlist', {});
+    const libRe = String(lib.id).replace(/[^\w-]/g, '');
+    const legacy = new RegExp(`:local:${libRe}:\\d{1,5}$`);
+    const hasLegacy = Object.keys(watch).some((k) => legacy.test(k)) || Object.keys(watchlist).some((k) => legacy.test(k));
+    const moves = opts.unchanged ? [] : planMoves({
+      prevItems, items, watchKeyOf: libraryWatchKeyOf,
+      claimedElsewhere: (key) => tmdbWatchKeyClaimed(key, lib.id, items),
+    });
+    const orphans = store.read('watchOrphans', {});
+    const parkedHere = Object.values(orphans).some((v) => v && v.key && String(v.libId) === String(lib.id));
+    // A pass that lost most of the library is a half-mounted share, not deletions: park nothing.
+    const mayPark = !opts.unchanged && (prevItems.length < 20 || items.length * 2 >= prevItems.length);
+    const keysNow = mayPark ? new Set(items.map((it) => it && it.key).filter(Boolean)) : null;
+    const anyVanished = mayPark && prevItems.some((it) => it && it.key && !keysNow.has(it.key));
+    if (!hasLegacy && !moves.length && !anyVanished && !parkedHere) return null;
+    // Rows only move after a copy of them is on disk.
+    backupWatchBeforeKeys();
+    const stats = applyLibraryMoves({
+      libId: lib.id, watch, watchlist, orphans, prevItems, items, moves, watchKeyOf: libraryWatchKeyOf,
+    });
+    stats.restored = restoreReturned({ libId: lib.id, watch, watchlist, orphans, items, watchKeyOf: libraryWatchKeyOf });
+    stats.gone = anyVanished ? parkVanished({
+      libId: lib.id, watch, watchlist, orphans, prevItems, items, moves, watchKeyOf: libraryWatchKeyOf,
+    }) : 0;
+    store.write('watch', watch);
+    store.write('watchlist', watchlist);
+    store.write('watchOrphans', orphans);
+    const log = stats.log;
+    delete stats.log;
+    store.update('watchKeyState', {}, (s) => {
+      s.libs = s.libs || {};
+      s.libs[lib.id] = { at: Date.now(), why: opts.why || 'scan', ...stats };
+      s.moves = [...(s.moves || []), ...log.map((m) => ({ at: Date.now(), lib: lib.id, ...m }))].slice(-3000);
+      return s;
+    });
+    if (stats.moved || stats.parked || stats.gone || stats.restored) {
+      console.log(`[library] "${lib.name || lib.id}": ${stats.moved} saved row(s) moved to their title, `
+        + `${stats.parked} kept aside (not confirmed), ${stats.gone} of removed files kept aside, ${stats.restored} back`);
+    }
+    return stats;
+  } catch (e) {
+    console.error('[library keys]', e && e.message);
+    return null;
+  }
+}
+function libraryItemByKey(libId, key) {
+  if (libraryDb.available) {
+    const item = libraryDb.itemByKey(libId, key);
+    if (item) return item;
+  }
+  const rec = store.read('libitems', {})[libId];
+  return ((rec && rec.items) || []).find((it) => it && it.key === key) || null;
+}
+// The server's own note of which library item a saved row belongs to (client meta cannot be
+// trusted and had neither). `hint` is the page's stable key of the local copy when the row is saved
+// under a catalog key; it counts only when that item really saves under this key.
+function localWatchStamp(ctx, key, hint) {
+  try {
+    const own = parseLocalKey(key);
+    const viaHint = !(own && !own.legacy);
+    const k = viaHint ? hint : key;
+    const lk = parseLocalKey(k);
+    if (!lk || lk.legacy) return null;
+    if (!allowedLocalLibraryIds(ctx).includes(String(lk.libId))) return null;
+    const item = libraryItemByKey(lk.libId, k);
+    if (!item || !item.key) return null;
+    if (viaHint && libraryWatchKeyOf(item) !== key) return null;
+    return { localKey: item.key, relPath: item.relPath || undefined };
+  } catch { return null; }
+}
+// A legacy position key -> the stable watch key of the item at that position NOW, when that item has
+// one. `trustPosition`: the caller's position is current (a Jellyfin id). Otherwise (a page loaded
+// before 3.4.16) only the saved file name may prove the item here; a title could be a twin, which
+// only the library pass can rule out, so that row waits for it. Anything else comes back unchanged.
+function canonicalLocalWatchKey(key, meta, { trustPosition = false } = {}) {
+  try {
+    const lk = parseLocalKey(key);
+    if (!lk || !lk.legacy) return key;
+    const item = libraryItemByIndex(lk.libId, lk.pos);
+    if (!item || !item.key) return key;
+    if (!trustPosition) {
+      const src = meta && meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
+      if (!src || !rowConfirms(item, meta, () => null)) return key;
+    }
+    return libraryWatchKeyOf(item) || key;
+  } catch { return key; }
+}
+function clientWatchMeta(meta) {
+  const out = { ...(meta && typeof meta === 'object' ? meta : {}) };
+  delete out.localKey;
+  delete out.relPath;
+  return out;
+}
+// Libraries stored before 3.4.16 have no keys: give them keys and move their saved rows once, from
+// the stored items (no disk walk), so the page never waits for the first scan behind playback.
+function keyStoredLibraries() {
+  const out = [];
+  for (const lib of store.read('libraries', { list: [] }).list) {
+    if (!lib || !lib.path) continue;
+    const st = scanStates.get(lib.id);
+    if (st && st.running) continue;
+    const rec = libraryRecord(lib.id);
+    if (!rec || !Array.isArray(rec.items) || !rec.items.length) continue;
+    const keyed = keyedLibraryCopy(lib, rec.items);
+    if (!sameLibraryItems(rec.items, keyed)) saveLibraryScan(lib.id, rec.scannedAt || Date.now(), keyed);
+    out.push({ lib: lib.id, stats: reconcileLibraryWatch(lib, keyed, keyed, { why: 'boot', unchanged: true }) });
+  }
+  return out;
+}
 function allowedLocalLibraryIds(ctx) {
   return store.read('libraries', { list: [] }).list
     .filter((lib) => lib && lib.id && lib.path)
@@ -5738,7 +5894,11 @@ function localItemFor(ctx, libId, idx) {
 }
 function localItemPayload(ctx, libId, item) {
   const safe = unboundLibraryItem(item);
-  const { file, artFile, dir, ...rest } = safe;
+  // relPath and fileSize stay server-side (keys and pairing). watchKey is the one key the pages
+  // save progress under (library-keys.js); an item scanned before 3.4.16 has none and the page
+  // falls back to its position until the boot pass or the next scan keys it.
+  const { file, artFile, dir, relPath: _relPath, fileSize: _fileSize, ...rest } = safe;
+  if (safe.key) rest.watchKey = watchKeyFor(safe);
   // The direct file address has no age check, so a restricted viewer gets it without its token and
   // plays through playUrl, which has one.
   if (ctx.directFileLevel === undefined) {
@@ -8047,6 +8207,7 @@ const H = {
   watchlistToggle: async (ctx) => {
     const b = await readJson(ctx.req);
     if (!b.key) return send(ctx.res, 400, { error: 'key required' });
+    b.key = canonicalLocalWatchKey(String(b.key), b.meta);
     const k = `${ctx.user.id}:${b.key}`;
     let on;
     store.update('watchlist', {}, (all) => {
@@ -8062,6 +8223,20 @@ const H = {
     store.update('libraries', { list: [] }, (s) => { s.list = s.list.filter((l) => l.id !== libId); return s; });
     store.update('libitems', {}, (s) => { delete s[libId]; return s; });
     libraryDb.deleteLibrary(libId);
+    // Its saved progress would point at nothing for ever ("That library file is not available"):
+    // keep it aside for 30 days instead (brief 99). Catalog-keyed rows stay with their title.
+    try {
+      if (!store.readFailed('watch') && !store.readFailed('watchlist')) {
+        const watch = store.read('watch', {});
+        const watchlist = store.read('watchlist', {});
+        const orphans = store.read('watchOrphans', {});
+        if (parkLibraryRows({ libId, watch, watchlist, orphans })) {
+          store.write('watch', watch);
+          store.write('watchlist', watchlist);
+          store.write('watchOrphans', orphans);
+        }
+      }
+    } catch (e) { console.error('[library delete] keeping progress aside failed:', e && e.message); }
     // Remove this library's cached cover thumbnails (data/thumbs/<libId>-<idx>.jpg) — otherwise
     // deleting a big library leaks thousands of generated jpgs on disk. The '-' delimiter prevents
     // a shorter libId from matching a longer one's files.
@@ -8445,7 +8620,7 @@ async function performScan(lib, state, mode = 'scan') {
       const nfo = nfoBeside(best.file) || readNfo(path.join(dir, 'movie.nfo'));
       const named = titleOf(nfo, label);
       const item = pushItem({
-        kind: 'movie', file: best.file, artFile: findArt(dir),
+        kind: 'movie', file: best.file, fileSize: best.size, artFile: findArt(dir),
         title: named.title, titleSource: named.titleSource, year: (nfo && nfo.year) || libraryNameParts(label).year,
         overview: (nfo && nfo.plot) || '', overviewSource: nfo && nfo.plot ? 'nfo' : undefined,
         rating: (nfo && nfo.rating) || null,
@@ -8590,12 +8765,32 @@ async function performScan(lib, state, mode = 'scan') {
       await Promise.all(lookupJobs.slice(i, i + 6).map((j) => j().catch(() => {})));
       state.progress = Math.min(items.length, state.progress + 6);
     }
+    // File sizes pair a renamed or moved file with its saved progress (brief 99). Films got theirs
+    // from the walk. A known file keeps its stored size; only files new to this pass are asked, plus
+    // a few hundred unsized ones per pass (rows from before 3.4.16), so a share is not stat-ed whole.
+    let sizeBudget = 300;
+    for (const it of items) {
+      if (!it || !it.file || Number.isFinite(it.fileSize)) continue;
+      const p = prevBy.get(it.file);
+      if (p && Number.isFinite(p.fileSize)) { it.fileSize = p.fileSize; continue; }
+      if (p && sizeBudget-- <= 0) continue;
+      await maybeBreathe();
+      try { it.fileSize = fs.statSync(it.file).size; } catch { /* gone or unreadable: no pairing */ }
+    }
+    // Stable keys: each item named by its place on disk, not its position (library-keys.js).
+    const keyRoot = resolveLibraryPath(lib.path);
+    assignStableKeys(lib.id, keyRoot, items);
     // An unchanged pass (the common 15-minute case) rewrote every row in one sync SQLite
     // transaction: 350-450 ms of frozen event loop for 20,000 items (result 89). Same items, same
     // order, same fields (addedAt and art included): keep the rows, refresh only the scan time.
     // No SQLite row to touch (the rows sit in the JSON store, e.g. SQLite could not open when
     // they were written): write them, so the library moves into SQLite as before.
-    if (!(sameLibraryItems(prevItems, items) && touchLibraryScan(lib.id, Date.now()))) saveLibraryScan(lib.id, Date.now(), items);
+    const unchangedPass = sameLibraryItems(prevItems, items);
+    if (!(unchangedPass && touchLibraryScan(lib.id, Date.now()))) saveLibraryScan(lib.id, Date.now(), items);
+    // Saved progress follows its title: legacy position rows, a changed match, a rename or move.
+    // An unchanged pass has the same items in the same places: the previous pass is this one.
+    reconcileLibraryWatch(lib, unchangedPass ? items : keyedLibraryCopy(lib, prevItems), items,
+      { why: mode, unchanged: unchangedPass });
     // Frames cached under the old position names (<libId>-<idx>.jpg) are never read again.
     try {
       const thumbDir = path.join(DATA_DIR, 'thumbs');
@@ -9139,6 +9334,7 @@ Object.assign(H, {
         if (!item) continue;
         const localKey = `local:${libId}:${item.idx}`;
         if (wanted.has(localKey) && !out[localKey]) out[localKey] = localItemPayload(ctx, libId, item);
+        if (item.key && wanted.has(item.key) && !out[item.key]) out[item.key] = localItemPayload(ctx, libId, item);
         if (!item.tmdbId) continue;
         const key = item.kind === 'movie'
           ? `tmdb:movie:${item.tmdbId}`
@@ -9362,16 +9558,26 @@ Object.assign(H, {
   watchSet: async (ctx) => {
     const b = await readJson(ctx.req);
     if (!b.key) return send(ctx.res, 400, { error: 'key required' });
+    // A page loaded before 3.4.16 still saves under a scan position: the item there, when its title
+    // confirms the row, takes it under its stable key (else the next library pass decides).
+    b.key = canonicalLocalWatchKey(String(b.key), b.meta);
     const profile = b.profile || 'default';
     const k = `${ctx.user.id}:${profile}:${b.key}`;
     let becameWatched = false;
+    // Which library item this row belongs to, by the server (brief 99): never the page's word.
+    const stamp = b.remove ? null : localWatchStamp(ctx, b.key, b.localKey);
+    const withStamp = (meta, prevMeta) => {
+      const out = sanitizeStoredMediaMeta(clientWatchMeta(meta));
+      const keep = stamp || (prevMeta && prevMeta.localKey ? { localKey: prevMeta.localKey, relPath: prevMeta.relPath } : null);
+      return keep ? { ...out, ...keep } : out;
+    };
     store.update('watch', {}, (all) => {
       const prev = all[k];
       if (b.remove) { deleteWatchKeyForProfile(all, ctx.user.id, profile, b.key); return all; } // "Remove from Continue Watching"
       if (b.hidden) {
         all[k] = {
           position: 0, duration: 0, watched: false, hidden: true,
-          meta: sanitizeStoredMediaMeta(b.meta), updatedAt: nextStamp(),
+          meta: withStamp(b.meta, prev && prev.meta), updatedAt: nextStamp(),
         };
         return all;
       }
@@ -9379,7 +9585,7 @@ Object.assign(H, {
       if (b.artOnly && prev) {
         all[k] = {
           ...prev,
-          meta: sanitizeStoredMediaMeta({ ...(prev.meta || {}), ...(b.meta || {}) }),
+          meta: withStamp({ ...(prev.meta || {}), ...clientWatchMeta(b.meta) }, prev.meta),
           updatedAt: prev.updatedAt || nextStamp(),
         };
         if (Number(prev.traktPct) > 0) all[k].traktPct = Number(prev.traktPct);
@@ -9390,7 +9596,7 @@ Object.assign(H, {
       const traktPct = b.traktPct != null ? Number(b.traktPct) : Number(prev && prev.traktPct) || 0;
       all[k] = {
         position: b.position || 0, duration: b.duration || 0, watched: !!b.watched,
-        meta: sanitizeStoredMediaMeta(b.meta), updatedAt: nextStamp(),
+        meta: withStamp(b.meta, prev && prev.meta), updatedAt: nextStamp(),
       };
       // A Trakt percent is the website's Continue Watching bar when no minute is saved yet.
       if (traktPct > 0) all[k].traktPct = traktPct;
@@ -12365,11 +12571,28 @@ function jellyfinLocalPlay(ctx, libId, idx) {
 
 function jellyfinWatchGet(ctx, key) {
   if (!ctx || !ctx.user || !key) return null;
-  return watchRowForKeyFromProfiles(store.read('watch', {}), ctx.user.id, jellyfinWatchProfileIds(ctx.user), key);
+  const all = store.read('watch', {});
+  const ids = jellyfinWatchProfileIds(ctx.user);
+  const canon = canonicalLocalWatchKey(key, null, { trustPosition: true });
+  const own = watchRowForKeyFromProfiles(all, ctx.user.id, ids, canon);
+  if (canon === key) return own;
+  // A row an older page or app wrote under the position before the next pass moved it.
+  const old = watchRowForKeyFromProfiles(all, ctx.user.id, ids, key);
+  return old && (!own || (old.updatedAt || 0) > (own.updatedAt || 0)) ? old : own;
+}
+
+function jellyfinLocalByKey(ctx, key) {
+  const lk = parseLocalKey(key);
+  if (!lk || lk.legacy || !jellyfinLocalAllowed(ctx, lk.libId)) return null;
+  const item = libraryItemByKey(lk.libId, key);
+  return item ? { libId: lk.libId, item: unboundLibraryItem(item) } : null;
 }
 
 function jellyfinWatchSave(ctx, key, patch) {
   if (!ctx || !ctx.user || !key) return;
+  // Jellyfin ids name the item at a scan position NOW: save under that item's stable key, so the
+  // app and Triboon share one row (brief 99).
+  key = canonicalLocalWatchKey(key, null, { trustPosition: true });
   const position = Math.max(0, Math.round(Number(patch.position) || 0));
   const duration = Math.max(0, Math.round(Number(patch.duration) || 0));
   const storeKey = `${ctx.user.id}:${jellyfinWatchStoreProfile(ctx.user, key)}:${key}`;
@@ -12411,6 +12634,9 @@ function jellyfinResumeIdentity(row) {
   const key = String(row && row.key || '');
   // A file in your own folder is that file. It must not merge with another
   // folder, or with a catalog show that happens to share the title.
+  // A stable episode key names its show: two paused episodes of one show are one card.
+  const stable = parseLocalKey(key);
+  if (stable && !stable.legacy) return stable.season !== undefined ? `localshow:${stable.libId}:${stable.id}` : key;
   const local = /^local:([^:]+):(\d+)$/i.exec(key);
   if (local) return `local:${local[1]}:${local[2]}`;
   const show = /^tmdb:tv:(\d+)/i.exec(key);
@@ -12570,6 +12796,7 @@ const mediaAppDeps = {
   localLibraries: jellyfinLocalLibraries,
   localPage: jellyfinLocalPage,
   localOne: jellyfinLocalOne,
+  localByKey: jellyfinLocalByKey,
   localImage: jellyfinLocalImage,
   localMediaInfo: jellyfinLocalMedia,
   localSubtitles: jellyfinLocalSubtitles,
@@ -13001,6 +13228,16 @@ if (require.main === module) {
     // the heavy network refresh can begin after login/playback/TV navigation have settled.
     scheduleIptvWarmSoon('startup', IPTV_STARTUP_WARM_DELAY_MS, { skipGuide: true });
     scheduleNextIptvWarm();
+    // Stable resume keys (3.4.16): libraries stored by an older version get their keys, and saved
+    // progress moves to its title once (with a backup first), from the stored items, with no disk
+    // walk, so the pages never wait for the first scan, which can wait 2 h behind playback.
+    const keyTimer = setTimeout(() => {
+      try {
+        const done = keyStoredLibraries().filter((r) => r.stats && (r.stats.moved || r.stats.parked));
+        if (done.length) console.log(`[boot] saved progress keyed to its title in ${done.length} librar${done.length === 1 ? 'y' : 'ies'}`);
+      } catch (e) { console.error('[boot] library keys failed:', e && e.message); }
+    }, 4000);
+    if (keyTimer.unref) keyTimer.unref();
   });
   // Docker sends SIGTERM on `docker stop` — flush the store and close cleanly instead of
   // being SIGKILLed 10s later with dirty state.
@@ -13038,4 +13275,5 @@ module.exports = {
   warmIptvCaches, msUntilNextIptvWarm, rewriteIptvHlsPlaylist,
   normalizeIp, isPrivateIp, clientIpForGeo, geoLocate, geoCacheKey, viewerGeolocationEnabled,
   autoScanTick, playbackActiveForAutoScan, liveStreamsForTest: () => activeIptvLiveStreams,
+  keyStoredLibraries,
 };
