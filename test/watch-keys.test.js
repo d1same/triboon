@@ -363,3 +363,26 @@ test('watch keys: twins with one title and one file name are not told apart by a
   assert.strictEqual(stats.parked, 1, 'kept aside, never put on the 2015 film');
   assert.deepStrictEqual(Object.keys(watch), []);
 });
+
+test('watch keys: a doubled episode file removed: the other copy takes the S/E key and keeps its own progress', () => {
+  const show = { kind: 'show', dir: at('Kuh'), title: 'Kuh' };
+  const a = { kind: 'episode', file: at('Kuh', 'Kuh S01E01 (1080p).mkv'), fileSize: 50, showIdx: 0, s: 1, e: 1, title: 'Kuh · S01E01' };
+  const b = { kind: 'episode', file: at('Kuh', 'Kuh S01E01.mkv'), fileSize: 60, showIdx: 0, s: 1, e: 1, title: 'Kuh · S01E01' };
+  const prev = pass([show, a, b]);
+  assert.ok(prev[1].key.endsWith(':s1e1') && !prev[2].key.endsWith(':s1e1'), 'the first by path holds S/E');
+  const next = pass([show, b]);
+  const watch = { [`u1:default:${prev[2].key}`]: row('Kuh — S01E01', { position: 700, meta: { title: 'Kuh — S01E01', type: 'episode' } }) };
+  const orphans = {};
+  const moves = planMoves({ prevItems: prev, items: next, watchKeyOf: wk });
+  applyLibraryMoves({ libId: LIB, watch, watchlist: {}, orphans, prevItems: prev, items: next, moves, watchKeyOf: wk, now: 1000 });
+  parkVanished({ libId: LIB, watch, watchlist: {}, orphans, prevItems: prev, items: next, moves, watchKeyOf: wk, now: 1000 });
+  assert.strictEqual(watch[`u1:default:${next[1].key}`] && watch[`u1:default:${next[1].key}`].position, 700);
+  assert.deepStrictEqual(orphans, {});
+  // The other way round: a better copy added beside the old one sorts first and takes S/E; the old
+  // copy's rows stay where they are (S/E), as before.
+  const one = pass([show, b]);
+  const two = pass([show, a, b]);
+  const w2 = { [`u1:default:${one[1].key}`]: row('Kuh — S01E01', { position: 400, meta: { title: 'Kuh — S01E01', type: 'episode' } }) };
+  run(one, two, w2);
+  assert.strictEqual(w2[`u1:default:${one[1].key}`].position, 400, 'the S/E row is not moved off its key');
+});
