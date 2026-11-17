@@ -33370,12 +33370,82 @@ async function restoreSavedSession() {
   }
   return true;
 }
+// ---- Reload after a server update ----
+// A page (or a TV app's WebView) left open across a server update kept running the old page
+// against the new server. The page now notes the version it loaded with, and reloads itself once
+// /api/server reports a different one: seen on two polls in a row (a restart that briefly answers
+// with the old build is not an update), never while something plays or a field is being typed in
+// (it waits until the player closes), at most once per version and twice per 30 minutes per tab, so
+// a version that flaps cannot loop. The Android and Windows shells load the page from the server,
+// so the same reload refreshes their WebView. index.html is served no-cache: the reload gets the new page.
+const VERSION_RELOAD_POLL_MS = 60000;
+const VERSION_RELOAD_WINDOW_MS = 30 * 60000;
+function versionReloadHistory(store) {
+  try { const h = JSON.parse((store && store.getItem('triboonVersionReloads')) || 'null'); if (h && Array.isArray(h.at) && Array.isArray(h.versions)) return h; } catch {}
+  return { at: [], versions: [] };
+}
+function serverVersionReloadDecision(st, seen, opts = {}) {
+  const v = String(seen || '');
+  if (!st || !st.loaded || !v) return 'none';
+  if (v === st.loaded) { st.candidate = ''; st.sightings = 0; return 'none'; }
+  if (v !== st.candidate) { st.candidate = v; st.sightings = 1; return 'wait'; }
+  st.sightings = (st.sightings || 0) + 1;
+  if (st.sightings < 2) return 'wait';
+  const hist = opts.history || { at: [], versions: [] };
+  const now = Number(opts.now) || Date.now();
+  if (hist.versions.includes(v)) return 'none';
+  if (hist.at.filter((t) => now - t < VERSION_RELOAD_WINDOW_MS).length >= 2) return 'none';
+  if (opts.busy) return 'defer';
+  return 'reload';
+}
+function versionReloadBusy() {
+  if (S.playing || S.view === 'player') return 'playing';
+  try { const m = document.getElementById('musicAudio'); if (m && !m.paused) return 'music'; } catch {}
+  try { const a = document.getElementById('abAudio'); if (a && !a.paused) return 'audiobook'; } catch {}
+  try { if (typeof AB !== 'undefined' && AB.now && AB.now.active) return 'audiobook'; } catch {}
+  const ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || '')) return 'typing';
+  return '';
+}
+async function checkServerVersionForReload() {
+  const st = S._versionReload;
+  if (!st || st.reloading) return;
+  let info = null;
+  try {
+    const r = await fetch('/api/server', { signal: AbortSignal.timeout(5000) });
+    if (r.ok) info = await r.json();
+  } catch {}
+  if (!info) return;
+  let store = null;
+  try { store = window.sessionStorage; } catch {}
+  const history = versionReloadHistory(store);
+  const now = Date.now();
+  const d = serverVersionReloadDecision(st, info.version, { history, now, busy: !!versionReloadBusy() });
+  if (d !== 'reload') return;
+  st.reloading = true;
+  history.at = history.at.filter((t) => now - t < VERSION_RELOAD_WINDOW_MS).concat(now);
+  history.versions = history.versions.concat(String(info.version)).slice(-10);
+  try { store && store.setItem('triboonVersionReloads', JSON.stringify(history)); } catch {}
+  try { toast(`Triboon was updated to ${info.version} — reloading`); } catch {}
+  setTimeout(() => { try { location.reload(); } catch {} }, 1500);
+}
+function startServerVersionWatch(loadedVersion) {
+  if (S._versionReloadT) clearInterval(S._versionReloadT);
+  S._versionReload = { loaded: String(loadedVersion || ''), candidate: '', sightings: 0, reloading: false };
+  if (!S._versionReload.loaded) return;
+  S._versionReloadT = setInterval(checkServerVersionForReload, VERSION_RELOAD_POLL_MS);
+  if (!S._versionReloadVisHook) {
+    S._versionReloadVisHook = true;
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkServerVersionForReload(); });
+  }
+}
 (async function boot() {
   const invite = new URLSearchParams(location.search).get('invite');
   let info;
   try { info = await api('/api/server'); } catch { document.body.innerHTML = '<p style="padding:40px">Triboon server unreachable.</p>'; return; }
   splashStage(40); // server answered — the session decision is next
   S.serverInfo = info;
+  startServerVersionWatch(info.version); // reload once the server reports another version (an update)
   S._serverBoot = String(info.boot || ''); // the VOD watch remounts only when this changes
   relayCastReceiverAppId();
   // The scroll-fade stays a DETAIL-page behavior only (wired to .detailScroll where detail opens).
