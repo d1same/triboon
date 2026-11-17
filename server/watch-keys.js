@@ -205,11 +205,14 @@ function planMoves({ prevItems, items, watchKeyOf, claimedElsewhere = () => fals
   // The same file under another key: a doubled episode (or a loose film beside one of another
   // extension) keyed by its path takes over the S/E key when the copy that held it is removed. Only
   // that way round: a key that still exists keeps its rows.
-  const nextByRel = new Map();
-  for (const it of items) if (it && it.key && it.relPath) nextByRel.set(`${it.kind}\0${it.relPath}`, it);
+  // The file is matched by its path on disk: the previous pass usually comes from the library
+  // database, which does not store relPath.
+  const where = (it) => (it.kind === 'show' ? it.dir : it.file) || '';
+  const nextByPath = new Map();
+  for (const it of items) if (it && it.key && where(it)) nextByPath.set(`${it.kind}\0${where(it)}`, it);
   for (const old of prevItems) {
-    if (!old || !old.key || !old.relPath || next.byKey.has(old.key)) continue;
-    const same = nextByRel.get(`${old.kind}\0${old.relPath}`);
+    if (!old || !old.key || !where(old) || next.byKey.has(old.key)) continue;
+    const same = nextByPath.get(`${old.kind}\0${where(old)}`);
     if (same && same.key !== old.key) add(watchKeyOf(old), watchKeyOf(same), 'rekey', same);
   }
   // Renames and moves: vanished vs appeared, paired by file name + size.
