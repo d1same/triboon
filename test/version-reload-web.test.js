@@ -171,3 +171,23 @@ test('version reload: playback that starts in the second before the reload holds
   while (timers.length) timers.shift()();
   assert.strictEqual(reloads, 1, 'it reloads once the player closed');
 });
+
+test('version reload: a focused list or switch is not typing; only a text field holds the reload', () => {
+  // Check 103: on the Android TV app the library view leaves SELECT#genreSel focused after the
+  // native player closes, so the reload waited for ever ("typing").
+  const doc = { activeElement: null, getElementById: () => null };
+  const S = { playing: null, view: 'library' };
+  const { versionReloadBusy } = load(['versionReloadBusy'], { S, document: doc, AB: { now: null } });
+  doc.activeElement = { tagName: 'SELECT', id: 'genreSel' };
+  assert.strictEqual(versionReloadBusy(), '', 'a genre list');
+  for (const type of ['checkbox', 'radio', 'range', 'button', 'submit', 'color', 'file']) {
+    doc.activeElement = { tagName: 'INPUT', type };
+    assert.strictEqual(versionReloadBusy(), '', `an input of type ${type}`);
+  }
+  for (const type of ['', 'text', 'search', 'password', 'email', 'number', 'url', 'tel']) {
+    doc.activeElement = { tagName: 'INPUT', type };
+    assert.strictEqual(versionReloadBusy(), 'typing', `an input of type ${type || '(none)'}`);
+  }
+  doc.activeElement = { tagName: 'TEXTAREA' };
+  assert.strictEqual(versionReloadBusy(), 'typing');
+});

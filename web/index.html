@@ -33405,8 +33405,12 @@ function versionReloadBusy() {
   try { const m = document.getElementById('musicAudio'); if (m && !m.paused) return 'music'; } catch {}
   try { const a = document.getElementById('abAudio'); if (a && !a.paused) return 'audiobook'; } catch {}
   try { if (typeof AB !== 'undefined' && AB.now && AB.now.active) return 'audiobook'; } catch {}
+  // Only a text field counts: the TV library view keeps its genre list (a SELECT) focused after the
+  // native player closes, which held the reload for ever. Lists, switches and buttons lose nothing.
   const ae = document.activeElement;
-  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || '')) return 'typing';
+  const tag = String((ae && ae.tagName) || '');
+  const textInput = tag === 'INPUT' && /^(|text|search|password|email|number|url|tel)$/i.test(String(ae.type || ''));
+  if (tag === 'TEXTAREA' || textInput || (ae && ae.isContentEditable)) return 'typing';
   return '';
 }
 async function checkServerVersionForReload() {
