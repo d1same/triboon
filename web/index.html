@@ -33425,11 +33425,17 @@ async function checkServerVersionForReload() {
   const d = serverVersionReloadDecision(st, info.version, { history, now, busy: !!versionReloadBusy() });
   if (d !== 'reload') return;
   st.reloading = true;
-  history.at = history.at.filter((t) => now - t < VERSION_RELOAD_WINDOW_MS).concat(now);
-  history.versions = history.versions.concat(String(info.version)).slice(-10);
-  try { store && store.setItem('triboonVersionReloads', JSON.stringify(history)); } catch {}
   try { toast(`Triboon was updated to ${info.version} — reloading`); } catch {}
-  setTimeout(() => { try { location.reload(); } catch {} }, 1500);
+  setTimeout(() => {
+    // A Play pressed while the toast showed holds the reload; the next poll after the player
+    // closes decides again (the version is only marked as reloaded when the reload happens).
+    if (versionReloadBusy()) { st.reloading = false; return; }
+    const at = Date.now();
+    history.at = history.at.filter((t) => at - t < VERSION_RELOAD_WINDOW_MS).concat(at);
+    history.versions = history.versions.concat(String(info.version)).slice(-10);
+    try { store && store.setItem('triboonVersionReloads', JSON.stringify(history)); } catch {}
+    try { location.reload(); } catch {}
+  }, 1500);
 }
 function startServerVersionWatch(loadedVersion) {
   if (S._versionReloadT) clearInterval(S._versionReloadT);

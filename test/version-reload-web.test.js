@@ -140,3 +140,34 @@ test('version reload: Multiview holds the reload (its players run with no S.play
   S.multiView = { open: false };
   assert.strictEqual(versionReloadBusy(), '');
 });
+
+test('version reload: playback that starts in the second before the reload holds it; the reload comes after it', async () => {
+  // Check 103: the reload ran 1.5 s after the decision without looking again, so a Play pressed in
+  // that second was cut; the version was also marked as reloaded, so no later reload followed.
+  let reloads = 0;
+  const timers = [];
+  const stored = {};
+  const window = { sessionStorage: { getItem: (k) => stored[k] || null, setItem: (k, v) => { stored[k] = v; } } };
+  const S = { playing: null, view: 'home', _versionReload: { loaded: '9.1.0', candidate: '', sightings: 0, reloading: false } };
+  const deps = {
+    S, window, VERSION_RELOAD_WINDOW_MS: WINDOW,
+    fetch: async () => ({ ok: true, json: async () => ({ version: '9.2.0' }) }),
+    AbortSignal: { timeout: () => undefined },
+    toast: () => {},
+    location: { reload: () => { reloads++; } },
+    setTimeout: (f) => { timers.push(f); },
+    document: { activeElement: null, getElementById: () => null },
+    AB: { now: null },
+  };
+  const { checkServerVersionForReload } = load(['versionReloadHistory', 'serverVersionReloadDecision', 'versionReloadBusy', 'checkServerVersionForReload'], deps);
+  await checkServerVersionForReload();
+  await checkServerVersionForReload();
+  assert.strictEqual(timers.length, 1, 'the reload is scheduled');
+  S.playing = { item: { type: 'movie' } }; // Play pressed during the toast
+  timers.shift()();
+  assert.strictEqual(reloads, 0, 'not while playing');
+  S.playing = null;
+  await checkServerVersionForReload();
+  while (timers.length) timers.shift()();
+  assert.strictEqual(reloads, 1, 'it reloads once the player closed');
+});
