@@ -567,17 +567,23 @@ Every library pass (a scan, and a boot pass over the stored items a few seconds 
 1. Legacy position rows move to the item that position named in the previous pass when the saved
    title (or the 3.4.15 file name in `meta.source.name`) confirms it; else to the one item of that
    pass with that title; else they are kept aside in `watchOrphans`. A title that appears twice in
-   the library is only carried by file name.
+   the library is only carried by file name, and not at all when the twins share the file name too.
+   An episode row whose title lacks SxxEyy (a Continue Watching card drops it) is checked against the
+   code in `meta.genre` / `meta.q`. With no previous pass (the library database could not open),
+   legacy rows wait.
 2. When an item's watch key changes (a match gained, lost or changed: Fix match, a switch to
    "Folder & NFO only"), its rows move with it (owner rule: progress carries over). A row on a
    catalog key stays only when it is shown to be another copy: `meta.localKey` names another item,
    `meta.source.name` is another file (a Usenet release), it was imported from Trakt, or its user
    cannot see this library. A catalog key another library item still owns stays. On a merge the
-   newer row wins, except that a watched tick is kept over a newer row of 30 s or less (a replay
-   started from a catalog page). A 3.4.15 file name counts only with a saved title and kind that
+   newer row wins, except that a Trakt import never beats the user's own row, and a watched tick is
+   kept over a newer row of 30 s or less (a replay started from a catalog page). When several copies
+   of one catalog title change keys at once, each row follows the copy its stamp or file name names.
+   A row that changes catalog title loses `traktExportedAt`, so it is sent to Trakt again. A 3.4.15 file name counts only with a saved title and kind that
    agree (generic names like `01.mp4` repeat).
 3. A file that vanished and one that appeared with the same name and size (never the modified time)
-   carry the rows; a show folder follows when half its episodes pair.
+   carry the rows; a show folder follows when half its episodes pair. The same file under a new key
+   (a doubled episode taking over the S/E key when the other copy is removed) carries its rows.
 4. Rows of files that left the library are kept aside (not on a pass that lost half the library),
    come back when the file returns, and are deleted after 30 days.
 
