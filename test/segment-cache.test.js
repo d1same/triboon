@@ -99,6 +99,32 @@ test('segment cache returns a decoded article and drops the oldest when the lid 
   assert.equal(cache.stats().bytes, 0);
 });
 
+test('segment cache: a blob changed on disk is a miss, and a record from an older version without a checksum is read again once', async () => {
+  const dir = tmpDir();
+  const piece = Buffer.alloc(4096, 7);
+  const first = new SegmentDiskCache({ dir, enabled: true });
+  first.put('<old@test>', piece, { size: 4096, partSize: 4096 });
+  first.put('<zeroed@test>', piece, { size: 4096, partSize: 4096 });
+  await first.flush();
+  // An older version wrote no checksum; and one blob is zeroed on disk at the same length.
+  const indexFile = path.join(dir, 'index.json');
+  const index = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+  const { articleKey } = require('../server/segment-cache');
+  delete index.entries[articleKey('old@test')].crc;
+  fs.writeFileSync(indexFile, JSON.stringify(index));
+  const zeroKey = articleKey('zeroed@test');
+  fs.writeFileSync(path.join(dir, zeroKey.slice(0, 2), zeroKey), Buffer.alloc(4096));
+
+  const later = new SegmentDiskCache({ dir, enabled: true });
+  assert.strictEqual(await later.get('zeroed@test'), null, 'a zeroed blob is never handed back');
+  assert.strictEqual(await later.get('old@test'), null, 'a record with no checksum cannot be proven: read it again once');
+  later.put('<old@test>', piece, { size: 4096, partSize: 4096 });
+  await later.flush();
+  const hit = await later.get('old@test');
+  assert.ok(hit && hit.data.equals(piece), 'written back with a checksum, it is a hit again');
+  await later.clear();
+});
+
 test('segment cache keeps a pinned spot when the lid drops older pieces', async () => {
   const dir = tmpDir();
   const cache = new SegmentDiskCache({ dir, enabled: true, maxBytes: 500 });
