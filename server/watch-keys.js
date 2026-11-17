@@ -45,6 +45,14 @@ function savedTitleParts(meta) {
   const ms = meta && Number.isInteger(+meta.season) ? +meta.season : null;
   const me = meta && Number.isInteger(+meta.episode) ? +meta.episode : null;
   if (out.s === null && ms !== null && me !== null) { out.s = ms; out.e = me; }
+  // A Continue Watching card (3.4.13 to 3.4.15) drops "— S01E02" from the title it saves, but a
+  // library episode row keeps its code in `genre` ("S01E02") and `q` ("Show S01E02"). Without it
+  // the row could only be placed by a position that may have shifted inside its show.
+  if (out.s === null && meta && meta._kind !== 'movie' && meta.type !== 'movie') {
+    const code = /^\s*S(\d{1,3})\s*E(\d{1,4})\s*$/i.exec(String(meta.genre || ''))
+      || /\bS(\d{1,3})\s*E(\d{1,4})\s*$/i.exec(String(meta.q || ''));
+    if (code) { out.s = parseInt(code[1], 10); out.e = parseInt(code[2], 10); }
+  }
   return out;
 }
 
@@ -149,8 +157,13 @@ function resolveLegacyRow(row, pos, prev) {
   const at = prev.byIdx.get(pos);
   const want = savedTitleParts(meta);
   const byFile = !!(meta.source && meta.source.name);
-  // The file name (3.4.15 rows) names one file exactly.
-  if (at && byFile && rowConfirms(at, meta, showOf)) return at;
+  // The file name (3.4.13 to 3.4.15 rows) names one file, unless another item of that pass has the
+  // same file name and title (Baran (2001)/Baran.mkv and Baran (2015)/Baran.mkv): a scan before this
+  // one could have swapped their positions, and the row cannot tell.
+  if (at && byFile && rowConfirms(at, meta, showOf)) {
+    const twin = (it) => it && it !== at && it.kind === at.kind && rowConfirms(it, meta, showOf);
+    return prev.candidates(meta).some(twin) ? null : at;
+  }
   // A title at its position is trusted only when no other item of that pass carries the same title
   // (another film of that name, or an episode of another show of that name): a scan before this one
   // could have swapped the two, and the row cannot tell (result 85: about 248 such film groups).
@@ -188,6 +201,16 @@ function planMoves({ prevItems, items, watchKeyOf, claimedElsewhere = () => fals
     const before = prev.byKey.get(key);
     if (!before) continue;
     add(watchKeyOf(before), watchKeyOf(it), 'match', it);
+  }
+  // The same file under another key: a doubled episode (or a loose film beside one of another
+  // extension) keyed by its path takes over the S/E key when the copy that held it is removed. Only
+  // that way round: a key that still exists keeps its rows.
+  const nextByRel = new Map();
+  for (const it of items) if (it && it.key && it.relPath) nextByRel.set(`${it.kind}\0${it.relPath}`, it);
+  for (const old of prevItems) {
+    if (!old || !old.key || !old.relPath || next.byKey.has(old.key)) continue;
+    const same = nextByRel.get(`${old.kind}\0${old.relPath}`);
+    if (same && same.key !== old.key) add(watchKeyOf(old), watchKeyOf(same), 'rekey', same);
   }
   // Renames and moves: vanished vs appeared, paired by file name + size.
   const gone = prevItems.filter((it) => it && it.key && it.file && !next.byKey.has(it.key) && Number.isFinite(it.fileSize));
@@ -251,7 +274,20 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
   const note = (entry) => { if (stats.log.length < 2000) stats.log.push(entry); };
   const prev = makeIndex(prevItems);
   const next = makeIndex(items);
-  const moveMap = new Map(moves.map((m) => [m.from, m]));
+  // One catalog key can leave several copies at once (a 1080p and a 2160p folder of one film, both
+  // switched to "Folder & NFO only"): each row goes with the copy its stamp or file name names.
+  const moveMap = new Map();
+  for (const m of moves) { if (!moveMap.has(m.from)) moveMap.set(m.from, []); moveMap.get(m.from).push(m); }
+  const moveFor = (list, row) => {
+    if (list.length === 1) return list[0];
+    const meta = (row && row.meta) || {};
+    if (meta.localKey) return list.find((m) => m.item && m.item.key === meta.localKey) || list[list.length - 1];
+    const src = meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
+    const named = src ? list.filter((m) => m.item && m.item.file && baseName(m.item.file) === src) : [];
+    // No stamp and no file name of one copy: the last copy, as before (the owner's answer 4 carries
+    // progress over; which copy of the same title cannot be told).
+    return named.length === 1 ? named[0] : list[list.length - 1];
+  };
   const targetFor = (it) => {
     if (!it) return null;
     // The item's counterpart in this pass (same stable key), else the key it had.
@@ -262,11 +298,21 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
     const have = doc[toFull];
     const meta = stamp ? { ...(row.meta || {}), ...stamp } : row.meta;
     const moved = { ...row, meta };
+    // Sent to Trakt under another catalog title (a match changed from one id to another): send it
+    // again under this one.
+    if (fromFull !== toFull && /:tmdb:/i.test(toFull) && fromFull.slice(fromFull.indexOf(':tmdb:')) !== toFull.slice(toFull.indexOf(':tmdb:'))) {
+      delete moved.traktExportedAt;
+    }
     const at = (r) => r.updatedAt || r.addedAt || 0;
     // The newer row wins, except that a watched tick is not lost to a newer row that only started
     // the episode again (the catalog page's "Play S01E01" wrote 2 s over a finished episode).
     const replay = (newer, older) => older.watched && !newer.watched && (Number(newer.position) || 0) <= 30;
     let keepMoved = !have || at(row) > at(have);
+    // A row imported from Trakt (stamped with the time of the sync) never replaces the user's own
+    // row: after a mode switch and back, the import sits on the catalog key the user's row returns to.
+    // The replay rule below still keeps a watched tick, the import's included.
+    if (have && have.fromTrakt && !row.fromTrakt) keepMoved = true;
+    else if (have && !have.fromTrakt && row.fromTrakt) keepMoved = false;
     if (have && keepMoved && replay(row, have)) keepMoved = false;
     else if (have && !keepMoved && replay(have, row)) keepMoved = true;
     if (keepMoved) doc[toFull] = moved;
@@ -288,7 +334,8 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
       const parts = split(fullKey);
       if (!parts) continue;
       const { prefix, key } = parts;
-      const mv = moveMap.get(key);
+      const mvs = moveMap.get(key);
+      const mv = mvs ? moveFor(mvs, row) : null;
       if (mv) {
         // A catalog row leaves its catalog key with this copy unless it is shown to be another copy
         // (another item's stamp, a Usenet release as its source, a Trakt import) or its user cannot
@@ -299,6 +346,9 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
       }
       const lk = parseLocalKey(key);
       if (!lk || !lk.legacy || String(lk.libId) !== String(libId)) continue;
+      // No previous pass (the library database could not open): a position names nothing yet, and
+      // a row kept aside now would never come back. It waits for a pass that knows its position.
+      if (!prev.items.length) continue;
       stats.legacy++;
       const owner = resolveLegacyRow(row, lk.pos, prev);
       const target = targetFor(owner);

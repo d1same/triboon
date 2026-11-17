@@ -336,3 +336,114 @@ test('watch keys: thousands of old rows on a large library move in well under se
   assert.strictEqual(stats.parked, 0);
   assert.ok(ms < 3000, `took ${ms} ms`);
 });
+
+// ---- Second check (brief 100) ----
+
+test('watch keys: an episode row resumed from a Continue Watching card (show title only) is placed by its saved S/E, not by its position', () => {
+  // 3.4.13 to 3.4.15 cards drop "— S01E02" from the title, and a save in the first 30 s has no file
+  // name; the row still carries the episode in q and genre. An S01E00 file added later moved E01
+  // onto the position E02 was saved at.
+  const show = { kind: 'show', dir: at('Iron Harbor'), title: 'Iron Harbor' };
+  const ep = (e) => ({ kind: 'episode', file: at('Iron Harbor', `Iron Harbor S01E0${e}.mkv`), showIdx: 0, s: 1, e, title: `Iron Harbor · S01E0${e}` });
+  const prev = pass([show, ep(0), ep(1), ep(2)]);
+  const meta = { title: 'Iron Harbor', type: 'episode', _kind: 'episode', q: 'Iron Harbor S01E02', genre: 'S01E02' };
+  const watch = { [`u1:default:local:${LIB}:2`]: row('Iron Harbor', { meta }) };
+  run(prev, prev, watch);
+  assert.deepStrictEqual(Object.keys(watch), [`u1:default:${prev[0].key}:s1e2`], 'E02, never the E01 now at its position');
+  // A film's genre ("Drama") or a film title that is its q never reads as an episode.
+  assert.strictEqual(savedTitleParts({ title: 'Baran', genre: 'Drama', q: 'Baran' }).s, null);
+});
+
+test('watch keys: twins with one title and one file name are not told apart by a position that may have shifted', () => {
+  // Baran (2001) was at position 1 when the row was saved; a folder ahead of it was then removed,
+  // so position 1 holds Baran (2015), which has the same title and the same file name.
+  const prev = pass([film('Baran (2001)', 'Baran.mkv', { title: 'Baran' }), film('Baran (2015)', 'Baran.mkv', { title: 'Baran' })]);
+  const watch = { [`u1:default:local:${LIB}:1`]: row('Baran', { meta: { title: 'Baran', _kind: 'movie', source: { name: 'Baran.mkv' } } }) };
+  const { stats } = run(prev, prev, watch);
+  assert.strictEqual(stats.parked, 1, 'kept aside, never put on the 2015 film');
+  assert.deepStrictEqual(Object.keys(watch), []);
+});
+
+test('watch keys: two copies of one matched film lose the match: each stamped row follows its own copy', () => {
+  const before = pass([film('Film (2010) 1080p', 'a.mkv', { tmdbId: 77, title: 'Film' }), film('Film (2010) 2160p', 'b.mkv', { tmdbId: 77, title: 'Film' })]);
+  const after = pass([film('Film (2010) 1080p', 'a.mkv', { title: 'Film' }), film('Film (2010) 2160p', 'b.mkv', { title: 'Film' })]);
+  const watch = {
+    'u1:p1:tmdb:movie:77': row('Film', { position: 300, meta: { title: 'Film', type: 'movie', localKey: before[0].key } }),
+    'u1:p2:tmdb:movie:77': row('Film', { position: 600, meta: { title: 'Film', type: 'movie', localKey: before[1].key } }),
+    'u1:p3:tmdb:movie:77': row('Film', { position: 900, meta: { title: 'Film', type: 'movie', source: { name: 'a.mkv' } } }),
+  };
+  run(before, after, watch);
+  assert.strictEqual(watch[`u1:p1:${after[0].key}`].position, 300, 'the 1080p copy');
+  assert.strictEqual(watch[`u1:p2:${after[1].key}`].position, 600, 'the 2160p copy');
+  assert.strictEqual(watch[`u1:p3:${after[0].key}`].position, 900, 'its file name names the 1080p copy');
+  assert.ok(!Object.keys(watch).some((k) => k.endsWith('tmdb:movie:77')), 'nothing is left on a catalog key no copy uses');
+});
+
+test('watch keys: a doubled episode file removed: the other copy takes the S/E key and keeps its own progress', () => {
+  const show = { kind: 'show', dir: at('Kuh'), title: 'Kuh' };
+  const a = { kind: 'episode', file: at('Kuh', 'Kuh S01E01 (1080p).mkv'), fileSize: 50, showIdx: 0, s: 1, e: 1, title: 'Kuh · S01E01' };
+  const b = { kind: 'episode', file: at('Kuh', 'Kuh S01E01.mkv'), fileSize: 60, showIdx: 0, s: 1, e: 1, title: 'Kuh · S01E01' };
+  const prev = pass([show, a, b]);
+  assert.ok(prev[1].key.endsWith(':s1e1') && !prev[2].key.endsWith(':s1e1'), 'the first by path holds S/E');
+  const next = pass([show, b]);
+  const watch = { [`u1:default:${prev[2].key}`]: row('Kuh — S01E01', { position: 700, meta: { title: 'Kuh — S01E01', type: 'episode' } }) };
+  const orphans = {};
+  const moves = planMoves({ prevItems: prev, items: next, watchKeyOf: wk });
+  applyLibraryMoves({ libId: LIB, watch, watchlist: {}, orphans, prevItems: prev, items: next, moves, watchKeyOf: wk, now: 1000 });
+  parkVanished({ libId: LIB, watch, watchlist: {}, orphans, prevItems: prev, items: next, moves, watchKeyOf: wk, now: 1000 });
+  assert.strictEqual(watch[`u1:default:${next[1].key}`] && watch[`u1:default:${next[1].key}`].position, 700);
+  assert.deepStrictEqual(orphans, {});
+  // The other way round: a better copy added beside the old one sorts first and takes S/E; the old
+  // copy's rows stay where they are (S/E), as before.
+  const one = pass([show, b]);
+  const two = pass([show, a, b]);
+  const w2 = { [`u1:default:${one[1].key}`]: row('Kuh — S01E01', { position: 400, meta: { title: 'Kuh — S01E01', type: 'episode' } }) };
+  run(one, two, w2);
+  assert.strictEqual(w2[`u1:default:${one[1].key}`].position, 400, 'the S/E row is not moved off its key');
+});
+
+test('watch keys: a row imported from Trakt never wins a merge over the user\'s own row', () => {
+  const before = pass([film('Copper', 'c.mkv', { title: 'Copper' })]);
+  const after = pass([film('Copper', 'c.mkv', { title: 'Copper', tmdbId: 9001 })]);
+  const watch = {
+    [`u1:default:${before[0].key}`]: row('Copper', { position: 300, updatedAt: 100, meta: { title: 'Copper', type: 'movie', localKey: before[0].key } }),
+    'u1:default:tmdb:movie:9001': { position: 0, duration: 0, watched: true, fromTrakt: true, meta: { title: 'Copper', type: 'movie' }, updatedAt: 200 },
+  };
+  run(before, after, watch);
+  const r = watch['u1:default:tmdb:movie:9001'];
+  assert.strictEqual(r.position, 300, 'the user\'s 300 s stays');
+  assert.ok(!r.fromTrakt);
+});
+
+test('watch keys: a row that changes catalog title is sent to Trakt again under the new title', () => {
+  const before = pass([film('Romeo', 'r.mkv', { title: 'Romeo', tmdbId: 680 })]);
+  const after = pass([film('Romeo', 'r.mkv', { title: 'Romeo', tmdbId: 681 })]);
+  const watch = { 'u1:default:tmdb:movie:680': row('Romeo', { watched: true, traktExportedAt: 50, meta: { title: 'Romeo', type: 'movie' } }) };
+  run(before, after, watch);
+  assert.ok(watch['u1:default:tmdb:movie:681']);
+  assert.strictEqual(watch['u1:default:tmdb:movie:681'].traktExportedAt, undefined);
+});
+
+test('watch keys: with no previous pass to read positions from, old rows wait; none is kept aside', () => {
+  // The library database could not open, so the scan had no stored items: a position names nothing.
+  const items = pass([film('Bravo', 'b.mkv'), film('Delta', 'd.mkv')]);
+  const watch = { [`u1:default:local:${LIB}:1`]: row('Delta') };
+  const { stats, orphans } = run([], items, watch);
+  assert.strictEqual(stats.parked, 0);
+  assert.deepStrictEqual(orphans, {});
+  assert.ok(watch[`u1:default:local:${LIB}:1`], 'the row waits for a pass that knows its position');
+});
+
+test('watch keys: a watched tick imported from Trakt is not lost to the user\'s own replay of 30 s or less', () => {
+  // The matched show's "Play S01E01" wrote 0 s over an episode Trakt says is watched.
+  const show = (extra) => ({ kind: 'show', dir: at('Iron Harbor'), title: 'Iron Harbor', ...extra });
+  const ep = (extra) => ({ kind: 'episode', file: at('Iron Harbor', 'Iron Harbor S01E02.mkv'), showIdx: 0, s: 1, e: 2, title: 'Iron Harbor · S01E02', ...extra });
+  const before = pass([show({}), ep({})]);
+  const after = pass([show({ tmdbId: 9101 }), ep({ tmdbId: 9101 })]);
+  const watch = {
+    [`u1:default:${before[1].key}`]: row('Iron Harbor — S01E02', { position: 0, updatedAt: 300, meta: { title: 'Iron Harbor — S01E02', type: 'episode' } }),
+    'u1:default:tmdb:tv:9101:s1e2': { position: 0, duration: 0, watched: true, fromTrakt: true, meta: { title: 'Iron Harbor', type: 'episode' }, updatedAt: 200 },
+  };
+  run(before, after, watch);
+  assert.strictEqual(watch['u1:default:tmdb:tv:9101:s1e2'].watched, true);
+});

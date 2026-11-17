@@ -183,6 +183,7 @@ test('zero bytes: a player that reconnects mid-piece at the next byte, again and
       const parts = [];
       let pos = 0;
       let round = 0;
+      let errors = 0;
       while (pos < rel.size) {
         round++;
         if (round % 4 === 0) mock.trickleNext(5, 10);
@@ -201,7 +202,12 @@ test('zero bytes: a player that reconnects mid-piece at the next byte, again and
             if (got >= stopAfter) { ctl.abort(); vf.cancelReadAhead(); break; }
           }
         } catch (e) {
-          if (!ctl.signal.aborted) throw e;
+          // Two faults can land on one piece and use up its one retry: the stream then ends with an
+          // error (never filler), and the player reconnects at the next byte, as it does here.
+          if (!ctl.signal.aborted) {
+            errors++;
+            if (errors > 20) throw e;
+          }
         }
         pos += got;
         if (round > 400) throw new Error('too many rounds');
@@ -299,7 +305,10 @@ test('zero bytes: a disk-cached piece that was zeroed or cut on disk is read aga
     const first = new VirtualFile(pool, rel.nzb, { readAhead: 2 });
     await first.mount();
     assertNoFiller('first play (fills the disk cache)', await play(first, rel.size), rel.data);
-    await getSegmentDisk().flush();
+    // flush() hands back a flush already running, which holds only the pieces queued before it
+    // began: flush until nothing is queued, or a piece written late is not on disk yet.
+    const disk = getSegmentDisk();
+    while (disk._flushing || disk.queue.length) await disk.flush();
     const blobs = fs.readdirSync(dir, { recursive: true }).map(String)
       .filter((f) => !/index\.json/.test(f) && fs.statSync(path.join(dir, f)).isFile());
     assert.ok(blobs.length >= 10, `pieces were written to disk (${blobs.length})`);
