@@ -257,6 +257,7 @@ test('resume keys: rows saved by 3.4.15 under scan positions move to their title
     await srv.shutdown();
     mock.close();
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(data, { recursive: true, force: true });
   }
 });
 
@@ -288,6 +289,7 @@ test('resume keys: the boot pass keys a library stored by 3.4.15 and moves its r
   } finally {
     await srv.shutdown();
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(data, { recursive: true, force: true });
   }
 });
 
