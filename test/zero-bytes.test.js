@@ -299,7 +299,10 @@ test('zero bytes: a disk-cached piece that was zeroed or cut on disk is read aga
     const first = new VirtualFile(pool, rel.nzb, { readAhead: 2 });
     await first.mount();
     assertNoFiller('first play (fills the disk cache)', await play(first, rel.size), rel.data);
-    await getSegmentDisk().flush();
+    // flush() hands back a flush already running, which holds only the pieces queued before it
+    // began: flush until nothing is queued, or a piece written late is not on disk yet.
+    const disk = getSegmentDisk();
+    while (disk._flushing || disk.queue.length) await disk.flush();
     const blobs = fs.readdirSync(dir, { recursive: true }).map(String)
       .filter((f) => !/index\.json/.test(f) && fs.statSync(path.join(dir, f)).isFile());
     assert.ok(blobs.length >= 10, `pieces were written to disk (${blobs.length})`);
