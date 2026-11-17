@@ -92,6 +92,7 @@ test('watch keys: a matched show\'s episode saved under a position moves to the 
   const { stats } = run(prev, prev, watch);
   assert.deepStrictEqual(Object.keys(watch), ['u1:default:tmdb:tv:9101:s1e2']);
   assert.strictEqual(watch['u1:default:tmdb:tv:9101:s1e2'].position, 61, 'the newer row wins');
+  assert.strictEqual(watch['u1:default:tmdb:tv:9101:s1e2'].meta.tmdbId, 9101, 'a row on a catalog key names its catalog id');
   assert.strictEqual(stats.merged, 0);
   // The other way round: an existing newer catalog row is kept.
   const watch2 = {
@@ -110,6 +111,8 @@ test('watch keys: a gained, lost or changed match moves the rows; a still-claime
   const r = run(before, after, watch);
   assert.deepStrictEqual(r.moves.map((m) => [m.from, m.to]), [[before[0].key, 'tmdb:movie:680']]);
   assert.ok(watch['u1:default:tmdb:movie:680'], 'Fix match: the saved minute follows to the catalog key');
+  assert.strictEqual(watch['u1:default:tmdb:movie:680'].meta.tmdbId, 680,
+    'real setup (brief 101): a row moved by Fix match names its catalog id, so "Details" opens the catalog page instead of playing');
   // Match lost (a switch to Folder & NFO only): a row played from this library copy (the server's
   // stamp) goes back to the stable key; another user's Usenet row of that film stays a catalog row.
   const mine = { title: 'Romeo', type: 'movie', localKey: after[0].key };
@@ -446,4 +449,23 @@ test('watch keys: a watched tick imported from Trakt is not lost to the user\'s 
   };
   run(before, after, watch);
   assert.strictEqual(watch['u1:default:tmdb:tv:9101:s1e2'].watched, true);
+});
+
+test('watch keys: a library path change (every show moves) is planned in well under seconds (brief 101)', () => {
+  const big = (rootName) => {
+    const list = [];
+    for (let s = 0; s < 800; s++) {
+      const showIdx = list.length;
+      list.push({ kind: 'show', dir: at(rootName, `Show ${s}`), title: `Show ${s}` });
+      for (let e = 1; e <= 25; e++) list.push({ kind: 'episode', file: at(rootName, `Show ${s}`, `S01E${e}.mkv`), showIdx, s: 1, e, title: `Show ${s} · S01E${e}`, fileSize: 1000 + s * 100 + e });
+    }
+    return pass(list);
+  };
+  const before = big('Old');
+  const after = big('New'); // the library folder moved one level: every key changes, files pair by name + size
+  const t0 = Date.now();
+  const moves = planMoves({ prevItems: before, items: after, watchKeyOf: wk });
+  const ms = Date.now() - t0;
+  assert.ok(ms < 1500, `took ${ms} ms (the per-show scan of the whole library took 2.4 s here)`);
+  assert.strictEqual(moves.filter((m) => /^local:[^:]+:[0-9a-f]{12}$/.test(m.from)).length, 800, 'every show followed its folder');
 });

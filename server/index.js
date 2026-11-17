@@ -17,7 +17,7 @@ const { Store, VerdictCache, scrubOrphanTempDirs } = require('./store');
 const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { resolveLibraryPath, existingMediaPath } = require('./library-path');
-const { assignStableKeys, watchKeyFor, parseLocalKey } = require('./library-keys');
+const { assignStableKeys, watchKeyFor, parseLocalKey, itemRelPath } = require('./library-keys');
 const { planMoves, applyLibraryMoves, parkVanished, restoreReturned, parkLibraryRows, rowConfirms } = require('./watch-keys');
 const { pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryAutoTmdbMatch, libraryScanUsesLocalMetaOnly, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt, libraryNameParts, libraryTmdbQueries, isLibrarySeasonDir, librarySeasonFromDir, libraryEpisodeNumber, solarToGregorian, foldPersian, cleanNfoTitle } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter, SIGN_IN_NAME_MAX } = require('./auth');
@@ -5290,6 +5290,7 @@ function sameLibraryItems(prev, next) {
     const b = next[i] || {};
     const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
     for (const k of keys) {
+      if (k === 'relPath') continue; // recomputed each pass, never stored (library-db storedPayload)
       const x = a[k];
       const y = b[k];
       if (x === undefined && y === undefined) continue;
@@ -5335,6 +5336,8 @@ function libraryWatchKeyOf(item) {
 // other keys, so those items look vanished and appeared, and the name + size pairing carries their
 // rows. Items stored before 3.4.16 (no key) get theirs computed here.
 function keyedLibraryCopy(lib, items) {
+  // Stored items that all have keys already are what this would return (stored keys win).
+  if ((items || []).every((it) => !it || it.key)) return items || [];
   const copy = (items || []).map((it) => (it ? { ...it } : it));
   assignStableKeys(lib.id, resolveLibraryPath(lib.path), copy);
   copy.forEach((it, i) => {
@@ -5455,7 +5458,10 @@ function localWatchStamp(ctx, key, hint) {
     const item = libraryItemByKey(lk.libId, k);
     if (!item || !item.key) return null;
     if (viaHint && libraryWatchKeyOf(item) !== key) return null;
-    return { localKey: item.key, relPath: item.relPath || undefined };
+    // The relative path is not stored with the item: recompute it from the library folder.
+    const lib = store.read('libraries', { list: [] }).list.find((l) => l && String(l.id) === String(lk.libId));
+    const rel = item.relPath || (lib ? itemRelPath(resolveLibraryPath(lib.path), item) : null);
+    return { localKey: item.key, relPath: rel || undefined };
   } catch { return null; }
 }
 // A legacy position key -> the stable watch key of the item at that position NOW, when that item has
@@ -5489,6 +5495,15 @@ function keyStoredLibraries() {
     if (!lib || !lib.path) continue;
     const st = scanStates.get(lib.id);
     if (st && st.running) continue;
+    // Already keyed and no position rows left: nothing to do. Reading and re-keying 20,000 stored
+    // items held the server for over a second on every start (real setup, brief 101).
+    const legacy = new RegExp(`:local:${String(lib.id).replace(/[^\w-]/g, '')}:\\d{1,5}$`);
+    const hasLegacy = Object.keys(store.read('watch', {})).some((k) => legacy.test(k))
+      || Object.keys(store.read('watchlist', {})).some((k) => legacy.test(k));
+    if (!hasLegacy && libraryDb.available && libraryDb.unkeyedCount(lib.id) === 0) {
+      out.push({ lib: lib.id, stats: null, skipped: true });
+      continue;
+    }
     const rec = libraryRecord(lib.id);
     if (!rec || !Array.isArray(rec.items) || !rec.items.length) continue;
     const keyed = keyedLibraryCopy(lib, rec.items);
@@ -8869,12 +8884,17 @@ async function performScan(lib, state, mode = 'scan') {
       const p = prevBy.get(it.file);
       if (p && Number.isFinite(p.fileSize)) { it.fileSize = p.fileSize; continue; }
       if (p && sizeBudget-- <= 0) continue;
-      await maybeBreathe();
-      try { it.fileSize = fs.statSync(it.file).size; } catch { /* gone or unreadable: no pairing */ }
+      // Asynchronous: on a busy network share one stat can take seconds, and a sync stat held the
+      // whole server for that long (real setup, brief 101). Nothing else waits on these sizes.
+      try { it.fileSize = (await fs.promises.stat(it.file)).size; } catch { /* gone or unreadable: no pairing */ }
     }
     // Stable keys: each item named by its place on disk, not its position (library-keys.js).
     const keyRoot = resolveLibraryPath(lib.path);
     assignStableKeys(lib.id, keyRoot, items);
+    // Let waiting requests run before the save: naming 21,000 items is 0.2-0.35 s of sync work and
+    // the save below is another second on a changed pass; back to back they were one long stall.
+    // Nothing is published yet, so a request in between still sees the previous pass.
+    await new Promise((resolve) => setImmediate(resolve));
     // An unchanged pass (the common 15-minute case) rewrote every row in one sync SQLite
     // transaction: 350-450 ms of frozen event loop for 20,000 items (result 89). Same items, same
     // order, same fields (addedAt and art included): keep the rows, refresh only the scan time.

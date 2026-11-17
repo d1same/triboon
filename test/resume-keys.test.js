@@ -285,7 +285,13 @@ test('resume keys: the boot pass keys a library stored by 3.4.15 and moves its r
     assert.match(gol.watchKey, /^local:[^:]+:[0-9a-f]{12}$/);
     assert.strictEqual((await rowsOf(srv.port, admin)).find((w) => w.key === gol.watchKey).position, 321);
     // Run again: nothing left to do.
-    assert.strictEqual(srv.keyStoredLibraries()[0].stats, null);
+    const again = srv.keyStoredLibraries()[0];
+    assert.strictEqual(again.stats, null);
+    assert.strictEqual(again.skipped, true, 'a keyed library with no position rows is not read again at the next start (brief 101: 1.3 s stall on a 21,000-item library)');
+    // A position row written later (an old page) brings the pass back.
+    await save(srv.port, admin, { key: `local:${lib.id}:${golPos}`, position: 400, duration: 900, meta: { title: 'Gol Sorkh گل سرخ', type: 'movie' } });
+    const third = srv.keyStoredLibraries()[0];
+    assert.ok(!third.skipped && third.stats && third.stats.moved === 1);
   } finally {
     await srv.shutdown();
     fs.rmSync(root, { recursive: true, force: true });

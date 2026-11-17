@@ -3,6 +3,14 @@
 const fs = require('fs');
 const path = require('path');
 
+// The stored item: the relative path is recomputed when needed (library-keys.js), so it does not
+// travel in every payload (about 100 bytes x 21,000 items on every changed pass).
+function storedPayload(item) {
+  if (!item || item.relPath === undefined) return JSON.stringify(item);
+  const { relPath: _relPath, ...rest } = item;
+  return JSON.stringify(rest);
+}
+
 class LibraryDb {
   constructor(dir) {
     this.file = path.join(dir, 'library.sqlite');
@@ -48,8 +56,18 @@ class LibraryDb {
           ON library_items(tmdb_id, kind, season, episode);
         CREATE INDEX IF NOT EXISTS library_items_title_idx
           ON library_items(lib_id, title_key);
-        CREATE INDEX IF NOT EXISTS library_items_key_idx
-          ON library_items(lib_id, json_extract(payload, '$.key'));
+      `);
+      // The stable key (library-keys.js) in its own column. An index on json_extract(payload) made
+      // SQLite parse every payload on each insert and delete: a changed pass over a 21,000-item
+      // library rewrote its rows 0.45 s slower, on the thread that sends the video (brief 101).
+      const cols = this.db.prepare('PRAGMA table_info(library_items)').all().map((c) => c.name);
+      if (!cols.includes('item_key')) {
+        this.db.exec('ALTER TABLE library_items ADD COLUMN item_key TEXT');
+        this.db.exec("UPDATE library_items SET item_key = json_extract(payload, '$.key') WHERE item_key IS NULL");
+      }
+      this.db.exec(`
+        DROP INDEX IF EXISTS library_items_key_idx;
+        CREATE INDEX IF NOT EXISTS library_items_item_key_idx ON library_items(lib_id, item_key);
       `);
       try { this.db.exec('PRAGMA optimize;'); } catch {}
       this.available = true;
@@ -111,8 +129,8 @@ class LibraryDb {
     const insert = this.db.prepare(`
       INSERT INTO library_items
       (lib_id, idx, kind, show_idx, tmdb_id, season, episode, title, title_key, year, rating,
-       added_at, file, art_file, dir, genres, payload)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       added_at, file, art_file, dir, genres, payload, item_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     try {
       this.db.exec('BEGIN IMMEDIATE');
@@ -137,7 +155,8 @@ class LibraryDb {
           item.artFile || null,
           item.dir || null,
           this._genreText(item),
-          JSON.stringify(item),
+          storedPayload(item),
+          item.key || null,
         );
       }
       this.db.exec('COMMIT');
@@ -172,9 +191,18 @@ class LibraryDb {
   itemByKey(libId, key) {
     if (!this.available || !this.db || !key) return null;
     if (!this._byKeyStmt) {
-      this._byKeyStmt = this.db.prepare("SELECT payload FROM library_items WHERE lib_id = ? AND json_extract(payload, '$.key') = ? LIMIT 1");
+      this._byKeyStmt = this.db.prepare('SELECT payload FROM library_items WHERE lib_id = ? AND item_key = ? LIMIT 1');
     }
     return this._parsePayload(this._byKeyStmt.get(String(libId), String(key)));
+  }
+
+  // How many stored items of a library have no stable key yet (null when the library is not stored).
+  unkeyedCount(libId) {
+    if (!this.available || !this.db) return null;
+    const meta = this.db.prepare('SELECT 1 AS hit FROM library_meta WHERE lib_id = ?').get(String(libId));
+    if (!meta) return null;
+    const row = this.db.prepare('SELECT COUNT(*) AS n FROM library_items WHERE lib_id = ? AND item_key IS NULL').get(String(libId));
+    return row ? row.n : 0;
   }
 
   // Every episode of one show, in season and episode order.
@@ -215,7 +243,7 @@ class LibraryDb {
       this.db.prepare(`
         UPDATE library_items
         SET kind = ?, show_idx = ?, tmdb_id = ?, season = ?, episode = ?, title = ?, title_key = ?,
-            year = ?, rating = ?, added_at = ?, file = ?, art_file = ?, dir = ?, genres = ?, payload = ?
+            year = ?, rating = ?, added_at = ?, file = ?, art_file = ?, dir = ?, genres = ?, payload = ?, item_key = ?
         WHERE lib_id = ? AND idx = ?
       `).run(
         String(item.kind || 'movie'),
@@ -232,7 +260,8 @@ class LibraryDb {
         item.artFile || null,
         item.dir || null,
         this._genreText(item),
-        JSON.stringify(item),
+        storedPayload(item),
+        item.key || null,
         libId,
         parseInt(idx, 10),
       );

@@ -128,3 +128,19 @@ test('web keys: Home looks up the pictures of library cards once when the page m
   assert.strictEqual(asked.length, 4);
   assert.match(fn('loadRows'), /publishHomeRows\(homeRowsFromWatch\(cw, false\)[^\n]+\n\s*if \(!opts\.catalogOnly && cw\.length\) \(window\.requestIdleCallback \|\| \(\(f\) => setTimeout\(f, 200\)\)\)\(\(\) => warmContinueWatchingArt\(cw\)\);/);
 });
+
+test('web keys: "Details" on a card moved onto a catalog key by a match opens the catalog page (brief 101)', () => {
+  // Real setup: a library row saved before a Fix match had no tmdbId in its meta; moved onto
+  // tmdb:tv:<id>:s<S>e<E>, its card's Details took it for a non-catalog title and played it.
+  const { detailTargetForItem } = load(['showTitleFromEpisodeItem', 'detailTargetForItem']);
+  const ep = detailTargetForItem({ key: 'tmdb:tv:209419:s2e3', title: 'Masturan', type: 'episode', tmdbId: null, resume: 1396 });
+  assert.strictEqual(ep.key, 'tmdb:tv:209419');
+  assert.strictEqual(ep.type, 'tv');
+  assert.strictEqual(ep.tmdbId, 209419);
+  assert.strictEqual(ep.resume, 0);
+  const film = detailTargetForItem({ key: 'tmdb:movie:680', title: 'Romeo', type: null, tmdbId: null });
+  assert.strictEqual(film.tmdbId, 680);
+  assert.strictEqual(film.type, 'movie');
+  const local = detailTargetForItem({ key: 'local:abc123def0:0123456789ab', title: 'Gol Sorkh', tmdbId: null });
+  assert.strictEqual(local.tmdbId, null, 'a library key is not a catalog id');
+});

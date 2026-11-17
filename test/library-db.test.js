@@ -203,3 +203,39 @@ test('library page: a show card says which of its episodes are new', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('library db: the stable key has its own column, the relative path is not stored, and a 5211707 database is upgraded (brief 101)', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { DatabaseSync } = require('node:sqlite');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-keys-db-'));
+  try {
+    // A database as 5211707 wrote it: no item_key column, the key inside the payload, an expression index.
+    const raw = new DatabaseSync(path.join(dir, 'library.sqlite'));
+    raw.exec(`CREATE TABLE library_meta (lib_id TEXT PRIMARY KEY, scanned_at INTEGER NOT NULL);
+      CREATE TABLE library_items (lib_id TEXT NOT NULL, idx INTEGER NOT NULL, kind TEXT NOT NULL, show_idx INTEGER, tmdb_id INTEGER,
+        season INTEGER, episode INTEGER, title TEXT, title_key TEXT, year INTEGER, rating REAL, added_at INTEGER, file TEXT,
+        art_file TEXT, dir TEXT, genres TEXT, payload TEXT NOT NULL, PRIMARY KEY (lib_id, idx));
+      CREATE INDEX library_items_key_idx ON library_items(lib_id, json_extract(payload, '$.key'));
+      INSERT INTO library_meta VALUES ('libA', 1);`);
+    raw.prepare('INSERT INTO library_items (lib_id, idx, kind, title, payload) VALUES (?, ?, ?, ?, ?)')
+      .run('libA', 0, 'movie', 'Old', JSON.stringify({ idx: 0, kind: 'movie', title: 'Old', key: 'local:libA:0123456789ab', relPath: 'Old/old.mkv' }));
+    raw.close();
+    const db = new LibraryDb(dir);
+    assert.strictEqual(db.itemByKey('libA', 'local:libA:0123456789ab').title, 'Old', 'the key column is backfilled from the payload');
+    assert.strictEqual(db.unkeyedCount('libA'), 0);
+    const idx = db.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'library_items'").all().map((r) => r.name);
+    assert.ok(!idx.includes('library_items_key_idx'), 'the json_extract index is gone (it parsed every payload on each write)');
+    assert.ok(idx.includes('library_items_item_key_idx'));
+    db.replaceLibrary('libA', 2, [{ idx: 0, kind: 'movie', title: 'New', key: 'local:libA:aaaaaaaaaaaa', relPath: 'New/new.mkv' }, { idx: 1, kind: 'movie', title: 'Unkeyed' }]);
+    const payload = db.db.prepare('SELECT payload FROM library_items WHERE lib_id = ? AND idx = 0').get('libA').payload;
+    assert.ok(!/relPath/.test(payload), 'the relative path is recomputed, not stored');
+    assert.strictEqual(db.itemByKey('libA', 'local:libA:aaaaaaaaaaaa').title, 'New');
+    assert.strictEqual(db.unkeyedCount('libA'), 1);
+    assert.strictEqual(db.unkeyedCount('nope'), null);
+    db.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

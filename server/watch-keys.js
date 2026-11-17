@@ -230,8 +230,18 @@ function planMoves({ prevItems, items, watchKeyOf, claimedElsewhere = () => fals
   }
   // A show whose folder was renamed or moved: at least half its episodes paired to one new show.
   const prevShows = prevItems.filter((it) => it && it.kind === 'show' && it.key && !next.byKey.has(it.key));
+  // Episodes grouped once: a library path change makes every show "vanish", and filtering the whole
+  // library per show was 800 x 21,000 steps (seconds) on the real setup (brief 101).
+  const epsByShow = new Map();
+  if (prevShows.length) {
+    for (const e of prevItems) {
+      if (!e || e.kind !== 'episode') continue;
+      if (!epsByShow.has(e.showIdx)) epsByShow.set(e.showIdx, []);
+      epsByShow.get(e.showIdx).push(e);
+    }
+  }
   for (const show of prevShows) {
-    const eps = prevItems.filter((e) => e && e.kind === 'episode' && e.showIdx === show.idx);
+    const eps = epsByShow.get(show.idx) || [];
     if (!eps.length) continue;
     const votes = new Map();
     for (const e of eps) {
@@ -296,7 +306,12 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
   };
   const put = (doc, fromFull, toFull, row, stamp) => {
     const have = doc[toFull];
-    const meta = stamp ? { ...(row.meta || {}), ...stamp } : row.meta;
+    let meta = stamp ? { ...(row.meta || {}), ...stamp } : row.meta;
+    // A row that lands on a catalog key carries that catalog id in its meta, as rows saved there by
+    // the pages do: a library row saved before the match had none, and the card's "Details" then
+    // took it for a non-catalog title and played it instead of opening the show's page.
+    const cat = /^(?:[^:]*:){1,2}tmdb:(movie|tv):(\d+)(?::s\d+e\d+)?$/i.exec(toFull);
+    if (cat) meta = { ...(meta || {}), tmdbId: parseInt(cat[2], 10) };
     const moved = { ...row, meta };
     // Sent to Trakt under another catalog title (a match changed from one id to another): send it
     // again under this one.

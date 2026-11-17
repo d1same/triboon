@@ -162,6 +162,43 @@ test('the auto-scan waits while a stream or a Live TV viewer plays, runs after p
   }
 });
 
+test('the scan reads file sizes without holding the server: a slow size read on the share does not stop other requests', async () => {
+  // A user share can take seconds to answer one size read. A sync read froze the whole server
+  // (the thread that sends the video) for that long; the async read lets other requests through.
+  const lib = makeLibrary();
+  const srv = await bootServer({ TMDB_BASE: null });
+  const origStat = fs.promises.stat;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let held = 0;
+  fs.promises.stat = async function gatedStat(p, ...a) {
+    if (String(p).startsWith(lib) && /\.(mkv|mp4)$/i.test(String(p))) { held++; await gate; }
+    return origStat.call(this, p, ...a);
+  };
+  try {
+    const admin = await setupAdmin(srv.port);
+    const id = (await httpJson(srv.port, 'POST', '/api/libraries', { name: 'Slow', kind: 'movie', path: lib }, admin)).json.id;
+    const started = await httpJson(srv.port, 'POST', `/api/libraries/${id}/scan`, {}, admin);
+    assert.ok(started.status === 200 || started.status === 202, started.raw);
+    for (let i = 0; i < 200 && !held; i++) await new Promise((r) => setTimeout(r, 25));
+    assert.ok(held >= 1, 'the scan reads media sizes through the async API');
+    const t0 = Date.now();
+    const server = await httpJson(srv.port, 'GET', '/api/server', null);
+    assert.strictEqual(server.status, 200);
+    assert.ok(Date.now() - t0 < 1000, 'the server answers while a size read is still pending');
+    const mid = await httpJson(srv.port, 'GET', `/api/libraries/${id}/scanstatus`, null, admin);
+    assert.ok(mid.json.running, 'the scan is still waiting on the size read');
+    release();
+    const done = await scanAndWait(srv.port, id, admin);
+    assert.ok(done.count >= 8, `the scan finishes once the share answers: ${JSON.stringify(done)}`);
+  } finally {
+    release();
+    fs.promises.stat = origStat;
+    await srv.shutdown();
+    fs.rmSync(lib, { recursive: true, force: true });
+  }
+});
+
 test('a library kept in the JSON store moves into SQLite on the next scan, even when nothing changed', async () => {
   // SQLite could not open (a folder sits where the database file goes): the scan keeps its rows in
   // the JSON store. Once SQLite opens again, the next pass must move them there, as 3.4.14 did; an
