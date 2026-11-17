@@ -412,6 +412,8 @@ class ArchiveVirtualFile {
     const parts = [];
     const pieces = [];
     const edges = [];
+    const unread = [];
+    let at = 0;
     for (const e of this.extents) {
       const from = Math.max(start, e.innerStart);
       const to = Math.min(end, e.innerStart + e.length);
@@ -420,8 +422,10 @@ class ArchiveVirtualFile {
       const got = await this.vols[e.vol].freshBytes(e.offset + (from - e.innerStart), e.offset + (to - e.innerStart), opts);
       parts.push(got.buf);
       pieces.push(...got.pieces);
+      for (const [a, b] of got.unread || []) unread.push([at + a, at + b]);
+      at += got.buf.length;
     }
-    return { buf: Buffer.concat(parts), pieces, edges };
+    return { buf: Buffer.concat(parts), pieces, edges, unread };
   }
 
   // The player polls THIS object's health. A volume that lost a piece on every

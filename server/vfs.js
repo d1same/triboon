@@ -874,6 +874,10 @@ class NzbFileStream {
     const last = this._segForOffset(end - 1);
     const out = Buffer.alloc(Math.max(0, end - start));
     const pieces = [];
+    // Window-relative [from, to) of the slots whose article could not be re-read. Those bytes stay
+    // zero in `out` and say nothing about the file. A short article is NOT listed: the tail of its
+    // slot is the hole read() pads with zeros, so the player got those zeros too.
+    const unread = [];
     const fetchOne = async (i) => {
       const piece = { i, slot: i * this.partSize, crcOk: false, intact: false, offGrid: false };
       pieces.push(piece);
@@ -887,8 +891,12 @@ class NzbFileStream {
         const from = Math.max(begin, start);
         const to = Math.min(begin + dec.data.length, end);
         if (to > from) dec.data.copy(out, from - start, from - begin, to - begin);
+        if (!piece.offGrid) piece.short = Math.max(0, Math.min(this.partSize, this.size - piece.slot) - dec.data.length);
       } catch (e) {
         piece.error = String((e && e.message) || e).slice(0, 100);
+        const from = Math.max(piece.slot, start);
+        const to = Math.min(piece.slot + this.partSize, end);
+        if (to > from) unread.push([from - start, to - start]);
       }
     };
     const queue = [];
@@ -896,7 +904,7 @@ class NzbFileStream {
     await Promise.all(Array.from({ length: 4 }, async () => {
       while (queue.length) await fetchOne(queue.shift());
     }));
-    return { buf: out, pieces, edges: [] };
+    return { buf: out, pieces, edges: [], unread };
   }
 
   // Random-access for header parsing: fetches ONLY the segments covering [start, start+len),

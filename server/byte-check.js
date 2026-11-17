@@ -97,6 +97,37 @@ function longestZeroRun(buf) {
   return best;
 }
 
+// Sorted, merged window ranges [from, to) clipped to the buffer.
+function mergeRanges(ranges, total) {
+  const out = [];
+  const clipped = ranges.map(([a, b]) => [Math.max(0, a), Math.min(total, b)]).filter(([a, b]) => b > a)
+    .sort((x, y) => x[0] - y[0]);
+  for (const [a, b] of clipped) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+// The longest zero run in the re-read window, leaving out the slots that could not be re-read
+// (`unread`): the buffer holds zeros there that never came from the file (a 90 s time-out once
+// logged 2 MB of them as a zero run). A slot not re-read breaks a run; it never joins one.
+function zeroRunOutside(buf, unread) {
+  if (!Array.isArray(unread) || !unread.length) return longestZeroRun(buf);
+  let best = 0;
+  let at = 0;
+  for (const [a, b] of [...mergeRanges(unread, buf.length), [buf.length, buf.length]]) {
+    if (a > at) best = Math.max(best, longestZeroRun(buf.subarray(at, a)));
+    at = Math.max(at, b);
+  }
+  return best;
+}
+
+function rangeBytes(ranges, total) {
+  return Array.isArray(ranges) ? mergeRanges(ranges, total).reduce((n, [a, b]) => n + (b - a), 0) : 0;
+}
+
 async function collect(stream) {
   const parts = [];
   for await (const chunk of stream) parts.push(chunk);
@@ -142,11 +173,18 @@ async function runByteCheck(vf, { name = '', log = (line) => debug.fail('play', 
   try {
     // Served first, while the pieces the player read are still in the cache.
     const served = await collect(vf.read(start, end, { priority: 'background', signal: controller.signal }));
-    const { buf: fresh, pieces, edges = [] } = await vf.freshBytes(start, end, { signal: controller.signal });
+    const { buf: fresh, pieces, edges = [], unread } = await vf.freshBytes(start, end, { signal: controller.signal });
     const mkv = /\.mkv$/i.test(String(vf.name || '')) ? walkMkv(fresh, start) : null;
     const verdict = byteCheckVerdict({ served, fresh, pieces, mkv, edges });
+    const missing = rangeBytes(unread, fresh.length);
+    // A short article is served as posted and the rest of its slot is padded with zeros on play.
+    const short = pieces.filter((p) => p.short > 0);
+    const shortBytes = short.reduce((n, p) => n + p.short, 0);
     log(`byte check — "${label}": ${verdict.text} — window ${mb(start)} to ${mb(end)} of ${mb(Number(vf.size) || 0)}, ${pieces.length} pieces, `
-      + `${mkv && mkv.checked ? `${mkv.clusters} clusters walked, ` : ''}longest zero run ${longestZeroRun(fresh)}, ${Math.round((now() - t0) / 1000)}s`);
+      + `${mkv && mkv.checked ? `${mkv.clusters} clusters walked, ` : ''}longest zero run ${zeroRunOutside(fresh, unread)}`
+      + `${missing > 0 ? ` in the re-read bytes (${missing} bytes not re-read, not counted)` : ''}`
+      + `${short.length ? `, ${short.length} pieces shorter than their slot (${shortBytes} bytes padded with zeros on play)` : ''}`
+      + `, ${Math.round((now() - t0) / 1000)}s`);
     return verdict;
   } catch (e) {
     log(`byte check — "${label}": could not finish (${String((e && e.message) || e).slice(0, 120)})`);
@@ -156,4 +194,4 @@ async function runByteCheck(vf, { name = '', log = (line) => debug.fail('play', 
   }
 }
 
-module.exports = { runByteCheck, walkMkv, byteCheckVerdict, firstDifference, longestZeroRun, WINDOW_BYTES };
+module.exports = { runByteCheck, walkMkv, byteCheckVerdict, firstDifference, longestZeroRun, zeroRunOutside, WINDOW_BYTES };
