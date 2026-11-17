@@ -1,0 +1,80 @@
+{
+ "version": "3.4.13",
+ "commit": "a039b68",
+ "capturedAt": "2026-11-17T16:09:07.498Z",
+ "libRootPlaceholder": "C:\\qa-lib",
+ "userId": "db05f65acbd0",
+ "profiles": [
+  {
+   "id": "777f89d6",
+   "name": "owner"
+  },
+  {
+   "id": "438e35a6",
+   "name": "Second"
+  }
+ ],
+ "savedKeys": {
+  "owner": {
+   "copper": "tmdb:movie:9001",
+   "gol": "local:9b4213e092:1",
+   "shab": "local:9b4213e092:2",
+   "ironE02": "local:8b9758c200:6",
+   "daryaE02": "local:8b9758c200:2",
+   "kuhE02": "local:8b9758c200:10"
+  },
+  "secondE01": {
+   "iron": "local:8b9758c200:5",
+   "darya": "local:8b9758c200:1",
+   "kuh": "local:8b9758c200:9"
+  },
+  "extras": {
+   "ownerWatchlist": "tmdb:movie:9001",
+   "ownerWatchlistLocal": "local:8b9758c200:0",
+   "ownerTick": "local:8b9758c200:3",
+   "secondFilm": "local:9b4213e092:2",
+   "secondEpisode": "local:8b9758c200:10",
+   "secondTick": "local:9b4213e092:1",
+   "secondWatchlist": "tmdb:tv:9101",
+   "secondWatchlistLocal": "local:9b4213e092:1"
+  }
+ },
+ "extrasResult": {
+  "ownerWatchlist": {
+   "ok": true,
+   "key": "tmdb:movie:9001"
+  },
+  "ownerWatchlistLocal": {
+   "ok": true,
+   "key": "local:8b9758c200:0"
+  },
+  "ownerTick": {
+   "ok": true,
+   "key": "local:8b9758c200:3"
+  },
+  "secondFilm": {
+   "ok": true,
+   "key": "local:9b4213e092:2",
+   "name": "Shab Abi (2019) شب آبی.mp4",
+   "t": 128
+  },
+  "secondEpisode": {
+   "ok": true,
+   "key": "local:8b9758c200:10",
+   "name": "Kuh S01E02.mp4",
+   "t": 77
+  },
+  "secondTick": {
+   "ok": true,
+   "key": "local:9b4213e092:1"
+  },
+  "secondWatchlist": {
+   "ok": true,
+   "key": "tmdb:tv:9101"
+  },
+  "secondWatchlistLocal": {
+   "ok": true,
+   "key": "local:9b4213e092:1"
+  }
+ }
+}

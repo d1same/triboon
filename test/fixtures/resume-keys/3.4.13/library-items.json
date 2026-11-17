@@ -1,0 +1,341 @@
+{
+ "source": "library.sqlite library_items",
+ "rows": [
+  {
+   "lib_id": "8b9758c200",
+   "idx": 0,
+   "payload": {
+    "kind": "show",
+    "file": null,
+    "artFile": null,
+    "dir": "C:\\qa-lib\\TV\\Darya دریا [1080p]",
+    "title": "Darya دریا [1080p]",
+    "year": null,
+    "overview": "",
+    "rating": null,
+    "tmdbId": null,
+    "poster": null,
+    "backdrop": null,
+    "genres": [],
+    "idx": 0,
+    "addedAt": 1794928882956
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 1,
+   "payload": {
+    "kind": "episode",
+    "file": "C:\\qa-lib\\TV\\Darya دریا [1080p]\\Season 01\\Darya S01E01.mp4",
+    "artFile": null,
+    "showIdx": 0,
+    "title": "Darya دریا [1080p] · S01E01",
+    "epTitle": null,
+    "s": 1,
+    "e": 1,
+    "year": null,
+    "overview": "",
+    "rating": null,
+    "tmdbId": null,
+    "poster": null,
+    "backdrop": null,
+    "genres": [],
+    "addedAt": 1794928880730,
+    "idx": 1
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 2,
+   "payload": {
+    "kind": "episode",
+    "file": "C:\\qa-lib\\TV\\Darya دریا [1080p]\\Season 01\\Darya S01E02.mp4",
+    "artFile": null,
+    "showIdx": 0,
+    "title": "Darya دریا [1080p] · S01E02",
+    "epTitle": null,
+    "s": 1,
+    "e": 2,
+    "year": null,
+    "overview": "",
+    "rating": null,
+    "tmdbId": null,
+    "poster": null,
+    "backdrop": null,
+    "genres": [],
+    "addedAt": 1794928881817,
+    "idx": 2
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 3,
+   "payload": {
+    "kind": "episode",
+    "file": "C:\\qa-lib\\TV\\Darya دریا [1080p]\\Season 01\\Darya S01E03.mp4",
+    "artFile": null,
+    "showIdx": 0,
+    "title": "Darya دریا [1080p] · S01E03",
+    "epTitle": null,
+    "s": 1,
+    "e": 3,
+    "year": null,
+    "overview": "",
+    "rating": null,
+    "tmdbId": null,
+    "poster": null,
+    "backdrop": null,
+    "genres": [],
+    "addedAt": 1794928882956,
+    "idx": 3
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 4,
+   "payload": {
+    "kind": "show",
+    "file": null,
+    "artFile": null,
+    "dir": "C:\\qa-lib\\TV\\Iron Harbor (2015)",
+    "title": "Iron Harbor",
+    "year": "2015",
+    "overview": "Iron Harbor (QA stand-in).",
+    "rating": 8.5,
+    "tmdbId": 9101,
+    "poster": null,
+    "backdrop": null,
+    "genres": [
+     18
+    ],
+    "idx": 4,
+    "addedAt": 1794928879656,
+    "originalTitle": "Iron Harbor"
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 5,
+   "payload": {
+    "kind": "episode",
+    "file": "C:\\qa-lib\\TV\\Iron Harbor (2015)\\Season 01\\Iron Harbor S01E01.mp4",
+    "artFile": null,
+    "showIdx": 4,
+    "title": "Iron Harbor · S01E01",
+    "epTitle": null,
+    "s": 1,
+    "e": 1,
+    "year": "2015",
+    "overview": "",
+    "rating": null,
+    "tmdbId": 9101,
+    "poster": null,
+    "backdrop": null,
+    "genres": [
+     18
+    ],
+    "addedAt": 1794928877647,
+    "idx": 5
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 6,
+   "payload": {
+    "kind": "episode",
+    "file": "C:\\qa-lib\\TV\\Iron Harbor (2015)\\Season 01\\Iron Harbor S01E02.mp4",
+    "artFile": null,
+    "showIdx": 4,
+    "title": "Iron Harbor · S01E02",
+    "epTitle": null,
+    "s": 1,
+    "e": 2,
+    "year": "2015",
+    "overview": "",
+    "rating": null,
+    "tmdbId": 9101,
+    "poster": null,
+    "backdrop": null,
+    "genres": [
+     18
+    ],
+    "addedAt": 1794928878656,
+    "idx": 6
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 7,
+   "payload": {
+    "kind": "episode",
+    "file": "C:\\qa-lib\\TV\\Iron Harbor (2015)\\Season 01\\Iron Harbor S01E03.mp4",
+    "artFile": null,
+    "showIdx": 4,
+    "title": "Iron Harbor · S01E03",
+    "epTitle": null,
+    "s": 1,
+    "e": 3,
+    "year": "2015",
+    "overview": "",
+    "rating": null,
+    "tmdbId": 9101,
+    "poster": null,
+    "backdrop": null,
+    "genres": [
+     18
+    ],
+    "addedAt": 1794928879656,
+    "idx": 7
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 8,
+   "payload": {
+    "kind": "show",
+    "file": null,
+    "artFile": null,
+    "dir": "C:\\qa-lib\\TV\\Kuh کوه [1080p]",
+    "title": "IR - Kuh کوه [1080p]",
+    "year": null,
+    "overview": "",
+    "rating": null,
+    "tmdbId": null,
+    "poster": null,
+    "backdrop": null,
+    "genres": [],
+    "idx": 8,
+    "addedAt": 1794928886544
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 9,
+   "payload": {
+    "kind": "episode",
+    "file": "C:\\qa-lib\\TV\\Kuh کوه [1080p]\\Season 01\\Kuh S01E01.mp4",
+    "artFile": null,
+    "showIdx": 8,
+    "title": "IR - Kuh کوه [1080p] · S01E01",
+    "epTitle": null,
+    "s": 1,
+    "e": 1,
+    "year": null,
+    "overview": "",
+    "rating": null,
+    "tmdbId": null,
+    "poster": null,
+    "backdrop": null,
+    "genres": [],
+    "addedAt": 1794928884124,
+    "idx": 9
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 10,
+   "payload": {
+    "kind": "episode",
+    "file": "C:\\qa-lib\\TV\\Kuh کوه [1080p]\\Season 01\\Kuh S01E02.mp4",
+    "artFile": null,
+    "showIdx": 8,
+    "title": "IR - Kuh کوه [1080p] · S01E02",
+    "epTitle": null,
+    "s": 1,
+    "e": 2,
+    "year": null,
+    "overview": "",
+    "rating": null,
+    "tmdbId": null,
+    "poster": null,
+    "backdrop": null,
+    "genres": [],
+    "addedAt": 1794928885337,
+    "idx": 10
+   }
+  },
+  {
+   "lib_id": "8b9758c200",
+   "idx": 11,
+   "payload": {
+    "kind": "episode",
+    "file": "C:\\qa-lib\\TV\\Kuh کوه [1080p]\\Season 01\\Kuh S01E03.mp4",
+    "artFile": null,
+    "showIdx": 8,
+    "title": "IR - Kuh کوه [1080p] · S01E03",
+    "epTitle": null,
+    "s": 1,
+    "e": 3,
+    "year": null,
+    "overview": "",
+    "rating": null,
+    "tmdbId": null,
+    "poster": null,
+    "backdrop": null,
+    "genres": [],
+    "addedAt": 1794928886544,
+    "idx": 11
+   }
+  },
+  {
+   "lib_id": "9b4213e092",
+   "idx": 0,
+   "payload": {
+    "kind": "movie",
+    "file": "C:\\qa-lib\\Movies\\Copper Lantern (2010)\\Copper Lantern (2010).mp4",
+    "artFile": null,
+    "title": "Copper Lantern",
+    "year": "2010",
+    "overview": "Copper Lantern (QA stand-in).",
+    "rating": 8.2,
+    "tmdbId": 9001,
+    "poster": null,
+    "backdrop": null,
+    "genres": [
+     18
+    ],
+    "addedAt": 1794928866469,
+    "idx": 0,
+    "originalTitle": "Copper Lantern"
+   }
+  },
+  {
+   "lib_id": "9b4213e092",
+   "idx": 1,
+   "payload": {
+    "kind": "movie",
+    "file": "C:\\qa-lib\\Movies\\Gol Sorkh گل سرخ [1080p]\\Gol Sorkh گل سرخ [1080p].mp4",
+    "artFile": null,
+    "title": "Gol Sorkh گل سرخ [1080p]",
+    "year": null,
+    "overview": "",
+    "rating": null,
+    "tmdbId": null,
+    "poster": null,
+    "backdrop": null,
+    "genres": [],
+    "addedAt": 1794928869091,
+    "idx": 1
+   }
+  },
+  {
+   "lib_id": "9b4213e092",
+   "idx": 2,
+   "payload": {
+    "kind": "movie",
+    "file": "C:\\qa-lib\\Movies\\Shab Abi (2019) شب آبی\\Shab Abi (2019) شب آبی.mp4",
+    "artFile": null,
+    "title": "Shab Abi",
+    "year": "2019",
+    "overview": "",
+    "rating": null,
+    "tmdbId": null,
+    "poster": null,
+    "backdrop": null,
+    "genres": [],
+    "addedAt": 1794928871804,
+    "idx": 2
+   }
+  }
+ ]
+}
