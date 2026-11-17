@@ -352,6 +352,31 @@ test('resume keys: a Jellyfin app and the pages share one row through the stable
   }
 });
 
+test('resume keys: progress follows its files when the library path changes to the parent folder', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-keys-path-'));
+  put(root, 'Movies/Gol Sorkh گل سرخ/gol.sorkh.mkv', 'GOL');
+  put(root, 'Movies/Shab Abi/shab.abi.mkv', 'SHAB-LONGER');
+  const srv = await bootServer({ TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(srv.port);
+    const lib = (await httpJson(srv.port, 'POST', '/api/libraries', { name: 'Films', kind: 'movie', path: path.join(root, 'Movies') }, admin)).json;
+    await runScan(srv.port, lib.id, admin);
+    const gol = find(await allItems(srv.port, lib.id, admin), /^Gol Sorkh/, 'movie');
+    await save(srv.port, admin, { key: gol.watchKey, position: 444, duration: 900, meta: { title: 'Gol Sorkh گل سرخ', type: 'movie' } });
+    await httpJson(srv.port, 'PATCH', `/api/libraries/${lib.id}`, { path: root }, admin);
+    await runScan(srv.port, lib.id, admin);
+    const moved = find(await allItems(srv.port, lib.id, admin), /^Gol Sorkh/, 'movie');
+    assert.ok(moved, 'the film is still found one level down');
+    assert.notStrictEqual(moved.watchKey, gol.watchKey, 'its place in the library changed');
+    const rows = await rowsOf(srv.port, admin);
+    assert.strictEqual((rows.find((w) => w.key === moved.watchKey) || {}).position, 444, 'paired by name and size: the minute followed');
+    assert.ok(!rows.some((w) => w.key === gol.watchKey), 'no row left on a key nothing has');
+  } finally {
+    await srv.shutdown();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('resume keys: Fix match works in a "Folder & NFO only" library, and switching modes carries progress both ways (S-4, M-3, S-1)', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-keys-mode-'));
   put(root, 'Copper Lantern (2010)/Copper Lantern.mkv');
@@ -366,14 +391,19 @@ test('resume keys: Fix match works in a "Folder & NFO only" library, and switchi
     let items = await allItems(srv.port, lib.id, admin);
     const copper = find(items, /^Copper/, 'movie');
     assert.strictEqual(copper.watchKey, 'tmdb:movie:9001');
-    await save(srv.port, admin, { key: copper.watchKey, position: 300, duration: 900, meta: { title: 'Copper Lantern' } });
-    // Switch to Folder & NFO only: the matched film's progress follows it to its folder key.
+    // Played from the library copy (the page sends the copy as a hint), and on another profile from
+    // Usenet (no hint).
+    await save(srv.port, admin, { key: copper.watchKey, localKey: copper.key, position: 300, duration: 900, meta: { title: 'Copper Lantern' } });
+    await save(srv.port, admin, { key: copper.watchKey, profile: 'p2', position: 222, duration: 900, meta: { title: 'Copper Lantern', source: { name: 'Copper.Lantern.2010.1080p.WEB' } } });
+    // Switch to Folder & NFO only: the library copy's progress follows it to its folder key.
     await httpJson(srv.port, 'PATCH', `/api/libraries/${lib.id}`, { tmdbMatch: 'local' }, admin);
     await runScan(srv.port, lib.id, admin);
     items = await allItems(srv.port, lib.id, admin);
     const local = find(items, /^Copper/, 'movie');
     assert.match(local.watchKey, /^local:/);
     assert.strictEqual((await rowsOf(srv.port, admin)).find((w) => w.key === local.watchKey).position, 300);
+    assert.strictEqual((await rowsOf(srv.port, admin, 'p2')).find((w) => w.key === 'tmdb:movie:9001').position, 222,
+      'a Usenet watch of the catalog film stays with the catalog film');
     // Fix match inside that library: applied (it used to be saved and never used) and progress follows.
     const romeo = find(items, /^Romeo/, 'movie');
     await save(srv.port, admin, { key: romeo.watchKey, position: 500, duration: 900, meta: { title: 'Romeo' } });

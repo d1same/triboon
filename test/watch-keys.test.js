@@ -110,18 +110,66 @@ test('watch keys: a gained, lost or changed match moves the rows; a still-claime
   const r = run(before, after, watch);
   assert.deepStrictEqual(r.moves.map((m) => [m.from, m.to]), [[before[0].key, 'tmdb:movie:680']]);
   assert.ok(watch['u1:default:tmdb:movie:680'], 'Fix match: the saved minute follows to the catalog key');
-  // Match lost (a switch to Folder & NFO only): back to the stable key.
-  const lost = { 'u1:default:tmdb:movie:680': row('Romeo'), 'u1:default:tmdb:movie:681': row('X', { fromTrakt: true }) };
+  // Match lost (a switch to Folder & NFO only): a row played from this library copy (the server's
+  // stamp) goes back to the stable key; another user's Usenet row of that film stays a catalog row.
+  const mine = { title: 'Romeo', type: 'movie', localKey: after[0].key };
+  const lost = {
+    'u1:default:tmdb:movie:680': row('Romeo', { meta: mine }),
+    'u2:default:tmdb:movie:680': row('Pulp Fiction', { meta: { title: 'Pulp Fiction', source: { name: 'Pulp.Fiction.1994.1080p.BluRay' } } }),
+  };
   run(after, before, lost);
-  assert.ok(lost[`u1:default:${before[0].key}`]);
+  assert.ok(lost[`u1:default:${before[0].key}`], 'the library copy\'s row follows it');
+  assert.ok(lost['u2:default:tmdb:movie:680'], 'a Usenet row of the catalog title is not taken');
+  // A 3.4.15 row played from the library carries the file name instead of a stamp.
+  const byName = { 'u1:default:tmdb:movie:680': row('Romeo', { meta: { title: 'Romeo', source: { name: 'r.mkv' } } }) };
+  run(after, before, byName);
+  assert.ok(byName[`u1:default:${before[0].key}`]);
   // Another library item still owns the id: nothing moves.
-  const shared = { 'u1:default:tmdb:movie:680': row('Romeo') };
+  const shared = { 'u1:default:tmdb:movie:680': row('Romeo', { meta: mine }) };
   run(after, before, shared, { claimed: (k) => k === 'tmdb:movie:680' });
   assert.ok(shared['u1:default:tmdb:movie:680']);
   // A row imported from Trakt never leaves its catalog key.
-  const trakt = { 'u1:default:tmdb:movie:680': row('Romeo', { fromTrakt: true }) };
+  const trakt = { 'u1:default:tmdb:movie:680': row('Romeo', { fromTrakt: true, meta: mine }) };
   run(after, before, trakt);
   assert.ok(trakt['u1:default:tmdb:movie:680']);
+  // Fix match from one id to another: only this copy's rows go to the new id.
+  const other = pass([film('Romeo', 'r.mkv', { tmdbId: 681, matchOverride: 681, matchTitle: 'Other' })]);
+  const fix = {
+    'u1:default:tmdb:movie:680': row('Romeo', { meta: mine }),
+    'u2:default:tmdb:movie:680': row('Pulp Fiction', { meta: { title: 'Pulp Fiction' } }),
+  };
+  run(after, other, fix);
+  assert.ok(fix['u1:default:tmdb:movie:681'] && fix['u2:default:tmdb:movie:680']);
+});
+
+test('watch keys: a generic file name names the file only together with the saved title and kind', () => {
+  const show = (dir, at0) => [
+    { kind: 'show', dir: at(dir), title: dir },
+    { kind: 'episode', file: at(dir, 'Season 1', '01.mp4'), showIdx: at0, s: 1, e: 1, title: `${dir} · S01E01` },
+  ];
+  // Written when Beta's 01.mp4 was at position 1; "Alpha" now sorts in front, and the stored pass
+  // (the previous one) already shows Alpha's 01.mp4 there.
+  const prev = pass([...show('Alpha', 0), ...show('Beta', 2)]);
+  const w = { [`u1:default:local:${LIB}:1`]: row('Beta — S01E01', { meta: { title: 'Beta — S01E01', type: 'episode', source: { name: '01.mp4' } } }) };
+  run(prev, prev, w);
+  assert.ok(!w[`u1:default:${prev[0].key}:s1e1`], 'never Alpha\'s episode');
+  assert.ok(w[`u1:default:${prev[2].key}:s1e1`], 'Beta\'s, found by title and file name');
+});
+
+test('watch keys: a film row whose old position now holds an episode is still looked up as a film', () => {
+  const prev = pass([
+    { kind: 'show', dir: at('Show'), title: 'Show' },
+    { kind: 'episode', file: at('Show', 'S01E01.mkv'), showIdx: 0, s: 1, e: 1, title: 'Show · S01E01' },
+    film('Romeo', 'r.mkv'),
+  ]);
+  const w = { [`u1:default:local:${LIB}:1`]: row('Romeo', { meta: { title: 'Romeo', type: 'movie' } }) };
+  run(prev, prev, w);
+  assert.ok(w[`u1:default:${prev[2].key}`], 'Romeo is unique: found');
+  // An episode row never lands on a show item.
+  const w2 = { [`u1:default:local:${LIB}:0`]: row('Show — S01E01', { meta: { title: 'Show — S01E01', type: 'episode' } }) };
+  run(prev, prev, w2);
+  assert.ok(!w2[`u1:default:${prev[0].key}`]);
+  assert.ok(w2[`u1:default:${prev[0].key}:s1e1`]);
 });
 
 test('watch keys: a renamed or moved folder is paired by file name and size, never by guess', () => {

@@ -148,3 +148,16 @@ test('library keys: two show folders of one library on one TMDB id keep local ep
   assert.notStrictEqual(items[1].key, items[3].key);
   assert.strictEqual(watchKeyFor(items[0]), items[0].key);
 });
+
+test('library keys: two loose files with one name and other extensions get two keys', () => {
+  const items = scan([
+    { kind: 'movie', file: at('Film.mp4') },
+    { kind: 'movie', file: at('Film.mkv') },
+  ]);
+  assert.notStrictEqual(items[0].key, items[1].key);
+  const again = scan([
+    { kind: 'movie', file: at('Film.mkv') },
+    { kind: 'movie', file: at('Film.mp4') },
+  ]);
+  assert.deepStrictEqual(new Set(again.map((i) => i.key)), new Set(items.map((i) => i.key)), 'the same two keys whatever the walk order');
+});

@@ -97,6 +97,14 @@ function assignStableKeys(libId, root, items) {
         : `local:${libId}:${hashOf('file', stripExt(rel))}`;
     }
   }
+  // Two loose files with one name and other extensions (Film.mkv, Film.mp4) must not share a key:
+  // the later one by path is keyed by its whole file path.
+  const filmKeys = new Map();
+  for (const it of [...items].filter((x) => x && x.kind !== 'show' && x.kind !== 'episode' && x.key)
+    .sort((a, b) => String(a.relPath).localeCompare(String(b.relPath), 'en'))) {
+    if (!filmKeys.has(it.key)) { filmKeys.set(it.key, it); continue; }
+    it.key = `local:${libId}:${hashOf('path', it.relPath)}`;
+  }
   // Episodes: show key + s/e; a second file with the same s/e in one show is keyed by its own path.
   const eps = items.filter((it) => it && it.kind === 'episode');
   const byPath = (a, b) => String(a._rel || '').localeCompare(String(b._rel || ''), 'en');

@@ -5314,12 +5314,19 @@ function saveLibraryScan(libId, scannedAt, items) {
 // The key progress is saved under, from the read-time view (a match that fails the read-time check
 // counts as none, as everywhere else).
 function libraryWatchKeyOf(item) { return watchKeyFor(unboundLibraryItem(item)); }
-// Copies of stored items with their stable keys. A stored key is kept when the path no longer
-// lies under the library folder (the library path was changed).
+// Copies of stored items with their stable keys. A stored key always wins: it is the key the rows
+// were saved under. When the library path changes to a parent or child folder the new pass computes
+// other keys, so those items look vanished and appeared, and the name + size pairing carries their
+// rows. Items stored before 3.4.16 (no key) get theirs computed here.
 function keyedLibraryCopy(lib, items) {
   const copy = (items || []).map((it) => (it ? { ...it } : it));
   assignStableKeys(lib.id, resolveLibraryPath(lib.path), copy);
-  copy.forEach((it, i) => { if (it && !it.key && items[i] && items[i].key) it.key = items[i].key; });
+  copy.forEach((it, i) => {
+    const had = items[i];
+    if (!it || !had || !had.key) return;
+    it.key = had.key;
+    if (had.relPath) it.relPath = had.relPath;
+  });
   return copy;
 }
 // A catalog key that another library item still owns keeps its rows when this item loses the match.
@@ -5437,7 +5444,7 @@ function canonicalLocalWatchKey(key, meta, { trustPosition = false } = {}) {
     if (!item || !item.key) return key;
     if (!trustPosition) {
       const src = meta && meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
-      if (!src || !rowConfirms(item, meta, () => null)) return key;
+      if (!src || !rowConfirms(item, meta, (ep) => libraryItemByIndex(lk.libId, ep.showIdx))) return key;
     }
     return libraryWatchKeyOf(item) || key;
   } catch { return key; }
@@ -12660,6 +12667,9 @@ function jellyfinWatchSave(ctx, key, patch) {
   const position = Math.max(0, Math.round(Number(patch.position) || 0));
   const duration = Math.max(0, Math.round(Number(patch.duration) || 0));
   const storeKey = `${ctx.user.id}:${jellyfinWatchStoreProfile(ctx.user, key)}:${key}`;
+  // The server's note of the library item, as for page saves (a stable key only: the app's catalog
+  // items are not a library copy).
+  const stamp = localWatchStamp(ctx, key, null);
   store.update('watch', {}, (all) => {
     const prev = all[storeKey] || {};
     const keptDuration = duration || prev.duration || 0;
@@ -12669,7 +12679,10 @@ function jellyfinWatchSave(ctx, key, patch) {
       duration: keptDuration,
       watched,
       favorite: typeof patch.favorite === 'boolean' ? patch.favorite : !!prev.favorite,
-      meta: sanitizeStoredMediaMeta({ ...(prev.meta || {}), ...(patch.meta || {}) }),
+      meta: {
+        ...sanitizeStoredMediaMeta(clientWatchMeta({ ...(prev.meta || {}), ...(patch.meta || {}) })),
+        ...(stamp || (prev.meta && prev.meta.localKey ? { localKey: prev.meta.localKey, relPath: prev.meta.relPath } : {})),
+      },
       updatedAt: nextStamp(),
     };
     if (Number(prev.traktPct) > 0) all[storeKey].traktPct = Number(prev.traktPct);

@@ -80,12 +80,26 @@ function makeIndex(items) {
 }
 
 // Does a saved row (its meta) belong to `item`? `showOf` gives an episode's show item.
+// The kind a saved row says it is ('movie', 'episode', 'show'), or null when it does not say.
+function savedKind(meta) {
+  const k = meta && (meta._kind || meta.type);
+  if (k === 'movie') return 'movie';
+  if (k === 'episode') return 'episode';
+  if (k === 'show' || k === 'tv') return 'show';
+  return null;
+}
+
 function rowConfirms(item, meta, showOf) {
   if (!item || !item.key) return false;
-  const src = meta && meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
-  if (src && item.file) return path.basename(item.file) === src;
   const want = savedTitleParts(meta);
-  if (!want.title) return false;
+  // A row that names its kind (or a season and episode) never belongs to another kind of item.
+  const kind = want.s !== null ? 'episode' : savedKind(meta);
+  if (kind && kind !== item.kind) return false;
+  const src = meta && meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
+  // A file name must agree, and so must the saved title when there is one: generic names
+  // (01.mp4, S01E01.mkv) repeat across shows.
+  if (src && item.file && path.basename(item.file) !== src) return false;
+  if (!want.title) return !!(src && item.file);
   if (item.kind === 'episode') {
     const show = showOf(item);
     const names = new Set([...titlesOf(show), ...titlesOf(item)]);
@@ -116,7 +130,10 @@ function resolveLegacyRow(row, pos, prev) {
   }
   // Elsewhere in that pass: exactly one item with that file name or title, else nothing.
   // An episode row needs its own s/e or file name (a show title alone names every episode).
-  const episodeRow = want.s !== null || (at && at.kind === 'episode') || meta.type === 'episode';
+  // What the row says it is wins over what its old position holds now (a film row whose position
+  // now holds an episode is still a film row).
+  const kind = savedKind(meta);
+  const episodeRow = want.s !== null || kind === 'episode' || (!kind && at && at.kind === 'episode');
   if (episodeRow && want.s === null && !byFile) return null;
   const hits = prev.items.filter((it) => it && it !== at
     && (byFile ? it.kind !== 'show' : (episodeRow ? it.kind === 'episode' : it.kind !== 'episode'))
@@ -174,6 +191,16 @@ function planMoves({ prevItems, items, watchKeyOf, claimedElsewhere = () => fals
   return moves;
 }
 
+// Was this row played from this library item? The server's stamp says so; a 3.4.15 row says so by
+// its file name.
+function rowFromCopy(row, item) {
+  const meta = (row && row.meta) || {};
+  if (!item) return false;
+  if (meta.localKey) return meta.localKey === item.key;
+  const src = meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
+  return !!(src && item.file && path.basename(item.file) === src);
+}
+
 function stampFor(item, libId) {
   if (!item || !item.key) return null;
   return { localKey: item.key, relPath: item.relPath || undefined, libId };
@@ -220,7 +247,10 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
       const { prefix, key } = parts;
       const mv = moveMap.get(key);
       if (mv) {
-        if (row.fromTrakt && /^tmdb:/i.test(key) && !/^tmdb:/i.test(mv.to)) continue;
+        // A catalog row is shared with the Usenet copy, Trakt and other users' history: it leaves its
+        // catalog key only when it was played from THIS library copy (the server's stamp, or the
+        // 3.4.15 file name). Rows imported from Trakt never move.
+        if (/^tmdb:/i.test(key) && (row.fromTrakt || !rowFromCopy(row, mv.item))) continue;
         put(doc, fullKey, prefix + mv.to, row, stampFor(mv.item, libId));
         continue;
       }
