@@ -230,6 +230,11 @@ test('resume keys: rows saved by 3.4.15 under scan positions move to their title
     assert.ok((await rowsOf(srv.port, admin)).some((w) => w.key === legacy(pos(/^Gol Sorkh/, 'movie'))), 'saved as 3.4.15 did');
 
     await runScan(srv.port, lib.id, admin); // the first pass of 3.4.16 on this data
+    const sized = new LibraryDb(data);
+    const stored = sized.readLibrary(lib.id).items;
+    sized.close();
+    assert.ok(stored.filter((it) => it.file).every((it) => Number.isFinite(it.fileSize)),
+      'files stored without a size get one on the first pass (pairing needs it), within the per-pass budget');
     const items = await allItems(srv.port, lib.id, admin);
     const gol = find(items, /^Gol Sorkh/, 'movie');
     const kuh2 = find(items, /^Kuh/, 'episode', 1, 2);

@@ -8827,8 +8827,10 @@ async function performScan(lib, state, mode = 'scan') {
     }
     // File sizes pair a renamed or moved file with its saved progress (brief 99). Films got theirs
     // from the walk. A known file keeps its stored size; only files new to this pass are asked, plus
-    // a few hundred unsized ones per pass (rows from before 3.4.16), so a share is not stat-ed whole.
-    let sizeBudget = 300;
+    // up to 2000 unsized ones per pass (rows from before 3.4.16), so a share is not stat-ed whole in
+    // one pass, and a 20,000-file library is sized (and its rows rewritten) within a few passes
+    // instead of every pass for a day.
+    let sizeBudget = 2000;
     for (const it of items) {
       if (!it || !it.file || Number.isFinite(it.fileSize)) continue;
       const p = prevBy.get(it.file);
