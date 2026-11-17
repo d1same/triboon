@@ -7958,6 +7958,9 @@ async function openLibraryDetailsFor(it) {
 function detailTargetForItem(it) {
   if (!it) return it;
   const isEpisode = it.type === 'episode' || /^tmdb:tv:\d+:s\d+e\d+$/i.test(String(it.key || ''));
+  // A row moved onto a catalog key by 3.4.16 (a match gained) may carry no tmdbId: the key names it.
+  const fromKey = /^tmdb:(?:tv|movie):(\d+)/i.exec(String(it.key || ''));
+  if (!it.tmdbId && fromKey) it = { ...it, tmdbId: +fromKey[1], type: it.type || (/^tmdb:movie:/i.test(String(it.key)) ? 'movie' : it.type) };
   if (isEpisode && it.tmdbId) {
     return { ...it, key: `tmdb:tv:${it.tmdbId}`, type: 'tv', title: showTitleFromEpisodeItem(it), resume: 0 };
   }

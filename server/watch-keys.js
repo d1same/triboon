@@ -260,7 +260,12 @@ function applyLibraryMoves({ libId, watch, watchlist, orphans, prevItems, items,
   };
   const put = (doc, fromFull, toFull, row, stamp) => {
     const have = doc[toFull];
-    const meta = stamp ? { ...(row.meta || {}), ...stamp } : row.meta;
+    let meta = stamp ? { ...(row.meta || {}), ...stamp } : row.meta;
+    // A row that lands on a catalog key carries that catalog id in its meta, as rows saved there by
+    // the pages do: a library row saved before the match had none, and the card's "Details" then
+    // took it for a non-catalog title and played it instead of opening the show's page.
+    const cat = /^(?:[^:]*:){1,2}tmdb:(movie|tv):(\d+)(?::s\d+e\d+)?$/i.exec(toFull);
+    if (cat) meta = { ...(meta || {}), tmdbId: parseInt(cat[2], 10) };
     const moved = { ...row, meta };
     const at = (r) => r.updatedAt || r.addedAt || 0;
     // The newer row wins, except that a watched tick is not lost to a newer row that only started

@@ -92,6 +92,7 @@ test('watch keys: a matched show\'s episode saved under a position moves to the 
   const { stats } = run(prev, prev, watch);
   assert.deepStrictEqual(Object.keys(watch), ['u1:default:tmdb:tv:9101:s1e2']);
   assert.strictEqual(watch['u1:default:tmdb:tv:9101:s1e2'].position, 61, 'the newer row wins');
+  assert.strictEqual(watch['u1:default:tmdb:tv:9101:s1e2'].meta.tmdbId, 9101, 'a row on a catalog key names its catalog id');
   assert.strictEqual(stats.merged, 0);
   // The other way round: an existing newer catalog row is kept.
   const watch2 = {
@@ -110,6 +111,8 @@ test('watch keys: a gained, lost or changed match moves the rows; a still-claime
   const r = run(before, after, watch);
   assert.deepStrictEqual(r.moves.map((m) => [m.from, m.to]), [[before[0].key, 'tmdb:movie:680']]);
   assert.ok(watch['u1:default:tmdb:movie:680'], 'Fix match: the saved minute follows to the catalog key');
+  assert.strictEqual(watch['u1:default:tmdb:movie:680'].meta.tmdbId, 680,
+    'real setup (brief 101): a row moved by Fix match names its catalog id, so "Details" opens the catalog page instead of playing');
   // Match lost (a switch to Folder & NFO only): a row played from this library copy (the server's
   // stamp) goes back to the stable key; another user's Usenet row of that film stays a catalog row.
   const mine = { title: 'Romeo', type: 'movie', localKey: after[0].key };
