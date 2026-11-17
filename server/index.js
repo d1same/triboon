@@ -5336,6 +5336,8 @@ function libraryWatchKeyOf(item) {
 // other keys, so those items look vanished and appeared, and the name + size pairing carries their
 // rows. Items stored before 3.4.16 (no key) get theirs computed here.
 function keyedLibraryCopy(lib, items) {
+  // Stored items that all have keys already are what this would return (stored keys win).
+  if ((items || []).every((it) => !it || it.key)) return items || [];
   const copy = (items || []).map((it) => (it ? { ...it } : it));
   assignStableKeys(lib.id, resolveLibraryPath(lib.path), copy);
   copy.forEach((it, i) => {

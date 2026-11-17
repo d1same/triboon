@@ -207,8 +207,18 @@ function planMoves({ prevItems, items, watchKeyOf, claimedElsewhere = () => fals
   }
   // A show whose folder was renamed or moved: at least half its episodes paired to one new show.
   const prevShows = prevItems.filter((it) => it && it.kind === 'show' && it.key && !next.byKey.has(it.key));
+  // Episodes grouped once: a library path change makes every show "vanish", and filtering the whole
+  // library per show was 800 x 21,000 steps (seconds) on the real setup (brief 101).
+  const epsByShow = new Map();
+  if (prevShows.length) {
+    for (const e of prevItems) {
+      if (!e || e.kind !== 'episode') continue;
+      if (!epsByShow.has(e.showIdx)) epsByShow.set(e.showIdx, []);
+      epsByShow.get(e.showIdx).push(e);
+    }
+  }
   for (const show of prevShows) {
-    const eps = prevItems.filter((e) => e && e.kind === 'episode' && e.showIdx === show.idx);
+    const eps = epsByShow.get(show.idx) || [];
     if (!eps.length) continue;
     const votes = new Map();
     for (const e of eps) {
