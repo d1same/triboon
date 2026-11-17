@@ -6936,7 +6936,9 @@ function continueWatchingTitleFor(w) {
   if (!/^local:/i.test(key) && !meta.localKey) return raw;
   const map = S.localMap || {};
   const rec = map[key] || (meta.localKey ? map[meta.localKey] : null);
-  const now = rec && rec.name ? String(rec.name).split(' · ')[0].trim() : '';
+  // The library's own title is cleaned too: a library stored by 3.4.14 keeps the raw NFO name until
+  // its first rescan (cleaning a clean title changes nothing).
+  const now = rec && rec.name ? cleanLibraryTitle(String(rec.name).split(' · ')[0].trim()) : '';
   return now || cleanLibraryTitle(raw) || raw;
 }
 function continueWatchingCleanTitle(s) {

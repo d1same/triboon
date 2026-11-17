@@ -63,6 +63,9 @@ test('web keys: a library card is titled by the library today; an old raw NFO ti
   const S = { localMap: { [`local:${LIB}:${H}:s1e2`]: { name: 'Kuh کوه · S01E02' } } };
   const { continueWatchingTitleFor, cleanLibraryTitle } = load(['cleanLibraryTitle', 'continueWatchingTitleFor'], { S });
   assert.strictEqual(continueWatchingTitleFor({ key: `local:${LIB}:${H}:s1e2`, meta: { title: 'IR - Kuh کوه [1080p] — S01E02' } }), 'Kuh کوه');
+  S.localMap[`local:${LIB}:eeeeeeeeeeee:s1e2`] = { name: 'IR - Kuh کوه [1080p] · S01E02' };
+  assert.strictEqual(continueWatchingTitleFor({ key: `local:${LIB}:eeeeeeeeeeee:s1e2`, meta: { title: 'IR - Kuh کوه [1080p] — S01E02' } }), 'Kuh کوه',
+    'a library stored by 3.4.14 still holds the raw NFO name before its first rescan: cleaned too');
   assert.strictEqual(continueWatchingTitleFor({ key: `local:${LIB}:dddddddddddd`, meta: { title: 'IR - Kuh کوه [1080p] — S01E02' } }), 'Kuh کوه',
     'not in the page map yet: cleaned like the server does');
   assert.strictEqual(continueWatchingTitleFor({ key: 'tmdb:movie:5', meta: { title: 'A Catalog Film [1080p]' } }), 'A Catalog Film [1080p]',
