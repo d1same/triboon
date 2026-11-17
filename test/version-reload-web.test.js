@@ -127,3 +127,16 @@ test('version reload: the poll reloads the page once, keeps the tab history, and
   assert.ok(/startServerVersionWatch\(info\.version\)/.test(ui), 'the boot starts the watch with the version it loaded');
   assert.ok(/VERSION_RELOAD_POLL_MS\s*=\s*60000/.test(ui), 'the page polls once a minute');
 });
+
+test('version reload: Multiview holds the reload (its players run with no S.playing)', () => {
+  // Check 103: openMultiViewFromGuide stops the single player (S.playing = null) and sets
+  // S.view = 'multiview'; a reload there cut every tile, VOD tiles with unsaved progress included.
+  const doc = { activeElement: null, getElementById: () => null };
+  const S = { playing: null, view: 'multiview', multiView: { open: true } };
+  const { versionReloadBusy } = load(['versionReloadBusy'], { S, document: doc, AB: { now: null } });
+  assert.ok(versionReloadBusy(), 'Multiview is busy');
+  S.view = 'livetv'; // the view changed while the tiles stay open
+  assert.ok(versionReloadBusy(), 'open tiles are busy');
+  S.multiView = { open: false };
+  assert.strictEqual(versionReloadBusy(), '');
+});

@@ -33400,6 +33400,8 @@ function serverVersionReloadDecision(st, seen, opts = {}) {
 }
 function versionReloadBusy() {
   if (S.playing || S.view === 'player') return 'playing';
+  // Multiview stops the single player (no S.playing) and runs its own tiles.
+  if (S.view === 'multiview' || (S.multiView && S.multiView.open)) return 'multiview';
   try { const m = document.getElementById('musicAudio'); if (m && !m.paused) return 'music'; } catch {}
   try { const a = document.getElementById('abAudio'); if (a && !a.paused) return 'audiobook'; } catch {}
   try { if (typeof AB !== 'undefined' && AB.now && AB.now.active) return 'audiobook'; } catch {}
