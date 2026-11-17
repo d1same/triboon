@@ -7,6 +7,12 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+const zlib = require('zlib');
+
+// Checksum of a decoded piece as it was written. A blob read back must match it: the length alone
+// let a piece zeroed on disk (a crash between write and flush, a bad sector) reach the player.
+const blobCrc = typeof zlib.crc32 === 'function' ? (buf) => zlib.crc32(buf) >>> 0 : () => null;
+
 const FLUSH_BYTES = 16 * 1024 * 1024;
 const QUEUE_CAP_BYTES = 64 * 1024 * 1024;
 
@@ -75,7 +81,10 @@ class SegmentDiskCache {
     }
     try {
       const data = await fs.promises.readFile(this._blobPath(key));
-      if (data.length !== rec.bytes) {
+      // A record with no checksum (written by an older version) cannot be proven: read it again
+      // from the network once, which writes it back with one.
+      const crc = blobCrc(data);
+      if (data.length !== rec.bytes || (crc !== null && rec.crc !== crc)) {
         await this._drop(key);
         this.misses++;
         return null;
@@ -174,6 +183,7 @@ class SegmentDiskCache {
         if (!rec || !(rec.bytes > 0)) continue;
         this.index.set(key, {
           bytes: rec.bytes,
+          crc: Number.isInteger(rec.crc) ? rec.crc >>> 0 : null,
           size: rec.size ?? null,
           partSize: rec.partSize ?? null,
           partOrigin: knownOrigin(rec.partOrigin),
@@ -212,6 +222,7 @@ class SegmentDiskCache {
         const priorPin = prior && prior.pin === true;
         this.index.set(job.key, {
           bytes: job.buf.length,
+          crc: blobCrc(job.buf),
           size: job.size,
           partSize: job.partSize,
           partOrigin: knownOrigin(job.partOrigin),

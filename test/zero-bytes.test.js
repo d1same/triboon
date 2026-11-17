@@ -281,3 +281,40 @@ test('zero bytes: a store-RAR stream that reconnects at and around every volume 
     assert.strictEqual(at, payload.length, `store-RAR bytes differ from the source at ${at}`);
   } finally { pool.close(); await mock.close(); }
 });
+
+// ---- the segment disk cache hands bytes back with no network read ----
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { configureSegmentDisk, getSegmentDisk } = require('../server/segment-cache');
+
+test('zero bytes: a disk-cached piece that was zeroed or cut on disk is read again from the network, never served', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-zb-disk-'));
+  configureSegmentDisk({ dir, enabled: true, maxBytes: 256 * 1024 * 1024 });
+  const rel = makeRelease('Disk.Test.mkv', 16, `dk${Math.random().toString(36).slice(2, 8)}`);
+  const mock = createMockNntp({ articles: rel.articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 300 }, 2);
+  try {
+    const first = new VirtualFile(pool, rel.nzb, { readAhead: 2 });
+    await first.mount();
+    assertNoFiller('first play (fills the disk cache)', await play(first, rel.size), rel.data);
+    await getSegmentDisk().flush();
+    const blobs = fs.readdirSync(dir, { recursive: true }).map(String)
+      .filter((f) => !/index\.json/.test(f) && fs.statSync(path.join(dir, f)).isFile());
+    assert.ok(blobs.length >= 10, `pieces were written to disk (${blobs.length})`);
+    // One blob zeroed at its full length (a crash between write and flush), one cut short.
+    const zeroed = path.join(dir, blobs[3]);
+    fs.writeFileSync(zeroed, Buffer.alloc(fs.statSync(zeroed).size));
+    const cut = path.join(dir, blobs[7]);
+    fs.writeFileSync(cut, fs.readFileSync(cut).subarray(0, 1000));
+    const again = new VirtualFile(pool, rel.nzb, { readAhead: 2 });
+    await again.mount();
+    assertNoFiller('second play from the disk cache', await play(again, rel.size), rel.data);
+  } finally {
+    configureSegmentDisk({ enabled: false });
+    pool.close();
+    await mock.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
