@@ -353,3 +353,13 @@ test('watch keys: an episode row resumed from a Continue Watching card (show tit
   // A film's genre ("Drama") or a film title that is its q never reads as an episode.
   assert.strictEqual(savedTitleParts({ title: 'Baran', genre: 'Drama', q: 'Baran' }).s, null);
 });
+
+test('watch keys: twins with one title and one file name are not told apart by a position that may have shifted', () => {
+  // Baran (2001) was at position 1 when the row was saved; a folder ahead of it was then removed,
+  // so position 1 holds Baran (2015), which has the same title and the same file name.
+  const prev = pass([film('Baran (2001)', 'Baran.mkv', { title: 'Baran' }), film('Baran (2015)', 'Baran.mkv', { title: 'Baran' })]);
+  const watch = { [`u1:default:local:${LIB}:1`]: row('Baran', { meta: { title: 'Baran', _kind: 'movie', source: { name: 'Baran.mkv' } } }) };
+  const { stats } = run(prev, prev, watch);
+  assert.strictEqual(stats.parked, 1, 'kept aside, never put on the 2015 film');
+  assert.deepStrictEqual(Object.keys(watch), []);
+});

@@ -157,8 +157,13 @@ function resolveLegacyRow(row, pos, prev) {
   const at = prev.byIdx.get(pos);
   const want = savedTitleParts(meta);
   const byFile = !!(meta.source && meta.source.name);
-  // The file name (3.4.15 rows) names one file exactly.
-  if (at && byFile && rowConfirms(at, meta, showOf)) return at;
+  // The file name (3.4.13 to 3.4.15 rows) names one file, unless another item of that pass has the
+  // same file name and title (Baran (2001)/Baran.mkv and Baran (2015)/Baran.mkv): a scan before this
+  // one could have swapped their positions, and the row cannot tell.
+  if (at && byFile && rowConfirms(at, meta, showOf)) {
+    const twin = (it) => it && it !== at && it.kind === at.kind && rowConfirms(it, meta, showOf);
+    return prev.candidates(meta).some(twin) ? null : at;
+  }
   // A title at its position is trusted only when no other item of that pass carries the same title
   // (another film of that name, or an episode of another show of that name): a scan before this one
   // could have swapped the two, and the row cannot tell (result 85: about 248 such film groups).
