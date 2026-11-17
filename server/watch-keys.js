@@ -16,11 +16,14 @@
 // Parked rows live in their own table (`watchOrphans`) with the original key and the date; they are
 // deleted after 30 days. Undo is a move back.
 
-const path = require('path');
 const { cleanNfoTitle, libraryNameParts } = require('./library-match');
 const { parseLocalKey } = require('./library-keys');
 
 const ORPHAN_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+// Stored paths can be Windows paths read on Linux (a library moved from a Windows server to Docker):
+// split names on both separators.
+const baseName = (p) => String(p || '').split(/[\\/]+/).filter(Boolean).pop() || '';
+const dirName = (p) => { const parts = String(p || '').split(/[\\/]+/).filter(Boolean); parts.pop(); return parts.join('/'); };
 const SE_RE = /\bS(\d{1,3})\s*E(\d{1,4})\b/i;
 
 function normTitle(s) {
@@ -60,14 +63,14 @@ function titlesOf(item) {
   add(own);
   add(item.matchTitle);
   add(item.originalTitle);
-  const label = item.kind === 'show' && item.dir ? path.basename(item.dir)
-    : (item.file ? (path.basename(path.dirname(item.file)) || '') : '');
+  const label = item.kind === 'show' && item.dir ? baseName(item.dir)
+    : (item.file ? (baseName(dirName(item.file)) || '') : '');
   if (label) {
     add(label);
     try { add(libraryNameParts(label).display); } catch {}
   }
   if (item.file && item.kind === 'movie') {
-    const base = path.basename(item.file, path.extname(item.file));
+    const base = baseName(item.file).replace(/\.[^.]{1,8}$/, '');
     try { add(libraryNameParts(base, { file: true }).display); } catch {}
   }
   return out;
@@ -96,7 +99,7 @@ function makeIndex(items) {
         if (!it) continue;
         for (const t of titlesOf(it)) put(byTitle, t, it);
         if (it.kind === 'episode') for (const t of titlesOf(byIdx.get(it.showIdx))) put(byTitle, t, it);
-        if (it.file) put(byFile, path.basename(it.file), it);
+        if (it.file) put(byFile, baseName(it.file), it);
       }
     }
     const want = savedTitleParts(meta);
@@ -127,7 +130,7 @@ function rowConfirms(item, meta, showOf) {
   const src = meta && meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
   // A file name must agree, and so must the saved title when there is one: generic names
   // (01.mp4, S01E01.mkv) repeat across shows.
-  if (src && item.file && path.basename(item.file) !== src) return false;
+  if (src && item.file && baseName(item.file) !== src) return false;
   if (!want.title) return !!(src && item.file);
   if (item.kind === 'episode') {
     const show = showOf(item);
@@ -189,7 +192,7 @@ function planMoves({ prevItems, items, watchKeyOf, claimedElsewhere = () => fals
   // Renames and moves: vanished vs appeared, paired by file name + size.
   const gone = prevItems.filter((it) => it && it.key && it.file && !next.byKey.has(it.key) && Number.isFinite(it.fileSize));
   const born = items.filter((it) => it && it.key && it.file && !prev.byKey.has(it.key) && Number.isFinite(it.fileSize));
-  const sig = (it) => `${it.kind}\0${path.basename(it.file).normalize('NFC')}\0${it.fileSize}`;
+  const sig = (it) => `${it.kind}\0${baseName(it.file).normalize('NFC')}\0${it.fileSize}`;
   const count = (list) => { const m = new Map(); for (const it of list) m.set(sig(it), (m.get(sig(it)) || 0) + 1); return m; };
   const goneN = count(gone);
   const bornN = count(born);
@@ -227,7 +230,7 @@ function rowFromCopy(row, item) {
   if (!item) return false;
   if (meta.localKey) return meta.localKey === item.key;
   const src = meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
-  return !!(src && item.file && path.basename(item.file) === src);
+  return !!(src && item.file && baseName(item.file) === src);
 }
 
 function stampFor(item, libId) {

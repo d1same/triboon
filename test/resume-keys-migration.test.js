@@ -19,10 +19,14 @@ for (const version of ['3.4.13', '3.4.14', '3.4.15']) {
     const dir = path.join(FIX, version);
     const read = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
     const capture = read('capture.json');
+    // The rig ran on Windows: on Linux the stored library paths are Linux paths, as a server there writes them.
+    const local = (p) => (typeof p === 'string' && path.sep === '/' ? p.replace(/^C:\\qa-lib/, '/qa-lib').replace(/\\/g, '/') : p);
     const libs = read('libraries.json');
-    const items = read('library-items.json').rows;
+    for (const lib of libs.list) lib.path = local(lib.path);
+    const items = read('library-items.json').rows.map((r) => ({ ...r, payload: { ...r.payload, file: local(r.payload.file), dir: local(r.payload.dir) } }));
     const data = fs.mkdtempSync(path.join(os.tmpdir(), `triboon-keys-${version}-`));
-    for (const f of ['watch.json', 'watchlist.json', 'libraries.json']) fs.copyFileSync(path.join(dir, f), path.join(data, f));
+    for (const f of ['watch.json', 'watchlist.json']) fs.copyFileSync(path.join(dir, f), path.join(data, f));
+    fs.writeFileSync(path.join(data, 'libraries.json'), JSON.stringify(libs));
     const db = new LibraryDb(data);
     for (const lib of libs.list) {
       db.replaceLibrary(lib.id, 1, items.filter((r) => r.lib_id === lib.id).map((r) => ({ ...r.payload, idx: r.idx })));
