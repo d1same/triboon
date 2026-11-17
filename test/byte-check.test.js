@@ -105,7 +105,7 @@ test('byte check: end to end, identical bytes with broken MKV blames the file an
 });
 
 // One made-up file served from memory. `fail(id, n)` makes the n-th request for an article throw.
-function memoryStream(data, partSize, { name = 'x.bin', articleFor = null, fail = () => false } = {}) {
+function memoryStream(data, partSize, { name = 'x.bin', articleFor = null, fail = () => false, reread = () => null } = {}) {
   const totalParts = Math.ceil(data.length / partSize);
   const articles = new Map();
   const segments = [];
@@ -122,7 +122,7 @@ function memoryStream(data, partSize, { name = 'x.bin', articleFor = null, fail 
       const n = (asked.get(id) || 0) + 1;
       asked.set(id, n);
       if (fail(id, n)) throw new Error('NNTP command aborted');
-      return articles.get(id);
+      return reread(id, n, articles.get(id)) || articles.get(id);
     },
   };
   const nzb = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="q" date="1" subject="&quot;${name}&quot; yEnc (1/${totalParts})"><groups><group>a</group></groups><segments>${segments.join('')}</segments></file></nzb>`;
@@ -176,6 +176,28 @@ test('byte check: a short article still counts its padded zeros and is named, ne
   assert.strictEqual(run, partSize - 1000, `the padded hole is counted: ${lines[0]}`);
   assert.doesNotMatch(lines[0], /not re-read/);
   assert.match(lines[0], new RegExp(`1 pieces shorter than their slot \\(${partSize - 1000} bytes padded with zeros on play\\)`));
+});
+
+test('byte check: a cut re-read is "not re-read", never short-piece padding', async () => {
+  // The re-read gets a copy cut off mid-body (no =yend line). Play refuses such a copy, so the rest
+  // of its slot is neither padding the player got nor the file's zeros.
+  const partSize = 96 * 1024;
+  const data = Buffer.alloc(8 * partSize);
+  for (let i = 0; i < data.length; i++) data[i] = 1 + (i % 251);
+  const cutAt = 3;
+  const vf = memoryStream(data, partSize, {
+    reread: (id, n, good) => (id === `q${cutAt}@t` && n > 1 ? good.subarray(0, Math.floor(good.length / 2)) : null),
+  });
+  await vf.mount('startup');
+  vf._lastServedEnd = data.length;
+  const lines = [];
+  await runByteCheck(vf, { log: (l) => lines.push(l), name: 'Cut.Reread' });
+  assert.strictEqual(lines.length, 1);
+  const run = Number((lines[0].match(/longest zero run (\d+)/) || [])[1]);
+  assert.strictEqual(run, 0, `the missing tail of a cut re-read is not the file's zeros: ${lines[0]}`);
+  assert.doesNotMatch(lines[0], /shorter than their slot/);
+  const notRead = Number((lines[0].match(/\((\d+) bytes not re-read/) || [])[1]);
+  assert.ok(notRead > 0 && notRead < partSize, `the cut tail is named as not re-read: ${lines[0]}`);
 });
 
 test('byte check: an article that decodes to zeros with its own valid checksum is the file; a wrong checksum is refused', async () => {

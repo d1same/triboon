@@ -891,7 +891,15 @@ class NzbFileStream {
         const from = Math.max(begin, start);
         const to = Math.min(begin + dec.data.length, end);
         if (to > from) dec.data.copy(out, from - start, from - begin, to - begin);
-        if (!piece.offGrid) piece.short = Math.max(0, Math.min(this.partSize, this.size - piece.slot) - dec.data.length);
+        const missing = piece.offGrid ? 0 : Math.max(0, Math.min(this.partSize, this.size - piece.slot) - dec.data.length);
+        if (dec.crcOk && dec.intact) piece.short = missing; // served as posted, the rest padded on play
+        else if (missing > 0) {
+          // A cut or corrupt copy: play refuses it, so the rest of its slot is not padding the
+          // player got. Those zeros were not re-read either.
+          const gapFrom = Math.max(piece.slot + dec.data.length, start);
+          const gapTo = Math.min(piece.slot + this.partSize, end);
+          if (gapTo > gapFrom) unread.push([gapFrom - start, gapTo - start]);
+        }
       } catch (e) {
         piece.error = String((e && e.message) || e).slice(0, 100);
         const from = Math.max(piece.slot, start);
