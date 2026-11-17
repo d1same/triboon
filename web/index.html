@@ -6936,6 +6936,9 @@ function continueWatchingTitlesMatch(a, b) {
 function continueWatchingIdentity(it) {
   if (!it) return '';
   const key = String(it.key || '');
+  // A stable library key (3.4.16, 12 hex): an episode is its show (one card per show), else itself.
+  const stable = /^local:([^:]+):([0-9a-f]{12})(:s\d+e\d+)?$/i.exec(key);
+  if (stable) return stable[3] ? `localshow:${stable[1]}:${stable[2].toLowerCase()}` : key;
   // Custom library rows must never merge by TMDB id alone — two folders can share a wrong match.
   let m = /^local:([^:]+):(\d+)$/i.exec(key);
   // Folder-show episodes are keyed per file, and the home cache rarely holds episode rows, so
@@ -7228,6 +7231,7 @@ function buildCwItems(cw) {
     backdrop: backdrop || procBackdrop(280, 320, 5),
     progress: w.duration ? w.position / w.duration : (w.traktPct || 0) / 100,
     resume: w.position, _traktPct: w.traktPct || 0, _cw: true, _cwSortAt: w.updatedAt || 0,
+    _localKey: (w.meta && w.meta.localKey) || undefined, // the library copy the server noted
     };
     item = attachLocalWatchContext(item, w.key);
     const loc = localPlaybackForItem(item);
@@ -7973,7 +7977,22 @@ function bindLibrarySource(it) {
   if (!it._local && hit._local) it._local = hit._local;
   return it;
 }
+// A stable library key (3.4.16): `local:<lib>:<12 hex>` or `...:<12 hex>:s<N>e<M>`. A legacy
+// position key has at most 5 digits; a stable id is always 12 characters, even when all digits.
+function parseStableLocalKey(key) {
+  const m = /^local:([^:]+):([0-9a-f]{12})(?::s(\d+)e(\d+))?$/i.exec(String(key || ''));
+  if (!m) return null;
+  return { libId: m[1], id: m[2].toLowerCase(), season: m[3] != null ? +m[3] : null, episode: m[4] != null ? +m[4] : null };
+}
 function localLibraryRowFromKey(key) {
+  const stable = parseStableLocalKey(key);
+  if (stable) {
+    const lib = (S.libraries || []).find((l) => l.id === stable.libId);
+    if (!lib) return null;
+    const cached = S.libCache && S.libCache[stable.libId];
+    const row = cached && cached.data && (cached.data.items || []).find((x) => x.key === key || x.watchKey === key);
+    return { lib, row: row || null };
+  }
   const m = /^local:([^:]+):(\d+)$/i.exec(String(key || ''));
   if (!m) return null;
   const libId = m[1], idx = +m[2];
@@ -7987,7 +8006,7 @@ function attachLocalWatchContext(item, key) {
   const hit = localLibraryRowFromKey(key || (item && item.key));
   if (!hit || !hit.row) return item;
   const row = hit.row;
-  const out = { ...item, _lib: hit.lib, _idx: row.idx, _kind: row.kind || item._kind };
+  const out = { ...item, _lib: hit.lib, _idx: row.idx, _kind: row.kind || item._kind, _localKey: row.key || item._localKey };
   if (row.kind === 'episode') {
     out.type = out.type || 'episode';
     out.season = out.season != null ? out.season : row.s;
@@ -10863,7 +10882,7 @@ function localSeasonSummaries(episodes) {
     name: `Season ${seasonNumber}`,
     episode_count: eps.length,
     _local: true,
-    _episodeKeys: eps.map((ep) => `local:${S.detailItem && S.detailItem._lib ? S.detailItem._lib.id : ''}:${ep.idx}`),
+    _episodeKeys: eps.map((ep) => ep.watchKey || `local:${S.detailItem && S.detailItem._lib ? S.detailItem._lib.id : ''}:${ep.idx}`),
   }));
 }
 function isLocalSeasonWatched(season) {
@@ -11376,8 +11395,9 @@ function localEpisodesFromFolderCache(show) {
     const localKey = `local:${lib.id}:${ep.idx}`;
     const tmdbKey = ep.tmdbId ? `tmdb:tv:${ep.tmdbId}:s${ep.s}e${ep.e}` : '';
     const scoped = tmdbKey ? localScopedTmdbMapKey(lib.id, tmdbKey) : '';
-    const loc = (S.localMap && (S.localMap[localKey] || (scoped && S.localMap[scoped]))) || null;
-    return loc ? { key: localKey, s: ep.s, e: ep.e, loc } : null;
+    const loc = (S.localMap && ((ep.key && S.localMap[ep.key]) || S.localMap[localKey] || (scoped && S.localMap[scoped]))) || null;
+    // The key progress is saved under (3.4.16): stable, or the catalog key of a matched show.
+    return loc ? { key: ep.watchKey || localKey, s: ep.s, e: ep.e, loc } : null;
   }).filter(Boolean).sort((a, b) => a.s - b.s || a.e - b.e);
 }
 async function localShowEpisodeList(it) {
@@ -12590,6 +12610,7 @@ function saveMultiViewVodProgress(i, final = false) {
     profile: S.profile ? S.profile.id : undefined,
     meta: wlMeta(slot.item),
   };
+  if (slot.item._localKey && slot.item._localKey !== payload.key) payload.localKey = slot.item._localKey;
   if (playedSeconds > 0) payload.playedSeconds = playedSeconds;
   const finalKey = final ? `${payload.position}:${payload.duration}:${payload.watched ? 1 : 0}` : '';
   if (final && slot._finalWatchKey === finalKey && Date.now() - (slot._finalWatchAt || 0) < 2000) {
@@ -17657,6 +17678,8 @@ async function saveWatch(final, opts = {}) {
     watched, profile: S.profile ? S.profile.id : undefined,
     meta, // episodes resume + reopen
   };
+  // The library copy behind a catalog key: the server checks it and notes the file (3.4.16).
+  if (p.item._localKey && p.item._localKey !== payload.key) payload.localKey = p.item._localKey;
   if (playedSeconds > 0) payload.playedSeconds = playedSeconds;
   // Pause, visibility loss, pagehide, and the Android lifecycle bridge can arrive together.
   // Coalesce the same final point so one durable checkpoint does not fan out into duplicate
@@ -17715,7 +17738,8 @@ function playbackFinishedDetailTarget(item) {
 // Unmatched library files have no tmdb id, so the show/movie page has to come from the scan row.
 async function localContinueDetailTarget(item) {
   const key = String(item && item.key || '');
-  const m = /^local:([^:]+):(\d+)$/i.exec(key);
+  const stable = parseStableLocalKey(key); // 3.4.16 keys name the item on disk
+  const m = stable ? [key, stable.libId] : /^local:([^:]+):(\d+)$/i.exec(key);
   if (!m || playbackFinishedDetailTarget(item)) return null;
   let row = null;
   try {
@@ -21975,6 +21999,9 @@ function mergeLocalItemsInto(map, lib, items) {
     };
     const localKey = lib && lib.id ? `local:${lib.id}:${x.idx}` : '';
     if (localKey) map[localKey] = rec;
+    // Stable keys name the file whatever its position (3.4.16).
+    if (x.key) map[x.key] = rec;
+    if (x.watchKey && /^local:/i.test(x.watchKey)) map[x.watchKey] = rec;
     if (!x.tmdbId || !lib || !lib.id) continue;
     const key = x.kind === 'episode' ? `tmdb:tv:${x.tmdbId}:s${x.s}e${x.e}` : `tmdb:movie:${x.tmdbId}`;
     map[localScopedTmdbMapKey(lib.id, key)] = rec;
@@ -22171,7 +22198,10 @@ function mapLocal(lib, x, titleOverride) {
   const type = x.kind === 'show' ? 'tv' : (x.kind === 'movie' ? 'movie' : null);
   const cover = localLibraryCover(x);
   const mapped = {
-    key: matched && type ? `tmdb:${type}:${x.tmdbId}` : `local:${lib.id}:${x.idx}`,
+    // The server's watch key (3.4.16): the item on disk, or its catalog key when matched (episodes
+    // of a matched show too). An item not yet keyed by the server keeps the old position key.
+    key: x.watchKey || (matched && type ? `tmdb:${type}:${x.tmdbId}` : `local:${lib.id}:${x.idx}`),
+    _localKey: x.key || '',
     title: titleOverride || x.title, year: x.year || '', genre: lib.name,
     _added: x.addedAt || 0, _genres: x.genres || [], _lib: lib, _idx: x.idx, _matchOv: x.matchOverride,
     _matchTitle: matched ? (x.matchTitle || '') : '', // the catalog title behind a folder-named card
@@ -22360,7 +22390,7 @@ function paintLibraryCardCover(idx, poster, backdrop) {
 }
 function folderInfoCoverFor(it) {
   const loc = (S.localMap && it && it._lib && it._idx !== undefined)
-    ? S.localMap[`local:${it._lib.id}:${it._idx}`] : null;
+    ? ((it._localKey && S.localMap[it._localKey]) || S.localMap[`local:${it._lib.id}:${it._idx}`]) : null;
   const thumb = (it && it.thumbUrl) || (loc && loc.thumbUrl) || '';
   const art = (it && it.artUrl) || (loc && loc.artUrl) || '';
   return { poster: thumb || art || (it && it.poster) || '', backdrop: thumb || art || (it && it.backdrop) || '' };
@@ -27086,6 +27116,13 @@ function openDashRecent(key, title) {
   const show = /^tmdb:tv:(\d+)/i.exec(key || '');
   if (movie) return openDetail({ type: 'movie', tmdbId: +movie[1], title, key });
   if (show) return openDetail({ type: 'tv', tmdbId: +show[1], title, key: `tmdb:tv:${show[1]}` });
+  const stable = parseStableLocalKey(key);
+  if (stable) {
+    const lib = (S.libraries || []).find((l) => String(l.id) === stable.libId);
+    const x = lib && (((S.libCache || {})[lib.id] || {}).data || {}).items?.find((it) => it.key === key || it.watchKey === key);
+    if (lib && x) return openDetail(mapLocal(lib, x));
+    return;
+  }
   const local = /^local:(\w+):(\d+)$/.exec(key || '');
   if (local) {
     const lib = (S.libraries || []).find((l) => String(l.id) === local[1]);
