@@ -7897,6 +7897,39 @@ function showTitleFromEpisodeItem(it) {
     .replace(/\s*(?:[·•]\s*|(?:-|\u2013|\u2014)\s*)?S\d{1,2}E\d{1,3}.*$/i, '')
     .trim() || 'Show';
 }
+// A card of a library title without a catalog match (result 98 F-3).
+function isLibraryOnlyCard(it) {
+  if (!it) return false;
+  if (/^local:/i.test(String(it.key || ''))) return true;
+  return !!(it._lib && it._lib.path && !it.tmdbId);
+}
+// "Details" on such a card opens the title's library page (a show's episode list for an episode),
+// as pressing a library card does. openDetail() plays anything without a catalog id.
+async function openLibraryDetailsFor(it) {
+  let item = attachLocalWatchContext(it, it.key);
+  if (!(item._lib && item._lib.path && item._idx != null)) {
+    const key = /^local:/i.test(String(it.key || '')) ? String(it.key) : String(it._localKey || '');
+    const stable = parseStableLocalKey(key);
+    const legacy = stable ? null : /^local:([^:]+):(\d+)$/i.exec(key);
+    const libId = stable ? stable.libId : (legacy ? legacy[1] : '');
+    const lib = (S.libraries || []).find((l) => l.id === libId);
+    const r = lib ? await api(`/api/libraries/local-lookup?${new URLSearchParams({ key })}`).catch(() => null) : null;
+    const row = r && r.items && r.items[key];
+    if (lib && row) {
+      item = { ...item, _lib: lib, _idx: row.idx, _kind: row.kind, _localKey: row.key || item._localKey };
+      if (row.kind === 'episode' && row.showIdx != null) { item._showOpen = row.showIdx; item._showIdx = row.showIdx; }
+    }
+  }
+  if (!(item._lib && item._lib.path) || item._idx == null) return openDetail(detailTargetForItem(it));
+  const lib = item._lib;
+  S.currentLib = lib;
+  if (item._kind === 'episode' || item._kind === 'show') {
+    const showIdx = item._kind === 'show' ? item._idx : (item._showOpen != null ? item._showOpen : item._showIdx);
+    if (S.view !== 'library') switchView('library');
+    return openLocalShowDetail({ ...item, _lib: lib, _showOpen: showIdx, _kind: 'show', _episode: false, resume: 0 });
+  }
+  return openLocalDetail({ ...item, _lib: lib });
+}
 function detailTargetForItem(it) {
   if (!it) return it;
   const isEpisode = it.type === 'episode' || /^tmdb:tv:\d+:s\d+e\d+$/i.test(String(it.key || ''));
@@ -8124,6 +8157,7 @@ function openItemMenu(it, card) {
     const snap = S.view === 'home' ? homeFocusSnapshot() : null;
     e.stopPropagation(); closeCwMenu();
     if (act === 'resume') play(it);
+    else if (act === 'info' && isLibraryOnlyCard(it)) openLibraryDetailsFor(it);
     else if (act === 'info') openDetail(detailTargetForItem(it));
     else if (act === 'watch') markItemWatched(it, true);
     else if (act === 'unwatch') markItemWatched(it, false);
