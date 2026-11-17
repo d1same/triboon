@@ -8627,6 +8627,9 @@ async function performScan(lib, state, mode = 'scan') {
       } catch { return null; }
     };
     const wantTmdb = autoTmdb;
+    // A manual pick (Fix match) is applied in a "Folder & NFO only" library too (owner answer 5):
+    // the mode only skips the automatic search.
+    const manualTmdb = (ov) => typeof ov === 'number' && !wantAudio && lib.kind !== 'other' && lib.kind !== 'sports';
     const pushItem = (base) => { base.idx = items.length; items.push(base); return base; };
     // TMDB lookups are queued and run in PARALLEL BATCHES after the walk — a 2000-title
     // library scans in seconds of disk walk + lookups at 6-wide instead of one-at-a-time.
@@ -8692,7 +8695,7 @@ async function performScan(lib, state, mode = 'scan') {
       const prev = localMeta ? null : reuse(best.file);
       if (localMeta) { item.tmdbId = null; item.poster = null; item.backdrop = null; delete item.matchSource; }
       else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) copyMatch(item, prev);
-      else if (wantTmdb) lookupJobs.push(async () => {
+      else if (wantTmdb || manualTmdb(ov)) lookupJobs.push(async () => {
         // A "tv"-kind library searches TV even for season-less folders (mini-series etc.).
         const kind = lib.kind === 'tv' ? 'tv' : 'movie';
         const found = await tmdbLookup(kind, { label, year: item.year, manual: typeof ov === 'number', tmdbId: typeof ov === 'number' ? ov : item.tmdbId });
@@ -8728,7 +8731,7 @@ async function performScan(lib, state, mode = 'scan') {
       const prevShow = localMetaShow ? null : reuse(`show:${dir}`);
       if (localMetaShow) { show.tmdbId = null; show.poster = null; show.backdrop = null; delete show.matchSource; }
       else if (prevShow && (typeof ovS !== 'number' || prevShow.tmdbId === ovS)) copyMatch(show, prevShow);
-      else if (wantTmdb) lookupJobs.push(async () => {
+      else if (wantTmdb || manualTmdb(ovS)) lookupJobs.push(async () => {
         const found = await tmdbLookup('tv', { label, year: show.year, manual: typeof ovS === 'number', tmdbId: typeof ovS === 'number' ? ovS : show.tmdbId });
         if (found) applyHit(show, found, nfo);
         else keepPrev(show, `show:${dir}`);
@@ -8789,7 +8792,7 @@ async function performScan(lib, state, mode = 'scan') {
           const prev = localMetaLoose ? null : reuse(full);
           if (localMetaLoose) { item.tmdbId = null; item.poster = null; item.backdrop = null; }
           else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) copyMatch(item, prev);
-          else if (wantTmdb) lookupJobs.push(async () => {
+          else if (wantTmdb || manualTmdb(ov)) lookupJobs.push(async () => {
             const found = await tmdbLookup(lib.kind === 'tv' ? 'tv' : 'movie', { label: e.name, file: true, year: item.year, manual: typeof ov === 'number', tmdbId: typeof ov === 'number' ? ov : null });
             if (found) applyHit(item, found, null);
             else keepPrev(item, full);
