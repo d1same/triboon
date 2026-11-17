@@ -6181,7 +6181,7 @@ function nextLocalEpisodes(ctx, profile = 'default') {
       backdrop: payload.thumbUrl || payload.artUrl || '', poster: payload.artUrl || payload.thumbUrl || undefined,
       type: 'episode', season: next.s, episode: next.e, progress: 0, resume: 0,
       _local: payload.streamUrl ? { streamUrl: payload.streamUrl, playUrl: payload.playUrl, name: title } : null,
-      _libId: top.libId, _localNext: true,
+      _libId: top.libId, _localNext: true, _nextEp: true, _newEp: (Number(next.addedAt) || 0) > (top.w.updatedAt || 0),
       updatedAt: top.w.updatedAt || 0,
     });
   }

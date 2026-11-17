@@ -179,6 +179,7 @@ test('resume keys: Up next comes from the library for local shows, and from the 
     const card = next.find((x) => x.key === darya2.watchKey);
     assert.strictEqual(card.title, 'Darya دریا');
     assert.ok(card._local && card._local.playUrl, 'the card can play the file without a warm page');
+    assert.strictEqual(card._nextEp, true, 'a next-episode card: pressing it plays (and it carries the NEXT EPISODE tag)');
     // Episode 2 in progress: no Up next for that show.
     await save(srv.port, admin, { key: darya2.watchKey, profile: 'p2', position: 60, duration: 120, meta: { title: 'Darya' } });
     const busy = (await httpJson(srv.port, 'GET', '/api/watch/next?profile=p2', null, admin)).json.map((x) => x.key);
