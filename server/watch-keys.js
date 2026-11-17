@@ -47,10 +47,15 @@ function savedTitleParts(meta) {
 
 // Every title an item has been shown or saved under across 3.4.13 to 3.4.16: the current title, the
 // catalog title of a match, the folder name parsed, and (through normTitle) the raw NFO title of 3.4.14.
+// Name parsing is the costly part of a pass: computed once per item object.
+const titleMemo = new WeakMap();
 function titlesOf(item) {
+  if (!item) return new Set();
+  const hit = titleMemo.get(item);
+  if (hit) return hit;
   const out = new Set();
+  titleMemo.set(item, out);
   const add = (t) => { const n = normTitle(t); if (n) out.add(n); };
-  if (!item) return out;
   const own = item.kind === 'episode' ? String(item.title || '').split(' · ')[0] : item.title;
   add(own);
   add(item.matchTitle);
@@ -76,7 +81,31 @@ function makeIndex(items) {
     if (Number.isInteger(it.idx)) byIdx.set(it.idx, it);
     if (it.key) byKey.set(it.key, it);
   }
-  return { byIdx, byKey, items: items || [] };
+  const index = { byIdx, byKey, items: items || [] };
+  // The items a saved row could belong to: those carrying its title (an episode also by its show's
+  // titles) or its file name. Built on first use, so a pass with no old rows pays nothing; a row then
+  // looks at a handful of items instead of the whole library (20,000 items x thousands of rows).
+  let byTitle = null;
+  let byFile = null;
+  index.candidates = (meta) => {
+    if (!byTitle) {
+      byTitle = new Map();
+      byFile = new Map();
+      const put = (map, k, it) => { if (!k) return; if (!map.has(k)) map.set(k, new Set()); map.get(k).add(it); };
+      for (const it of index.items) {
+        if (!it) continue;
+        for (const t of titlesOf(it)) put(byTitle, t, it);
+        if (it.kind === 'episode') for (const t of titlesOf(byIdx.get(it.showIdx))) put(byTitle, t, it);
+        if (it.file) put(byFile, path.basename(it.file), it);
+      }
+    }
+    const want = savedTitleParts(meta);
+    const src = meta && meta.source && typeof meta.source.name === 'string' ? meta.source.name : '';
+    const out = new Set(byTitle.get(want.title) || []);
+    if (src) for (const it of byFile.get(src) || []) out.add(it);
+    return [...out];
+  };
+  return index;
 }
 
 // Does a saved row (its meta) belong to `item`? `showOf` gives an episode's show item.
@@ -126,7 +155,7 @@ function resolveLegacyRow(row, pos, prev) {
     const rival = (it) => it && it !== at && (at.kind === 'episode'
       ? it.kind === 'episode' && it.showIdx !== at.showIdx
       : it.kind !== 'episode') && rowConfirms(it, meta, showOf);
-    return prev.items.some(rival) ? null : at;
+    return prev.candidates(meta).some(rival) ? null : at;
   }
   // Elsewhere in that pass: exactly one item with that file name or title, else nothing.
   // An episode row needs its own s/e or file name (a show title alone names every episode).
@@ -135,7 +164,7 @@ function resolveLegacyRow(row, pos, prev) {
   const kind = savedKind(meta);
   const episodeRow = want.s !== null || kind === 'episode' || (!kind && at && at.kind === 'episode');
   if (episodeRow && want.s === null && !byFile) return null;
-  const hits = prev.items.filter((it) => it && it !== at
+  const hits = prev.candidates(meta).filter((it) => it && it !== at
     && (byFile ? it.kind !== 'show' : (episodeRow ? it.kind === 'episode' : it.kind !== 'episode'))
     && rowConfirms(it, meta, showOf));
   return hits.length === 1 ? hits[0] : null;

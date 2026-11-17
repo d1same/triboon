@@ -30,9 +30,27 @@ function normRel(rel) {
   return String(rel || '').split(/[\\/]+/).filter(Boolean).join('/').normalize('NFC');
 }
 
+// A pass recomputes every key on the same strings every 15 minutes (sync, beside the video): memo
+// the relative path and the hash of each string seen, bounded.
+const relMemo = new Map();
+const hashMemo = new Map();
+const MEMO_MAX = 200000;
+function memo(map, k, make) {
+  let v = map.get(k);
+  if (v === undefined) {
+    if (map.size >= MEMO_MAX) map.clear();
+    v = make();
+    map.set(k, v);
+  }
+  return v;
+}
+
 // `abs` relative to `root`, or null when it is not inside it.
 function relPath(root, abs) {
   if (!root || !abs) return null;
+  return memo(relMemo, `${root}\0${abs}`, () => relPathNow(root, abs));
+}
+function relPathNow(root, abs) {
   for (const mod of [path, path.win32, path.posix]) {
     let r;
     try { r = mod.relative(String(root), String(abs)); } catch { continue; }
@@ -47,7 +65,8 @@ function stripExt(rel) {
 }
 
 function hashOf(kind, rel) {
-  return crypto.createHash('sha256').update(`triboon-local-v1\0${kind}\0${rel}`).digest('hex').slice(0, HASH_LEN);
+  return memo(hashMemo, `${kind}\0${rel}`,
+    () => crypto.createHash('sha256').update(`triboon-local-v1\0${kind}\0${rel}`).digest('hex').slice(0, HASH_LEN));
 }
 
 function parseLocalKey(key) {

@@ -275,3 +275,25 @@ test('watch keys: legacy watchlist rows move too', () => {
   run(items, items, {}, { watchlist });
   assert.deepStrictEqual(Object.keys(watchlist), [`u1:${items[1].key}`]);
 });
+
+test('watch keys: thousands of old rows on a large library move in well under seconds (the pass runs beside the video)', () => {
+  const big = [];
+  for (let s = 0; s < 300; s++) {
+    const showIdx = big.length;
+    big.push({ kind: 'show', dir: at(`Show ${s}`), title: `Show ${s}` });
+    for (let e = 1; e <= 20; e++) big.push({ kind: 'episode', file: at(`Show ${s}`, `S01E${e}.mkv`), showIdx, s: 1, e, title: `Show ${s} · S01E${e}` });
+  }
+  for (let m = 0; m < 2000; m++) big.push(film(`Film ${m}`, 'f.mkv'));
+  const items = pass(big);
+  const watch = {};
+  for (let i = 0; i < 3000; i++) {
+    const it = items[(i * 7) % items.length];
+    const title = it.kind === 'episode' ? `${it.title.split(' · ')[0]} — S01E${it.e}` : it.title;
+    watch[`u1:p${i % 3}:local:${LIB}:${it.idx}`] = row(title, { meta: { title, _kind: it.kind } });
+  }
+  const t0 = Date.now();
+  const { stats } = run(items, items, watch);
+  const ms = Date.now() - t0;
+  assert.strictEqual(stats.parked, 0);
+  assert.ok(ms < 3000, `took ${ms} ms`);
+});
