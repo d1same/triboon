@@ -8884,12 +8884,17 @@ async function performScan(lib, state, mode = 'scan') {
       const p = prevBy.get(it.file);
       if (p && Number.isFinite(p.fileSize)) { it.fileSize = p.fileSize; continue; }
       if (p && sizeBudget-- <= 0) continue;
-      await maybeBreathe();
-      try { it.fileSize = fs.statSync(it.file).size; } catch { /* gone or unreadable: no pairing */ }
+      // Asynchronous: on a busy network share one stat can take seconds, and a sync stat held the
+      // whole server for that long (real setup, brief 101). Nothing else waits on these sizes.
+      try { it.fileSize = (await fs.promises.stat(it.file)).size; } catch { /* gone or unreadable: no pairing */ }
     }
     // Stable keys: each item named by its place on disk, not its position (library-keys.js).
     const keyRoot = resolveLibraryPath(lib.path);
     assignStableKeys(lib.id, keyRoot, items);
+    // Let waiting requests run before the save: naming 21,000 items is 0.2-0.35 s of sync work and
+    // the save below is another second on a changed pass; back to back they were one long stall.
+    // Nothing is published yet, so a request in between still sees the previous pass.
+    await new Promise((resolve) => setImmediate(resolve));
     // An unchanged pass (the common 15-minute case) rewrote every row in one sync SQLite
     // transaction: 350-450 ms of frozen event loop for 20,000 items (result 89). Same items, same
     // order, same fields (addedAt and art included): keep the rows, refresh only the scan time.
