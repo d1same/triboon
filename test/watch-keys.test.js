@@ -339,3 +339,22 @@ test('watch keys: thousands of old rows on a large library move in well under se
   assert.strictEqual(stats.parked, 0);
   assert.ok(ms < 3000, `took ${ms} ms`);
 });
+
+test('watch keys: a library path change (every show moves) is planned in well under seconds (brief 101)', () => {
+  const big = (rootName) => {
+    const list = [];
+    for (let s = 0; s < 800; s++) {
+      const showIdx = list.length;
+      list.push({ kind: 'show', dir: at(rootName, `Show ${s}`), title: `Show ${s}` });
+      for (let e = 1; e <= 25; e++) list.push({ kind: 'episode', file: at(rootName, `Show ${s}`, `S01E${e}.mkv`), showIdx, s: 1, e, title: `Show ${s} · S01E${e}`, fileSize: 1000 + s * 100 + e });
+    }
+    return pass(list);
+  };
+  const before = big('Old');
+  const after = big('New'); // the library folder moved one level: every key changes, files pair by name + size
+  const t0 = Date.now();
+  const moves = planMoves({ prevItems: before, items: after, watchKeyOf: wk });
+  const ms = Date.now() - t0;
+  assert.ok(ms < 1500, `took ${ms} ms (the per-show scan of the whole library took 2.4 s here)`);
+  assert.strictEqual(moves.filter((m) => /^local:[^:]+:[0-9a-f]{12}$/.test(m.from)).length, 800, 'every show followed its folder');
+});
