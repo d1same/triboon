@@ -569,8 +569,11 @@ Every library pass (a scan, and a boot pass over the stored items a few seconds 
    pass with that title; else they are kept aside in `watchOrphans`. A title that appears twice in
    the library is only carried by file name.
 2. When an item's watch key changes (a match gained, lost or changed: Fix match, a switch to
-   "Folder & NFO only"), its rows move with it. A catalog key another library item still owns stays,
-   and rows imported from Trakt never leave their catalog key.
+   "Folder & NFO only"), its rows move with it. A row on a catalog key moves only when it was played
+   from this library copy (`meta.localKey`, or the 3.4.15 file name in `meta.source.name`): a Usenet
+   watch of the same title, another user's history and rows imported from Trakt stay with the catalog
+   title. A catalog key another library item still owns stays. A 3.4.15 file name counts only with a
+   saved title and kind that agree (generic names like `01.mp4` repeat).
 3. A file that vanished and one that appeared with the same name and size (never the modified time)
    carry the rows; a show folder follows when half its episodes pair.
 4. Rows of files that left the library are kept aside (not on a pass that lost half the library),
