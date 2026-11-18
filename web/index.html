@@ -792,6 +792,12 @@ body.tv #filterMenu{backdrop-filter:none}
 .gChip.sel{background:var(--btnSelected);color:var(--text);border-color:transparent}
 #grid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,var(--poster));gap:20px 16px;align-content:start;justify-content:start;padding:6px 4px 30px}
 #grid .pcard,#grid .card{flex:none;width:var(--poster);max-width:var(--poster);min-width:0}
+/* Wide cards (Live TV channels in Search) are 16:9 boxes with overflow:hidden. That makes their
+   automatic minimum height 0, so each grid row shrank to 2px and the channels piled on top of each
+   other. overflow:clip still clips but keeps the real height; the TV min-height is the same 16:9
+   height for older TV browsers without clip. */
+#grid .card{overflow:clip}
+body.tv #grid .card{min-height:calc(var(--poster) * 9 / 16)}
 #browse.searchMode{padding-top:var(--searchPad, 110px)!important} /* clears the floating search bar */
 #browse.searchMode.hasSuggest{padding-top:168px!important} /* TV WebView drops CSS max(); tight gap — JS then measures the real chip */
 #browse.searchMode .browseHead{display:none}
@@ -2442,7 +2448,7 @@ body.iosPhone #volSlider{display:none}
    movie loader runs it at half time (--tbS) and hides mid-build the moment the first frame is
    ready. Reduced motion (or a hidden loader) shows the finished mark with no animation. */
 #appLoader{--tbS:1}#playerLoader{--tbS:.5}
-@keyframes tbRise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}@keyframes tbDraw{from{stroke-dasharray:1;stroke-dashoffset:1}to{stroke-dasharray:1;stroke-dashoffset:0}}@keyframes tbPop{from{opacity:0;transform:scale(.55)}to{opacity:1;transform:none}}@keyframes tbLand{from{opacity:0;transform:translateX(70px)}to{opacity:1;transform:none}}.tbMark{display:block;height:auto;overflow:visible}.tbMark .tbPlay{transform-box:fill-box;transform-origin:30% 50%}@media (prefers-reduced-motion:no-preference){#appLoader:not(.hide) .tbL,#playerLoader.show .tbL{animation:tbRise calc(.6s*var(--tbS,1)) cubic-bezier(.2,.7,.2,1) both}#appLoader:not(.hide) .tbT,#playerLoader.show .tbT{animation-delay:calc(.10s*var(--tbS,1))}#appLoader:not(.hide) .tbR,#playerLoader.show .tbR{animation-delay:calc(.16s*var(--tbS,1))}#appLoader:not(.hide) .tbI,#playerLoader.show .tbI{animation-delay:calc(.22s*var(--tbS,1))}#appLoader:not(.hide) .tbB,#playerLoader.show .tbB{animation-delay:calc(.28s*var(--tbS,1))}#appLoader:not(.hide) .tbN,#playerLoader.show .tbN{animation-delay:calc(.46s*var(--tbS,1))}#appLoader:not(.hide) .tbO1,#playerLoader.show .tbO1{animation:tbDraw calc(.8s*var(--tbS,1)) cubic-bezier(.45,0,.2,1) calc(.34s*var(--tbS,1)) both}#appLoader:not(.hide) .tbO2,#playerLoader.show .tbO2{animation:tbDraw calc(.8s*var(--tbS,1)) cubic-bezier(.45,0,.2,1) calc(.48s*var(--tbS,1)) both}#appLoader:not(.hide) .tbPlay,#playerLoader.show .tbPlay{animation:tbPop calc(.45s*var(--tbS,1)) cubic-bezier(.2,.8,.25,1) calc(1s*var(--tbS,1)) both}#appLoader:not(.hide) .tbDot,#playerLoader.show .tbDot{animation:tbLand calc(.55s*var(--tbS,1)) cubic-bezier(.2,.75,.2,1) calc(1.12s*var(--tbS,1)) both}}
+@keyframes tbRise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}@keyframes tbDraw{from{stroke-dasharray:1;stroke-dashoffset:1}to{stroke-dasharray:1;stroke-dashoffset:0}}@keyframes tbPop{from{opacity:0;transform:scale(.55)}to{opacity:1;transform:none}}@keyframes tbLand{from{opacity:0;transform:translateX(70px)}to{opacity:1;transform:none}}.tbMark{display:block;height:auto;overflow:visible}.tbMark .tbPlay{transform-box:fill-box;transform-origin:30% 50%}@media (prefers-reduced-motion:no-preference){#appLoader.go:not(.hide) .tbL,#playerLoader.show .tbL{animation:tbRise calc(.6s*var(--tbS,1)) cubic-bezier(.2,.7,.2,1) both}#appLoader.go:not(.hide) .tbT,#playerLoader.show .tbT{animation-delay:calc(.10s*var(--tbS,1))}#appLoader.go:not(.hide) .tbR,#playerLoader.show .tbR{animation-delay:calc(.16s*var(--tbS,1))}#appLoader.go:not(.hide) .tbI,#playerLoader.show .tbI{animation-delay:calc(.22s*var(--tbS,1))}#appLoader.go:not(.hide) .tbB,#playerLoader.show .tbB{animation-delay:calc(.28s*var(--tbS,1))}#appLoader.go:not(.hide) .tbN,#playerLoader.show .tbN{animation-delay:calc(.46s*var(--tbS,1))}#appLoader.go:not(.hide) .tbO1,#playerLoader.show .tbO1{animation:tbDraw calc(.8s*var(--tbS,1)) cubic-bezier(.45,0,.2,1) calc(.34s*var(--tbS,1)) both}#appLoader.go:not(.hide) .tbO2,#playerLoader.show .tbO2{animation:tbDraw calc(.8s*var(--tbS,1)) cubic-bezier(.45,0,.2,1) calc(.48s*var(--tbS,1)) both}#appLoader.go:not(.hide) .tbPlay,#playerLoader.show .tbPlay{animation:tbPop calc(.45s*var(--tbS,1)) cubic-bezier(.2,.8,.25,1) calc(1s*var(--tbS,1)) both}#appLoader.go:not(.hide) .tbDot,#playerLoader.show .tbDot{animation:tbLand calc(.55s*var(--tbS,1)) cubic-bezier(.2,.75,.2,1) calc(1.12s*var(--tbS,1)) both}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes pulseLogo{0%,100%{opacity:.85;transform:scale(1)}50%{opacity:1;transform:scale(1.05)}}
 .spinner{width:46px;height:46px;border-radius:50%;border:3px solid rgba(var(--fg),.15);border-top-color:var(--coral);animation:spin .8s linear infinite}
@@ -2456,6 +2462,9 @@ body.iosPhone #volSlider{display:none}
 @keyframes splashTint{from{transform:rotate(0deg) scale(1)}to{transform:rotate(4deg) scale(1.07)}}
 @media (prefers-reduced-motion:reduce){#appLoader::before{animation:none}}
 #appLoader.hide{opacity:0;pointer-events:none}
+/* Plain ink until the code has loaded and .go starts the build (see startBootLogo); reduced motion
+   shows the finished mark at once. */
+@media (prefers-reduced-motion:no-preference){#appLoader:not(.go) .tbMark{visibility:hidden}}
 #appLoader .inner{position:relative;display:flex;flex-direction:column;align-items:center;gap:26px;animation:splashIn .9s ease both}
 @keyframes splashIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 #appLoader .tbMark{width:280px} /* same visual size as the old 330px clipped wordmark */
@@ -6077,7 +6086,10 @@ let bdFlip = false, bdCurrent = '';
 let _bdPendingUrl = null, _bdTimer = null;
 function setBackdrop(url) {
   const safe = safeArtUrl(url);
-  if (!safe || safe === bdCurrent) return;
+  if (!safe) return;
+  // Back on the title already shown: drop any queued art, or the title you passed over in the last
+  // 150ms would land on screen behind the one you are on.
+  if (safe === bdCurrent) { _bdPendingUrl = null; return; }
   // Debounce ~150ms: fast D-pad/scroll fires setBackdrop on EVERY focused card, and each distinct url
   // kicks off a w1280 TMDB image fetch that competes with NNTP bandwidth on a TV. Coalesce to the card
   // focus settles on — the .7s crossfade makes the small delay invisible. (Credits/prefetch/prepare
@@ -30539,7 +30551,10 @@ function switchView(v, push = true, opts = {}) {
     leaveRail();
     if (wasOpen) requestAnimationFrame(() => requestAnimationFrame(leaveRail));
   }
-  if (v === 'search') $('bdInfo').classList.remove('show'); // stale hero text bled through the results
+  // Search never paints its own backdrop (a clean results list), so it must always drop the last
+  // page's: as a cached page it kept the previous movie's art behind the results (owner, Shield).
+  // clearBackdrop also hides the stale hero text that bled through.
+  if (v === 'search') clearBackdrop();
   // Cached Home/Movies keep their last still so the page does not flash ink. Settings,
   // Preferences, and Live TV are not cover pages — always drop the previous title so they
   // sit on clean background (owner: leftover Mario art was still showing on Settings and
@@ -33454,24 +33469,41 @@ function bootReady() {
 // wordmark build-up has finished, whichever is LATER — so the new logo is always seen whole.
 // No extra time is added on top: a slow boot is not delayed at all, and the wait is capped at
 // 1.8 s after the page started. Reduced motion shows the finished mark, so no wait.
+// 3.5.0 (owner): the finished logo stays on screen 2 s before Home appears.
+const BOOT_LOGO_HOLD_MS = 2000;
 function hideAppLoaderAfterLogo() {
   const loader = $('appLoader');
-  const hide = () => loader.classList.add('hide');
   if (loader.classList.contains('hide') || loader._logoWait) return;
-  // Wait for the wordmark's own (finite) build animations, not a guessed time: the web splash can
-  // start later than the page on TV shells. Infinite loops (tint drift, progress lane) are ignored,
-  // and a 2.5 s cap means a stuck animation can never hold the app.
-  let finite = [];
-  try {
-    finite = loader.getAnimations({ subtree: true }).filter((a) => {
-      const t = a.effect && a.effect.getComputedTiming && a.effect.getComputedTiming();
-      return t && Number.isFinite(t.endTime) && a.playState !== 'finished';
-    });
-  } catch {}
-  if (!finite.length) { setTimeout(hide, 0); requestAnimationFrame(() => requestAnimationFrame(hide)); return; }
   loader._logoWait = true;
-  Promise.race([Promise.all(finite.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 2500))])
-    .then(hide);
+  startBootLogo().then(() => {
+    const wait = Math.max(0, (loader._logoDoneAt || 0) + BOOT_LOGO_HOLD_MS - performance.now());
+    setTimeout(() => loader.classList.add('hide'), wait);
+  });
+}
+// The wordmark build starts only once the app's code has loaded (boot() runs at the end of the
+// script, plus two frames). Before that the splash is plain ink: starting the build during the
+// 1.9 MB script parse froze the SVG letters mid-move, which read as lag on TV boxes (owner).
+// Resolves when the build has finished: its own (finite) animations, not a guessed time.
+// Infinite loops (tint drift, progress lane) are ignored, and a 2.5 s cap means a stuck
+// animation can never hold the app. Runs once; a re-armed splash (after sign-in) reuses it.
+function startBootLogo() {
+  const loader = $('appLoader');
+  if (loader._logoDone) return loader._logoDone;
+  loader.classList.add('go');
+  loader._logoDone = new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      let finite = [];
+      try {
+        finite = loader.getAnimations({ subtree: true }).filter((a) => {
+          const t = a.effect && a.effect.getComputedTiming && a.effect.getComputedTiming();
+          return t && Number.isFinite(t.endTime) && a.playState !== 'finished';
+        });
+      } catch {}
+      Promise.race([Promise.all(finite.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 2500))])
+        .then(() => { loader._logoDoneAt = performance.now(); resolve(); });
+    });
+  });
+  return loader._logoDone;
 }
 async function loadWatchlist() {
   try { const wl = await api('/api/watchlist'); S.watchlist = wl; S.watchlistMap = Object.fromEntries(wl.map((w) => [w.key, w])); }
@@ -33520,6 +33552,7 @@ async function enterAppShell() {
   // while watch/libraries/rows were still fetching.
   S._booting = true;
   $('appLoader').classList.remove('hide');
+  $('appLoader')._logoWait = false; // the gate's close set it; without this the re-armed splash never closed
   setTimeout(bootReady, 10000); // safety: never trap the user behind the loader
   applyCoverSize();
   S.maxLevel = (S.profile && (S.profile.level ?? 4)) ?? 4;
@@ -33690,6 +33723,7 @@ function startServerVersionWatch(loadedVersion) {
   }
 }
 (async function boot() {
+  requestAnimationFrame(() => requestAnimationFrame(startBootLogo)); // the code has loaded: build the logo now
   const invite = new URLSearchParams(location.search).get('invite');
   let info;
   try { info = await api('/api/server'); } catch { document.body.innerHTML = '<p style="padding:40px">Triboon server unreachable.</p>'; return; }

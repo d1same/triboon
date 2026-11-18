@@ -6264,8 +6264,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // on the movie loader, and reduced motion shows the finished mark.
   assert.match(ui, /#appLoader\{--tbS:1\}#playerLoader\{--tbS:\.5\}/,
     'the movie loader runs the logo build-up at half the splash time');
-  assert.match(ui, /@media \(prefers-reduced-motion:no-preference\)\{#appLoader:not\(\.hide\) \.tbL,#playerLoader\.show \.tbL\{animation:tbRise [^}]+ both\}[\s\S]+#appLoader:not\(\.hide\) \.tbO1,#playerLoader\.show \.tbO1\{animation:tbDraw[\s\S]+#appLoader:not\(\.hide\) \.tbDot,#playerLoader\.show \.tbDot\{animation:tbLand[^}]+\}\}/,
-    'the logo animates only on a visible splash or loader, and only without reduced motion');
+  assert.match(ui, /@media \(prefers-reduced-motion:no-preference\)\{#appLoader\.go:not\(\.hide\) \.tbL,#playerLoader\.show \.tbL\{animation:tbRise [^}]+ both\}[\s\S]+#appLoader\.go:not\(\.hide\) \.tbO1,#playerLoader\.show \.tbO1\{animation:tbDraw[\s\S]+#appLoader\.go:not\(\.hide\) \.tbDot,#playerLoader\.show \.tbDot\{animation:tbLand[^}]+\}\}/,
+    'the logo animates only on a visible splash (once the code has loaded: .go, 3.5.0 owner) or loader, and only without reduced motion');
   assert.match(ui, /@keyframes tbDraw\{from\{stroke-dasharray:1;stroke-dashoffset:1\}to\{stroke-dasharray:1;stroke-dashoffset:0\}\}/,
     'the linked OO draws itself with stroke-dashoffset only');
   assert.match(ui, /#playerLoader \.loadMark svg:not\(\.tbMark\)\{display:none\}/,
@@ -11721,10 +11721,21 @@ test('Quiet Graphite polish (3.5.0): no amber capitals, quiet credits, calmer pa
 
 test('Boot splash waits for the logo build-up to finish (3.5.0, owner), capped and reduced-motion safe', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  const fn = ui.slice(ui.indexOf('function hideAppLoaderAfterLogo()'), ui.indexOf('function hideAppLoaderAfterLogo()') + 1400);
+  // hideAppLoaderAfterLogo + startBootLogo (the animation wait moved into the latter).
+  const fn = ui.slice(ui.indexOf('function hideAppLoaderAfterLogo()'), ui.indexOf('function hideAppLoaderAfterLogo()') + 2600);
   assert.match(fn, /getAnimations\(\{ subtree: true \}\)/, 'waits for the real animations, not a guessed time');
   assert.match(fn, /Number\.isFinite\(t\.endTime\)/, 'infinite loops (tint drift, progress lane) never hold the splash');
   assert.match(fn, /setTimeout\(r, 2500\)/, 'a stuck animation can never hold the app longer than 2.5 s');
   assert.match(ui, /perfMark\('boot-ready'[\s\S]{0,200}hideAppLoaderAfterLogo\(\);/, 'the app path closes the splash through it');
   assert.match(ui, /function showGate\(which\) \{\s*if \(which\) hideAppLoaderAfterLogo\(\);/, 'sign-in screens wait for the logo too');
+  // Search: Live TV channel cards must not collapse into 2px rows and pile up; no stale backdrop.
+  assert.match(ui, /#grid \.card\{overflow:clip\}\s*body\.tv #grid \.card\{min-height:calc\(var\(--poster\) \* 9 \/ 16\)\}/);
+  assert.match(ui, /if \(v === 'search'\) clearBackdrop\(\);/);
+  assert.match(ui, /if \(safe === bdCurrent\) \{ _bdPendingUrl = null; return; \}/);
+  // Owner: smooth build, then hold the finished logo 2 s before Home.
+  assert.match(ui, /const BOOT_LOGO_HOLD_MS = 2000;/, 'the finished logo is held 2 s');
+  assert.match(ui, /\(async function boot\(\) \{\s*requestAnimationFrame\(\(\) => requestAnimationFrame\(startBootLogo\)\);/,
+    'the build starts only once the code has loaded, so the parse cannot freeze it');
+  assert.match(ui, /#appLoader:not\(\.go\) \.tbMark\{visibility:hidden\}/, 'plain ink before the build starts');
+  assert.match(ui, /\$\('appLoader'\)\._logoWait = false;/, 'the splash re-armed after sign-in can close again');
 });
