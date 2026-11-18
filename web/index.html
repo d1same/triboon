@@ -24420,6 +24420,27 @@ window.__tvNativeLiveError = (msg) => {
   toast(`Live TV unavailable: ${reason}`);
   if (S.view === 'livetv') setTimeout(() => focusContent(), 80);
 };
+// OK (Enter) held right now? Tracked in the CAPTURE phase so it is set before the one global key
+// handler activates a card on key-down. okKeyReleased() resolves on the release, or after maxMs
+// so a stuck or swallowed key-up never blocks a tune.
+const OK_KEY_RELEASE_MAX_MS = 1000;
+document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.repeat) S._okKeyDown = true; }, true);
+document.addEventListener('keyup', (e) => {
+  if (e.key !== 'Enter') return;
+  S._okKeyDown = false;
+  const waiters = S._okKeyWaiters || []; S._okKeyWaiters = [];
+  waiters.forEach((done) => done());
+}, true);
+function okKeyReleased(maxMs = OK_KEY_RELEASE_MAX_MS) {
+  if (!S._okKeyDown) return Promise.resolve();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    S._okKeyWaiters = S._okKeyWaiters || [];
+    S._okKeyWaiters.push(finish);
+    setTimeout(() => { S._okKeyDown = false; finish(); }, maxMs);
+  });
+}
 async function playChannel(it, list) {
   if (promotePlayerGuideChannelToFullscreen(it)) return;
   if (liveSplitEnabled() && S.view === 'player' && S.playing && S.playing.item && S.playing.item.type === 'live') {
@@ -24446,6 +24467,13 @@ async function playChannel(it, list) {
     return;
   }
   if (!liveTuneIsCurrent(tune)) return;
+  // Native hand-off waits for OK to come up: the release of the press that picked the channel
+  // otherwise reaches the native player, which clicks its focused Play/Pause on key-up — Home
+  // favorites (activated on key-down) opened PAUSED (owner report 2026-11-18).
+  if (canUseNativeLivePlayer()) {
+    await okKeyReleased();
+    if (!liveTuneIsCurrent(tune)) return;
+  }
   // Zap speed: warm the NEIGHBORS' stream URLs in the background (a tiny token-minting GET, no
   // provider connection) so PgUp/PgDn ⏮⏭ zaps skip the serial /api/iptv/play round-trip entirely.
   prefetchAdjacentChannelUrls(it, S.liveList);
