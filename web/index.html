@@ -4048,6 +4048,20 @@ body[data-theme="graphite"] .epCard:hover,body[data-theme="graphite"] .epCard.fo
    The focus ring is a box-shadow, so it follows the corner. */
 body[data-theme="graphite"] :is(.pcard .art,.card,.seasonCard .art,.epCard,.epCard .still,.castCard .ph,.pPhoto,.thumb,
   .chCard .chLogo,.playerEpCard,.playerEpCard .peStill,.abCard .art,.mCard .art){border-radius:6px!important}
+/* Audiobooks and Music match the posters: no zoom, crisp corner, the same clear 3px white ring. */
+body[data-theme="graphite"] .abCard.focusable.focus,body[data-theme="graphite"] .abCard:hover,
+body[data-theme="graphite"] .mCard.focusable.focus,body[data-theme="graphite"] .mCard:hover{transform:translateZ(0)}
+body[data-theme="graphite"] .abCover,body[data-theme="graphite"] .mCover{border-radius:6px!important}
+body[data-theme="graphite"] .abCard:hover .abCover,body[data-theme="graphite"] .abCard.focus .abCover,body[data-theme="graphite"] .abCard:focus .abCover,
+body[data-theme="graphite"] .mCard:hover .mCover,body[data-theme="graphite"] .mCard.focus .mCover,body[data-theme="graphite"] .mCard:focus .mCover{
+  box-shadow:0 0 0 3px var(--focus)!important;filter:none}
+/* Live TV: the guide had its own steel-blue channel side and teal category side. Graphite uses
+   the same neutral whites and greys as everywhere else: white focus line, soft grey wash for the
+   chosen category, no tinted panes. */
+body[data-theme="graphite"] :is(#chBody,#pGuide,.pgGuideShell,#chCats,.liveCatPane,.guideCats,.pgCatPane){
+  --focus:#EDEFF3;--focusSoft:rgba(237,239,243,.3);--amber:#EDEFF3;--artFocusLine:#EDEFF3;--artFocusGlow:transparent;
+  --btnSelected:rgba(237,239,243,.16);--btnSelectedHover:rgba(237,239,243,.26)}
+body[data-theme="graphite"] :is(.liveCatPane,.pgCatPane){background:var(--field)}
 body[data-theme="graphite"] .castCard{display:flex;flex-direction:column;justify-content:flex-start;align-self:flex-start;min-width:0}
 /* min-width:0 — a one-line name is a nowrap box, so a long name ("Philip Seymour Hoffman") made its
    card's minimum width the name's width and that face grew bigger than the rest. The card now keeps
@@ -4180,6 +4194,10 @@ body[data-theme="graphite"] #dCrew .crewLink{color:var(--text);font-weight:600}
    screen. With a wide-card row in focus it is anchored at the same height the poster rows give it
    (12% of the screen height — scales with every TV size); poster rows are unchanged. */
 body[data-theme="graphite"].tv #home:has(.card.focus) #hero{margin-top:max(var(--bdInfoPadT),12vh);margin-bottom:auto}
+/* Discover (and the Movies/Shows pages) use the separate #bdInfo block, pinned to the bottom of the
+   space above the row. Same fix there: with a wide row focused, the text starts at the same height
+   as Home's (12% of the screen + the hero's 40px top padding). */
+body[data-theme="graphite"].tv:has(:is(#discover,#browse) .card.focus) #bdInfo{justify-content:flex-start;padding-top:calc(max(var(--bdInfoPadT),12vh) + 40px)}
 /* Quality badge: thin outline mono, reads as info, not a button. */
 body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px solid rgba(var(--fg),.28);border-radius:6px;
   font-weight:600;text-shadow:none}
