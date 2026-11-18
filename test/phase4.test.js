@@ -11625,16 +11625,20 @@ test('Quiet Graphite (3.5.0): flat Graphite look, labelled buttons, other themes
   // The Graphite theme carries no focus glow.
   assert.match(ui, /label: 'Graphite'[\s\S]{0,1400}artFocusGlow: 'transparent'[\s\S]{0,200}artFocusTileGlow: 'transparent'/);
   // Title page icon buttons say what they do; same buttons, same order (labels come from data-label).
-  for (const [id, lab] of [['dSources', 'Sources'], ['dWatchlist', 'Watchlist'], ['dPlayed', 'Watched'], ['dTrailer', 'Trailer']]) {
-    assert.match(ui, new RegExp(`<button [^>]*id="${id}"[^>]* data-label="${lab}">`), `${id} carries its label`);
+  for (const [id, lab] of [['dSources', 'Sources'], ['dWatchlist', 'Add to watchlist'], ['dPlayed', 'Mark watched'], ['dTrailer', 'Trailer']]) {
+    assert.match(ui, new RegExp(`<button [^>]*id="${id}"[^>]* data-label="${lab}"[^>]*>`), `${id} carries its label`);
   }
+  // The name follows the state: "In watchlist" / "Watched" once on (the .on class the page already sets).
+  assert.match(ui, /<button [^>]*id="dWatchlist"[^>]* data-label-on="In watchlist">/);
+  assert.match(ui, /<button [^>]*id="dPlayed"[^>]* data-label-on="Watched">/);
+  assert.match(block, /#dBtns \.iconBtn\.on\[data-label-on\]::after\{content:attr\(data-label-on\)\}/);
   // Icon-only (owner 2026-11-17: no width lost); the focused one shows its name below, out of the flow.
   assert.match(block, /#dBtns \.iconBtn\[data-label\]::after\{content:attr\(data-label\);position:absolute;[^}]*opacity:0;pointer-events:none\}/);
   assert.match(block, /#dBtns \.iconBtn\[data-label\]\.focusable\.focus::after\{opacity:1\}/);
   assert.ok(!/#dBtns \.iconBtn[^{]*\{[^}]*width:auto/.test(block), 'title icon buttons keep their compact width');
   // TV row slide: short, Graphite + TV only, off under reduced motion, and every new press settles the
   // previous slide first so held presses never queue.
-  assert.match(ui, /const ROW_SLIDE_MS = 120;/);
+  assert.match(ui, /const ROW_SLIDE_MS = 200;/);
   assert.match(ui, /function rowSlideOk\(\) \{\s*if \(!document\.body\.classList\.contains\('tv'\) \|\| document\.body\.dataset\.theme !== 'graphite'\) return false;[\s\S]{0,200}prefers-reduced-motion: reduce/);
   assert.match(ui, /function rowScrollTo\(row, left\) \{\s*settleRowSlide\(row\);/);
   assert.match(ui, /function scrollHorizontalRowIntoView\(el\) \{[\s\S]{0,120}settleRowSlide\(row\);/);

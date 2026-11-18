@@ -4052,6 +4052,7 @@ body[data-theme="graphite"] #dBtns .iconBtn{border-radius:12px}
 body[data-theme="graphite"] #dBtns .iconBtn[data-label]::after{content:attr(data-label);position:absolute;left:50%;top:calc(100% + 7px);
   transform:translateX(-50%);font:600 12.5px "Sora",system-ui,sans-serif;color:var(--text);white-space:nowrap;opacity:0;pointer-events:none}
 body[data-theme="graphite"] #dBtns .iconBtn[data-label].focusable.focus::after{opacity:1}
+body[data-theme="graphite"] #dBtns .iconBtn.on[data-label-on]::after{content:attr(data-label-on)}
 /* Row and section labels: calm sentence-style Sora instead of letter-spaced amber mono caps.
    Size stays on --ctSection so the text-size setting still applies. */
 body[data-theme="graphite"] .row h2,body[data-theme="graphite"] #person h2,body[data-theme="graphite"] .secHead h2{
@@ -4966,9 +4967,9 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
             <button data-q="3" class="focusable qon">1080p</button><button data-q="4" class="focusable">4K</button></div>
           <button class="iconBtn focusable" id="dSources" title="Sources" data-label="Sources">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
-          <button class="iconBtn focusable" id="dWatchlist" title="Add to watchlist" data-label="Watchlist">
+          <button class="iconBtn focusable" id="dWatchlist" title="Add to watchlist" data-label="Add to watchlist" data-label-on="In watchlist">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg></button>
-          <button class="iconBtn focusable" id="dPlayed" title="Mark as watched" data-label="Watched">
+          <button class="iconBtn focusable" id="dPlayed" title="Mark as watched" data-label="Mark watched" data-label-on="Watched">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></button>
           <button class="iconBtn focusable" id="dTrailer" title="Trailer" style="display:none" data-label="Trailer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5Z" fill="currentColor" stroke="none"/></svg></button>
@@ -30901,10 +30902,10 @@ function horizontalRowScroller(el) {
   return el && el.closest && el.closest('.cards, #epGrid, #seasonGrid, #castRow, #relatedRow, #seasonTabs, .calItems, .musicRail, #playerEpisodes, .abRowScroll');
 }
 // Quiet Graphite (3.5.0): on TV the focus ring still SNAPS, but the row itself slides for a short
-// 120ms instead of jumping. rAF on scrollLeft (the WebView's native smooth scroll is unreliable),
+// 200ms instead of jumping. rAF on scrollLeft (the WebView's native smooth scroll is unreliable),
 // and every new press first finishes the previous slide at its end, so held D-pad presses never
 // queue up or lag. Graphite only, and never under reduced motion.
-const ROW_SLIDE_MS = 120;
+const ROW_SLIDE_MS = 200;
 function rowSlideOk() {
   if (!document.body.classList.contains('tv') || document.body.dataset.theme !== 'graphite') return false;
   try { if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false; } catch {}
