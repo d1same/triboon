@@ -6280,6 +6280,20 @@ test('Android native player: direct source and native chrome stay out of the web
     assert.match(svgText, /viewBox="0 0 512 512"[\s\S]*?<rect width="512" height="512" rx="\d+" fill="#161020"\/>/,
       `${rel} favicon keeps its dark tile (a rect without width/height draws nothing, leaving a pale T on light tab strips)`);
   }
+  // The wordmark PNG is near-white on transparent (made for the dark app). Places outside the app
+  // that sit on LIGHT backgrounds (GitHub README, the Unraid Docker page) use the square T icon on
+  // its own dark tile instead, so the logo reads on light and dark.
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+  const unraid = fs.readFileSync(path.join(__dirname, '..', 'unraid', 'triboon.xml'), 'utf8');
+  assert.match(readme, /<img src="logo\/triboon-icon\.png" alt="Triboon"/, 'README shows the dark-tile T icon, not the near-white wordmark');
+  assert.match(unraid, /<Icon>https:\/\/raw\.githubusercontent\.com\/d1same\/triboon\/main\/logo\/triboon-icon\.png<\/Icon>/,
+    'the Unraid template icon is the square dark-tile T icon');
+  const iconPng = fs.readFileSync(path.join(__dirname, '..', 'logo', 'triboon-icon.png'));
+  assert.equal(iconPng.toString('ascii', 1, 4), 'PNG', 'logo/triboon-icon.png is a PNG');
+  assert.equal(iconPng.readUInt32BE(16), iconPng.readUInt32BE(20), 'logo/triboon-icon.png is square for icon slots');
+  assert.ok(iconPng.readUInt32BE(16) >= 256, 'logo/triboon-icon.png is large enough for store cards');
+  assert.ok(pngHasTransparentPixels(path.join(__dirname, '..', 'logo', 'triboon-icon.png')),
+    'logo/triboon-icon.png keeps transparent rounded corners around its dark tile');
   assert.match(ui, /PLAYER_LOADING_STAGES = \['Preparing', 'Finding source', 'Mounting', 'Checking health\.\.\.', 'Starting stream'\][\s\S]+function clearPlayerLoadingStages\(\)[\s\S]+if \(hot\) \{[\s\S]+setPlayerLoadingStage\(2\);[\s\S]+S\._stageTimers = \[500, 1100\][\s\S]+S\._stageTimers = \[650, 1400, 2200, 3000\][\s\S]+setPlayerLoadingStage\(i \+ 1\)/,
     'web player loading status should skip Finding source after a details/trailer/next warmup');
   assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+ImageView loadingMark = new ImageView\(this\);[\s\S]+loadingMark\.setImageResource\(R\.drawable\.native_loading_wordmark\);[\s\S]+loadingCenter\.addView\(loadingMark, markLp\);[\s\S]+FrameLayout loadingLane = new FrameLayout\(this\);[\s\S]+nativeLoadingLaneGlow = new View\(this\);[\s\S]+nativeLoadingStatus = new TextView\(this\);[\s\S]+nativeLoadingStatus\.setText\(R\.string\.preparing\);[\s\S]+startNativeLoadingLane\(\);/,

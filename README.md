@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo/triboon.png" alt="Triboon" width="190">
+  <img src="logo/triboon-icon.png" alt="Triboon" width="120">
 </p>
 
 <h1 align="center">Triboon</h1>

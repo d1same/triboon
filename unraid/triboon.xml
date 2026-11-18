@@ -12,7 +12,7 @@
   <Category>MediaApp:Video MediaServer:Video</Category>
   <WebUI>http://[IP]:[PORT:7777]</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/d1same/triboon/main/unraid/triboon.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/d1same/triboon/main/logo/triboon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/d1same/triboon/main/logo/triboon-icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <DonateText/>
