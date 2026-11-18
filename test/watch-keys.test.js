@@ -469,3 +469,21 @@ test('watch keys: a library path change (every show moves) is planned in well un
   assert.ok(ms < 1500, `took ${ms} ms (the per-show scan of the whole library took 2.4 s here)`);
   assert.strictEqual(moves.filter((m) => /^local:[^:]+:[0-9a-f]{12}$/.test(m.from)).length, 800, 'every show followed its folder');
 });
+
+test('watch keys: a doubled episode removed: the other copy keeps its progress when the previous pass comes from storage (no relPath)', () => {
+  // Check 103: the library database no longer stores relPath (f11d4fb) and keyed stored items are
+  // used as they are (e7af53b), so the previous pass has no relPath; the same file is matched by
+  // its stored path instead.
+  const show = { kind: 'show', dir: at('Kuh'), title: 'Kuh' };
+  const a = { kind: 'episode', file: at('Kuh', 'Kuh S01E01 (1080p).mkv'), fileSize: 50, showIdx: 0, s: 1, e: 1, title: 'Kuh · S01E01' };
+  const b = { kind: 'episode', file: at('Kuh', 'Kuh S01E01.mkv'), fileSize: 60, showIdx: 0, s: 1, e: 1, title: 'Kuh · S01E01' };
+  const stored = pass([show, a, b]).map((it) => { const { relPath: _r, ...rest } = it; return rest; });
+  const next = pass([show, b]);
+  const watch = { [`u1:default:${stored[2].key}`]: row('Kuh — S01E01', { position: 700, meta: { title: 'Kuh — S01E01', type: 'episode' } }) };
+  const orphans = {};
+  const moves = planMoves({ prevItems: stored, items: next, watchKeyOf: wk });
+  applyLibraryMoves({ libId: LIB, watch, watchlist: {}, orphans, prevItems: stored, items: next, moves, watchKeyOf: wk, now: 1000 });
+  parkVanished({ libId: LIB, watch, watchlist: {}, orphans, prevItems: stored, items: next, moves, watchKeyOf: wk, now: 1000 });
+  assert.strictEqual(watch[`u1:default:${next[1].key}`] && watch[`u1:default:${next[1].key}`].position, 700);
+  assert.deepStrictEqual(orphans, {});
+});

@@ -127,3 +127,67 @@ test('version reload: the poll reloads the page once, keeps the tab history, and
   assert.ok(/startServerVersionWatch\(info\.version\)/.test(ui), 'the boot starts the watch with the version it loaded');
   assert.ok(/VERSION_RELOAD_POLL_MS\s*=\s*60000/.test(ui), 'the page polls once a minute');
 });
+
+test('version reload: Multiview holds the reload (its players run with no S.playing)', () => {
+  // Check 103: openMultiViewFromGuide stops the single player (S.playing = null) and sets
+  // S.view = 'multiview'; a reload there cut every tile, VOD tiles with unsaved progress included.
+  const doc = { activeElement: null, getElementById: () => null };
+  const S = { playing: null, view: 'multiview', multiView: { open: true } };
+  const { versionReloadBusy } = load(['versionReloadBusy'], { S, document: doc, AB: { now: null } });
+  assert.ok(versionReloadBusy(), 'Multiview is busy');
+  S.view = 'livetv'; // the view changed while the tiles stay open
+  assert.ok(versionReloadBusy(), 'open tiles are busy');
+  S.multiView = { open: false };
+  assert.strictEqual(versionReloadBusy(), '');
+});
+
+test('version reload: playback that starts in the second before the reload holds it; the reload comes after it', async () => {
+  // Check 103: the reload ran 1.5 s after the decision without looking again, so a Play pressed in
+  // that second was cut; the version was also marked as reloaded, so no later reload followed.
+  let reloads = 0;
+  const timers = [];
+  const stored = {};
+  const window = { sessionStorage: { getItem: (k) => stored[k] || null, setItem: (k, v) => { stored[k] = v; } } };
+  const S = { playing: null, view: 'home', _versionReload: { loaded: '9.1.0', candidate: '', sightings: 0, reloading: false } };
+  const deps = {
+    S, window, VERSION_RELOAD_WINDOW_MS: WINDOW,
+    fetch: async () => ({ ok: true, json: async () => ({ version: '9.2.0' }) }),
+    AbortSignal: { timeout: () => undefined },
+    toast: () => {},
+    location: { reload: () => { reloads++; } },
+    setTimeout: (f) => { timers.push(f); },
+    document: { activeElement: null, getElementById: () => null },
+    AB: { now: null },
+  };
+  const { checkServerVersionForReload } = load(['versionReloadHistory', 'serverVersionReloadDecision', 'versionReloadBusy', 'checkServerVersionForReload'], deps);
+  await checkServerVersionForReload();
+  await checkServerVersionForReload();
+  assert.strictEqual(timers.length, 1, 'the reload is scheduled');
+  S.playing = { item: { type: 'movie' } }; // Play pressed during the toast
+  timers.shift()();
+  assert.strictEqual(reloads, 0, 'not while playing');
+  S.playing = null;
+  await checkServerVersionForReload();
+  while (timers.length) timers.shift()();
+  assert.strictEqual(reloads, 1, 'it reloads once the player closed');
+});
+
+test('version reload: a focused list or switch is not typing; only a text field holds the reload', () => {
+  // Check 103: on the Android TV app the library view leaves SELECT#genreSel focused after the
+  // native player closes, so the reload waited for ever ("typing").
+  const doc = { activeElement: null, getElementById: () => null };
+  const S = { playing: null, view: 'library' };
+  const { versionReloadBusy } = load(['versionReloadBusy'], { S, document: doc, AB: { now: null } });
+  doc.activeElement = { tagName: 'SELECT', id: 'genreSel' };
+  assert.strictEqual(versionReloadBusy(), '', 'a genre list');
+  for (const type of ['checkbox', 'radio', 'range', 'button', 'submit', 'color', 'file']) {
+    doc.activeElement = { tagName: 'INPUT', type };
+    assert.strictEqual(versionReloadBusy(), '', `an input of type ${type}`);
+  }
+  for (const type of ['', 'text', 'search', 'password', 'email', 'number', 'url', 'tel']) {
+    doc.activeElement = { tagName: 'INPUT', type };
+    assert.strictEqual(versionReloadBusy(), 'typing', `an input of type ${type || '(none)'}`);
+  }
+  doc.activeElement = { tagName: 'TEXTAREA' };
+  assert.strictEqual(versionReloadBusy(), 'typing');
+});
