@@ -4053,6 +4053,10 @@ body[data-theme="graphite"] #dBtns .iconBtn[data-label]::after{content:attr(data
   transform:translateX(-50%);font:600 12.5px "Sora",system-ui,sans-serif;color:var(--text);white-space:nowrap;opacity:0;pointer-events:none}
 body[data-theme="graphite"] #dBtns .iconBtn[data-label].focusable.focus::after{opacity:1}
 body[data-theme="graphite"] #dBtns .iconBtn.on[data-label-on]::after{content:attr(data-label-on)}
+/* On-state colour: In watchlist = brand magenta (the logo square), Watched = the green of the
+   poster "watched" tick. Kept when focused too, so the state reads on the white fill. */
+body[data-theme="graphite"] #dWatchlist.on,body[data-theme="graphite"] #dWatchlist.on.focusable.focus{color:#C13BD6!important}
+body[data-theme="graphite"] #dPlayed.on,body[data-theme="graphite"] #dPlayed.on.focusable.focus{color:#2BBB6A!important}
 /* Row and section labels: calm sentence-style Sora instead of letter-spaced amber mono caps.
    Size stays on --ctSection so the text-size setting still applies. */
 body[data-theme="graphite"] .row h2,body[data-theme="graphite"] #person h2,body[data-theme="graphite"] .secHead h2{

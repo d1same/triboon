@@ -11632,6 +11632,9 @@ test('Quiet Graphite (3.5.0): flat Graphite look, labelled buttons, other themes
   assert.match(ui, /<button [^>]*id="dWatchlist"[^>]* data-label-on="In watchlist">/);
   assert.match(ui, /<button [^>]*id="dPlayed"[^>]* data-label-on="Watched">/);
   assert.match(block, /#dBtns \.iconBtn\.on\[data-label-on\]::after\{content:attr\(data-label-on\)\}/);
+  // On-state colour: magenta bookmark (logo square), green tick (poster watched badge), also when focused.
+  assert.match(block, /#dWatchlist\.on,[^{]*#dWatchlist\.on\.focusable\.focus\{color:#C13BD6!important\}/);
+  assert.match(block, /#dPlayed\.on,[^{]*#dPlayed\.on\.focusable\.focus\{color:#2BBB6A!important\}/);
   // Icon-only (owner 2026-11-17: no width lost); the focused one shows its name below, out of the flow.
   assert.match(block, /#dBtns \.iconBtn\[data-label\]::after\{content:attr\(data-label\);position:absolute;[^}]*opacity:0;pointer-events:none\}/);
   assert.match(block, /#dBtns \.iconBtn\[data-label\]\.focusable\.focus::after\{opacity:1\}/);
