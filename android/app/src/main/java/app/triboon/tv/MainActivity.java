@@ -3975,7 +3975,7 @@ public class MainActivity extends Activity {
         nativeAboutPoster.setScaleType(ImageView.ScaleType.CENTER_CROP);
         GradientDrawable posterBg = new GradientDrawable();
         posterBg.setColor(0xFF16101F);
-        posterBg.setCornerRadius(dp(8));
+        posterBg.setCornerRadius(dp(6));
         nativeAboutPoster.setBackground(posterBg);
         nativeAboutPoster.setClipToOutline(true);
         LinearLayout.LayoutParams posterLp = new LinearLayout.LayoutParams(dp(nativeAboutPosterDp()), Math.round(dp(nativeAboutPosterDp()) * 1.5f));
@@ -4109,9 +4109,9 @@ public class MainActivity extends Activity {
                 ph.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 GradientDrawable phBg = new GradientDrawable();
                 phBg.setColor(0xFF1A1422);
-                phBg.setCornerRadius(dp(8));
+                phBg.setCornerRadius(dp(6));
                 ph.setBackground(phBg);
-                clipRoundRect(ph, dp(8));
+                clipRoundRect(ph, dp(6));
                 item.addView(ph, new LinearLayout.LayoutParams(dp(face), Math.round(dp(face) * 4f / 3f)));
                 String photo = c.optString("photo", "");
                 if (!photo.isEmpty()) loadNativeEpisodeStill(ph, photo);
@@ -5939,13 +5939,13 @@ public class MainActivity extends Activity {
             LinearLayout cell = new LinearLayout(this);
             cell.setOrientation(LinearLayout.VERTICAL);
             cell.setPadding(dp(10), dp(6), dp(10), dp(7));
-            cell.setBackground(nativePillBg(isNow ? 0x30F3EFF7 : 0x14F3EFF7,
-                    isNow ? 0x66F3EFF7 : 0x18F3EFF7, 0));
+            // 3.5.1 (owner): crisp 6dp corners, no edge line; Now is a soft fill, like the site.
+            cell.setBackground(nativePillBg(isNow ? 0x33EDEFF3 : 0x14EDEFF3, 0x00000000, dp(6)));
             TextView when = new TextView(this);
             when.setTextColor(0xCCBFBFBF);
             when.setTextSize(9);
-            when.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-            when.setText(isNow ? "NOW" : fmtNativeClock(start));
+            when.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            when.setText(isNow ? "Now" : fmtNativeClock(start));
             cell.addView(when, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             TextView title = new TextView(this);
@@ -7525,7 +7525,7 @@ public class MainActivity extends Activity {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{0x00000000, 0x00000000});
-        d.setCornerRadius(dp(16));
+        d.setCornerRadius(dp(6));
         return d;
     }
 
@@ -7533,7 +7533,7 @@ public class MainActivity extends Activity {
         GradientDrawable d = new GradientDrawable();
         d.setShape(GradientDrawable.RECTANGLE);
         d.setColor(0x00000000);
-        d.setCornerRadius(dp(12));
+        d.setCornerRadius(dp(6));
         // Quiet Graphite (3.5.0): the same flat white ring as the web posters; the playing episode
         // keeps a faint white line so it stays findable.
         if (focused) d.setStroke(dp(3), 0xFFEDEFF3);
@@ -7713,7 +7713,7 @@ public class MainActivity extends Activity {
             still.setScaleType(ImageView.ScaleType.CENTER_CROP);
             GradientDrawable stillBg = new GradientDrawable();
             stillBg.setColor(0xFF16101F);
-            stillBg.setCornerRadius(dp(12));
+            stillBg.setCornerRadius(dp(6));
             still.setBackground(stillBg);
             still.setForeground(nativeEpisodeStillFrame(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep.current));
             still.setClipToOutline(true);

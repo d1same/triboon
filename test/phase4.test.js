@@ -4791,9 +4791,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android episode cards should show a 16:9 still that follows cover size, with a check on watched episodes and the name below');
   assert.match(androidStrings, /<string name="watched_episode">WATCHED  %1\$s<\/string>/,
     'native Android watched labels remain localized while preserving the episode tag');
-  assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused\) d\.setStroke\(dp\(3\), 0xFFEDEFF3\);[\s\S]+else if \(current\) d\.setStroke\(dp\(1\), 0x73EDEFF3\);[\s\S]+return d;/,
+  assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(6\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused\) d\.setStroke\(dp\(3\), 0xFFEDEFF3\);[\s\S]+else if \(current\) d\.setStroke\(dp\(1\), 0x73EDEFF3\);[\s\S]+return d;/,
     'native Android episode cards use the Quiet Graphite flat 3dp white focus ring (3.5.0)');
-  assert.match(android, /still\.setTag\("nativeEpisodeStill"\);[\s\S]+GradientDrawable stillBg = new GradientDrawable\(\);[\s\S]+stillBg\.setCornerRadius\(dp\(12\)\);[\s\S]+still\.setBackground\(stillBg\);[\s\S]+still\.setForeground\(nativeEpisodeStillFrame\(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep\.current\)\);[\s\S]+still\.setClipToOutline\(true\);/,
+  assert.match(android, /still\.setTag\("nativeEpisodeStill"\);[\s\S]+GradientDrawable stillBg = new GradientDrawable\(\);[\s\S]+stillBg\.setCornerRadius\(dp\(6\)\);[\s\S]+still\.setBackground\(stillBg\);[\s\S]+still\.setForeground\(nativeEpisodeStillFrame\(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep\.current\)\);[\s\S]+still\.setClipToOutline\(true\);/,
     'native Android episode thumbnails should clip and own the same contained hollow frame as the web player');
   assert.match(android, /public void updateEpisodeChoices\(String json\) \{[\s\S]+updateNativeEpisodeChoices\(json\)/,
     'web should be able to refresh native episode choices after TMDB season metadata loads');
@@ -5978,8 +5978,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'the native EPG strip must be added to the chrome directly above the seek row');
   assert.match(android, /public void setLiveEpg\(String json\) \{[\s\S]+new org\.json\.JSONArray\(json\)[\s\S]+renderNativeEpgStrip\(\)/,
     'the setLiveEpg bridge should parse the pushed programmes and render the native strip');
-  assert.match(android, /private void renderNativeEpgStrip\(\) \{[\s\S]+horizon = now \+ 2L \* 3600000L[\s\S]+isNow \? "NOW" : fmtNativeClock\(start\)/,
-    'native EPG strip should cover ~2h and mark the current programme');
+  assert.match(android, /private void renderNativeEpgStrip\(\) \{[\s\S]+horizon = now \+ 2L \* 3600000L[\s\S]+isNow \? "Now" : fmtNativeClock\(start\)/,
+    'native EPG strip should cover ~2h and mark the current programme (3.5.1: "Now", no mono capitals)');
   assert.match(android, /int maxCells = dpWidth < 600 \? 2 : 4;[\s\S]+shown < maxCells/,
     'native EPG strip should drop to 2 cells on a narrow phone (4 truncates every title)');
   assert.match(android, /return 4; \/\/ v4: native live EPG strip/,
