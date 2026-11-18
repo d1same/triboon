@@ -4180,14 +4180,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'foreground tint must route through --fg (dark only on data-light="1") with the always-black player/multiview restored to light — no raw off-white literals left');
   assert.ok(/button\.focusable:not\(\.card\):not\(\.pcard\):not\(\.railBtn\):not\(\.castCard\):not\(\.seasonCard\):not\(\.epCard\):not\(\.chCard\):not\(\.playerEpCard\)/.test(ui),
     'media tiles (cast/season/episode/channel) must be excluded from the solid button-fill rollover so they keep their poster RING like .pcard');
-  assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'triboon'")
-    && ui.includes('THEMES[name] || THEMES.triboon'),
-    'the Triboon brand theme is the default and fallback');
+  // 3.5.0 (owner pick 2026-11-17, "Quiet Graphite"): Graphite replaced Triboon gold as the default.
+  assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'graphite'")
+    && ui.includes("} catch { return 'graphite'; }")
+    && ui.includes('THEMES[name] || THEMES.graphite') && !ui.includes('THEMES[name] || THEMES.triboon'),
+    'the Graphite theme is the default and fallback');
   // Theme (colors) follows the PROFILE and syncs to the server like the other prefs, so it survives
   // updates/reinstalls — with the device-wide triboon.theme kept as the pre-login boot fallback.
   assert.match(ui, /function savePrefTheme\(name\) \{[\s\S]+localStorage\.setItem\(profilePrefKey\('theme'\), name\);[\s\S]+localStorage\.setItem\('triboon\.theme', name\);[\s\S]+syncProfilePrefsUp\(\);/,
     'saving a theme should write the per-profile (synced) key + device fallback and push to the server');
-  assert.match(ui, /function prefTheme\(\) \{[\s\S]+triboon\.profile\.\$\{S\.profile\.id\}\.theme[\s\S]+localStorage\.getItem\('triboon\.theme'\) \|\| 'triboon'/,
+  assert.match(ui, /function prefTheme\(\) \{[\s\S]+triboon\.profile\.\$\{S\.profile\.id\}\.theme[\s\S]+localStorage\.getItem\('triboon\.theme'\) \|\| 'graphite'/,
     'applyTheme should resolve the profile-scoped theme first, then the device fallback');
   assert.match(ui, /applyServerProfilePrefs\(r\.prefs\);[\s\S]+try \{ applyTheme\(\); \} catch \{\}/,
     'loading server prefs should apply the profile’s synced theme');
@@ -4196,7 +4198,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // Custom theme = ACCENTS ONLY over a fixed neutral-dark foundation: the user picks the trio,
   // everything readable (focus ring, on-accent text by luminance, glows) derives from it — a
   // custom theme can never produce an unreadable UI.
-  assert.match(ui, /const t = name === 'custom' \? \(customTheme\(prefThemeCustomColors\(\)\) \|\| THEMES\.triboon\)/,
+  assert.match(ui, /const t = name === 'custom' \? \(customTheme\(prefThemeCustomColors\(\)\) \|\| THEMES\.graphite\)/,
     'applyTheme should resolve the custom theme from the stored accent colors with a safe fallback');
   assert.match(ui, /function customTheme\(colors\) \{[\s\S]+if \(!_hexRgb\(c\)\) return null;[\s\S]+const f = _hexRgb\(colors && colors\.f\) \? colors\.f : c;[\s\S]+const onAccent = _lumaOf\(c\) > 0\.55 \? '#141414' : '#F7F5EF';[\s\S]+focus: f, focusSoft: _rgbaOf\(f, \.26\), onAccent,[\s\S]+btnPrimary: c, btnPrimaryHover: _lightenHex\(c, \.14\)/,
     'the custom theme builder derives on-accent/button tokens from the accent (luminance-aware) and the focus family from the independently-pickable focus color (falling back to the accent)');
@@ -11599,4 +11601,52 @@ test('Live TV guide inside the player: the category menu keeps a visible highlig
   assert.ok(keep >= 0 && keep < wipe, 'the old menu scroll is read before the guide is cleared');
   assert.match(body, /const keepPgCatsTop = oldPgCats \? oldPgCats\.scrollTop : 0;/);
   assert.ok(restore > attach && attach > 0, 'the new menu gets that scroll back once it is in the page');
+});
+
+test('Quiet Graphite (3.5.0): flat Graphite look, labelled buttons, other themes untouched', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('/* ===== Quiet Graphite (3.5.0');
+  assert.ok(start > 0, 'the Quiet Graphite block exists');
+  const block = ui.slice(start, ui.indexOf('@media (prefers-reduced-motion:reduce)', start));
+  // Every rule in the block is scoped to the Graphite theme, so Triboon/Ocean/Custom look as before.
+  const selectors = block.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@media[^{]+\{/g, '').match(/[^{}]+(?=\{)/g) || [];
+  assert.ok(selectors.length > 10, 'the block has rules');
+  for (const sel of selectors) {
+    for (const part of sel.split(',')) {
+      if (!part.trim()) continue;
+      assert.match(part.trim(), /^body\[data-theme="graphite"\]/, `rule must be Graphite-scoped: ${part.trim()}`);
+    }
+  }
+  // Flat: focused posters and tiles neither zoom nor lift; the ring is a zero-blur 3px line.
+  assert.match(block, /\.pcard\.focusable\.focus[^{]*\{transform:translateZ\(0\)\}/);
+  assert.match(block, /\.pcard\.focus \.art[^{]*\{transform:none;box-shadow:0 0 0 3px var\(--focus\)!important\}/);
+  assert.match(block, /\.btn\.focusable\.focus,[^{]*\.cbtn\.focusable\.focus\{box-shadow:none!important\}/);
+  assert.ok(!/transition/.test(block), 'no new transitions (TV focus must snap)');
+  // The Graphite theme carries no focus glow.
+  assert.match(ui, /label: 'Graphite'[\s\S]{0,1400}artFocusGlow: 'transparent'[\s\S]{0,200}artFocusTileGlow: 'transparent'/);
+  // Title page icon buttons say what they do; same buttons, same order (labels come from data-label).
+  for (const [id, lab] of [['dSources', 'Sources'], ['dWatchlist', 'Watchlist'], ['dPlayed', 'Watched'], ['dTrailer', 'Trailer']]) {
+    assert.match(ui, new RegExp(`<button [^>]*id="${id}"[^>]* data-label="${lab}">`), `${id} carries its label`);
+  }
+  // Icon-only (owner 2026-11-17: no width lost); the focused one shows its name below, out of the flow.
+  assert.match(block, /#dBtns \.iconBtn\[data-label\]::after\{content:attr\(data-label\);position:absolute;[^}]*opacity:0;pointer-events:none\}/);
+  assert.match(block, /#dBtns \.iconBtn\[data-label\]\.focusable\.focus::after\{opacity:1\}/);
+  assert.ok(!/#dBtns \.iconBtn[^{]*\{[^}]*width:auto/.test(block), 'title icon buttons keep their compact width');
+  // TV row slide: short, Graphite + TV only, off under reduced motion, and every new press settles the
+  // previous slide first so held presses never queue.
+  assert.match(ui, /const ROW_SLIDE_MS = 120;/);
+  assert.match(ui, /function rowSlideOk\(\) \{\s*if \(!document\.body\.classList\.contains\('tv'\) \|\| document\.body\.dataset\.theme !== 'graphite'\) return false;[\s\S]{0,200}prefers-reduced-motion: reduce/);
+  assert.match(ui, /function rowScrollTo\(row, left\) \{\s*settleRowSlide\(row\);/);
+  assert.match(ui, /function scrollHorizontalRowIntoView\(el\) \{[\s\S]{0,120}settleRowSlide\(row\);/);
+  assert.match(ui, /if \(Math\.abs\(delta\) > 2\) rowScrollTo\(row, Math\.max\(0, row\.scrollLeft \+ delta\)\);/);
+  assert.match(block, /#dBtns:has\(\.focus\) \.btn\.primary:not\(\.focus\)/, 'Play steps back while another button is focused');
+  // Player: the focused control shows its short name, positioned so the bar never changes height.
+  for (const id of ['ccBtn', 'audBtn', 'qualBtn', 'back10', 'fwd30', 'fsBtn']) {
+    assert.match(ui, new RegExp(`<button [^>]*id="${id}"[^>]* data-label="[^"]+">`), `${id} carries a short label`);
+  }
+  assert.match(block, /#osd \.cbtn\[data-label\]::after\{content:attr\(data-label\);position:absolute;[^}]*opacity:0;pointer-events:none\}/);
+  assert.match(block, /#osd \.cbtn\[data-label\]\.focusable\.focus::after\{opacity:1\}/);
+  // Row labels stay on the text-size token (no font shorthand that would pin a size).
+  assert.match(block, /\.row h2[^{]*\{\s*font-family:"Sora"[^}]*text-transform:none/);
+  assert.ok(!/\.row h2[^{]*\{[^}]*font:/.test(block), 'row labels keep --ctSection sizing');
 });
