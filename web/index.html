@@ -7780,10 +7780,17 @@ const HOME_CATALOG_TTL = 30 * 60 * 1000;
 function homeCatalogKey() {
   return [S.serverInfo && S.serverInfo.tmdb ? 'tmdb' : 'none', S.maxLevel ?? 4, S.profile ? S.profile.id : 'default', todayStr()].join(':');
 }
+// The catalog key without the date: same server, profile and maturity level.
+function homeCatalogBaseKey() { return homeCatalogKey().split(':').slice(0, 3).join(':'); }
 function cachedHomeCatalogRows() {
   const key = homeCatalogKey();
-  if (S._homeCatalogKey !== key || !Array.isArray(S._homeCatalogRows)) return [];
-  return S._homeCatalogRows;
+  if (S._homeCatalogKey === key && Array.isArray(S._homeCatalogRows) && S._homeCatalogRows.length) return S._homeCatalogRows;
+  // 3.5.1 (owner, phone): Home sometimes showed ONLY Continue Watching until the app was restarted.
+  // A failed load (phone waking with no network yet) or a new day (the key holds the date) left no
+  // rows "for now". Keep showing the last good rows for this profile until a new load succeeds.
+  const good = S._homeCatalogGood;
+  if (good && good.base === homeCatalogBaseKey() && good.rows.length) return good.rows;
+  return [];
 }
 function homeCatalogFresh() {
   return cachedHomeCatalogRows().length && Date.now() - (S._homeCatalogAt || 0) < HOME_CATALOG_TTL;
@@ -7797,13 +7804,33 @@ function refreshHomeCatalogRows() {
   S._homeCatalogJob = loadHomeCatalogRows()
     .then((rows) => {
       S._homeCatalogRows = rows || [];
-      S._homeCatalogAt = Date.now();
-      return S._homeCatalogRows;
+      if (S._homeCatalogRows.length) {
+        S._homeCatalogAt = Date.now();
+        S._homeCatalogGood = { base: homeCatalogBaseKey(), rows: S._homeCatalogRows };
+        S._homeCatalogRetryMs = 0;
+      } else retryHomeCatalogSoon(); // every catalog request failed: try again, do not wait for a restart
+      return cachedHomeCatalogRows();
     })
-    .catch((e) => { toast('TMDB error: ' + e.message); return []; })
+    .catch((e) => { toast('TMDB error: ' + e.message); retryHomeCatalogSoon(); return cachedHomeCatalogRows(); })
     .finally(() => { S._homeCatalogJob = null; });
   return S._homeCatalogJob;
 }
+// Retry an empty or failed catalog load: 10 s, 20 s, 40 s ... up to 2 minutes, while Home is open.
+function retryHomeCatalogSoon() {
+  if (!S.serverInfo || !S.serverInfo.tmdb || S._homeCatalogRetryT) return;
+  const wait = Math.min(120000, Math.max(10000, (S._homeCatalogRetryMs || 5000) * 2));
+  S._homeCatalogRetryMs = wait;
+  S._homeCatalogRetryT = setTimeout(() => {
+    S._homeCatalogRetryT = null;
+    if (S.view === 'home' && document.visibilityState !== 'hidden') scheduleHomeCatalogRefresh();
+  }, wait);
+}
+// Coming back to the app (phone unlocked, app reopened from the background): reload stale or
+// missing catalog rows right away instead of waiting for the next retry.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || S.view !== 'home' || !S.serverInfo || !S.serverInfo.tmdb) return;
+  if (!homeCatalogFresh()) scheduleHomeCatalogRefresh();
+});
 function scheduleHomeCatalogRefresh() {
   if (!S.serverInfo.tmdb || homeCatalogFresh()) return;
   if (S._homeCatalogScheduled) return;

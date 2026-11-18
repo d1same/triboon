@@ -11747,3 +11747,40 @@ test('Boot splash waits for the logo build-up to finish (3.5.0, owner), capped a
   assert.match(ui, /#appLoader:not\(\.go\) \.tbMark\{visibility:hidden\}/, 'plain ink before the build starts');
   assert.match(ui, /\$\('appLoader'\)\._logoWait = false;/, 'the splash re-armed after sign-in can close again');
 });
+
+test('Home catalog rows survive a failed load and a new day, and a failed load retries (3.5.1, owner phone)', async () => {
+  const vm = require('vm');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('const HOME_CATALOG_TTL');
+  const block = ui.slice(start, ui.indexOf('function homePersonalSeed(', start));
+  let day = '2026-11-18';
+  let next = [];
+  const timers = [];
+  const ctx = {
+    S: { serverInfo: { tmdb: true }, maxLevel: 4, profile: { id: 'p1' }, view: 'home' },
+    todayStr: () => day,
+    loadHomeCatalogRows: async () => next,
+    toast: () => {},
+    setTimeout: (f, ms) => { timers.push(ms); return timers.length; },
+    requestIdleCallback: (f) => f(),
+    refreshHomeWhenSettled: () => {},
+    document: { visibilityState: 'visible', addEventListener: () => {} },
+  };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(block, ctx);
+  const good = [{ name: 'Trending today', items: [{ key: 'a' }] }];
+  next = good;
+  assert.equal((await vm.runInContext('refreshHomeCatalogRows()', ctx)).length, 1, 'a good load is cached');
+  ctx.S._homeCatalogAt = 0; // stale: allow another load
+  next = [];
+  const afterFail = await vm.runInContext('refreshHomeCatalogRows()', ctx);
+  assert.equal(afterFail.length, 1, 'a load where every request failed keeps the last good rows');
+  assert.equal(timers[timers.length - 1], 10000, 'and retries in 10 s, not only after an app restart');
+  day = '2026-11-19';
+  assert.equal(vm.runInContext('cachedHomeCatalogRows()', ctx).length, 1, 'a new day keeps the last good rows until a new load lands');
+  ctx.S.profile = { id: 'p2' };
+  assert.equal(vm.runInContext('cachedHomeCatalogRows()', ctx).length, 0, 'another profile never sees them');
+  assert.match(ui, /document\.addEventListener\('visibilitychange', \(\) => \{\s*if \(document\.visibilityState !== 'visible' \|\| S\.view !== 'home'[\s\S]{0,120}if \(!homeCatalogFresh\(\)\) scheduleHomeCatalogRefresh\(\);/,
+    'coming back to the app reloads missing rows');
+});
