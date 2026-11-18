@@ -11699,6 +11699,8 @@ test('Quiet Graphite polish (3.5.0): no amber capitals, quiet credits, calmer pa
   assert.match(block, /#hero \.eyebrow,[^{]*\.dashEyebrow,[^{]*\.prefTabDivider span\{\s*font-family:"Sora"[^}]*text-transform:none;color:var\(--muted\)\}/);
   assert.match(block, /#dMeta \.rating,[^{]*\.metaLine \.rating\{color:var\(--text\)\}/);
   assert.match(block, /\.crewLink\{color:var\(--text\)\}/);
+  // Every picture uses the buttons' crisp 6px corner (owner, 3.5.0).
+  assert.match(block, /:is\(\.pcard \.art,\.card,\.seasonCard \.art,\.epCard,[^)]*\.castCard \.ph[^)]*\)\{border-radius:6px!important\}/);
   // A long one-line cast name must not widen its card (owner saw one face much bigger on the Shield).
   assert.match(block, /\.castCard\{display:flex;flex-direction:column;justify-content:flex-start;align-self:flex-start;min-width:0\}/);
   assert.match(block, /\.epCard\{\s*display:flex;[^}]*min-width:0\}/);

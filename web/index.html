@@ -4043,6 +4043,11 @@ body[data-theme="graphite"] .castCard:hover .ph,body[data-theme="graphite"] .cas
 body[data-theme="graphite"] .epCard:hover,body[data-theme="graphite"] .epCard.focus{box-shadow:0 0 0 3px var(--focus)!important}
 /* Cast cards line up: a button centres its content vertically, so a two-line name or role pushed
    that face up. Pin content to the top, and keep name and role to one line each. */
+/* Crisp 6px corners on every picture too (owner, 3.5.0): posters, wide cards, seasons, episodes,
+   cast faces, channels, player episodes, music and audiobook covers — the same shape as the buttons.
+   The focus ring is a box-shadow, so it follows the corner. */
+body[data-theme="graphite"] :is(.pcard .art,.card,.seasonCard .art,.epCard,.epCard .still,.castCard .ph,.pPhoto,.thumb,
+  .chCard .chLogo,.playerEpCard,.playerEpCard .peStill,.abCard .art,.mCard .art){border-radius:6px!important}
 body[data-theme="graphite"] .castCard{display:flex;flex-direction:column;justify-content:flex-start;align-self:flex-start;min-width:0}
 /* min-width:0 — a one-line name is a nowrap box, so a long name ("Philip Seymour Hoffman") made its
    card's minimum width the name's width and that face grew bigger than the rest. The card now keeps
