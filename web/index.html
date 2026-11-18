@@ -4162,6 +4162,18 @@ body[data-theme="graphite"] .srcRow .srcMeta{font:600 15px "Sora",system-ui,sans
 body[data-theme="graphite"] .srcRow .chip{font:600 12px "Albert Sans",system-ui,sans-serif;letter-spacing:0;text-transform:none;color:rgba(var(--fg),.7)}
 body[data-theme="graphite"] .srcRow .chip.auto{color:var(--text)}
 body[data-theme="graphite"] .srcRow .chip.auto::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:#C13BD6;margin-right:6px;vertical-align:1px}
+/* Near-black buttons need an edge to read on dark art: a faint 1px hairline on every control that
+   is not selected (selected = white fill, the main action = magenta, neither gets the line). */
+body[data-theme="graphite"] :is(.iconBtn,.btn:not(.primary),.seasonTab,.sizePick button,.qToggle,.cbtn):not(.focus):not(:hover):not(:focus-visible){
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.10)!important}
+/* Rating / year / genre line: "★ 8.0" in white, quiet grey dots, the age rating (R, PG-13, TV-14) in
+   a small crisp outlined tag. Credits: the label ("Created by") quiet grey, the names white. */
+body[data-theme="graphite"] #dMeta .rating,body[data-theme="graphite"] .metaLine .rating{color:var(--text);font-weight:700}
+body[data-theme="graphite"] #dMeta .dot,body[data-theme="graphite"] .metaLine .dot{color:rgba(var(--fg),.35);margin:0 4px}
+body[data-theme="graphite"] #dMeta .cert,body[data-theme="graphite"] .metaLine .cert{display:inline-block;padding:0 7px;border:1px solid rgba(var(--fg),.55);
+  border-radius:3px;font:600 .82em/1.55 "Sora",system-ui,sans-serif;letter-spacing:.02em;vertical-align:1px}
+body[data-theme="graphite"] #dCrew b{color:var(--muted);font-weight:500}
+body[data-theme="graphite"] #dCrew .crewLink{color:var(--text);font-weight:600}
 /* Quality badge: thin outline mono, reads as info, not a button. */
 body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px solid rgba(var(--fg),.28);border-radius:6px;
   font-weight:600;text-shadow:none}
@@ -9270,7 +9282,7 @@ function metaLineHtml(it, d) {
   const parts = [];
   const detailRating = d && Number.isFinite(+d.vote_average) && +d.vote_average > 0 ? (+d.vote_average).toFixed(1) : '';
   const rating = detailRating || ((it && it.rating && it.rating !== '—') ? String(it.rating).replace(/^TMDB\s+/i, '') : '');
-  if (rating) parts.push(`<span class="rating">★ TMDB ${esc(rating)}</span>`);
+  if (rating) parts.push(`<span class="rating">★ ${esc(rating)}</span>`);
   // Prefer the focused item's OWN year (same source as the title) so the async detail-fetch pass can
   // never re-derive a different/late year onto the backdrop — the year now stays atomic with the title.
   const year = (it && it.year) || (d ? String(d.release_date || d.first_air_date || '').slice(0, 4) : '');
@@ -9288,7 +9300,7 @@ function metaLineHtml(it, d) {
   if (d && it) {
     try { cert = certOf(d, tmdbKind); } catch {}
   }
-  if (cert) parts.push(esc(cert));
+  if (cert) parts.push(`<span class="cert">${esc(cert)}</span>`);
   return parts.length ? `<span class="metaLine">${parts.map((p, i) => i ? `<span class="dot">·</span> ${p}` : p).join(' ')}</span>` : '';
 }
 // Title-logo art (owner-approved redesign, 2026-08-05): swap the text title for the release's
@@ -10888,7 +10900,7 @@ async function openDetail(it, push = true, opts = {}) {
     }
 
     // Meta line with dot separators (Plex style).
-    const parts = [`<span class="rating">★ TMDB ${(d.vote_average || 0).toFixed(1)}</span>`];
+    const parts = [`<span class="rating">★ ${(d.vote_average || 0).toFixed(1)}</span>`];
     const year = (d.release_date || d.first_air_date || '').slice(0, 4);
     if (year) parts.push(year);
     if (it.type === 'movie' && d.runtime) {
@@ -10899,7 +10911,7 @@ async function openDetail(it, push = true, opts = {}) {
     const g = (d.genres || []).slice(0, 2).map((x) => esc(x.name)).join(' / ');
     if (g) parts.push(g);
     const cert = certOf(d, it.type);
-    if (cert) { parts.push(esc(cert)); it.cert = cert; if (detailPlayTarget) detailPlayTarget.cert = cert; }
+    if (cert) { parts.push(`<span class="cert">${esc(cert)}</span>`); it.cert = cert; if (detailPlayTarget) detailPlayTarget.cert = cert; }
     // Deep links (typed URL / account watchlist) bypass the filtered rows — bounce a
     // restricted profile off the page entirely the moment the real rating is known.
     if (!levelAllows(cert) || d.adult) {
@@ -26344,7 +26356,7 @@ const THEMES = {
     field: 'rgba(11,8,18,.76)', soft: 'rgba(34,25,52,.62)', panel: 'rgba(20,14,30,.96)',
     focus: '#EDEFF3', focusSoft: 'rgba(237,239,243,.42)', onAccent: '#14161A',
     success: '#7CE6A0', danger: '#FF8D8D',
-    btn: 'rgba(6,6,8,.55)', btnHover: '#EDEFF3', btnSelected: 'rgba(237,239,243,.26)', btnSelectedHover: '#F6F8FA', btnPrimary: '#EDEFF3', btnPrimaryHover: '#FFFFFF', btnFocusText: '#14161A',
+    btn: 'rgba(8,8,10,.72)', btnHover: '#EDEFF3', btnSelected: 'rgba(237,239,243,.26)', btnSelectedHover: '#F6F8FA', btnPrimary: '#EDEFF3', btnPrimaryHover: '#FFFFFF', btnFocusText: '#14161A',
     artFocusLine: 'rgba(237,239,243,.90)', artFocusGlow: 'transparent', artFocusTileLine: 'rgba(237,239,243,.85)', artFocusTileBorder: 'rgba(237,239,243,.70)', artFocusTileGlow: 'transparent',
     scrim: 'linear-gradient(0deg,rgba(11,8,18,.85) 0%,rgba(11,8,18,.30) 24%,rgba(11,8,18,.04) 50%)',
   },
