@@ -4371,7 +4371,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer choice rows should scroll inside the bounded sheet instead of growing offscreen');
   assert.match(android, /private java\.util\.ArrayList<View> nativeSheetFocusableRows\(\)[\s\S]+nativeSheetRows != null \? nativeSheetRows : nativeSheet[\s\S]+private void focusNativeSheetRow\([\s\S]+scrollTo\(0, Math\.max\(0, row\.getTop\(\) - dp\(8\)\)\)/,
     'native ExoPlayer D-pad focus should keep the highlighted sheet row visible');
-  assert.match(android, /private GradientDrawable nativePanelBg\(\) \{[\s\S]+new int\[\]\{0xF0181A1D, 0xF00D0F12\}[\s\S]+d\.setCornerRadius\(dp\(6\)\);[\s\S]+d\.setStroke\(dp\(1\), 0x12FFFFFF\)/, // 3.5.0 Graphite: crisp 6dp corner
+  assert.match(android, /private GradientDrawable nativePanelBg\(\) \{[\s\S]+new int\[\]\{0xC8181A1D, 0xC80D0F12\}[\s\S]+d\.setCornerRadius\(dp\(6\)\);[\s\S]+d\.setStroke\(0, 0x00000000\)/, // 3.5.0 Graphite: crisp 6dp corner
     'native ExoPlayer option sheets should use compact graphite panels instead of bright purple glass');
   assert.match(android, /private GradientDrawable nativeSheetRowBg\(boolean focused, boolean selected\) \{[\s\S]+focused[\s\S]+new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+selected[\s\S]+new int\[\]\{0x29EDEFF3, 0x29EDEFF3\}[\s\S]+d\.setStroke\(0, 0x00000000\)/, // 3.5.0 Graphite: white focus, grey chosen, no gold
     'native ExoPlayer sheet focused and selected rows should be visually distinct');
@@ -6028,8 +6028,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android guide icon should use the Lucide list-video shape');
   assert.match(audioIcon, /M2,10 V13 M6,6 V17 M10,3 V21 M14,8 V15 M18,5 V18 M22,10 V13/,
     'Android audio icon should use the Lucide audio-lines shape');
-  assert.match(ccIcon, /M7,15 H11 M15,15 H17 M7,11 H9 M13,11 H17/,
-    'Android CC icon should use the Lucide closed-caption shape');
+  assert.match(ccIcon, /M11\.35,10\.4 A2\.3,2\.3 0,1 0,11\.35 13\.6 M17\.15,10\.4 A2\.3,2\.3 0,1 0,17\.15 13\.6/,
+    'Android CC icon shows the familiar CC letters in a box (3.5.0, owner)');
   assert.match(qualityIcon, /M10,12 H6 M10,15 V9 M6,15 V9[\s\S]+M14,9\.5/,
     'Android HD icon should use the Lucide hd shape');
   assert.match(rewindIcon, /M3,2 V8 H9[\s\S]+M21,12 A9,9 0,0 0,6 5\.3 L3,8/,
@@ -6237,8 +6237,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native right-side seek timer should have enough reserved width for movie durations');
   assert.match(android, /nativeChrome\.setPadding\(dp\(34\), dp\(12\), dp\(34\), dp\(18\)\)/,
     'native player seek bar should use wider horizontal space');
-  assert.match(android, /dp\(primary \? 46 : 36\)/,
-    'native player buttons should stay compact and avoid clipped circles on TV');
+  assert.match(android, /dp\(primary \? 40 : 32\)/,
+    'native player buttons stay compact (3.5.0 owner: smaller backgrounds, same icon size)');
   assert.doesNotMatch(android, /setScale[XY]\(hasFocus/,
     'native player focus should not scale buttons and clip the circle');
   assert.match(android, /private void updateNativeSheetLayout\(\) \{[\s\S]+lp\.width = nativeSheetWidthPx\(\);[\s\S]+lp\.gravity = android\.view\.Gravity\.END \| android\.view\.Gravity\.BOTTOM;[\s\S]+lp\.setMargins\(side, 0, side, nativeSheetBottomMarginPx\(\)\);[\s\S]+nativeSheet\.setLayoutParams\(lp\);[\s\S]+\}/,

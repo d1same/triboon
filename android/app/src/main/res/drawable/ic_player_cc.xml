@@ -3,6 +3,8 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
+    <!-- 3.5.0 (owner: "make the subtitle button a bit better"): the familiar "CC" mark in a
+         rounded box, clearer at TV distance than the old two dashed lines. -->
     <path
         android:fillColor="@android:color/transparent"
         android:pathData="M5,5 H19 A2,2 0,0 1,21 7 V17 A2,2 0,0 1,19 19 H5 A2,2 0,0 1,3 17 V7 A2,2 0,0 1,5 5"
@@ -12,7 +14,7 @@
         android:strokeWidth="1.8" />
     <path
         android:fillColor="@android:color/transparent"
-        android:pathData="M7,15 H11 M15,15 H17 M7,11 H9 M13,11 H17"
+        android:pathData="M11.35,10.4 A2.3,2.3 0,1 0,11.35 13.6 M17.15,10.4 A2.3,2.3 0,1 0,17.15 13.6"
         android:strokeColor="#FFFFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"

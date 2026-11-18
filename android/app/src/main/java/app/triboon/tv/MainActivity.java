@@ -3947,10 +3947,10 @@ public class MainActivity extends Activity {
     private GradientDrawable nativePanelBg() {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xF0181A1D, 0xF00D0F12});
+                new int[]{0xC8181A1D, 0xC80D0F12}); // 3.5.0 owner: more see-through
         d.setShape(GradientDrawable.RECTANGLE);
         d.setCornerRadius(dp(6));
-        d.setStroke(dp(1), 0x12FFFFFF);
+        d.setStroke(0, 0x00000000); // 3.5.0 owner: no border
         return d;
     }
 
@@ -4418,14 +4418,15 @@ public class MainActivity extends Activity {
         b.setClickable(true);
         b.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         b.setTag(iconRes);
-        b.setPadding(dp(primary ? 9 : 8), dp(primary ? 9 : 8), dp(primary ? 9 : 8), dp(primary ? 9 : 8));
+        // 3.5.0 owner: smaller button backgrounds, same icon size (padding shrinks with the box).
+        b.setPadding(dp(primary ? 8 : 6), dp(primary ? 8 : 6), dp(primary ? 8 : 6), dp(primary ? 8 : 6));
         b.setScaleType(ImageButton.ScaleType.CENTER_INSIDE);
         b.setCropToPadding(false);
         b.setClipToOutline(false);
         b.setBackground(nativeButtonBg(false, primary));
         setNativeButtonIcon(b, iconRes, primary, false);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                dp(primary ? 46 : 36), dp(primary ? 46 : 36));
+                dp(primary ? 40 : 32), dp(primary ? 40 : 32));
         lp.rightMargin = dp(8);
         b.setLayoutParams(lp);
         b.setOnFocusChangeListener((v, hasFocus) -> {
