@@ -5030,8 +5030,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer should show the controller shade and top metadata cluster with the controls');
   assert.match(android, /nativeControlShade\.setVisibility\(View\.GONE\);[\s\S]+nativeMetaBar\.setVisibility\(View\.GONE\);[\s\S]+nativeChrome\.setVisibility\(View\.GONE\);/,
     'native ExoPlayer should hide the controller shade and metadata bar with the controls');
-  assert.match(android, /private GradientDrawable nativeButtonBg\(boolean focused, boolean primary\) \{[\s\S]+new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+new int\[\]\{0x9E18181C, 0x9E18181C\}[\s\S]+d\.setCornerRadius\(dp\(6\)\);/,
-    'native ExoPlayer buttons use the site button: see-through near-black, crisp 6dp, fully light on focus (3.5.0 Graphite)');
+  assert.match(android, /private GradientDrawable nativeButtonBg\(boolean focused, boolean primary\) \{[\s\S]+new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+new int\[\]\{0x18EDEFF3, 0x18EDEFF3\}[\s\S]+d\.setCornerRadius\(dp\(6\)\);/,
+    'native ExoPlayer buttons use the site button: faint see-through fill, crisp 6dp, fully light on focus (3.5.0 Graphite)');
   assert.match(android, /nativeChrome\.setPadding\(dp\(34\), dp\(12\), dp\(34\), dp\(18\)\);[\s\S]+controls\.setPadding\(0, dp\(18\), 0, 0\);/,
     'native ExoPlayer control row should balance the play button spacing above and below');
   assert.match(android, /FrameLayout\.LayoutParams chromeLp = new FrameLayout\.LayoutParams\([\s\S]+android\.view\.Gravity\.BOTTOM\);[\s\S]+chromeLp\.setMargins\(0, 0, 0, dp\(28\)\);/,
@@ -6000,7 +6000,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player D-pad focus should skip disabled controls');
   assert.match(android, /setNativeButtonIcon\(ImageButton b, int iconRes, boolean primary, boolean focused\) \{[\s\S]+!b\.isEnabled\(\) \? 0x88EDEFF3 : \(focused \? 0xFF14161A : 0xFFEDEFF3\)/,
     'native player icons should turn dark when the focused button switches to light mode');
-  assert.match(android, /focused[\s\S]+\? new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+: new int\[\]\{0x9E18181C, 0x9E18181C\}/,
+  assert.match(android, /focused[\s\S]+\? new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+: new int\[\]\{0x18EDEFF3, 0x18EDEFF3\}/,
     'native player buttons should use a very transparent fill normally and full light fill while focused');
   // CC/audio enabled-state is LATCHED per playback: a server-seek (remux/transcode) respawns the
   // stream and options momentarily clear — without the latch the buttons dimmed→undimmed on every

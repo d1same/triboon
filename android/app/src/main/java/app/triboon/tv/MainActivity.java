@@ -4488,7 +4488,7 @@ public class MainActivity extends Activity {
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 focused
                         ? new int[]{0xFFEDEFF3, 0xFFEDEFF3}
-                        : new int[]{0x9E18181C, 0x9E18181C}); // Graphite 3.5.0: site button fill rgba(24,24,28,.62)
+                        : new int[]{0x18EDEFF3, 0x18EDEFF3}); // faint see-through fill (owner kept it, 3.5.0)
         d.setShape(GradientDrawable.RECTANGLE);
         d.setCornerRadius(dp(6)); // crisp corner, same as every site button
         d.setStroke(0, 0x00000000);
