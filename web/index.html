@@ -4078,6 +4078,10 @@ body[data-theme="graphite"] :is(.lcat.focus,.lcat:focus,.pgCat.focus,.pgCat:focu
 body[data-theme="graphite"] :is(.lcat.focus,.lcat:focus,.pgCat.focus,.pgCat:focus,.chGroupHead.focus,
   .gRow.focus .gCh,.pgRow.focus .gCh,.pgRow:focus .gCh) *{color:#14161A!important}
 body[data-theme="graphite"] :is(.lcat,.pgCat,.chGroupHead){border-radius:6px}
+/* Guide rows are <button>s, so the global "focused button = white" rule filled the WHOLE row white
+   and the white programme titles vanished (owner, Shield in-player guide). The row keeps a soft
+   wash; only its channel cell (above) turns white. */
+body[data-theme="graphite"] :is(.pgRow,.gRow):is(.focus,:focus){background:rgba(237,239,243,.07)!important;color:var(--text)!important}
 /* Live TV header buttons (Multiview / Channels): the site button, no edge line, white on focus. */
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn){border:0!important;border-radius:6px!important}
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn):is(.focus,:focus,:hover){background:var(--btnHover)!important;color:var(--btnFocusText)!important;box-shadow:none!important}
