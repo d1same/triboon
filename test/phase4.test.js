@@ -6267,8 +6267,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'the linked OO draws itself with stroke-dashoffset only');
   assert.match(ui, /#playerLoader \.loadMark svg:not\(\.tbMark\)\{display:none\}/,
     'the hidden legacy loader ring rule must not hide the new wordmark');
-  assert.doesNotMatch(ui, /animationend|animationiteration|getAnimations\(/,
-    'nothing in the app waits for the logo animation to finish');
+  // 3.5.0 (owner, 2026-11-17): the START-UP splash now waits for the build-up to finish (capped
+  // 2.5 s, see hideAppLoaderAfterLogo and its own test). The movie loader still never waits.
+  assert.doesNotMatch(ui, /animationend|animationiteration/,
+    'no animation-event waits anywhere');
+  assert.equal((ui.match(/getAnimations\(/g) || []).length, 1,
+    'only the start-up splash (hideAppLoaderAfterLogo) waits for the logo; Play never does');
   const tbIds = [...ui.matchAll(/ id="(tb[A-Za-z0-9]+)"/g)].map((m) => m[1]);
   assert.ok(tbIds.length >= 6 && new Set(tbIds).size === tbIds.length,
     `the two inline wordmarks need unique mask/clip ids (${tbIds.join(', ')})`);
@@ -11691,4 +11695,14 @@ test('Quiet Graphite polish (3.5.0): no amber capitals, quiet credits, calmer pa
   assert.match(block, /#colorBase\{opacity:\.45\}/);
   assert.match(block, /#colorGlow\{opacity:\.3\}/);
   assert.match(block, /#prefs \.setGrid\{align-content:start\}/, 'settings rows pack to the top, no stretched gaps');
+});
+
+test('Boot splash waits for the logo build-up to finish (3.5.0, owner), capped and reduced-motion safe', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const fn = ui.slice(ui.indexOf('function hideAppLoaderAfterLogo()'), ui.indexOf('function hideAppLoaderAfterLogo()') + 1400);
+  assert.match(fn, /getAnimations\(\{ subtree: true \}\)/, 'waits for the real animations, not a guessed time');
+  assert.match(fn, /Number\.isFinite\(t\.endTime\)/, 'infinite loops (tint drift, progress lane) never hold the splash');
+  assert.match(fn, /setTimeout\(r, 2500\)/, 'a stuck animation can never hold the app longer than 2.5 s');
+  assert.match(ui, /perfMark\('boot-ready'[\s\S]{0,200}hideAppLoaderAfterLogo\(\);/, 'the app path closes the splash through it');
+  assert.match(ui, /function showGate\(which\) \{\s*if \(which\) hideAppLoaderAfterLogo\(\);/, 'sign-in screens wait for the logo too');
 });

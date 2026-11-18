@@ -6377,7 +6377,7 @@ function adaptRowWindows() {
 window.addEventListener('resize', () => { clearTimeout(adaptRowWindows._t); adaptRowWindows._t = setTimeout(applyCoverSize, 80); });
 window.addEventListener('orientationchange', () => { clearTimeout(adaptRowWindows._t); adaptRowWindows._t = setTimeout(applyCoverSize, 80); });
 function showGate(which) {
-  if (which) $('appLoader').classList.add('hide'); // gate screens: drop the boot loader (app path hides it after content loads)
+  if (which) hideAppLoaderAfterLogo(); // gate screens: drop the boot loader once the logo has built (app path hides it after content loads)
   if (which === 'login') setLogin2faMode(null);
   document.body.classList.toggle('authOpen', !!which);
   if (which) ensureGateArt(); else stopGateArtCycle();
@@ -33384,8 +33384,30 @@ function bootReady() {
   maybePrepareFocusedHomeCard();
   perfMark('boot-ready', { view: S.view });
   signalTvReadyOnce('boot-ready');
-  setTimeout(() => $('appLoader').classList.add('hide'), 0);
-  requestAnimationFrame(() => requestAnimationFrame(() => $('appLoader').classList.add('hide')));
+  hideAppLoaderAfterLogo();
+}
+// 3.5.0 (owner, 2026-11-17): on app start the splash closes when Home is ready OR when the
+// wordmark build-up has finished, whichever is LATER — so the new logo is always seen whole.
+// No extra time is added on top: a slow boot is not delayed at all, and the wait is capped at
+// 1.8 s after the page started. Reduced motion shows the finished mark, so no wait.
+function hideAppLoaderAfterLogo() {
+  const loader = $('appLoader');
+  const hide = () => loader.classList.add('hide');
+  if (loader.classList.contains('hide') || loader._logoWait) return;
+  // Wait for the wordmark's own (finite) build animations, not a guessed time: the web splash can
+  // start later than the page on TV shells. Infinite loops (tint drift, progress lane) are ignored,
+  // and a 2.5 s cap means a stuck animation can never hold the app.
+  let finite = [];
+  try {
+    finite = loader.getAnimations({ subtree: true }).filter((a) => {
+      const t = a.effect && a.effect.getComputedTiming && a.effect.getComputedTiming();
+      return t && Number.isFinite(t.endTime) && a.playState !== 'finished';
+    });
+  } catch {}
+  if (!finite.length) { setTimeout(hide, 0); requestAnimationFrame(() => requestAnimationFrame(hide)); return; }
+  loader._logoWait = true;
+  Promise.race([Promise.all(finite.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 2500))])
+    .then(hide);
 }
 async function loadWatchlist() {
   try { const wl = await api('/api/watchlist'); S.watchlist = wl; S.watchlistMap = Object.fromEntries(wl.map((w) => [w.key, w])); }
