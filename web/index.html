@@ -4098,6 +4098,22 @@ body[data-theme="graphite"] #colorGlow{opacity:.3}
 body[data-theme="graphite"] #settings .setGrid,body[data-theme="graphite"] #prefs .setGrid{align-content:start}
 body[data-theme="graphite"] #settings .panel,body[data-theme="graphite"] #prefs .panel{padding:28px 0 32px}
 body[data-theme="graphite"] #settings .panel h2,body[data-theme="graphite"] #prefs .panel h2{font-weight:700;margin-bottom:8px}
+/* Sign-in: sentence-style labels, a real "Sign in with your phone" button (Quick Connect) under a
+   quiet "or", and a calm backdrop caption. */
+body[data-theme="graphite"] .gateCard label{font:600 13px "Sora",system-ui,sans-serif;letter-spacing:.01em;text-transform:none}
+body[data-theme="graphite"] #gateLoginForm .err:empty{min-height:0;margin-top:0}
+body[data-theme="graphite"] .gateCard .qcAlt{margin-top:16px}
+body[data-theme="graphite"] .gateCard .qcOr{display:flex;align-items:center;gap:14px;font:600 11px "Sora",system-ui,sans-serif;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
+body[data-theme="graphite"] .gateCard .qcOr::before,body[data-theme="graphite"] .gateCard .qcOr::after{content:"";flex:1;height:1px;background:rgba(var(--fg),.14)}
+body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn{width:100%;justify-content:center;gap:10px;border-radius:12px;
+  background:rgba(255,255,255,.08);color:var(--text);font:600 16px "Albert Sans",system-ui,sans-serif;padding:14px 20px;text-decoration:none;filter:none}
+body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn svg{width:20px;height:20px}
+body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn.focus,body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn:focus{background:var(--btnHover);color:var(--btnFocusText);text-decoration:none;filter:none}
+body[data-theme="graphite"] .gateCard .qcAlt .altSub{margin-top:10px}
+body[data-theme="graphite"] #gateLoginForm:has(#qcStart.focus) #liGo,
+body[data-theme="graphite"] #gateLoginForm:has(#qcStart:focus) #liGo{background:rgba(255,255,255,.12)!important;color:var(--text)!important}
+body[data-theme="graphite"] #gateArtCaption{font-family:"Sora",system-ui,sans-serif;font-weight:600;letter-spacing:.01em;text-transform:none;color:var(--muted)}
 /* Quality badge: thin outline mono, reads as info, not a button. */
 body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px solid rgba(var(--fg),.28);border-radius:6px;
   font-weight:600;text-shadow:none}
@@ -4151,15 +4167,16 @@ body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px
     </div>
     <button class="btn primary" id="liGo" type="submit">Sign in</button>
     <div class="err" id="liErr"></div>
-    <div class="alt">Tired of typing on a remote? <button type="button" id="qcStart" class="focusable">Use Quick Connect</button>
-      <div class="altSub">We'll show a 6-digit code — approve it from a phone or computer that's already signed in, and this device logs in as you.</div></div>
+    <div class="alt qcAlt"><div class="qcOr">or</div>
+      <button type="button" id="qcStart" class="btn qcBtn focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg>Sign in with your phone</button>
+      <div class="altSub">Get a code, approve it on a signed-in phone.</div></div>
   </form>
 </div>
 
 <div class="gate" id="gateQc">
   <div class="gateCard">
     <h1>Quick Connect</h1>
-    <div class="sub">On your phone (signed in), open Settings → Approve device and enter:</div>
+    <div class="sub">On your phone, open Settings → Approve device and enter:</div>
     <div id="qcCode">······</div>
     <div class="sub" id="qcState">waiting for approval…</div>
     <div class="alt"><button id="qcCancel">Back to sign-in</button></div>
