@@ -4038,16 +4038,37 @@ body[data-theme="graphite"] .card.focusable.focus,body[data-theme="graphite"] .c
 body[data-theme="graphite"] .pcard.focus .art,body[data-theme="graphite"] .pcard:hover .art,
 body[data-theme="graphite"] .seasonCard.focus .art,body[data-theme="graphite"] .seasonCard:hover .art{transform:none;box-shadow:0 0 0 3px var(--focus)!important}
 body[data-theme="graphite"] .card:hover,body[data-theme="graphite"] .card.focusable.focus{box-shadow:0 0 0 3px var(--focus)}
+/* Cast faces and episode cards on title pages: the same clear 3px white ring (was a faint 1px line). */
+body[data-theme="graphite"] .castCard:hover .ph,body[data-theme="graphite"] .castCard.focusable.focus .ph{box-shadow:0 0 0 3px var(--focus)!important}
+body[data-theme="graphite"] .epCard:hover,body[data-theme="graphite"] .epCard.focus{box-shadow:0 0 0 3px var(--focus)!important}
+/* Cast cards line up: a button centres its content vertically, so a two-line name or role pushed
+   that face up. Pin content to the top, and keep name and role to one line each. */
+body[data-theme="graphite"] .castCard{display:flex;flex-direction:column;justify-content:flex-start;align-self:flex-start}
+body[data-theme="graphite"] .castCard .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:8px}
+body[data-theme="graphite"] .castCard .ch{-webkit-line-clamp:1;font-family:"Albert Sans",system-ui,sans-serif}
+/* Same for every thumbnail (posters, season cards, episode cards, Continue Watching): content pinned
+   to the top so a longer title never shifts its picture; poster titles stay on one line. */
+body[data-theme="graphite"] .pcard,body[data-theme="graphite"] .seasonCard,body[data-theme="graphite"] .epCard{
+  display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;align-self:flex-start}
+body[data-theme="graphite"] .pcard .cap{-webkit-line-clamp:1}
 /* Buttons: the solid white fill IS the cue — drop the soft drop shadow under it. */
 body[data-theme="graphite"] .btn.focusable.focus,body[data-theme="graphite"] .iconBtn.focusable.focus,
 body[data-theme="graphite"] .cbtn.focusable.focus{box-shadow:none!important}
 /* Title page: flat rounded-square buttons. Sources / Watchlist / Watched stay icon-only (no width
    lost); the focused one shows its name underneath, positioned so nothing moves. */
 body[data-theme="graphite"] #dBtns .btn,body[data-theme="graphite"] #dBtns .qToggle{border-radius:12px}
-/* White fill means "focused" here, so the white Play button steps back while another button
-   holds focus — otherwise two white buttons sit side by side and the focus is unclear. */
-body[data-theme="graphite"] #dBtns:has(.focus) .btn.primary:not(.focus){background:rgba(237,239,243,.16);color:var(--text)}
-body[data-theme="graphite"] #dBtns:has(.focus) .btn.primary:not(.focus) svg{color:var(--text)}
+/* Option B (owner, 2026-11-17): the main action (Play, Sign in, …) is brand magenta — the logo
+   square — so it always stands out, and white only ever means "the remote is here". */
+body[data-theme="graphite"] .btn.primary:not(.focus):not(:focus-visible){background:#C13BD6!important;color:#fff!important;border-color:transparent!important}
+body[data-theme="graphite"] .btn.primary:not(.focus):not(:focus-visible) svg{color:#fff!important}
+body[data-theme="graphite"] .btn.primary{border-radius:12px}
+/* Season buttons: same rounded-rectangle shape and font as every other button. Not chosen = the
+   neutral button fill; the chosen season = light fill + white underline; focused = white fill. */
+body[data-theme="graphite"] .seasonTab{border-radius:12px;min-height:44px;padding:0 18px;font:600 15px "Albert Sans",system-ui,sans-serif;
+  letter-spacing:0;background:var(--btn);color:rgba(var(--fg),.82)}
+body[data-theme="graphite"] .seasonTab.sel{background:rgba(237,239,243,.16);color:var(--text);box-shadow:inset 0 -2px 0 var(--focus)}
+body[data-theme="graphite"] .seasonTab.focus,body[data-theme="graphite"] .seasonTab.sel.focus,body[data-theme="graphite"] .seasonTab:hover{
+  background:var(--btnHover);color:var(--btnFocusText);box-shadow:none}
 body[data-theme="graphite"] #dBtns .iconBtn{border-radius:12px}
 body[data-theme="graphite"] #dBtns .iconBtn[data-label]::after{content:attr(data-label);position:absolute;left:50%;top:calc(100% + 7px);
   transform:translateX(-50%);font:600 12.5px "Sora",system-ui,sans-serif;color:var(--text);white-space:nowrap;opacity:0;pointer-events:none}
@@ -4088,9 +4109,6 @@ body[data-theme="graphite"] .prefTabDivider span{font-size:12px}
 body[data-theme="graphite"] #dMeta .rating,body[data-theme="graphite"] .metaLine .rating{color:var(--text)}
 body[data-theme="graphite"] #bdInfo .bdiC,body[data-theme="graphite"] #heroCredits{color:rgba(var(--fg),.78)}
 body[data-theme="graphite"] .crewLink{color:var(--text)}
-/* Brand mark: the new T at the top of the side menu (not focusable; the menu list scrolls if short). */
-body[data-theme="graphite"] #railBrand{display:flex;flex:none;height:28px;margin:2px 0 14px;padding-left:11px;align-items:center}
-body[data-theme="graphite"] #railBrand svg{width:26px;height:26px}
 /* Calmer page: the per-title ambient colour stays, at a much lower strength (less purple/pink haze). */
 body[data-theme="graphite"] #colorBase{opacity:.45}
 body[data-theme="graphite"] #colorGlow{opacity:.3}
@@ -4111,8 +4129,6 @@ body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn{width:100%;justify-con
 body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn svg{width:20px;height:20px}
 body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn.focus,body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn:focus{background:var(--btnHover);color:var(--btnFocusText);text-decoration:none;filter:none}
 body[data-theme="graphite"] .gateCard .qcAlt .altSub{margin-top:10px}
-body[data-theme="graphite"] #gateLoginForm:has(#qcStart.focus) #liGo,
-body[data-theme="graphite"] #gateLoginForm:has(#qcStart:focus) #liGo{background:rgba(255,255,255,.12)!important;color:var(--text)!important}
 body[data-theme="graphite"] #gateArtCaption{font-family:"Sora",system-ui,sans-serif;font-weight:600;letter-spacing:.01em;text-transform:none;color:var(--muted)}
 /* Sources popup: sentence-case sort tabs with a white underline, readable rows, and a flat focused
    row (light fill + white bar on the left, no zoom/glow). Release names stay mono (technical text). */
@@ -4229,7 +4245,6 @@ body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px
 <!-- ============ app shell ============ -->
 <button id="burger" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
 <nav id="rail">
-  <div id="railBrand" aria-hidden="true"><svg viewBox="100 255 190 204"><rect x="107" y="264" width="38" height="37" rx="8" fill="#C13BD6"/><g fill="#F3EFF7"><rect x="152" y="264" width="131" height="37" rx="8"/><rect x="178" y="264" width="38" height="186" rx="8"/></g></svg></div>
   <div id="railMain">
   <!-- Profile avatar sits at the TOP (was the Triboon logo): one account entry point, and it frees the
        footer so the nav list rises into the reclaimed bottom space. Opens Preferences; admins get

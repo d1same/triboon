@@ -11646,7 +11646,11 @@ test('Quiet Graphite (3.5.0): flat Graphite look, labelled buttons, other themes
   assert.match(ui, /function rowScrollTo\(row, left\) \{\s*settleRowSlide\(row\);/);
   assert.match(ui, /function scrollHorizontalRowIntoView\(el\) \{[\s\S]{0,120}settleRowSlide\(row\);/);
   assert.match(ui, /if \(Math\.abs\(delta\) > 2\) rowScrollTo\(row, Math\.max\(0, row\.scrollLeft \+ delta\)\);/);
-  assert.match(block, /#dBtns:has\(\.focus\) \.btn\.primary:not\(\.focus\)/, 'Play steps back while another button is focused');
+  // Option B: the main action is brand magenta unless focused (then white like every focused button).
+  assert.match(block, /\.btn\.primary:not\(\.focus\):not\(:focus-visible\)\{background:#C13BD6!important;color:#fff!important/);
+  // Season buttons: rounded rectangles; the chosen-and-focused season is readable (dark text on white).
+  assert.match(block, /\.seasonTab\{border-radius:12px;/);
+  assert.match(block, /\.seasonTab\.sel\.focus,[^{]*\{\s*background:var\(--btnHover\);color:var\(--btnFocusText\)/);
   // Player: the focused control shows its short name, positioned so the bar never changes height.
   for (const id of ['ccBtn', 'audBtn', 'qualBtn', 'back10', 'fwd30', 'fsBtn']) {
     assert.match(ui, new RegExp(`<button [^>]*id="${id}"[^>]* data-label="[^"]+">`), `${id} carries a short label`);
@@ -11676,15 +11680,14 @@ test('Graphite only (3.5.0): every device and profile gets Graphite, and the the
   assert.match(ui, /<div class="panel" style="display:none"><h2>Theme defaults<\/h2>/);
 });
 
-test('Quiet Graphite polish (3.5.0): no amber capitals, quiet credits, T brand mark, calmer page, tidy settings', () => {
+test('Quiet Graphite polish (3.5.0): no amber capitals, quiet credits, calmer page, tidy settings', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const start = ui.indexOf('/* ===== Quiet Graphite (3.5.0');
   const block = ui.slice(start, ui.indexOf('@media (prefers-reduced-motion:reduce)', start));
   assert.match(block, /#hero \.eyebrow,[^{]*\.dashEyebrow,[^{]*\.prefTabDivider span\{\s*font-family:"Sora"[^}]*text-transform:none;color:var\(--muted\)\}/);
   assert.match(block, /#dMeta \.rating,[^{]*\.metaLine \.rating\{color:var\(--text\)\}/);
   assert.match(block, /\.crewLink\{color:var\(--text\)\}/);
-  assert.match(ui, /<nav id="rail">\s*<div id="railBrand" aria-hidden="true"><svg/, 'the T mark sits above the menu list and is not focusable');
-  assert.ok(!/id="railBrand"[^>]*class="[^"]*focusable/.test(ui));
+  assert.ok(!ui.includes('id="railBrand"'), 'owner dropped the T mark from the side menu (2026-11-17)');
   assert.match(block, /#colorBase\{opacity:\.45\}/);
   assert.match(block, /#colorGlow\{opacity:\.3\}/);
   assert.match(block, /#prefs \.setGrid\{align-content:start\}/, 'settings rows pack to the top, no stretched gaps');
