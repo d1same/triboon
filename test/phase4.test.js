@@ -11809,6 +11809,22 @@ test('Boot builds Home only after the logo finishes; network starts at once (3.5
   assert.match(fn, /if \(!logo \|\| loader\.classList\.contains\('hide'\) \|\| loader\._logoDoneAt\) return;/, 'no wait once the logo has finished');
 });
 
+test('Boot sound plays with the logo build, once, never on phones (3.5.1, owner pick L)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const tag = ui.match(/<audio id="bootSound" preload="auto" src="data:audio\/mpeg;base64,([A-Za-z0-9+/=]+)"><\/audio>/);
+  assert.ok(tag, 'the sound is embedded in the splash, ready at once');
+  const mp3 = Buffer.from(tag[1], 'base64');
+  assert.ok(mp3.length > 10000 && mp3.length < 40000, 'short clip, small page cost');
+  assert.ok(mp3.slice(0, 3).toString() === 'ID3' || (mp3[0] === 0xff && (mp3[1] & 0xe0) === 0xe0), 'a real MP3');
+  assert.ok(ui.indexOf('id="bootSound"') > ui.indexOf('<div class="bootLaneTrack">'), 'outside the logo markup');
+  assert.match(ui, /loader\.classList\.add\('go'\);\s*playBootSound\(\);/, 'starts with the build (t=0 of the sound)');
+  const fn = ui.slice(ui.indexOf('function playBootSound()'), ui.indexOf('function playBootSound()') + 900);
+  assert.match(fn, /mobileShell/, 'skipped on phones');
+  assert.match(fn, /prefers-reduced-motion/, 'skipped under reduced motion');
+  assert.match(fn, /triboon\.introSound/, 'can be turned off');
+  assert.match(fn, /p\.catch\(\(\) => \{\}\)/, 'a blocked autoplay stays silent, no error');
+});
+
 test('Profiles: square avatar tiles and a clean Who\'s watching picker (3.5.1, owner pick Option 1)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   for (let i = 1; i <= 20; i++) {
