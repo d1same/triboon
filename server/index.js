@@ -9638,6 +9638,14 @@ Object.assign(H, {
       headers['content-range'] = `bytes ${start}-${end - 1}/${total}`;
     }
     headers['content-length'] = String(end - start);
+    // A paused player stops reading: the 30 s server socket timeout cut this stream during any pause
+    // (a held connection got its last buffered bytes, then the end). The other stream routes already
+    // turn it off; a gone viewer still ends with its socket.
+    try {
+      ctx.req.setTimeout(0);
+      ctx.res.setTimeout(0);
+      if (ctx.req.socket) ctx.req.socket.setTimeout(0);
+    } catch {}
     ctx.res.writeHead(code, headers);
     if (ctx.req.method === 'HEAD') return ctx.res.end();
     const rs = openLocalReadStream(item.file, start, end);
