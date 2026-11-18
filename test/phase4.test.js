@@ -11699,6 +11699,11 @@ test('Quiet Graphite polish (3.5.0): no amber capitals, quiet credits, calmer pa
   assert.match(block, /#hero \.eyebrow,[^{]*\.dashEyebrow,[^{]*\.prefTabDivider span\{\s*font-family:"Sora"[^}]*text-transform:none;color:var\(--muted\)\}/);
   assert.match(block, /#dMeta \.rating,[^{]*\.metaLine \.rating\{color:var\(--text\)\}/);
   assert.match(block, /\.crewLink\{color:var\(--text\)\}/);
+  // A long one-line cast name must not widen its card (owner saw one face much bigger on the Shield).
+  assert.match(block, /\.castCard\{display:flex;flex-direction:column;justify-content:flex-start;align-self:flex-start;min-width:0\}/);
+  assert.match(block, /\.epCard\{\s*display:flex;[^}]*min-width:0\}/);
+  // Home on TV: with a wide (Continue Watching / Live) row focused, the title sits high, not sunk.
+  assert.match(block, /\.tv #home:has\(\.card\.focus\) #hero\{margin-top:max\(var\(--bdInfoPadT\),12vh\);margin-bottom:auto\}/);
   assert.ok(!ui.includes('id="railBrand"'), 'owner dropped the T mark from the side menu (2026-11-17)');
   assert.match(block, /#colorBase\{opacity:\.45\}/);
   assert.match(block, /#colorGlow\{opacity:\.3\}/);
