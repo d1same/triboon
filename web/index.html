@@ -792,6 +792,12 @@ body.tv #filterMenu{backdrop-filter:none}
 .gChip.sel{background:var(--btnSelected);color:var(--text);border-color:transparent}
 #grid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,var(--poster));gap:20px 16px;align-content:start;justify-content:start;padding:6px 4px 30px}
 #grid .pcard,#grid .card{flex:none;width:var(--poster);max-width:var(--poster);min-width:0}
+/* Wide cards (Live TV channels in Search) are 16:9 boxes with overflow:hidden. That makes their
+   automatic minimum height 0, so each grid row shrank to 2px and the channels piled on top of each
+   other. overflow:clip still clips but keeps the real height; the TV min-height is the same 16:9
+   height for older TV browsers without clip. */
+#grid .card{overflow:clip}
+body.tv #grid .card{min-height:calc(var(--poster) * 9 / 16)}
 #browse.searchMode{padding-top:var(--searchPad, 110px)!important} /* clears the floating search bar */
 #browse.searchMode.hasSuggest{padding-top:168px!important} /* TV WebView drops CSS max(); tight gap — JS then measures the real chip */
 #browse.searchMode .browseHead{display:none}
@@ -2442,7 +2448,7 @@ body.iosPhone #volSlider{display:none}
    movie loader runs it at half time (--tbS) and hides mid-build the moment the first frame is
    ready. Reduced motion (or a hidden loader) shows the finished mark with no animation. */
 #appLoader{--tbS:1}#playerLoader{--tbS:.5}
-@keyframes tbRise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}@keyframes tbDraw{from{stroke-dasharray:1;stroke-dashoffset:1}to{stroke-dasharray:1;stroke-dashoffset:0}}@keyframes tbPop{from{opacity:0;transform:scale(.55)}to{opacity:1;transform:none}}@keyframes tbLand{from{opacity:0;transform:translateX(70px)}to{opacity:1;transform:none}}.tbMark{display:block;height:auto;overflow:visible}.tbMark .tbPlay{transform-box:fill-box;transform-origin:30% 50%}@media (prefers-reduced-motion:no-preference){#appLoader:not(.hide) .tbL,#playerLoader.show .tbL{animation:tbRise calc(.6s*var(--tbS,1)) cubic-bezier(.2,.7,.2,1) both}#appLoader:not(.hide) .tbT,#playerLoader.show .tbT{animation-delay:calc(.10s*var(--tbS,1))}#appLoader:not(.hide) .tbR,#playerLoader.show .tbR{animation-delay:calc(.16s*var(--tbS,1))}#appLoader:not(.hide) .tbI,#playerLoader.show .tbI{animation-delay:calc(.22s*var(--tbS,1))}#appLoader:not(.hide) .tbB,#playerLoader.show .tbB{animation-delay:calc(.28s*var(--tbS,1))}#appLoader:not(.hide) .tbN,#playerLoader.show .tbN{animation-delay:calc(.46s*var(--tbS,1))}#appLoader:not(.hide) .tbO1,#playerLoader.show .tbO1{animation:tbDraw calc(.8s*var(--tbS,1)) cubic-bezier(.45,0,.2,1) calc(.34s*var(--tbS,1)) both}#appLoader:not(.hide) .tbO2,#playerLoader.show .tbO2{animation:tbDraw calc(.8s*var(--tbS,1)) cubic-bezier(.45,0,.2,1) calc(.48s*var(--tbS,1)) both}#appLoader:not(.hide) .tbPlay,#playerLoader.show .tbPlay{animation:tbPop calc(.45s*var(--tbS,1)) cubic-bezier(.2,.8,.25,1) calc(1s*var(--tbS,1)) both}#appLoader:not(.hide) .tbDot,#playerLoader.show .tbDot{animation:tbLand calc(.55s*var(--tbS,1)) cubic-bezier(.2,.75,.2,1) calc(1.12s*var(--tbS,1)) both}}
+@keyframes tbRise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}@keyframes tbDraw{from{stroke-dasharray:1;stroke-dashoffset:1}to{stroke-dasharray:1;stroke-dashoffset:0}}@keyframes tbPop{from{opacity:0;transform:scale(.55)}to{opacity:1;transform:none}}@keyframes tbLand{from{opacity:0;transform:translateX(70px)}to{opacity:1;transform:none}}.tbMark{display:block;height:auto;overflow:visible}.tbMark .tbPlay{transform-box:fill-box;transform-origin:30% 50%}@media (prefers-reduced-motion:no-preference){#appLoader.go:not(.hide) .tbL,#playerLoader.show .tbL{animation:tbRise calc(.6s*var(--tbS,1)) cubic-bezier(.2,.7,.2,1) both}#appLoader.go:not(.hide) .tbT,#playerLoader.show .tbT{animation-delay:calc(.10s*var(--tbS,1))}#appLoader.go:not(.hide) .tbR,#playerLoader.show .tbR{animation-delay:calc(.16s*var(--tbS,1))}#appLoader.go:not(.hide) .tbI,#playerLoader.show .tbI{animation-delay:calc(.22s*var(--tbS,1))}#appLoader.go:not(.hide) .tbB,#playerLoader.show .tbB{animation-delay:calc(.28s*var(--tbS,1))}#appLoader.go:not(.hide) .tbN,#playerLoader.show .tbN{animation-delay:calc(.46s*var(--tbS,1))}#appLoader.go:not(.hide) .tbO1,#playerLoader.show .tbO1{animation:tbDraw calc(.8s*var(--tbS,1)) cubic-bezier(.45,0,.2,1) calc(.34s*var(--tbS,1)) both}#appLoader.go:not(.hide) .tbO2,#playerLoader.show .tbO2{animation:tbDraw calc(.8s*var(--tbS,1)) cubic-bezier(.45,0,.2,1) calc(.48s*var(--tbS,1)) both}#appLoader.go:not(.hide) .tbPlay,#playerLoader.show .tbPlay{animation:tbPop calc(.45s*var(--tbS,1)) cubic-bezier(.2,.8,.25,1) calc(1s*var(--tbS,1)) both}#appLoader.go:not(.hide) .tbDot,#playerLoader.show .tbDot{animation:tbLand calc(.55s*var(--tbS,1)) cubic-bezier(.2,.75,.2,1) calc(1.12s*var(--tbS,1)) both}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes pulseLogo{0%,100%{opacity:.85;transform:scale(1)}50%{opacity:1;transform:scale(1.05)}}
 .spinner{width:46px;height:46px;border-radius:50%;border:3px solid rgba(var(--fg),.15);border-top-color:var(--coral);animation:spin .8s linear infinite}
@@ -2456,6 +2462,9 @@ body.iosPhone #volSlider{display:none}
 @keyframes splashTint{from{transform:rotate(0deg) scale(1)}to{transform:rotate(4deg) scale(1.07)}}
 @media (prefers-reduced-motion:reduce){#appLoader::before{animation:none}}
 #appLoader.hide{opacity:0;pointer-events:none}
+/* Plain ink until the code has loaded and .go starts the build (see startBootLogo); reduced motion
+   shows the finished mark at once. */
+@media (prefers-reduced-motion:no-preference){#appLoader:not(.go) .tbMark{visibility:hidden}}
 #appLoader .inner{position:relative;display:flex;flex-direction:column;align-items:center;gap:26px;animation:splashIn .9s ease both}
 @keyframes splashIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 #appLoader .tbMark{width:280px} /* same visual size as the old 330px clipped wordmark */
@@ -4026,10 +4035,202 @@ body.mobileShell #detail .detailHero{padding-top:calc(12px + var(--safeT));min-h
 body.tv #dTitle{font-size:var(--ctDetailTitle)}
 body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
 
+/* ===== Quiet Graphite (3.5.0, owner pick 2026-11-17) =====
+   Look only: no layout, order or remote behaviour changes. Scoped to the Graphite theme so the
+   other themes look exactly as before. Flat: no glows, no blurred shadows, no zoom on focus. */
+/* Posters and tiles: the ring is the focus cue; nothing grows or lifts, so rows never shift. */
+body[data-theme="graphite"] .pcard.focusable.focus,body[data-theme="graphite"] .pcard:hover,
+body[data-theme="graphite"] .seasonCard.focusable.focus,body[data-theme="graphite"] .seasonCard:hover,
+body[data-theme="graphite"] .epCard.focusable.focus,body[data-theme="graphite"] .epCard:hover,
+body[data-theme="graphite"] .castCard.focusable.focus,body[data-theme="graphite"] .castCard:hover,
+body[data-theme="graphite"] .card.focusable.focus,body[data-theme="graphite"] .card:hover{transform:translateZ(0)}
+body[data-theme="graphite"] .pcard.focus .art,body[data-theme="graphite"] .pcard:hover .art,
+body[data-theme="graphite"] .seasonCard.focus .art,body[data-theme="graphite"] .seasonCard:hover .art{transform:none;box-shadow:0 0 0 3px var(--focus)!important}
+body[data-theme="graphite"] .card:hover,body[data-theme="graphite"] .card.focusable.focus{box-shadow:0 0 0 3px var(--focus)}
+/* Cast faces and episode cards on title pages: the same clear 3px white ring (was a faint 1px line). */
+body[data-theme="graphite"] .castCard:hover .ph,body[data-theme="graphite"] .castCard.focusable.focus .ph{box-shadow:0 0 0 3px var(--focus)!important}
+body[data-theme="graphite"] .epCard:hover,body[data-theme="graphite"] .epCard.focus{box-shadow:0 0 0 3px var(--focus)!important}
+/* Cast cards line up: a button centres its content vertically, so a two-line name or role pushed
+   that face up. Pin content to the top, and keep name and role to one line each. */
+/* Crisp 6px corners on every picture too (owner, 3.5.0): posters, wide cards, seasons, episodes,
+   cast faces, channels, player episodes, music and audiobook covers — the same shape as the buttons.
+   The focus ring is a box-shadow, so it follows the corner. */
+body[data-theme="graphite"] :is(.pcard .art,.card,.seasonCard .art,.epCard,.epCard .still,.castCard .ph,.pPhoto,.thumb,
+  .chCard .chLogo,.playerEpCard,.playerEpCard .peStill,.abCard .art,.mCard .art){border-radius:6px!important}
+/* Audiobooks and Music match the posters: no zoom, crisp corner, the same clear 3px white ring. */
+body[data-theme="graphite"] .abCard.focusable.focus,body[data-theme="graphite"] .abCard:hover,
+body[data-theme="graphite"] .mCard.focusable.focus,body[data-theme="graphite"] .mCard:hover{transform:translateZ(0)}
+body[data-theme="graphite"] .abCover,body[data-theme="graphite"] .mCover{border-radius:6px!important;transition:none} /* ring shows at once, like posters: no repaint each frame of a fade */
+body[data-theme="graphite"] .abCard:hover .abCover,body[data-theme="graphite"] .abCard.focus .abCover,body[data-theme="graphite"] .abCard:focus .abCover,
+body[data-theme="graphite"] .mCard:hover .mCover,body[data-theme="graphite"] .mCard.focus .mCover,body[data-theme="graphite"] .mCard:focus .mCover{
+  box-shadow:0 0 0 3px var(--focus)!important;filter:none}
+/* Live TV: the guide had its own steel-blue channel side and teal category side. Graphite uses
+   the same neutral whites and greys as everywhere else: white focus line, soft grey wash for the
+   chosen category, no tinted panes. */
+body[data-theme="graphite"] :is(#chBody,#pGuide,.pgGuideShell,#chCats,.liveCatPane,.guideCats,.pgCatPane){
+  --focus:#EDEFF3;--focusSoft:rgba(237,239,243,.3);--amber:#EDEFF3;--artFocusLine:#EDEFF3;--artFocusGlow:transparent;
+  --btnSelected:rgba(237,239,243,.16);--btnSelectedHover:#EDEFF3;--btnHover:#EDEFF3}
+body[data-theme="graphite"] :is(.liveCatPane,.pgCatPane){background:var(--field)}
+/* Focus in the guide = the site's focus: white fill, dark text (category, channel cell, the
+   in-player / PiP guide rows). The programme strip next to it keeps its faint wash. */
+body[data-theme="graphite"] :is(.lcat.focus,.lcat:focus,.pgCat.focus,.pgCat:focus,.chGroupHead.focus,
+  .gRow.focus .gCh,.pgRow.focus .gCh,.pgRow:focus .gCh),
+body[data-theme="graphite"] :is(.lcat.focus,.lcat:focus,.pgCat.focus,.pgCat:focus,.chGroupHead.focus,
+  .gRow.focus .gCh,.pgRow.focus .gCh,.pgRow:focus .gCh) *{color:#14161A!important}
+body[data-theme="graphite"] :is(.lcat,.pgCat,.chGroupHead){border-radius:6px}
+/* Guide rows are <button>s, so the global "focused button = white" rule filled the WHOLE row white
+   and the white programme titles vanished (owner, Shield in-player guide). The row keeps a soft
+   wash; only its channel cell (above) turns white. */
+body[data-theme="graphite"] :is(.pgRow,.gRow):is(.focus,:focus){background:rgba(237,239,243,.07)!important;color:var(--text)!important}
+/* Live TV header buttons (Multiview / Channels): the site button, no edge line, white on focus. */
+body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn){border:0!important;border-radius:6px!important}
+body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn):is(.focus,:focus,:hover){background:var(--btnHover)!important;color:var(--btnFocusText)!important;box-shadow:none!important}
+/* "Categories" label: quiet Sora like the other labels, not mono capitals. */
+body[data-theme="graphite"] .liveCatTitle{font-family:"Sora",system-ui,sans-serif;font-weight:600;letter-spacing:0;text-transform:none}
+body[data-theme="graphite"] .castCard{display:flex;flex-direction:column;justify-content:flex-start;align-self:flex-start;min-width:0}
+/* min-width:0 — a one-line name is a nowrap box, so a long name ("Philip Seymour Hoffman") made its
+   card's minimum width the name's width and that face grew bigger than the rest. The card now keeps
+   its set width and the name is cut with "…". Same guard on the other thumbnail cards below. */
+body[data-theme="graphite"] .castCard .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:8px}
+body[data-theme="graphite"] .castCard .ch{-webkit-line-clamp:1;font-family:"Albert Sans",system-ui,sans-serif}
+/* Same for every thumbnail (posters, season cards, episode cards, Continue Watching): content pinned
+   to the top so a longer title never shifts its picture; poster titles stay on one line. */
+body[data-theme="graphite"] .pcard,body[data-theme="graphite"] .seasonCard,body[data-theme="graphite"] .epCard{
+  display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;align-self:flex-start;min-width:0}
+body[data-theme="graphite"] .pcard .cap{-webkit-line-clamp:1}
+/* Buttons: the solid white fill IS the cue — drop the soft drop shadow under it. */
+body[data-theme="graphite"] .btn.focusable.focus,body[data-theme="graphite"] .iconBtn.focusable.focus,
+body[data-theme="graphite"] .cbtn.focusable.focus{box-shadow:none!important}
+/* Title page: flat rounded-square buttons. Sources / Watchlist / Watched stay icon-only (no width
+   lost); the focused one shows its name underneath, positioned so nothing moves. */
+body[data-theme="graphite"] #dBtns .btn,body[data-theme="graphite"] #dBtns .qToggle{border-radius:12px}
+/* Option B (owner, 2026-11-17): the main action (Play, Sign in, …) is brand magenta — the logo
+   square — so it always stands out, and white only ever means "the remote is here". */
+body[data-theme="graphite"] .btn.primary:not(.focus):not(:focus-visible){background:#C13BD6!important;color:#fff!important;border-color:transparent!important}
+body[data-theme="graphite"] .btn.primary:not(.focus):not(:focus-visible) svg{color:#fff!important}
+body[data-theme="graphite"] .btn.primary{border-radius:12px}
+/* Season buttons: same rounded-rectangle shape and font as every other button. Not chosen = the
+   neutral button fill; the chosen season = light fill + white underline; focused = white fill. */
+body[data-theme="graphite"] .seasonTab{min-height:52px;padding:0 24px;font:600 15.5px "Albert Sans",system-ui,sans-serif;
+  letter-spacing:.01em;background:var(--btn);color:var(--text)}
+body[data-theme="graphite"] .seasonTab.sel{background:rgba(237,239,243,.18);color:var(--text);box-shadow:none}
+/* "Crisp" (owner pick E, 2026-11-17): one 6px corner on EVERY control — buttons, icon and player
+   buttons, tabs, season buttons, chips, fields, rows and the side menu — so the whole app reads as
+   one family with the wordmark's straight strokes. Artwork (posters, stills, faces) keeps its own. */
+body[data-theme="graphite"] :is(.btn,.iconBtn,.cbtn,.cbtn.big,.seasonTab,.sizePick,.sizePick button,#srcSort button,.srcRow,
+  .qToggle,.qToggle button,.railBtn,#prefTabs button,#setTabs button,.profileAction,.profileAddBtn,.ghostMini,.gChip,.chip,
+  .levelPick button,.menuRow button,.testBtn,.drawerClose,.un-play,.un-cancel,.mvIconBtn,.trailerCtl,.playerBackBtn,
+  input,select,textarea,.gateCard .qcAlt button.qcBtn){border-radius:6px!important}
+body[data-theme="graphite"] .seasonTab.focus,body[data-theme="graphite"] .seasonTab.sel.focus,body[data-theme="graphite"] .seasonTab:hover{
+  background:var(--btnHover);color:var(--btnFocusText);box-shadow:none}
+body[data-theme="graphite"] #dBtns .iconBtn{border-radius:12px}
+body[data-theme="graphite"] #dBtns .iconBtn[data-label]::after{content:attr(data-label);position:absolute;left:50%;top:calc(100% + 7px);
+  transform:translateX(-50%);font:600 12.5px "Sora",system-ui,sans-serif;color:var(--text);white-space:nowrap;opacity:0;pointer-events:none}
+body[data-theme="graphite"] #dBtns .iconBtn[data-label].focusable.focus::after{opacity:1}
+body[data-theme="graphite"] #dBtns .iconBtn.on[data-label-on]::after{content:attr(data-label-on)}
+/* On-state colour: In watchlist = brand magenta (the logo square), Watched = the green of the
+   poster "watched" tick. Kept when focused too, so the state reads on the white fill. */
+body[data-theme="graphite"] #dWatchlist.on,body[data-theme="graphite"] #dWatchlist.on.focusable.focus{color:#C13BD6!important}
+body[data-theme="graphite"] #dPlayed.on,body[data-theme="graphite"] #dPlayed.on.focusable.focus{color:#2BBB6A!important}
+/* Row and section labels: calm sentence-style Sora instead of letter-spaced amber mono caps.
+   Size stays on --ctSection so the text-size setting still applies. */
+body[data-theme="graphite"] .row h2,body[data-theme="graphite"] #person h2,body[data-theme="graphite"] .secHead h2{
+  font-family:"Sora",system-ui,sans-serif;font-weight:600;letter-spacing:.005em;text-transform:none;color:var(--text)}
+/* Settings choices: same chips, flat — no border, clearer selected state. */
+body[data-theme="graphite"] .sizePick button{border:0}
+body[data-theme="graphite"] .sizePick button.sel{background:rgba(237,239,243,.16);color:var(--text)}
+/* Player bar: bigger icons; the focused control turns white and shows its name under it. */
+body[data-theme="graphite"] #osd .cbtn svg{width:24px;height:24px}
+body[data-theme="graphite"] #osd .cbtn.focusable.focus,body[data-theme="graphite"] #osd .cbtn:focus-visible{
+  background:var(--btnHover)!important;color:var(--btnFocusText)!important;box-shadow:none!important}
+body[data-theme="graphite"] #osd .cbtn[data-label]::after{content:attr(data-label);position:absolute;left:50%;top:calc(100% + 6px);
+  transform:translateX(-50%);font:600 12.5px "Sora",system-ui,sans-serif;color:var(--text);white-space:nowrap;opacity:0;pointer-events:none}
+body[data-theme="graphite"] #osd .cbtn[data-label].focusable.focus::after{opacity:1}
+/* Player episode strip: the same flat white ring as posters; nothing lifts. The playing episode keeps
+   a faint line so it stays findable. */
+body[data-theme="graphite"] #player #playerEpisodes .playerEpCard.focus,body[data-theme="graphite"] #player #playerEpisodes .playerEpCard:focus-visible{transform:translateZ(0);filter:none}
+body[data-theme="graphite"] #player #playerEpisodes .playerEpCard.focus .peStill,body[data-theme="graphite"] #player #playerEpisodes .playerEpCard:focus-visible .peStill{box-shadow:inset 0 0 0 3px var(--focus)!important}
+body[data-theme="graphite"] .playerEpCard.current .peStill{box-shadow:inset 0 0 0 1.5px rgba(237,239,243,.45)}
+body[data-theme="graphite"] .playerEpCard .peTag{color:var(--muted)}
+/* Labels: no letter-spaced amber mono capitals left ("CONTINUE WATCHING", "MOVIE", "THIS ACCOUNT",
+   "SERVER SETTINGS") — quiet sentence-style Sora in grey, matching the new wordmark. */
+body[data-theme="graphite"] #hero .eyebrow,body[data-theme="graphite"] .dInfo .eyebrow,
+body[data-theme="graphite"] .dashEyebrow,body[data-theme="graphite"] .prefTabDivider span{
+  font-family:"Sora",system-ui,sans-serif;font-weight:600;font-size:13px;letter-spacing:.01em;text-transform:none;color:var(--muted)}
+body[data-theme="graphite"].tv #hero .eyebrow{height:auto;overflow:visible}
+body[data-theme="graphite"] .prefTabDivider span{font-size:12px}
+/* Rating, credits and people links: quiet white and grey, not amber. */
+body[data-theme="graphite"] #dMeta .rating,body[data-theme="graphite"] .metaLine .rating{color:var(--text)}
+body[data-theme="graphite"] #bdInfo .bdiC,body[data-theme="graphite"] #heroCredits{color:rgba(var(--fg),.78)}
+body[data-theme="graphite"] .crewLink{color:var(--text)}
+/* Calmer page: the per-title ambient colour stays, at a much lower strength (less purple/pink haze). */
+body[data-theme="graphite"] #colorBase{opacity:.45}
+body[data-theme="graphite"] #colorGlow{opacity:.3}
+/* Settings: rows pack to the top (no stretched empty gaps), more air between sections, one heading size. */
+body[data-theme="graphite"] #settings .setGrid,body[data-theme="graphite"] #prefs .setGrid{align-content:start}
+body[data-theme="graphite"] #settings .panel,body[data-theme="graphite"] #prefs .panel{padding:28px 0 32px}
+body[data-theme="graphite"] #settings .panel h2,body[data-theme="graphite"] #prefs .panel h2{font-weight:700;margin-bottom:8px}
+/* Sign-in: sentence-style labels, a real "Sign in with your phone" button (Quick Connect) under a
+   quiet "or", and a calm backdrop caption. */
+body[data-theme="graphite"] .gateCard label{font:600 13px "Sora",system-ui,sans-serif;letter-spacing:.01em;text-transform:none}
+body[data-theme="graphite"] #gateLoginForm .err:empty{min-height:0;margin-top:0}
+body[data-theme="graphite"] .gateCard .qcAlt{margin-top:16px}
+body[data-theme="graphite"] .gateCard .qcOr{display:flex;align-items:center;gap:14px;font:600 11px "Sora",system-ui,sans-serif;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
+body[data-theme="graphite"] .gateCard .qcOr::before,body[data-theme="graphite"] .gateCard .qcOr::after{content:"";flex:1;height:1px;background:rgba(var(--fg),.14)}
+body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn{width:100%;justify-content:center;gap:10px;border-radius:12px;
+  background:rgba(255,255,255,.08);color:var(--text);font:600 16px "Albert Sans",system-ui,sans-serif;padding:14px 20px;text-decoration:none;filter:none}
+body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn svg{width:20px;height:20px}
+body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn.focus,body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn:focus{background:var(--btnHover);color:var(--btnFocusText);text-decoration:none;filter:none}
+body[data-theme="graphite"] .gateCard .qcAlt .altSub{margin-top:10px}
+body[data-theme="graphite"] #gateArtCaption{font-family:"Sora",system-ui,sans-serif;font-weight:600;letter-spacing:.01em;text-transform:none;color:var(--muted)}
+/* Sources popup: sentence-case sort tabs with a white underline, readable rows, and a flat focused
+   row (light fill + white bar on the left, no zoom/glow). Release names stay mono (technical text). */
+body[data-theme="graphite"] #drawer h3{font:700 22px "Sora",system-ui,sans-serif}
+/* Sources popup follows the button rules exactly (owner, 2026-11-17): dark button fill, the chosen
+   sort tab a lighter fill, and white with dark text wherever the remote is. */
+body[data-theme="graphite"] #srcSort{gap:8px;margin:0 0 16px}
+body[data-theme="graphite"] #srcSort button{height:44px;padding:0 20px;font:600 15px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em;
+  text-transform:none;background:var(--btn);color:var(--text);box-shadow:none}
+body[data-theme="graphite"] #srcSort button.sel{background:rgba(237,239,243,.18);color:var(--text);box-shadow:none}
+body[data-theme="graphite"] #srcSort button.focus,body[data-theme="graphite"] #srcSort button.sel.focus,body[data-theme="graphite"] #srcSort button:hover{
+  background:var(--btnHover);color:var(--btnFocusText)}
+body[data-theme="graphite"] .srcRow{opacity:1;background:var(--btn);border-bottom:0;margin-bottom:8px;padding:12px 16px}
+body[data-theme="graphite"].tv .srcRow:hover:not(:focus):not(.focus){opacity:1;background:var(--btn)}
+body[data-theme="graphite"] .srcRow.focus,body[data-theme="graphite"] .srcRow:hover{opacity:1;background:var(--btnHover)!important;color:var(--btnFocusText);
+  box-shadow:none!important;transform:none!important}
+body[data-theme="graphite"] .srcRow.focus::before{opacity:0!important}
+body[data-theme="graphite"] .srcRow.focus .srcMeta,body[data-theme="graphite"] .srcRow.focus .name,body[data-theme="graphite"] .srcRow.focus .chip,
+body[data-theme="graphite"] .srcRow:hover .srcMeta,body[data-theme="graphite"] .srcRow:hover .name,body[data-theme="graphite"] .srcRow:hover .chip{color:var(--btnFocusText)!important}
+body[data-theme="graphite"] .srcRow .srcMeta{font:600 15px "Sora",system-ui,sans-serif}
+body[data-theme="graphite"] .srcRow .chip{font:600 12px "Albert Sans",system-ui,sans-serif;letter-spacing:0;text-transform:none;color:rgba(var(--fg),.7)}
+body[data-theme="graphite"] .srcRow .chip.auto{color:var(--text)}
+body[data-theme="graphite"] .srcRow .chip.auto::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:#C13BD6;margin-right:6px;vertical-align:1px}
+/* Rating / year / genre line: "★ 8.0" in white, quiet grey dots, the age rating (R, PG-13, TV-14) in
+   a small crisp outlined tag. Credits: the label ("Created by") quiet grey, the names white. */
+body[data-theme="graphite"] #dMeta .rating,body[data-theme="graphite"] .metaLine .rating{color:var(--text);font-weight:700}
+body[data-theme="graphite"] #dMeta .dot,body[data-theme="graphite"] .metaLine .dot{color:rgba(var(--fg),.35);margin:0 4px}
+body[data-theme="graphite"] #dMeta .cert,body[data-theme="graphite"] .metaLine .cert{display:inline-block;padding:0 7px;border:1px solid rgba(var(--fg),.55);
+  border-radius:3px;font:600 .82em/1.55 "Sora",system-ui,sans-serif;letter-spacing:.02em;vertical-align:1px}
+body[data-theme="graphite"] #dCrew b{color:var(--muted);font-weight:500}
+body[data-theme="graphite"] #dCrew .crewLink{color:var(--text);font-weight:600}
+/* Home on TV: the title block is centred in the space above the row window. A wide-card row
+   (Continue Watching, Live) is much shorter than a poster row, so the block sank to ~40% of the
+   screen. With a wide-card row in focus it is anchored at the same height the poster rows give it
+   (12% of the screen height — scales with every TV size); poster rows are unchanged. */
+body[data-theme="graphite"].tv #home:has(.card.focus) #hero{margin-top:max(var(--bdInfoPadT),12vh);margin-bottom:auto}
+/* Discover (and the Movies/Shows pages) use the separate #bdInfo block, pinned to the bottom of the
+   space above the row. Same fix there: with a wide row focused, the text starts at the same height
+   as Home's (12% of the screen + the hero's 40px top padding). */
+body[data-theme="graphite"].tv:has(:is(#discover,#browse) .card.focus) #bdInfo{justify-content:flex-start;padding-top:calc(max(var(--bdInfoPadT),12vh) + 40px)}
+/* Quality badge: thin outline mono, reads as info, not a button. */
+body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px solid rgba(var(--fg),.28);border-radius:6px;
+  font-weight:600;text-shadow:none}
+
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
-<body>
+<body data-theme="graphite" data-spotlight>
 
 <div id="appLoader"><div class="inner">
   <!-- Boot splash: the WORDMARK builds itself on tinted ink (CSS only, never waits for it) + one
@@ -4075,15 +4276,16 @@ body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
     </div>
     <button class="btn primary" id="liGo" type="submit">Sign in</button>
     <div class="err" id="liErr"></div>
-    <div class="alt">Tired of typing on a remote? <button type="button" id="qcStart" class="focusable">Use Quick Connect</button>
-      <div class="altSub">We'll show a 6-digit code — approve it from a phone or computer that's already signed in, and this device logs in as you.</div></div>
+    <div class="alt qcAlt"><div class="qcOr">or</div>
+      <button type="button" id="qcStart" class="btn qcBtn focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg>Sign in with your phone</button>
+      <div class="altSub">Get a code, approve it on a signed-in phone.</div></div>
   </form>
 </div>
 
 <div class="gate" id="gateQc">
   <div class="gateCard">
     <h1>Quick Connect</h1>
-    <div class="sub">On your phone (signed in), open Settings → Approve device and enter:</div>
+    <div class="sub">On your phone, open Settings → Approve device and enter:</div>
     <div id="qcCode">······</div>
     <div class="sub" id="qcState">waiting for approval…</div>
     <div class="alt"><button id="qcCancel">Back to sign-in</button></div>
@@ -4733,7 +4935,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <button data-ts="S">Compact</button><button data-ts="M">Standard</button><button data-ts="L">Larger</button>
       </div>
     </div>
-    <div class="panel"><h2>Theme on this device</h2>
+    <div class="panel" style="display:none"><h2>Theme on this device</h2>
       <p>Accent colors for buttons, focus rings and badges.</p>
       <div id="themePick"></div>
     </div>
@@ -4914,16 +5116,16 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg> Start over</button>
           <div class="qToggle" id="qToggle" title="Playback quality preference" style="display:none">
             <button data-q="3" class="focusable qon">1080p</button><button data-q="4" class="focusable">4K</button></div>
-          <button class="iconBtn focusable" id="dSources" title="Sources">
+          <button class="iconBtn focusable" id="dSources" title="Sources" data-label="Sources">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
-          <button class="iconBtn focusable" id="dWatchlist" title="Add to watchlist">
+          <button class="iconBtn focusable" id="dWatchlist" title="Add to watchlist" data-label="Add to watchlist" data-label-on="In watchlist">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg></button>
-          <button class="iconBtn focusable" id="dPlayed" title="Mark as watched">
+          <button class="iconBtn focusable" id="dPlayed" title="Mark as watched" data-label="Mark watched" data-label-on="Watched">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></button>
-          <button class="iconBtn focusable" id="dTrailer" title="Trailer" style="display:none">
+          <button class="iconBtn focusable" id="dTrailer" title="Trailer" style="display:none" data-label="Trailer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5Z" fill="currentColor" stroke="none"/></svg></button>
           <button class="btn ghost focusable" id="dUseLibInfo" style="display:none">Use library info</button>
-          <button class="iconBtn focusable" id="dFixMatch" title="Fix TMDB match (library item)" style="display:none">
+          <button class="iconBtn focusable" id="dFixMatch" title="Fix TMDB match (library item)" style="display:none" data-label="Fix match">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18v3h3l5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3z"/></svg></button>
         </div>
       </div>
@@ -5441,7 +5643,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <button data-sz="S">Small</button><button data-sz="M">Medium</button><button data-sz="L">Large</button>
     </div>
   </div>
-  <div class="panel"><h2>Theme defaults</h2>
+  <div class="panel" style="display:none"><h2>Theme defaults</h2>
     <p>Accent colors for buttons, focus rings and badges (saved on this device).</p>
     <div id="themePickSet"></div>
   </div>
@@ -5507,7 +5709,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <div id="osd">
     <div class="top">
       <div class="topLeft">
-        <button class="cbtn focusable playerBackBtn" id="playerBackBtn" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button>
+        <button class="cbtn focusable playerBackBtn" id="playerBackBtn" title="Back" data-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button>
         <div class="playerMetaRow">
           <div class="playerMetaText">
             <div class="title" id="pTitle"></div>
@@ -5535,31 +5737,31 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       </div>
       <div class="ctl">
         <div class="ctlGroup ctlLeft">
-          <button class="cbtn focusable" id="chGuide" title="TV guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/><path d="m16 12 5 3-5 3v-6Z"/></svg></button>
-          <button class="cbtn focusable" id="aboutBtn" title="About this title" aria-label="About this title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7v10"/><path d="M6 5v14"/><rect width="12" height="18" x="10" y="3" rx="2"/></svg></button>
+          <button class="cbtn focusable" id="chGuide" title="TV guide" data-label="Guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/><path d="m16 12 5 3-5 3v-6Z"/></svg></button>
+          <button class="cbtn focusable" id="aboutBtn" title="About this title" aria-label="About this title" data-label="About"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7v10"/><path d="M6 5v14"/><rect width="12" height="18" x="10" y="3" rx="2"/></svg></button>
         </div>
         <div class="ctlGroup ctlCenter">
-          <button class="cbtn focusable" id="back10" title="Back 10s" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
+          <button class="cbtn focusable" id="back10" title="Back 10s" aria-label="Back 10 seconds" data-label="Back 10s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
           <button class="cbtn big focusable" id="playPause" aria-label="Play / pause"><svg id="ppIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
-          <button class="cbtn focusable liveOnly" id="liveBtn" title="Go to live"><span class="liveBtnDot"></span><span class="liveBtnTxt">LIVE</span></button>
-          <button class="cbtn focusable" id="fwd30" title="Forward 30s" aria-label="Forward 30 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
-          <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(12 12) scale(0.78) translate(-12 -12)"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></g></svg></button>
+          <button class="cbtn focusable liveOnly" id="liveBtn" title="Go to live" data-label="Live"><span class="liveBtnDot"></span><span class="liveBtnTxt">LIVE</span></button>
+          <button class="cbtn focusable" id="fwd30" title="Forward 30s" aria-label="Forward 30 seconds" data-label="Forward 30s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
+          <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none" data-label="Next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(12 12) scale(0.78) translate(-12 -12)"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></g></svg></button>
         </div>
         <div class="ctlGroup ctlRight">
-          <button class="cbtn focusable" id="favBtn" title="Favorite channel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.9L12 3z"/></svg></button>
-          <button class="cbtn focusable" id="splitBtn" title="Split view (uses one extra Live TV stream)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="8" height="14" rx="2"/><rect x="13" y="5" width="8" height="14" rx="2"/></svg></button>
-          <button class="cbtn focusable" id="ccBtn" title="Subtitles" aria-label="Subtitles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg></button>
-          <button class="cbtn focusable" id="audBtn" title="Audio language" aria-label="Audio language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg></button>
-          <button class="cbtn focusable" id="srndBtn" title="Surround sound" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
-          <button class="cbtn focusable" id="qualBtn" title="Quality" aria-label="Quality"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12H6"/><path d="M10 15V9"/><path d="M14 14.5a.5.5 0 0 0 .5.5h1a2.5 2.5 0 0 0 2.5-2.5v-1A2.5 2.5 0 0 0 15.5 9h-1a.5.5 0 0 0-.5.5z"/><path d="M6 15V9"/><rect x="2" y="5" width="20" height="14" rx="2"/></svg></button>
-          <button class="cbtn focusable" id="castBtn" title="Cast to TV" aria-label="Cast to TV" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/><path d="M2 12a8 8 0 0 1 8 8"/><path d="M2 16a4 4 0 0 1 4 4"/><path d="M2 20h.01"/></svg></button>
-          <button class="cbtn focusable" id="airplayBtn" title="AirPlay" aria-label="AirPlay" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1"/><path d="m12 15 5 6H7l5-6Z"/></svg></button>
+          <button class="cbtn focusable" id="favBtn" title="Favorite channel" data-label="Favorite"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.9L12 3z"/></svg></button>
+          <button class="cbtn focusable" id="splitBtn" title="Split view (uses one extra Live TV stream)" data-label="Split"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="8" height="14" rx="2"/><rect x="13" y="5" width="8" height="14" rx="2"/></svg></button>
+          <button class="cbtn focusable" id="ccBtn" title="Subtitles" aria-label="Subtitles" data-label="Subtitles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg></button>
+          <button class="cbtn focusable" id="audBtn" title="Audio language" aria-label="Audio language" data-label="Audio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg></button>
+          <button class="cbtn focusable" id="srndBtn" title="Surround sound" style="display:none" data-label="Surround"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
+          <button class="cbtn focusable" id="qualBtn" title="Quality" aria-label="Quality" data-label="Quality"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12H6"/><path d="M10 15V9"/><path d="M14 14.5a.5.5 0 0 0 .5.5h1a2.5 2.5 0 0 0 2.5-2.5v-1A2.5 2.5 0 0 0 15.5 9h-1a.5.5 0 0 0-.5.5z"/><path d="M6 15V9"/><rect x="2" y="5" width="20" height="14" rx="2"/></svg></button>
+          <button class="cbtn focusable" id="castBtn" title="Cast to TV" aria-label="Cast to TV" style="display:none" data-label="Cast"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/><path d="M2 12a8 8 0 0 1 8 8"/><path d="M2 16a4 4 0 0 1 4 4"/><path d="M2 20h.01"/></svg></button>
+          <button class="cbtn focusable" id="airplayBtn" title="AirPlay" aria-label="AirPlay" style="display:none" data-label="AirPlay"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1"/><path d="m12 15 5 6H7l5-6Z"/></svg></button>
           <div class="volWrap">
-            <button class="cbtn focusable" id="muteBtn" title="Mute"><svg id="volIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 9a4 4 0 0 1 0 6"/></svg></button>
+            <button class="cbtn focusable" id="muteBtn" title="Mute" data-label="Mute"><svg id="volIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 9a4 4 0 0 1 0 6"/></svg></button>
             <input type="range" id="volSlider" min="0" max="100" value="100" title="Volume">
           </div>
-          <button class="cbtn focusable" id="fsBtn" title="Fullscreen (F)" aria-label="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
-          <button class="cbtn focusable" id="statsBtn" title="Playback stats" aria-label="Playback stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg></button>
+          <button class="cbtn focusable" id="fsBtn" title="Fullscreen (F)" aria-label="Fullscreen" data-label="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+          <button class="cbtn focusable" id="statsBtn" title="Playback stats" aria-label="Playback stats" data-label="Stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg></button>
         </div>
         <div class="time" id="pTime">0:00</div>
       </div>
@@ -5900,7 +6102,10 @@ let bdFlip = false, bdCurrent = '';
 let _bdPendingUrl = null, _bdTimer = null;
 function setBackdrop(url) {
   const safe = safeArtUrl(url);
-  if (!safe || safe === bdCurrent) return;
+  if (!safe) return;
+  // Back on the title already shown: drop any queued art, or the title you passed over in the last
+  // 150ms would land on screen behind the one you are on.
+  if (safe === bdCurrent) { _bdPendingUrl = null; return; }
   // Debounce ~150ms: fast D-pad/scroll fires setBackdrop on EVERY focused card, and each distinct url
   // kicks off a w1280 TMDB image fetch that competes with NNTP bandwidth on a TV. Coalesce to the card
   // focus settles on — the .7s crossfade makes the small delay invisible. (Credits/prefetch/prepare
@@ -6254,7 +6459,7 @@ function adaptRowWindows() {
 window.addEventListener('resize', () => { clearTimeout(adaptRowWindows._t); adaptRowWindows._t = setTimeout(applyCoverSize, 80); });
 window.addEventListener('orientationchange', () => { clearTimeout(adaptRowWindows._t); adaptRowWindows._t = setTimeout(applyCoverSize, 80); });
 function showGate(which) {
-  if (which) $('appLoader').classList.add('hide'); // gate screens: drop the boot loader (app path hides it after content loads)
+  if (which) hideAppLoaderAfterLogo(); // gate screens: drop the boot loader once the logo has built (app path hides it after content loads)
   if (which === 'login') setLogin2faMode(null);
   document.body.classList.toggle('authOpen', !!which);
   if (which) ensureGateArt(); else stopGateArtCycle();
@@ -9129,7 +9334,7 @@ function metaLineHtml(it, d) {
   const parts = [];
   const detailRating = d && Number.isFinite(+d.vote_average) && +d.vote_average > 0 ? (+d.vote_average).toFixed(1) : '';
   const rating = detailRating || ((it && it.rating && it.rating !== '—') ? String(it.rating).replace(/^TMDB\s+/i, '') : '');
-  if (rating) parts.push(`<span class="rating">★ TMDB ${esc(rating)}</span>`);
+  if (rating) parts.push(`<span class="rating">★ ${esc(rating)}</span>`);
   // Prefer the focused item's OWN year (same source as the title) so the async detail-fetch pass can
   // never re-derive a different/late year onto the backdrop — the year now stays atomic with the title.
   const year = (it && it.year) || (d ? String(d.release_date || d.first_air_date || '').slice(0, 4) : '');
@@ -9147,7 +9352,7 @@ function metaLineHtml(it, d) {
   if (d && it) {
     try { cert = certOf(d, tmdbKind); } catch {}
   }
-  if (cert) parts.push(esc(cert));
+  if (cert) parts.push(`<span class="cert">${esc(cert)}</span>`);
   return parts.length ? `<span class="metaLine">${parts.map((p, i) => i ? `<span class="dot">·</span> ${p}` : p).join(' ')}</span>` : '';
 }
 // Title-logo art (owner-approved redesign, 2026-08-05): swap the text title for the release's
@@ -10747,7 +10952,7 @@ async function openDetail(it, push = true, opts = {}) {
     }
 
     // Meta line with dot separators (Plex style).
-    const parts = [`<span class="rating">★ TMDB ${(d.vote_average || 0).toFixed(1)}</span>`];
+    const parts = [`<span class="rating">★ ${(d.vote_average || 0).toFixed(1)}</span>`];
     const year = (d.release_date || d.first_air_date || '').slice(0, 4);
     if (year) parts.push(year);
     if (it.type === 'movie' && d.runtime) {
@@ -10758,7 +10963,7 @@ async function openDetail(it, push = true, opts = {}) {
     const g = (d.genres || []).slice(0, 2).map((x) => esc(x.name)).join(' / ');
     if (g) parts.push(g);
     const cert = certOf(d, it.type);
-    if (cert) { parts.push(esc(cert)); it.cert = cert; if (detailPlayTarget) detailPlayTarget.cert = cert; }
+    if (cert) { parts.push(`<span class="cert">${esc(cert)}</span>`); it.cert = cert; if (detailPlayTarget) detailPlayTarget.cert = cert; }
     // Deep links (typed URL / account watchlist) bypass the filtered rows — bounce a
     // restricted profile off the page entirely the moment the real rating is known.
     if (!levelAllows(cert) || d.adult) {
@@ -26203,8 +26408,8 @@ const THEMES = {
     field: 'rgba(11,8,18,.76)', soft: 'rgba(34,25,52,.62)', panel: 'rgba(20,14,30,.96)',
     focus: '#EDEFF3', focusSoft: 'rgba(237,239,243,.42)', onAccent: '#14161A',
     success: '#7CE6A0', danger: '#FF8D8D',
-    btn: 'rgba(45,38,62,.75)', btnHover: '#EDEFF3', btnSelected: 'rgba(237,239,243,.26)', btnSelectedHover: '#F6F8FA', btnPrimary: '#EDEFF3', btnPrimaryHover: '#FFFFFF', btnFocusText: '#14161A',
-    artFocusLine: 'rgba(237,239,243,.90)', artFocusGlow: 'rgba(237,239,243,.34)', artFocusTileLine: 'rgba(237,239,243,.85)', artFocusTileBorder: 'rgba(237,239,243,.70)', artFocusTileGlow: 'rgba(237,239,243,.34)',
+    btn: 'rgba(24,24,28,.62)', btnHover: '#EDEFF3', btnSelected: 'rgba(237,239,243,.26)', btnSelectedHover: '#F6F8FA', btnPrimary: '#EDEFF3', btnPrimaryHover: '#FFFFFF', btnFocusText: '#14161A',
+    artFocusLine: 'rgba(237,239,243,.90)', artFocusGlow: 'transparent', artFocusTileLine: 'rgba(237,239,243,.85)', artFocusTileBorder: 'rgba(237,239,243,.70)', artFocusTileGlow: 'transparent',
     scrim: 'linear-gradient(0deg,rgba(11,8,18,.85) 0%,rgba(11,8,18,.30) 24%,rgba(11,8,18,.04) 50%)',
   },
   // ---- LEGACY THEMES (hidden from the picker; kept resolvable so devices/profiles that saved
@@ -26398,8 +26603,8 @@ const THEME_ALIASES = {
 function prefTheme() {
   try {
     const scoped = (S.profile && S.profile.id) ? localStorage.getItem(`triboon.profile.${S.profile.id}.theme`) : null;
-    return scoped || localStorage.getItem('triboon.theme') || 'triboon';
-  } catch { return 'triboon'; }
+    return scoped || localStorage.getItem('triboon.theme') || 'graphite';
+  } catch { return 'graphite'; }
 }
 // ---- custom theme (user-picked ACCENT colors over a fixed neutral-dark foundation) ----
 // Deliberately accents-only: free-form background/text theming produces unreadable combos and
@@ -26472,10 +26677,12 @@ function savePrefTheme(name) {
   syncProfilePrefsUp();
 }
 function applyTheme() {
-  let name = prefTheme();
+  // 3.5.0 (owner, 2026-11-17): Graphite is the only look. Saved theme choices are ignored (not
+  // deleted); the old theme objects stay so nothing that reads them breaks.
+  let name = 'graphite';
   if (name !== 'custom' && !THEMES[name] && THEME_ALIASES[name]) name = THEME_ALIASES[name];
-  const t = name === 'custom' ? (customTheme(prefThemeCustomColors()) || THEMES.triboon)
-    : (THEMES[name] || THEMES.triboon);
+  const t = name === 'custom' ? (customTheme(prefThemeCustomColors()) || THEMES.graphite)
+    : (THEMES[name] || THEMES.graphite);
   const r = document.documentElement.style;
   Object.entries(THEME_TOKEN_MAP).forEach(([key, cssVar]) => r.setProperty(cssVar, t[key]));
   r.setProperty('--grad', t.c);
@@ -30360,7 +30567,10 @@ function switchView(v, push = true, opts = {}) {
     leaveRail();
     if (wasOpen) requestAnimationFrame(() => requestAnimationFrame(leaveRail));
   }
-  if (v === 'search') $('bdInfo').classList.remove('show'); // stale hero text bled through the results
+  // Search never paints its own backdrop (a clean results list), so it must always drop the last
+  // page's: as a cached page it kept the previous movie's art behind the results (owner, Shield).
+  // clearBackdrop also hides the stale hero text that bled through.
+  if (v === 'search') clearBackdrop();
   // Cached Home/Movies keep their last still so the page does not flash ink. Settings,
   // Preferences, and Live TV are not cover pages — always drop the previous title so they
   // sit on clean background (owner: leftover Mario art was still showing on Settings and
@@ -30850,14 +31060,50 @@ function detailRowScroller(el) {
 function horizontalRowScroller(el) {
   return el && el.closest && el.closest('.cards, #epGrid, #seasonGrid, #castRow, #relatedRow, #seasonTabs, .calItems, .musicRail, #playerEpisodes, .abRowScroll');
 }
+// Quiet Graphite (3.5.0): on TV the focus ring still SNAPS, but the row itself slides for a short
+// 200ms instead of jumping. rAF on scrollLeft (the WebView's native smooth scroll is unreliable),
+// and every new press first finishes the previous slide at its end, so held D-pad presses never
+// queue up or lag. Graphite only, and never under reduced motion.
+const ROW_SLIDE_MS = 200;
+function rowSlideOk() {
+  if (!document.body.classList.contains('tv') || document.body.dataset.theme !== 'graphite') return false;
+  try { if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false; } catch {}
+  return true;
+}
+function settleRowSlide(row) {
+  const sl = row && row._slide;
+  if (!sl) return;
+  cancelAnimationFrame(sl.raf);
+  row._slide = null;
+  row.scrollLeft = sl.to;
+}
+function rowScrollTo(row, left) {
+  settleRowSlide(row);
+  if (!rowSlideOk()) { row.scrollTo({ left, behavior: focusScrollBehavior() }); return; }
+  const from = row.scrollLeft;
+  const to = Math.max(0, Math.min(left, row.scrollWidth - row.clientWidth));
+  if (Math.abs(to - from) < 2) { row.scrollLeft = to; return; }
+  const t0 = performance.now();
+  const sl = { to, raf: 0 };
+  const step = (now) => {
+    const p = Math.min(1, (now - t0) / ROW_SLIDE_MS);
+    const e = 1 - (1 - p) * (1 - p) * (1 - p); // ease-out cubic
+    row.scrollLeft = from + (to - from) * e;
+    if (p < 1 && row._slide === sl) sl.raf = requestAnimationFrame(step);
+    else if (row._slide === sl) row._slide = null;
+  };
+  row._slide = sl;
+  sl.raf = requestAnimationFrame(step);
+}
 function scrollHorizontalRowIntoView(el) {
   const row = horizontalRowScroller(el);
   if (!row || !el) return false;
+  settleRowSlide(row); // measure from where the last slide was going, not from mid-flight
   const kids = [...row.children].filter((c) => c.nodeType === 1 && c.offsetWidth > 2);
   if (!kids.length) return true;
   // First item returns to the opening alignment so it cannot sit under the rail.
   if (kids[0] === el) {
-    if (row.scrollLeft > 1) row.scrollTo({ left: 0, behavior: focusScrollBehavior() });
+    if (row.scrollLeft > 1) rowScrollTo(row, 0);
     return true;
   }
   if (row.scrollWidth <= row.clientWidth + 2) return true;
@@ -30874,7 +31120,7 @@ function scrollHorizontalRowIntoView(el) {
   let delta = 0;
   if (card.left < leftSafe) delta = card.left - leftSafe;
   else if (card.right > rightSafe) delta = card.right - rightSafe;
-  if (Math.abs(delta) > 2) row.scrollTo({ left: Math.max(0, row.scrollLeft + delta), behavior: focusScrollBehavior() });
+  if (Math.abs(delta) > 2) rowScrollTo(row, Math.max(0, row.scrollLeft + delta));
   return true;
 }
 function scrollDetailRowIntoView(el) {
@@ -31848,7 +32094,17 @@ function dpadSectionForm(k) {
     let i = tabs.indexOf(tabNow);
     if (i < 0) i = Math.max(0, tabs.findIndex((b) => b.classList.contains('on')));
     if (k === 'Enter') {
-      formActivate(tabs[i] || tabNow || active);
+      // OK opens that menu item and the remote STAYS on the menu, so the owner can peek at each
+      // page without pressing Back (3.5.0, owner). OK on the item that is already open, or Right,
+      // goes into the page.
+      const tab = tabs[i] || tabNow || active;
+      const wasOpen = tab && tab.classList.contains('on');
+      formActivate(tab);
+      if (!wasOpen) {
+        S.settingsZone = 'tabs';
+        focusSectionControl(tab);
+        return true;
+      }
       S.settingsZone = 'panel';
       focusSectionControl(formCtls(activeSectionPanel(cfg))[0]);
       return true;
@@ -33223,8 +33479,47 @@ function bootReady() {
   maybePrepareFocusedHomeCard();
   perfMark('boot-ready', { view: S.view });
   signalTvReadyOnce('boot-ready');
-  setTimeout(() => $('appLoader').classList.add('hide'), 0);
-  requestAnimationFrame(() => requestAnimationFrame(() => $('appLoader').classList.add('hide')));
+  hideAppLoaderAfterLogo();
+}
+// 3.5.0 (owner, 2026-11-17): on app start the splash closes when Home is ready OR when the
+// wordmark build-up has finished, whichever is LATER — so the new logo is always seen whole.
+// No extra time is added on top: a slow boot is not delayed at all, and the wait is capped at
+// 1.8 s after the page started. Reduced motion shows the finished mark, so no wait.
+// 3.5.0 (owner): the finished logo stays on screen 2 s before Home appears.
+const BOOT_LOGO_HOLD_MS = 2000;
+function hideAppLoaderAfterLogo() {
+  const loader = $('appLoader');
+  if (loader.classList.contains('hide') || loader._logoWait) return;
+  loader._logoWait = true;
+  startBootLogo().then(() => {
+    const wait = Math.max(0, (loader._logoDoneAt || 0) + BOOT_LOGO_HOLD_MS - performance.now());
+    setTimeout(() => loader.classList.add('hide'), wait);
+  });
+}
+// The wordmark build starts only once the app's code has loaded (boot() runs at the end of the
+// script, plus two frames). Before that the splash is plain ink: starting the build during the
+// 1.9 MB script parse froze the SVG letters mid-move, which read as lag on TV boxes (owner).
+// Resolves when the build has finished: its own (finite) animations, not a guessed time.
+// Infinite loops (tint drift, progress lane) are ignored, and a 2.5 s cap means a stuck
+// animation can never hold the app. Runs once; a re-armed splash (after sign-in) reuses it.
+function startBootLogo() {
+  const loader = $('appLoader');
+  if (loader._logoDone) return loader._logoDone;
+  loader.classList.add('go');
+  loader._logoDone = new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      let finite = [];
+      try {
+        finite = loader.getAnimations({ subtree: true }).filter((a) => {
+          const t = a.effect && a.effect.getComputedTiming && a.effect.getComputedTiming();
+          return t && Number.isFinite(t.endTime) && a.playState !== 'finished';
+        });
+      } catch {}
+      Promise.race([Promise.all(finite.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 2500))])
+        .then(() => { loader._logoDoneAt = performance.now(); resolve(); });
+    });
+  });
+  return loader._logoDone;
 }
 async function loadWatchlist() {
   try { const wl = await api('/api/watchlist'); S.watchlist = wl; S.watchlistMap = Object.fromEntries(wl.map((w) => [w.key, w])); }
@@ -33273,6 +33568,7 @@ async function enterAppShell() {
   // while watch/libraries/rows were still fetching.
   S._booting = true;
   $('appLoader').classList.remove('hide');
+  $('appLoader')._logoWait = false; // the gate's close set it; without this the re-armed splash never closed
   setTimeout(bootReady, 10000); // safety: never trap the user behind the loader
   applyCoverSize();
   S.maxLevel = (S.profile && (S.profile.level ?? 4)) ?? 4;
@@ -33455,6 +33751,7 @@ function startServerVersionWatch(loadedVersion) {
   }
 }
 (async function boot() {
+  requestAnimationFrame(() => requestAnimationFrame(startBootLogo)); // the code has loaded: build the logo now
   const invite = new URLSearchParams(location.search).get('invite');
   let info;
   try { info = await api('/api/server'); } catch { document.body.innerHTML = '<p style="padding:40px">Triboon server unreachable.</p>'; return; }

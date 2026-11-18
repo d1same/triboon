@@ -4126,9 +4126,12 @@ test('Android native player: direct source and native chrome stay out of the web
     };
     const tok = (blk) => Object.fromEntries([...blk.matchAll(/(\w+):\s*'([^']*)'/g)].map((m) => [m[1], m[2]]));
     const tri = tok(block('triboon')), gra = tok(block('graphite'));
-    for (const k of ['ink', 'surface', 'raise', 'text', 'muted', 'line', 'field', 'soft', 'panel', 'scrim', 'btn', 'm', 'c']) {
+    // 'btn' left the shared list in 3.5.0: Graphite is the only look and the owner chose a
+    // translucent near-black button fill (2026-11-17) instead of the shared blue-purple.
+    for (const k of ['ink', 'surface', 'raise', 'text', 'muted', 'line', 'field', 'soft', 'panel', 'scrim', 'm', 'c']) {
       assert.strictEqual(gra[k], tri[k], `Graphite must share Triboon's ${k}`);
     }
+    assert.match(gra.btn, /^rgba\(\d+,\d+,\d+,\.\d+\)$/, 'Graphite buttons use a translucent near-black fill');
     assert.ok(/^#(E|F)/i.test(gra.focus) && gra.focus !== tri.focus,
       'Graphite focus is a near-white, not Triboon gold');
     assert.ok(!/(FFC65C|E5B44E|FB8B3C)/i.test([gra.a, gra.focus, gra.btnPrimary, gra.btnHover].join(',')),
@@ -4180,14 +4183,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'foreground tint must route through --fg (dark only on data-light="1") with the always-black player/multiview restored to light — no raw off-white literals left');
   assert.ok(/button\.focusable:not\(\.card\):not\(\.pcard\):not\(\.railBtn\):not\(\.castCard\):not\(\.seasonCard\):not\(\.epCard\):not\(\.chCard\):not\(\.playerEpCard\)/.test(ui),
     'media tiles (cast/season/episode/channel) must be excluded from the solid button-fill rollover so they keep their poster RING like .pcard');
-  assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'triboon'")
-    && ui.includes('THEMES[name] || THEMES.triboon'),
-    'the Triboon brand theme is the default and fallback');
+  // 3.5.0 (owner pick 2026-11-17, "Quiet Graphite"): Graphite replaced Triboon gold as the default.
+  assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'graphite'")
+    && ui.includes("} catch { return 'graphite'; }")
+    && ui.includes('THEMES[name] || THEMES.graphite') && !ui.includes('THEMES[name] || THEMES.triboon'),
+    'the Graphite theme is the default and fallback');
   // Theme (colors) follows the PROFILE and syncs to the server like the other prefs, so it survives
   // updates/reinstalls — with the device-wide triboon.theme kept as the pre-login boot fallback.
   assert.match(ui, /function savePrefTheme\(name\) \{[\s\S]+localStorage\.setItem\(profilePrefKey\('theme'\), name\);[\s\S]+localStorage\.setItem\('triboon\.theme', name\);[\s\S]+syncProfilePrefsUp\(\);/,
     'saving a theme should write the per-profile (synced) key + device fallback and push to the server');
-  assert.match(ui, /function prefTheme\(\) \{[\s\S]+triboon\.profile\.\$\{S\.profile\.id\}\.theme[\s\S]+localStorage\.getItem\('triboon\.theme'\) \|\| 'triboon'/,
+  assert.match(ui, /function prefTheme\(\) \{[\s\S]+triboon\.profile\.\$\{S\.profile\.id\}\.theme[\s\S]+localStorage\.getItem\('triboon\.theme'\) \|\| 'graphite'/,
     'applyTheme should resolve the profile-scoped theme first, then the device fallback');
   assert.match(ui, /applyServerProfilePrefs\(r\.prefs\);[\s\S]+try \{ applyTheme\(\); \} catch \{\}/,
     'loading server prefs should apply the profile’s synced theme');
@@ -4196,7 +4201,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // Custom theme = ACCENTS ONLY over a fixed neutral-dark foundation: the user picks the trio,
   // everything readable (focus ring, on-accent text by luminance, glows) derives from it — a
   // custom theme can never produce an unreadable UI.
-  assert.match(ui, /const t = name === 'custom' \? \(customTheme\(prefThemeCustomColors\(\)\) \|\| THEMES\.triboon\)/,
+  assert.match(ui, /const t = name === 'custom' \? \(customTheme\(prefThemeCustomColors\(\)\) \|\| THEMES\.graphite\)/,
     'applyTheme should resolve the custom theme from the stored accent colors with a safe fallback');
   assert.match(ui, /function customTheme\(colors\) \{[\s\S]+if \(!_hexRgb\(c\)\) return null;[\s\S]+const f = _hexRgb\(colors && colors\.f\) \? colors\.f : c;[\s\S]+const onAccent = _lumaOf\(c\) > 0\.55 \? '#141414' : '#F7F5EF';[\s\S]+focus: f, focusSoft: _rgbaOf\(f, \.26\), onAccent,[\s\S]+btnPrimary: c, btnPrimaryHover: _lightenHex\(c, \.14\)/,
     'the custom theme builder derives on-accent/button tokens from the accent (luminance-aware) and the focus family from the independently-pickable focus color (falling back to the accent)');
@@ -4360,15 +4365,15 @@ test('Android native player: direct source and native chrome stay out of the web
     'native stats button should be the last ExoPlayer right-side control after CC/audio/quality');
   assert.match(android, /private ScrollView nativeSheetScroll;[\s\S]+private LinearLayout nativeSheetRows;/,
     'native ExoPlayer choice sheets should have a dedicated scroll viewport');
-  assert.match(android, /private int nativeSheetWidthPx\(\) \{[\s\S]+if \(isTvDevice\(\)\) return dp\(328\);[\s\S]+screen - dp\(32\)[\s\S]+private int nativeSheetBottomMarginPx\(\) \{[\s\S]+if \(isTvDevice\(\)\) return dp\(96\);[\s\S]+screen \/ 5[\s\S]+private int nativeSheetRowsViewportHeight\(int count\) \{[\s\S]+screen - nativeSheetVerticalReservePx\(\)[\s\S]+return Math\.min\(max, needed\);[\s\S]+\}/,
+  assert.match(android, /private int nativeSheetWidthPx\(\) \{[\s\S]+if \(isTvDevice\(\)\) return dp\(328\);[\s\S]+screen - dp\(32\)[\s\S]+private int nativeSheetBottomMarginPx\(\) \{[\s\S]+if \(isTvDevice\(\)\) return Math\.round\(screen \* 0\.28f\);[\s\S]+screen \/ 5[\s\S]+private int nativeSheetRowsViewportHeight\(int count\) \{[\s\S]+screen - nativeSheetVerticalReservePx\(\)[\s\S]+return Math\.min\(max, needed\);[\s\S]+\}/,
     'native ExoPlayer subtitle/audio/quality sheets should stay bounded on smaller screens');
   assert.match(android, /nativeSheetScroll = new ScrollView\(this\);[\s\S]+nativeSheetRows = new LinearLayout\(this\);[\s\S]+nativeSheetRows\.addView\(row\);[\s\S]+nativeSheet\.addView\(nativeSheetScroll, new LinearLayout\.LayoutParams\([\s\S]+nativeSheetRowsViewportHeight\(labels\.length\)\)\);/,
     'native ExoPlayer choice rows should scroll inside the bounded sheet instead of growing offscreen');
   assert.match(android, /private java\.util\.ArrayList<View> nativeSheetFocusableRows\(\)[\s\S]+nativeSheetRows != null \? nativeSheetRows : nativeSheet[\s\S]+private void focusNativeSheetRow\([\s\S]+scrollTo\(0, Math\.max\(0, row\.getTop\(\) - dp\(8\)\)\)/,
     'native ExoPlayer D-pad focus should keep the highlighted sheet row visible');
-  assert.match(android, /private GradientDrawable nativePanelBg\(\) \{[\s\S]+new int\[\]\{0xF0181A1D, 0xF00D0F12\}[\s\S]+d\.setCornerRadius\(dp\(10\)\);[\s\S]+d\.setStroke\(dp\(1\), 0x12FFFFFF\)/,
+  assert.match(android, /private GradientDrawable nativePanelBg\(\) \{[\s\S]+new int\[\]\{0xC8181A1D, 0xC80D0F12\}[\s\S]+d\.setCornerRadius\(dp\(6\)\);[\s\S]+d\.setStroke\(0, 0x00000000\)/, // 3.5.0 Graphite: crisp 6dp corner
     'native ExoPlayer option sheets should use compact graphite panels instead of bright purple glass');
-  assert.match(android, /private GradientDrawable nativeSheetRowBg\(boolean focused, boolean selected\) \{[\s\S]+focused[\s\S]+new int\[\]\{0xFF2B3137, 0xFF252A30\}[\s\S]+selected[\s\S]+new int\[\]\{0x403A3424, 0x30312D22\}[\s\S]+d\.setStroke\(dp\(1\), focused \? 0x66B8A46A : selected \? 0x55B8A46A : 0x00000000\)/,
+  assert.match(android, /private GradientDrawable nativeSheetRowBg\(boolean focused, boolean selected\) \{[\s\S]+focused[\s\S]+new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+selected[\s\S]+new int\[\]\{0x29EDEFF3, 0x29EDEFF3\}[\s\S]+d\.setStroke\(0, 0x00000000\)/, // 3.5.0 Graphite: white focus, grey chosen, no gold
     'native ExoPlayer sheet focused and selected rows should be visually distinct');
   assert.match(android, /row\.setSingleLine\(true\);[\s\S]+row\.setEllipsize\(TextUtils\.TruncateAt\.END\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(40\)/,
     'native ExoPlayer sheet rows should keep fixed height and ellipsize long track labels');
@@ -4780,14 +4785,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android episode strip should slide/fade in and out instead of popping on screen');
   assert.match(android, /private void scrollNativeEpisodeIntoView\(View child\) \{[\s\S]+nativeEpisodeStrip\.scrollTo\(target, 0\);[\s\S]+nativeEpisodeStrip\.smoothScrollTo\(target, 0\);[\s\S]+nativeEpisodeScrollAtMs = now;[\s\S]+\}/,
     'native Android episode focus should use one throttled scroll path instead of stacking repeated smooth-scroll calls');
-  assert.match(android, /card\.setOnFocusChangeListener\(\(v, hasFocus\) -> \{[\s\S]+v\.animate\(\)\.cancel\(\);[\s\S]+v\.animate\(\)\.translationY\(-dp\(3\)\)\.setDuration\(120\)\.start\(\);[\s\S]+scrollNativeEpisodeIntoView\(v\);[\s\S]+v\.animate\(\)\.translationY\(0f\)\.setDuration\(100\)\.start\(\);[\s\S]+\}\);/,
-    'native Android episode cards should animate their focus lift without resizing the strip');
+  assert.match(android, /card\.setOnFocusChangeListener\(\(v, hasFocus\) -> \{[\s\S]+v\.animate\(\)\.cancel\(\);[\s\S]+v\.setTranslationY\(0f\);[\s\S]+scrollNativeEpisodeIntoView\(v\);[\s\S]+v\.animate\(\)\.translationY\(0f\)\.setDuration\(100\)\.start\(\);[\s\S]+\}\);/,
+    'native Android episode cards keep a flat focus (Quiet Graphite, 3.5.0: no lift) without resizing the strip');
   assert.match(android, /int thumbW = nativeEpisodeThumbDp\(\);[\s\S]+int stillH = Math\.round\(thumbW \* 9f \/ 16f\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(stillH\)[\s\S]+if \(ep\.watched && !ep\.about\) \{[\s\S]+check\.setText\("✓"\)[\s\S]+label\.setText\(ep\.tag\);[\s\S]+TextView name = new TextView\(this\);[\s\S]+name\.setMaxLines\(2\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(thumbW\), dp\(stillH \+ 56\)\)/,
     'native Android episode cards should show a 16:9 still that follows cover size, with a check on watched episodes and the name below');
   assert.match(androidStrings, /<string name="watched_episode">WATCHED  %1\$s<\/string>/,
     'native Android watched labels remain localized while preserving the episode tag');
-  assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused\) d\.setStroke\(dp\(2\), 0xFFC6B37A\);[\s\S]+else if \(current\) d\.setStroke\(dp\(1\), 0x66C6B37A\);[\s\S]+return d;/,
-    'native Android episode cards should use a clearer 2dp focus ring without a thick gold frame');
+  assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused\) d\.setStroke\(dp\(3\), 0xFFEDEFF3\);[\s\S]+else if \(current\) d\.setStroke\(dp\(1\), 0x73EDEFF3\);[\s\S]+return d;/,
+    'native Android episode cards use the Quiet Graphite flat 3dp white focus ring (3.5.0)');
   assert.match(android, /still\.setTag\("nativeEpisodeStill"\);[\s\S]+GradientDrawable stillBg = new GradientDrawable\(\);[\s\S]+stillBg\.setCornerRadius\(dp\(12\)\);[\s\S]+still\.setBackground\(stillBg\);[\s\S]+still\.setForeground\(nativeEpisodeStillFrame\(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep\.current\)\);[\s\S]+still\.setClipToOutline\(true\);/,
     'native Android episode thumbnails should clip and own the same contained hollow frame as the web player');
   assert.match(android, /public void updateEpisodeChoices\(String json\) \{[\s\S]+updateNativeEpisodeChoices\(json\)/,
@@ -4910,7 +4915,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'TV About sizes ten faces across the remaining row');
   assert.doesNotMatch(ui, /\.paCastPh\{width:56px;height:56px;border-radius:50%/,
     'web About dropped circular faces');
-  assert.match(android, /nativeAboutKicker\.setText\(subline\.isEmpty\(\) \? "ABOUT" : "THIS EPISODE"\)/,
+  assert.match(android, /nativeAboutKicker\.setText\(subline\.isEmpty\(\) \? "About" : "This episode"\)/,
     'native episode About should switch the kicker to This episode');
   assert.match(android, /nativeAboutSubline\.setText\(subline\)/,
     'native episode About should show the episode line');
@@ -5025,8 +5030,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer should show the controller shade and top metadata cluster with the controls');
   assert.match(android, /nativeControlShade\.setVisibility\(View\.GONE\);[\s\S]+nativeMetaBar\.setVisibility\(View\.GONE\);[\s\S]+nativeChrome\.setVisibility\(View\.GONE\);/,
     'native ExoPlayer should hide the controller shade and metadata bar with the controls');
-  assert.match(android, /private GradientDrawable nativeButtonBg\(boolean focused, boolean primary\) \{[\s\S]+new int\[\]\{0xFFEDE8F5, 0xFFD9CBE7\}[\s\S]+new int\[\]\{0x18F3EFF7, 0x18F3EFF7\}/,
-    'native ExoPlayer buttons should use a very transparent circle background and switch fully light on focus');
+  assert.match(android, /private GradientDrawable nativeButtonBg\(boolean focused, boolean primary\) \{[\s\S]+new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+new int\[\]\{0x59000000, 0x59000000\}[\s\S]+d\.setCornerRadius\(dp\(6\)\);/,
+    'native ExoPlayer buttons use the site button: see-through black, crisp 6dp, fully light on focus (3.5.0 Graphite)');
   assert.match(android, /nativeChrome\.setPadding\(dp\(34\), dp\(12\), dp\(34\), dp\(18\)\);[\s\S]+controls\.setPadding\(0, dp\(18\), 0, 0\);/,
     'native ExoPlayer control row should balance the play button spacing above and below');
   assert.match(android, /FrameLayout\.LayoutParams chromeLp = new FrameLayout\.LayoutParams\([\s\S]+android\.view\.Gravity\.BOTTOM\);[\s\S]+chromeLp\.setMargins\(0, 0, 0, dp\(28\)\);/,
@@ -5993,9 +5998,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'web CC menu should avoid built-in probing in online-only mode and explain why local rows are hidden');
   assert.match(ui, /ctlButtons\(\) \{[\s\S]+!b\.disabled && !b\.classList\.contains\('disabled'\)/,
     'web player D-pad focus should skip disabled controls');
-  assert.match(android, /setNativeButtonIcon\(ImageButton b, int iconRes, boolean primary, boolean focused\) \{[\s\S]+!b\.isEnabled\(\) \? 0x88EDE8F5 : \(focused \? 0xFF0B0812 : 0xFFEDE8F5\)/,
+  assert.match(android, /setNativeButtonIcon\(ImageButton b, int iconRes, boolean primary, boolean focused\) \{[\s\S]+!b\.isEnabled\(\) \? 0x88EDEFF3 : \(focused \? 0xFF14161A : 0xFFEDEFF3\)/,
     'native player icons should turn dark when the focused button switches to light mode');
-  assert.match(android, /focused[\s\S]+\? new int\[\]\{0xFFEDE8F5, 0xFFD9CBE7\}[\s\S]+: new int\[\]\{0x18F3EFF7, 0x18F3EFF7\}/,
+  assert.match(android, /focused[\s\S]+\? new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+: new int\[\]\{0x59000000, 0x59000000\}/,
     'native player buttons should use a very transparent fill normally and full light fill while focused');
   // CC/audio enabled-state is LATCHED per playback: a server-seek (remux/transcode) respawns the
   // stream and options momentarily clear — without the latch the buttons dimmed→undimmed on every
@@ -6023,8 +6028,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android guide icon should use the Lucide list-video shape');
   assert.match(audioIcon, /M2,10 V13 M6,6 V17 M10,3 V21 M14,8 V15 M18,5 V18 M22,10 V13/,
     'Android audio icon should use the Lucide audio-lines shape');
-  assert.match(ccIcon, /M7,15 H11 M15,15 H17 M7,11 H9 M13,11 H17/,
-    'Android CC icon should use the Lucide closed-caption shape');
+  assert.match(ccIcon, /M11\.35,10\.4 A2\.3,2\.3 0,1 0,11\.35 13\.6 M17\.15,10\.4 A2\.3,2\.3 0,1 0,17\.15 13\.6/,
+    'Android CC icon shows the familiar CC letters in a box (3.5.0, owner)');
   assert.match(qualityIcon, /M10,12 H6 M10,15 V9 M6,15 V9[\s\S]+M14,9\.5/,
     'Android HD icon should use the Lucide hd shape');
   assert.match(rewindIcon, /M3,2 V8 H9[\s\S]+M21,12 A9,9 0,0 0,6 5\.3 L3,8/,
@@ -6232,8 +6237,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native right-side seek timer should have enough reserved width for movie durations');
   assert.match(android, /nativeChrome\.setPadding\(dp\(34\), dp\(12\), dp\(34\), dp\(18\)\)/,
     'native player seek bar should use wider horizontal space');
-  assert.match(android, /dp\(primary \? 46 : 36\)/,
-    'native player buttons should stay compact and avoid clipped circles on TV');
+  assert.match(android, /dp\(primary \? 40 : 32\)/,
+    'native player buttons stay compact (3.5.0 owner: smaller backgrounds, same icon size)');
   assert.doesNotMatch(android, /setScale[XY]\(hasFocus/,
     'native player focus should not scale buttons and clip the circle');
   assert.match(android, /private void updateNativeSheetLayout\(\) \{[\s\S]+lp\.width = nativeSheetWidthPx\(\);[\s\S]+lp\.gravity = android\.view\.Gravity\.END \| android\.view\.Gravity\.BOTTOM;[\s\S]+lp\.setMargins\(side, 0, side, nativeSheetBottomMarginPx\(\)\);[\s\S]+nativeSheet\.setLayoutParams\(lp\);[\s\S]+\}/,
@@ -6259,14 +6264,18 @@ test('Android native player: direct source and native chrome stay out of the web
   // on the movie loader, and reduced motion shows the finished mark.
   assert.match(ui, /#appLoader\{--tbS:1\}#playerLoader\{--tbS:\.5\}/,
     'the movie loader runs the logo build-up at half the splash time');
-  assert.match(ui, /@media \(prefers-reduced-motion:no-preference\)\{#appLoader:not\(\.hide\) \.tbL,#playerLoader\.show \.tbL\{animation:tbRise [^}]+ both\}[\s\S]+#appLoader:not\(\.hide\) \.tbO1,#playerLoader\.show \.tbO1\{animation:tbDraw[\s\S]+#appLoader:not\(\.hide\) \.tbDot,#playerLoader\.show \.tbDot\{animation:tbLand[^}]+\}\}/,
-    'the logo animates only on a visible splash or loader, and only without reduced motion');
+  assert.match(ui, /@media \(prefers-reduced-motion:no-preference\)\{#appLoader\.go:not\(\.hide\) \.tbL,#playerLoader\.show \.tbL\{animation:tbRise [^}]+ both\}[\s\S]+#appLoader\.go:not\(\.hide\) \.tbO1,#playerLoader\.show \.tbO1\{animation:tbDraw[\s\S]+#appLoader\.go:not\(\.hide\) \.tbDot,#playerLoader\.show \.tbDot\{animation:tbLand[^}]+\}\}/,
+    'the logo animates only on a visible splash (once the code has loaded: .go, 3.5.0 owner) or loader, and only without reduced motion');
   assert.match(ui, /@keyframes tbDraw\{from\{stroke-dasharray:1;stroke-dashoffset:1\}to\{stroke-dasharray:1;stroke-dashoffset:0\}\}/,
     'the linked OO draws itself with stroke-dashoffset only');
   assert.match(ui, /#playerLoader \.loadMark svg:not\(\.tbMark\)\{display:none\}/,
     'the hidden legacy loader ring rule must not hide the new wordmark');
-  assert.doesNotMatch(ui, /animationend|animationiteration|getAnimations\(/,
-    'nothing in the app waits for the logo animation to finish');
+  // 3.5.0 (owner, 2026-11-17): the START-UP splash now waits for the build-up to finish (capped
+  // 2.5 s, see hideAppLoaderAfterLogo and its own test). The movie loader still never waits.
+  assert.doesNotMatch(ui, /animationend|animationiteration/,
+    'no animation-event waits anywhere');
+  assert.equal((ui.match(/getAnimations\(/g) || []).length, 1,
+    'only the start-up splash (hideAppLoaderAfterLogo) waits for the logo; Play never does');
   const tbIds = [...ui.matchAll(/ id="(tb[A-Za-z0-9]+)"/g)].map((m) => m[1]);
   assert.ok(tbIds.length >= 6 && new Set(tbIds).size === tbIds.length,
     `the two inline wordmarks need unique mask/clip ids (${tbIds.join(', ')})`);
@@ -11599,4 +11608,142 @@ test('Live TV guide inside the player: the category menu keeps a visible highlig
   assert.ok(keep >= 0 && keep < wipe, 'the old menu scroll is read before the guide is cleared');
   assert.match(body, /const keepPgCatsTop = oldPgCats \? oldPgCats\.scrollTop : 0;/);
   assert.ok(restore > attach && attach > 0, 'the new menu gets that scroll back once it is in the page');
+});
+
+test('Quiet Graphite (3.5.0): flat Graphite look, labelled buttons, other themes untouched', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('/* ===== Quiet Graphite (3.5.0');
+  assert.ok(start > 0, 'the Quiet Graphite block exists');
+  const block = ui.slice(start, ui.indexOf('@media (prefers-reduced-motion:reduce)', start));
+  // Every rule in the block is scoped to the Graphite theme, so Triboon/Ocean/Custom look as before.
+  const selectors = block.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@media[^{]+\{/g, '').match(/[^{}]+(?=\{)/g) || [];
+  assert.ok(selectors.length > 10, 'the block has rules');
+  for (const sel of selectors) {
+    // split on top-level commas only (commas inside :is(...)/:has(...) belong to one selector)
+    const parts = []; let depth = 0; let cur = '';
+    for (const ch of sel) { if (ch === '(') depth++; if (ch === ')') depth--; if (ch === ',' && !depth) { parts.push(cur); cur = ''; } else cur += ch; }
+    parts.push(cur);
+    for (const part of parts) {
+      if (!part.trim()) continue;
+      assert.match(part.trim(), /^body\[data-theme="graphite"\]/, `rule must be Graphite-scoped: ${part.trim()}`);
+    }
+  }
+  // Flat: focused posters and tiles neither zoom nor lift; the ring is a zero-blur 3px line.
+  assert.match(block, /\.pcard\.focusable\.focus[^{]*\{transform:translateZ\(0\)\}/);
+  assert.match(block, /\.pcard\.focus \.art[^{]*\{transform:none;box-shadow:0 0 0 3px var\(--focus\)!important\}/);
+  assert.match(block, /\.btn\.focusable\.focus,[^{]*\.cbtn\.focusable\.focus\{box-shadow:none!important\}/);
+  // Only `transition:none` (turning an old fade OFF) is allowed — never a new animated transition.
+  assert.ok(!/transition(?!:none[;}])/.test(block), 'no new transitions (TV focus must snap)');
+  // The Graphite theme carries no focus glow.
+  assert.match(ui, /label: 'Graphite'[\s\S]{0,1400}artFocusGlow: 'transparent'[\s\S]{0,200}artFocusTileGlow: 'transparent'/);
+  // Title page icon buttons say what they do; same buttons, same order (labels come from data-label).
+  for (const [id, lab] of [['dSources', 'Sources'], ['dWatchlist', 'Add to watchlist'], ['dPlayed', 'Mark watched'], ['dTrailer', 'Trailer']]) {
+    assert.match(ui, new RegExp(`<button [^>]*id="${id}"[^>]* data-label="${lab}"[^>]*>`), `${id} carries its label`);
+  }
+  // The name follows the state: "In watchlist" / "Watched" once on (the .on class the page already sets).
+  assert.match(ui, /<button [^>]*id="dWatchlist"[^>]* data-label-on="In watchlist">/);
+  assert.match(ui, /<button [^>]*id="dPlayed"[^>]* data-label-on="Watched">/);
+  assert.match(block, /#dBtns \.iconBtn\.on\[data-label-on\]::after\{content:attr\(data-label-on\)\}/);
+  // On-state colour: magenta bookmark (logo square), green tick (poster watched badge), also when focused.
+  assert.match(block, /#dWatchlist\.on,[^{]*#dWatchlist\.on\.focusable\.focus\{color:#C13BD6!important\}/);
+  assert.match(block, /#dPlayed\.on,[^{]*#dPlayed\.on\.focusable\.focus\{color:#2BBB6A!important\}/);
+  // Icon-only (owner 2026-11-17: no width lost); the focused one shows its name below, out of the flow.
+  assert.match(block, /#dBtns \.iconBtn\[data-label\]::after\{content:attr\(data-label\);position:absolute;[^}]*opacity:0;pointer-events:none\}/);
+  assert.match(block, /#dBtns \.iconBtn\[data-label\]\.focusable\.focus::after\{opacity:1\}/);
+  assert.ok(!/#dBtns \.iconBtn[^{]*\{[^}]*width:auto/.test(block), 'title icon buttons keep their compact width');
+  // TV row slide: short, Graphite + TV only, off under reduced motion, and every new press settles the
+  // previous slide first so held presses never queue.
+  assert.match(ui, /const ROW_SLIDE_MS = 200;/);
+  assert.match(ui, /function rowSlideOk\(\) \{\s*if \(!document\.body\.classList\.contains\('tv'\) \|\| document\.body\.dataset\.theme !== 'graphite'\) return false;[\s\S]{0,200}prefers-reduced-motion: reduce/);
+  assert.match(ui, /function rowScrollTo\(row, left\) \{\s*settleRowSlide\(row\);/);
+  assert.match(ui, /function scrollHorizontalRowIntoView\(el\) \{[\s\S]{0,120}settleRowSlide\(row\);/);
+  assert.match(ui, /if \(Math\.abs\(delta\) > 2\) rowScrollTo\(row, Math\.max\(0, row\.scrollLeft \+ delta\)\);/);
+  // Option B: the main action is brand magenta unless focused (then white like every focused button).
+  assert.match(block, /\.btn\.primary:not\(\.focus\):not\(:focus-visible\)\{background:#C13BD6!important;color:#fff!important/);
+  // Season buttons: rounded rectangles; the chosen-and-focused season is readable (dark text on white).
+  assert.match(block, /\.seasonTab\{min-height:52px;/, 'season buttons match the other buttons');
+  assert.match(block, /:is\(\.btn,\.iconBtn,\.cbtn,[\s\S]*?\.seasonTab,[\s\S]*?\)\{border-radius:6px!important\}/, 'crisp 6px corners on every control (owner pick E)');
+  assert.match(block, /\.seasonTab\.sel\.focus,[^{]*\{\s*background:var\(--btnHover\);color:var\(--btnFocusText\)/);
+  // Player: the focused control shows its short name, positioned so the bar never changes height.
+  for (const id of ['ccBtn', 'audBtn', 'qualBtn', 'back10', 'fwd30', 'fsBtn']) {
+    assert.match(ui, new RegExp(`<button [^>]*id="${id}"[^>]* data-label="[^"]+">`), `${id} carries a short label`);
+  }
+  assert.match(block, /#osd \.cbtn\[data-label\]::after\{content:attr\(data-label\);position:absolute;[^}]*opacity:0;pointer-events:none\}/);
+  assert.match(block, /#osd \.cbtn\[data-label\]\.focusable\.focus::after\{opacity:1\}/);
+  // Player episode strip (web/TV-web): flat white ring, no lift.
+  // Same specificity as the base #player #playerEpisodes rules (which carry !important on the shadow).
+  assert.match(block, /#player #playerEpisodes \.playerEpCard\.focus,[^{]*\{transform:translateZ\(0\);filter:none\}/);
+  assert.match(block, /#player #playerEpisodes \.playerEpCard\.focus \.peStill,[^{]*\{box-shadow:inset 0 0 0 3px var\(--focus\)!important\}/);
+  // Windows libmpv player (own stylesheet, no theme switch): the same flat white focus, no glows.
+  const px8 = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'ui', 'player.css'), 'utf8');
+  assert.match(px8, /--focus: 0 0 0 3px #edeff3;/);
+  assert.match(px8, /--artFocusGlow: transparent;/);
+  assert.ok(!/drop-shadow\(0 0 5px var\(--coral\)\)/.test(px8) && !/focus-visible::-webkit-slider-thumb[^}]*18px/.test(px8), 'no glow on Windows player focus');
+  // Row labels stay on the text-size token (no font shorthand that would pin a size).
+  assert.match(block, /\.row h2[^{]*\{\s*font-family:"Sora"[^}]*text-transform:none/);
+  assert.ok(!/\.row h2[^{]*\{[^}]*font:/.test(block), 'row labels keep --ctSection sizing');
+});
+
+test('Graphite only (3.5.0): every device and profile gets Graphite, and the theme pickers are hidden', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /function applyTheme\(\) \{[\s\S]{0,300}let name = 'graphite';/, 'applyTheme ignores saved theme choices');
+  assert.ok(!/function applyTheme\(\) \{\s*let name = prefTheme\(\);/.test(ui), 'a saved gold/ocean/custom choice no longer applies');
+  assert.match(ui, /<\/head>\s*<body data-theme="graphite" data-spotlight>/, 'first paint is already Graphite (no gold flash before JS)');
+  assert.match(ui, /<div class="panel" style="display:none"><h2>Theme on this device<\/h2>/);
+  assert.match(ui, /<div class="panel" style="display:none"><h2>Theme defaults<\/h2>/);
+});
+
+test('Quiet Graphite polish (3.5.0): no amber capitals, quiet credits, calmer page, tidy settings', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('/* ===== Quiet Graphite (3.5.0');
+  const block = ui.slice(start, ui.indexOf('@media (prefers-reduced-motion:reduce)', start));
+  assert.match(block, /#hero \.eyebrow,[^{]*\.dashEyebrow,[^{]*\.prefTabDivider span\{\s*font-family:"Sora"[^}]*text-transform:none;color:var\(--muted\)\}/);
+  assert.match(block, /#dMeta \.rating,[^{]*\.metaLine \.rating\{color:var\(--text\)\}/);
+  assert.match(block, /\.crewLink\{color:var\(--text\)\}/);
+  // Settings: OK on a menu item opens it and keeps the remote on the menu; OK again or Right goes in.
+  assert.match(ui, /const wasOpen = tab && tab\.classList\.contains\('on'\);\s*formActivate\(tab\);\s*if \(!wasOpen\) \{\s*S\.settingsZone = 'tabs';\s*focusSectionControl\(tab\);/);
+  // Audiobooks/Music covers match posters; Live TV drops its blue/teal; Discover title sits high too.
+  assert.match(block, /\.abCover,body\[data-theme="graphite"\] \.mCover\{border-radius:6px!important;transition:none\}/);
+  assert.match(block, /:is\(#chBody,#pGuide,\.pgGuideShell,#chCats,\.liveCatPane,\.guideCats,\.pgCatPane\)\{\s*--focus:#EDEFF3;/);
+  assert.match(block, /\.tv:has\(:is\(#discover,#browse\) \.card\.focus\) #bdInfo\{justify-content:flex-start;/);
+  // Live TV / TV guide / PiP guide: site focus (white, dark text), no edge lines, no mono caps.
+  assert.match(block, /\.gRow\.focus \.gCh,\.pgRow\.focus \.gCh,\.pgRow:focus \.gCh\) \*\{color:#14161A!important\}/);
+  assert.match(block, /:is\(#chGuideBtn,#chMultiBtn\)\{border:0!important;border-radius:6px!important\}/);
+  assert.match(block, /\.liveCatTitle\{font-family:"Sora"[^}]*text-transform:none\}/);
+  // Every picture uses the buttons' crisp 6px corner (owner, 3.5.0).
+  assert.match(block, /:is\(\.pcard \.art,\.card,\.seasonCard \.art,\.epCard,[^)]*\.castCard \.ph[^)]*\)\{border-radius:6px!important\}/);
+  // A long one-line cast name must not widen its card (owner saw one face much bigger on the Shield).
+  assert.match(block, /\.castCard\{display:flex;flex-direction:column;justify-content:flex-start;align-self:flex-start;min-width:0\}/);
+  assert.match(block, /\.epCard\{\s*display:flex;[^}]*min-width:0\}/);
+  // Home on TV: with a wide (Continue Watching / Live) row focused, the title sits high, not sunk.
+  assert.match(block, /\.tv #home:has\(\.card\.focus\) #hero\{margin-top:max\(var\(--bdInfoPadT\),12vh\);margin-bottom:auto\}/);
+  assert.ok(!ui.includes('id="railBrand"'), 'owner dropped the T mark from the side menu (2026-11-17)');
+  assert.match(block, /#colorBase\{opacity:\.45\}/);
+  assert.match(block, /#colorGlow\{opacity:\.3\}/);
+  assert.match(block, /#prefs \.setGrid\{align-content:start\}/, 'settings rows pack to the top, no stretched gaps');
+});
+
+test('Boot splash waits for the logo build-up to finish (3.5.0, owner), capped and reduced-motion safe', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  // hideAppLoaderAfterLogo + startBootLogo (the animation wait moved into the latter).
+  const fn = ui.slice(ui.indexOf('function hideAppLoaderAfterLogo()'), ui.indexOf('function hideAppLoaderAfterLogo()') + 2600);
+  assert.match(fn, /getAnimations\(\{ subtree: true \}\)/, 'waits for the real animations, not a guessed time');
+  assert.match(fn, /Number\.isFinite\(t\.endTime\)/, 'infinite loops (tint drift, progress lane) never hold the splash');
+  assert.match(fn, /setTimeout\(r, 2500\)/, 'a stuck animation can never hold the app longer than 2.5 s');
+  assert.match(ui, /perfMark\('boot-ready'[\s\S]{0,200}hideAppLoaderAfterLogo\(\);/, 'the app path closes the splash through it');
+  assert.match(ui, /function showGate\(which\) \{\s*if \(which\) hideAppLoaderAfterLogo\(\);/, 'sign-in screens wait for the logo too');
+  // Android Playback stats = info card (owner pick C): tags + live detail lines, nothing to select, OK/Back close.
+  const androidSrc = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(androidSrc, /private void showNativeStatsSheet\(\) \{[\s\S]+nativeStatsTag\([\s\S]+nativeStatsLine\("Video"\)[\s\S]+nativeStatsLine\("Audio"\)[\s\S]+nativeStatsLine\("File size"\)[\s\S]+nativeStatsLine\("Buffered"\)[\s\S]+nativeStatsLine\("Bandwidth"\)[\s\S]+nativeProgress\.postDelayed\(nativeStatsTick, 1000\);/);
+  assert.match(androidSrc, /if \(rows\.isEmpty\(\)\) \{[\s\S]{0,420}hideNativeSheet\(\);\s*return true;/);
+  // Search: Live TV channel cards must not collapse into 2px rows and pile up; no stale backdrop.
+  assert.match(ui, /#grid \.card\{overflow:clip\}\s*body\.tv #grid \.card\{min-height:calc\(var\(--poster\) \* 9 \/ 16\)\}/);
+  assert.match(ui, /if \(v === 'search'\) clearBackdrop\(\);/);
+  assert.match(ui, /if \(safe === bdCurrent\) \{ _bdPendingUrl = null; return; \}/);
+  // Owner: smooth build, then hold the finished logo 2 s before Home.
+  assert.match(ui, /const BOOT_LOGO_HOLD_MS = 2000;/, 'the finished logo is held 2 s');
+  assert.match(ui, /\(async function boot\(\) \{\s*requestAnimationFrame\(\(\) => requestAnimationFrame\(startBootLogo\)\);/,
+    'the build starts only once the code has loaded, so the parse cannot freeze it');
+  assert.match(ui, /#appLoader:not\(\.go\) \.tbMark\{visibility:hidden\}/, 'plain ink before the build starts');
+  assert.match(ui, /\$\('appLoader'\)\._logoWait = false;/, 'the splash re-armed after sign-in can close again');
 });

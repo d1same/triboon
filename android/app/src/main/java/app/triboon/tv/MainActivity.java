@@ -3330,12 +3330,12 @@ public class MainActivity extends Activity {
         subRow.setPadding(0, dp(6), 0, 0);
 
         nativePlayerBadge = new TextView(this);
-        nativePlayerBadge.setTextColor(0xFFEDE8F5);
+        nativePlayerBadge.setTextColor(0xFFEDEFF3);
         nativePlayerBadge.setTextSize(10);
         nativePlayerBadge.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         nativePlayerBadge.setGravity(android.view.Gravity.CENTER);
         nativePlayerBadge.setPadding(dp(9), dp(3), dp(9), dp(4));
-        nativePlayerBadge.setBackground(nativePillBg(0x55221934, 0x66C9B8D8, dp(14)));
+        nativePlayerBadge.setBackground(nativePillBg(0x00000000, 0x47EDEFF3, dp(6)));
         subRow.addView(nativePlayerBadge, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -3754,7 +3754,7 @@ public class MainActivity extends Activity {
     private GradientDrawable nativeLoadingLaneGlowBg() {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                new int[]{0x00FFFFFF, 0xCCB8A46A, 0xFFFFFFFF, 0xCCB8A46A, 0x00FFFFFF});
+                new int[]{0x00FFFFFF, 0x99EDEFF3, 0xFFFFFFFF, 0x99EDEFF3, 0x00FFFFFF});
         d.setCornerRadius(dp(999));
         return d;
     }
@@ -3947,10 +3947,10 @@ public class MainActivity extends Activity {
     private GradientDrawable nativePanelBg() {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xF0181A1D, 0xF00D0F12});
+                new int[]{0xC8181A1D, 0xC80D0F12}); // 3.5.0 owner: more see-through
         d.setShape(GradientDrawable.RECTANGLE);
-        d.setCornerRadius(dp(10));
-        d.setStroke(dp(1), 0x12FFFFFF);
+        d.setCornerRadius(dp(6));
+        d.setStroke(0, 0x00000000); // 3.5.0 owner: no border
         return d;
     }
 
@@ -3986,10 +3986,10 @@ public class MainActivity extends Activity {
         body.setOrientation(LinearLayout.VERTICAL);
 
         nativeAboutKicker = new TextView(this);
-        nativeAboutKicker.setText("ABOUT");
-        nativeAboutKicker.setTextColor(0xE0FFCC67);
-        nativeAboutKicker.setTextSize(10);
-        nativeAboutKicker.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nativeAboutKicker.setText("About");
+        nativeAboutKicker.setTextColor(0xB3EDEFF3);
+        nativeAboutKicker.setTextSize(12);
+        nativeAboutKicker.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         nativeAboutKicker.setLetterSpacing(0.12f);
         body.addView(nativeAboutKicker);
 
@@ -4002,7 +4002,7 @@ public class MainActivity extends Activity {
         body.addView(nativeAboutTitle);
 
         nativeAboutSubline = new TextView(this);
-        nativeAboutSubline.setTextColor(0xE6FFCC67);
+        nativeAboutSubline.setTextColor(0xE6EDEFF3);
         nativeAboutSubline.setTextSize(16);
         nativeAboutSubline.setPadding(0, dp(8), 0, 0);
         nativeAboutSubline.setVisibility(View.GONE);
@@ -4068,7 +4068,7 @@ public class MainActivity extends Activity {
         nativeAboutTitle.setText(title);
         String subline = d.optString("subline", "");
         if (nativeAboutKicker != null) {
-            nativeAboutKicker.setText(subline.isEmpty() ? "ABOUT" : "THIS EPISODE");
+            nativeAboutKicker.setText(subline.isEmpty() ? "About" : "This episode");
         }
         if (nativeAboutSubline != null) {
             nativeAboutSubline.setText(subline);
@@ -4418,14 +4418,15 @@ public class MainActivity extends Activity {
         b.setClickable(true);
         b.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         b.setTag(iconRes);
-        b.setPadding(dp(primary ? 9 : 8), dp(primary ? 9 : 8), dp(primary ? 9 : 8), dp(primary ? 9 : 8));
+        // 3.5.0 owner: smaller button backgrounds, same icon size (padding shrinks with the box).
+        b.setPadding(dp(primary ? 8 : 6), dp(primary ? 8 : 6), dp(primary ? 8 : 6), dp(primary ? 8 : 6));
         b.setScaleType(ImageButton.ScaleType.CENTER_INSIDE);
         b.setCropToPadding(false);
         b.setClipToOutline(false);
         b.setBackground(nativeButtonBg(false, primary));
         setNativeButtonIcon(b, iconRes, primary, false);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                dp(primary ? 46 : 36), dp(primary ? 46 : 36));
+                dp(primary ? 40 : 32), dp(primary ? 40 : 32));
         lp.rightMargin = dp(8);
         b.setLayoutParams(lp);
         b.setOnFocusChangeListener((v, hasFocus) -> {
@@ -4448,7 +4449,7 @@ public class MainActivity extends Activity {
 
     private void setNativeButtonIcon(ImageButton b, int iconRes, boolean primary, boolean focused) {
         b.setImageResource(iconRes);
-        int tint = !b.isEnabled() ? 0x88EDE8F5 : (focused ? 0xFF0B0812 : 0xFFEDE8F5);
+        int tint = !b.isEnabled() ? 0x88EDEFF3 : (focused ? 0xFF14161A : 0xFFEDEFF3);
         b.setImageTintList(ColorStateList.valueOf(tint));
     }
 
@@ -4487,10 +4488,10 @@ public class MainActivity extends Activity {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 focused
-                        ? new int[]{0xFFEDE8F5, 0xFFD9CBE7}
-                        : new int[]{0x18F3EFF7, 0x18F3EFF7});
+                        ? new int[]{0xFFEDEFF3, 0xFFEDEFF3}
+                        : new int[]{0x59000000, 0x59000000}); // 3.5.0 owner: see-through black, a touch darker than the player shade
         d.setShape(GradientDrawable.RECTANGLE);
-        d.setCornerRadius(dp(primary ? 23 : 18));
+        d.setCornerRadius(dp(6)); // crisp corner, same as every site button
         d.setStroke(0, 0x00000000);
         return d;
     }
@@ -6215,7 +6216,12 @@ public class MainActivity extends Activity {
                 && code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT
                 && code != KeyEvent.KEYCODE_DPAD_CENTER && code != KeyEvent.KEYCODE_ENTER) return false;
         java.util.ArrayList<View> rows = nativeSheetFocusableRows();
-        if (rows.isEmpty()) return true;
+        if (rows.isEmpty()) {
+            // Info card (Playback stats): nothing to pick, so OK closes it like Back.
+            if ((code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER)
+                    && e.getAction() == KeyEvent.ACTION_UP) hideNativeSheet();
+            return true;
+        }
         int cur = rows.indexOf(getCurrentFocus());
         if (cur < 0) {
             cur = 0;
@@ -7528,8 +7534,10 @@ public class MainActivity extends Activity {
         d.setShape(GradientDrawable.RECTANGLE);
         d.setColor(0x00000000);
         d.setCornerRadius(dp(12));
-        if (focused) d.setStroke(dp(2), 0xFFC6B37A);
-        else if (current) d.setStroke(dp(1), 0x66C6B37A);
+        // Quiet Graphite (3.5.0): the same flat white ring as the web posters; the playing episode
+        // keeps a faint white line so it stays findable.
+        if (focused) d.setStroke(dp(3), 0xFFEDEFF3);
+        else if (current) d.setStroke(dp(1), 0x73EDEFF3);
         return d;
     }
 
@@ -7687,7 +7695,7 @@ public class MainActivity extends Activity {
                     ImageView focusedStill = v.findViewWithTag("nativeEpisodeStill");
                     if (focusedStill != null) focusedStill.setForeground(nativeEpisodeStillFrame(true, nativeEpisodes.get(idx).current));
                     v.setElevation(0);
-                    v.animate().translationY(-dp(3)).setDuration(120).start();
+                    v.setTranslationY(0f); // Quiet Graphite: the ring is the cue; the card never lifts
                     scrollNativeEpisodeIntoView(v);
                     loadNativeEpisodeStillsAround(idx); // D-pad movement pulls the next image window in
                 } else {
@@ -7735,7 +7743,7 @@ public class MainActivity extends Activity {
             TextView label = new TextView(this);
             label.setText(ep.tag);
             label.setSingleLine(true);
-            label.setTextColor(0xEFFFCC67);
+            label.setTextColor(0xB3EDEFF3);
             label.setTextSize(10);
             label.setTypeface(Typeface.DEFAULT_BOLD);
             label.setPadding(dp(1), dp(7), dp(1), 0);
@@ -8249,6 +8257,7 @@ public class MainActivity extends Activity {
 
     private void hideNativeSheet() {
         if (nativeSheet == null) return;
+        nativeStatsOpen = false;
         nativeSheet.setVisibility(View.GONE);
         nativeSheet.removeAllViews();
         nativeSheetScroll = null;
@@ -8273,14 +8282,21 @@ public class MainActivity extends Activity {
         return isTvDevice() ? dp(42) : dp(16);
     }
 
+    // 3.5.0 (owner, Shield): on TV the popup sat only 96dp up, over the end of the seek bar and the
+    // time. It now ends just above the seek bar (28% of the screen height up, which tracks the bar on
+    // every TV size) and its rows fit between the title block (top 17%) and that line.
     private int nativeSheetBottomMarginPx() {
-        if (isTvDevice()) return dp(96);
         int screen = Math.max(1, getResources().getDisplayMetrics().heightPixels);
+        if (isTvDevice()) return Math.round(screen * 0.28f);
         return Math.max(dp(68), Math.min(dp(96), screen / 5));
     }
 
     private int nativeSheetVerticalReservePx() {
-        return isTvDevice() ? dp(260) : dp(190);
+        if (isTvDevice()) {
+            int screen = Math.max(1, getResources().getDisplayMetrics().heightPixels);
+            return nativeSheetBottomMarginPx() + Math.round(screen * 0.17f) + dp(64); // + sheet title and padding
+        }
+        return dp(190);
     }
 
     private void updateNativeSheetLayout() {
@@ -8376,7 +8392,7 @@ public class MainActivity extends Activity {
     private TextView nativeSheetRow(String label, boolean selected) {
         TextView row = new TextView(this);
         row.setText(label);
-        row.setTextColor(selected ? 0xFFF4E6B7 : 0xDDF3EFF7);
+        row.setTextColor(selected ? 0xFFEDEFF3 : 0xDDEDEFF3);
         row.setTextSize(12);
         row.setTypeface(Typeface.DEFAULT_BOLD);
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -8392,7 +8408,7 @@ public class MainActivity extends Activity {
         row.setLayoutParams(lp);
         row.setOnFocusChangeListener((v, hasFocus) -> {
             v.setBackground(nativeSheetRowBg(hasFocus, selected));
-            ((TextView) v).setTextColor(hasFocus ? 0xFFF9F4FF : selected ? 0xFFF4E6B7 : 0xDDF3EFF7);
+            ((TextView) v).setTextColor(hasFocus ? 0xFF14161A : selected ? 0xFFEDEFF3 : 0xDDEDEFF3);
         });
         return row;
     }
@@ -8401,12 +8417,12 @@ public class MainActivity extends Activity {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 focused
-                        ? new int[]{0xFF2B3137, 0xFF252A30}
+                        ? new int[]{0xFFEDEFF3, 0xFFEDEFF3}
                         : selected
-                        ? new int[]{0x403A3424, 0x30312D22}
+                        ? new int[]{0x29EDEFF3, 0x29EDEFF3}
                         : new int[]{0x0012091D, 0x0012091D});
-        d.setCornerRadius(dp(8));
-        d.setStroke(dp(1), focused ? 0x66B8A46A : selected ? 0x55B8A46A : 0x00000000);
+        d.setCornerRadius(dp(6));
+        d.setStroke(0, 0x00000000); // Graphite: no edge lines
         return d;
     }
 
@@ -8565,8 +8581,150 @@ public class MainActivity extends Activity {
         return rows.toArray(new String[0]);
     }
 
+    // 3.5.0 (owner pick "C"): Playback stats is an info card, not a menu of selectable rows.
+    // Headline tags (how it plays, quality, codec, audio, size) then a few detail lines that refresh
+    // every second while the card is open. Nothing to select: OK or Back closes it.
+    private TextView nativeStatsVideoLine, nativeStatsAudioLine, nativeStatsSizeLine, nativeStatsBufferLine, nativeStatsBandwidthLine;
+    private boolean nativeStatsOpen;
+    private final Runnable nativeStatsTick = new Runnable() {
+        @Override public void run() {
+            if (!nativeStatsOpen || !nativeSheetOpen()) { nativeStatsOpen = false; return; }
+            updateNativeStatsLines();
+            if (nativeProgress != null) nativeProgress.postDelayed(this, 1000);
+        }
+    };
+
     private void showNativeStatsSheet() {
-        showNativeChoiceSheet("Playback stats", nativeStatsRows(), null, index -> {});
+        if (nativeSheet == null) return;
+        nativeProgress.removeCallbacks(nativeHideChrome);
+        nativeSheetReturnFocus = getCurrentFocus();
+        nativeSheet.removeAllViews();
+        nativeSheetScroll = null;
+        nativeSheetRows = null;
+        updateNativeSheetLayout();
+
+        TextView head = new TextView(this);
+        head.setText("Playback stats");
+        head.setTextColor(0xFFEDEFF3);
+        head.setTextSize(13);
+        head.setTypeface(Typeface.DEFAULT_BOLD);
+        head.setPadding(dp(4), dp(2), dp(4), dp(10));
+        nativeSheet.addView(head, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // Headline tags, wrapped onto as many lines as the card width needs.
+        java.util.ArrayList<String> tags = new java.util.ArrayList<>();
+        String kind = nativeKind == null ? "" : nativeKind.trim();
+        tags.add(kind.isEmpty() || "direct".equalsIgnoreCase(kind) ? "Direct play"
+                : Character.toUpperCase(kind.charAt(0)) + kind.substring(1));
+        if ("live".equals(nativeMode)) tags.add("Live TV");
+        tags.add(nativeQualityLabel == null || nativeQualityLabel.isEmpty() ? "Auto" : nativeQualityLabel);
+        Format vf = nativeSelectedFormat(C.TRACK_TYPE_VIDEO);
+        String vcodec = vf == null ? "" : nativeCodecName(vf.sampleMimeType, vf.codecs);
+        if (!vcodec.isEmpty()) tags.add(vcodec);
+        Format af = nativeSelectedFormat(C.TRACK_TYPE_AUDIO);
+        if (af != null) {
+            String acodec = nativeCodecName(af.sampleMimeType, af.codecs);
+            String ch = af.channelCount == 6 ? "5.1" : af.channelCount == 8 ? "7.1" : af.channelCount > 0 ? af.channelCount + "ch" : "";
+            String a = (acodec + " " + ch).trim();
+            if (!a.isEmpty()) tags.add(a);
+        }
+        if (nativePlaybackSizeBytes > 0) tags.add(nativeFileSizeLabel(nativePlaybackSizeBytes));
+        int avail = nativeSheetWidthPx() - nativeSheet.getPaddingLeft() - nativeSheet.getPaddingRight() - dp(8);
+        LinearLayout tagLine = null;
+        int used = 0;
+        for (int i = 0; i < tags.size(); i++) {
+            TextView t = nativeStatsTag(tags.get(i), i == 0);
+            t.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+            int w = t.getMeasuredWidth() + dp(6);
+            if (tagLine == null || used + w > avail) {
+                tagLine = new LinearLayout(this);
+                tagLine.setOrientation(LinearLayout.HORIZONTAL);
+                tagLine.setPadding(dp(4), 0, dp(4), dp(6));
+                nativeSheet.addView(tagLine, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                used = 0;
+            }
+            LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            tlp.rightMargin = dp(6);
+            tagLine.addView(t, tlp);
+            used += w;
+        }
+
+        nativeStatsVideoLine = nativeStatsLine("Video");
+        nativeStatsAudioLine = nativeStatsLine("Audio");
+        nativeStatsSizeLine = nativeStatsLine("File size");
+        nativeStatsBufferLine = nativeStatsLine("Buffered");
+        nativeStatsBandwidthLine = nativeStatsLine("Bandwidth");
+        nativeStatsLine("Player").setText("ExoPlayer (Android)");
+        updateNativeStatsLines();
+
+        nativeSheet.setVisibility(View.VISIBLE);
+        nativeSheet.bringToFront();
+        nativeSheet.requestFocus();
+        nativeStatsOpen = true;
+        nativeProgress.removeCallbacks(nativeStatsTick);
+        nativeProgress.postDelayed(nativeStatsTick, 1000);
+    }
+
+    private TextView nativeStatsTag(String text, boolean strong) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(12);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setSingleLine(true);
+        t.setTextColor(strong ? 0xFF14161A : 0xFFEDEFF3);
+        t.setPadding(dp(9), dp(4), dp(9), dp(5));
+        t.setBackground(nativePillBg(strong ? 0xFFEDEFF3 : 0x00000000, strong ? 0xFFEDEFF3 : 0x47EDEFF3, dp(6)));
+        return t;
+    }
+
+    // One "Label   value" line with a hairline above; returns the value view.
+    private TextView nativeStatsLine(String label) {
+        LinearLayout line = new LinearLayout(this);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+        line.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        line.setPadding(dp(4), dp(5), dp(4), dp(5));
+        View rule = new View(this);
+        rule.setBackgroundColor(0x1AEDEFF3);
+        nativeSheet.addView(rule, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
+        TextView k = new TextView(this);
+        k.setText(label);
+        k.setTextSize(12);
+        k.setTextColor(0x99EDEFF3);
+        line.addView(k, new LinearLayout.LayoutParams(dp(78), ViewGroup.LayoutParams.WRAP_CONTENT));
+        TextView v = new TextView(this);
+        v.setTextSize(12);
+        v.setTextColor(0xFFEDEFF3);
+        v.setSingleLine(true);
+        v.setEllipsize(TextUtils.TruncateAt.END);
+        line.addView(v, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        nativeSheet.addView(line, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return v;
+    }
+
+    private void updateNativeStatsLines() {
+        if (nativeStatsVideoLine != null) {
+            String video = nativeVideoStatsLabel(nativeSelectedFormat(C.TRACK_TYPE_VIDEO)).replace(" - ", " · ");
+            nativeStatsVideoLine.setText(video.isEmpty() ? "Detecting" : video);
+        }
+        if (nativeStatsAudioLine != null) {
+            String audio = nativeAudioStatsLabel(nativeSelectedFormat(C.TRACK_TYPE_AUDIO)).replace(" - ", " · ");
+            nativeStatsAudioLine.setText(audio.isEmpty() ? "Detecting" : audio);
+        }
+        if (nativeStatsSizeLine != null) {
+            nativeStatsSizeLine.setText(nativePlaybackSizeBytes > 0 ? nativeFileSizeLabel(nativePlaybackSizeBytes) : "Unknown");
+        }
+        if (nativeStatsBufferLine != null) {
+            long buffered = nativeBufferedAheadMs();
+            nativeStatsBufferLine.setText(buffered > 0 ? Math.round(buffered / 1000.0) + " s ahead" : "Detecting");
+        }
+        if (nativeStatsBandwidthLine != null) {
+            long bw = nativeBandwidthEstimate();
+            nativeStatsBandwidthLine.setText(bw > 0 ? nativeBitrateLabel((int) Math.min(Integer.MAX_VALUE, bw)) : "Detecting");
+        }
     }
 
     private void playNativeNextEpisode() {
