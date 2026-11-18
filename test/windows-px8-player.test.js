@@ -404,7 +404,13 @@ test('Windows client: native chrome matches the web player loader and transport'
   const rust = read('clients/windows-px8/src-tauri/src/player.rs');
   assert.match(html, /class="loadSteps"[\s\S]+id="loadingStage"/,
     'startup uses the web load bar, not a spinning ring');
-  assert.match(html, /src="triboon.png"/, 'startup shows the Triboon wordmark');
+  assert.match(html, /<svg class="tbMark loadLogo"[^>]*aria-label="Triboon">[\s\S]*?<\/svg>\s*<strong id="loadingTitle">/,
+    'startup shows the Triboon vector wordmark');
+  assert.match(css, /\.loading \{ --tbS: \.5; \}/, 'the Windows loader runs the logo build-up at half time like the web loader');
+  assert.match(css, /@media \(prefers-reduced-motion:no-preference\)\{body\[data-state="loading"\] \.loading \.tbL\{animation:tbRise [^}]+ both\}[\s\S]+body\[data-state="loading"\] \.loading \.tbDot\{animation:tbLand[^}]+\}\}/,
+    'the Windows logo animates only while loading and only without reduced motion');
+  assert.doesNotMatch(css, /\.loadLogo[^}]*drop-shadow/, 'the loader wordmark stays flat (no shadow)');
+  assert.doesNotMatch(js, /animationend|getAnimations\(/, 'the Windows player never waits for the logo animation');
   assert.match(html, /id="i-back"[\s\S]+M3 2v6h6[\s\S]+id="i-forward"[\s\S]+M21 2v6h-6/,
     'skip icons are the same stroke arrows as the web player');
   assert.doesNotMatch(html, /<text[^>]*>10<\/text>|<text[^>]*>30<\/text>/,

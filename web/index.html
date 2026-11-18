@@ -2438,6 +2438,11 @@ body.iosPhone #volSlider{display:none}
 }
 
 /* Branded loaders so nothing ever looks frozen. */
+/* The wordmark builds itself while the app is waiting anyway: CSS only, never awaited. The
+   movie loader runs it at half time (--tbS) and hides mid-build the moment the first frame is
+   ready. Reduced motion (or a hidden loader) shows the finished mark with no animation. */
+#appLoader{--tbS:1}#playerLoader{--tbS:.5}
+@keyframes tbRise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}@keyframes tbDraw{from{stroke-dasharray:1;stroke-dashoffset:1}to{stroke-dasharray:1;stroke-dashoffset:0}}@keyframes tbPop{from{opacity:0;transform:scale(.55)}to{opacity:1;transform:none}}@keyframes tbLand{from{opacity:0;transform:translateX(70px)}to{opacity:1;transform:none}}.tbMark{display:block;height:auto;overflow:visible}.tbMark .tbPlay{transform-box:fill-box;transform-origin:30% 50%}@media (prefers-reduced-motion:no-preference){#appLoader:not(.hide) .tbL,#playerLoader.show .tbL{animation:tbRise calc(.6s*var(--tbS,1)) cubic-bezier(.2,.7,.2,1) both}#appLoader:not(.hide) .tbT,#playerLoader.show .tbT{animation-delay:calc(.10s*var(--tbS,1))}#appLoader:not(.hide) .tbR,#playerLoader.show .tbR{animation-delay:calc(.16s*var(--tbS,1))}#appLoader:not(.hide) .tbI,#playerLoader.show .tbI{animation-delay:calc(.22s*var(--tbS,1))}#appLoader:not(.hide) .tbB,#playerLoader.show .tbB{animation-delay:calc(.28s*var(--tbS,1))}#appLoader:not(.hide) .tbN,#playerLoader.show .tbN{animation-delay:calc(.46s*var(--tbS,1))}#appLoader:not(.hide) .tbO1,#playerLoader.show .tbO1{animation:tbDraw calc(.8s*var(--tbS,1)) cubic-bezier(.45,0,.2,1) calc(.34s*var(--tbS,1)) both}#appLoader:not(.hide) .tbO2,#playerLoader.show .tbO2{animation:tbDraw calc(.8s*var(--tbS,1)) cubic-bezier(.45,0,.2,1) calc(.48s*var(--tbS,1)) both}#appLoader:not(.hide) .tbPlay,#playerLoader.show .tbPlay{animation:tbPop calc(.45s*var(--tbS,1)) cubic-bezier(.2,.8,.25,1) calc(1s*var(--tbS,1)) both}#appLoader:not(.hide) .tbDot,#playerLoader.show .tbDot{animation:tbLand calc(.55s*var(--tbS,1)) cubic-bezier(.2,.75,.2,1) calc(1.12s*var(--tbS,1)) both}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes pulseLogo{0%,100%{opacity:.85;transform:scale(1)}50%{opacity:1;transform:scale(1.05)}}
 .spinner{width:46px;height:46px;border-radius:50%;border:3px solid rgba(var(--fg),.15);border-top-color:var(--coral);animation:spin .8s linear infinite}
@@ -2453,10 +2458,8 @@ body.iosPhone #volSlider{display:none}
 #appLoader.hide{opacity:0;pointer-events:none}
 #appLoader .inner{position:relative;display:flex;flex-direction:column;align-items:center;gap:26px;animation:splashIn .9s ease both}
 @keyframes splashIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-#appLoader .brandWordmarkClip{width:330px;height:92px;overflow:hidden} /* bigger mark (owner call) */
-#appLoader .brandWordmark img{display:block;width:330px;height:auto;transform:translateY(-25%)}
-@media (max-width:600px){#appLoader .brandWordmarkClip{width:250px;height:70px}
-  #appLoader .brandWordmark img{width:250px}}
+#appLoader .tbMark{width:280px} /* same visual size as the old 330px clipped wordmark */
+@media (max-width:600px){#appLoader .tbMark{width:220px}}
 #appLoader .bootLaneTrack{width:150px;height:2px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden}
 #appLoader .bootLaneTrack i{display:block;height:100%;width:12%;border-radius:999px;background:rgba(255,255,255,.5);
   transition:width 1.1s cubic-bezier(.25,.6,.35,1)}
@@ -2465,8 +2468,8 @@ body.iosPhone #volSlider{display:none}
 #playerLoader .cover{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(10px) brightness(.42);transform:scale(1.03)}
 #playerLoader .lc{position:relative;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;width:min(560px,calc(100vw - 64px));padding:0 24px}
 #playerLoader .loadMark{display:grid;place-items:center}
-#playerLoader .loadMark svg{display:none}
-#playerLoader .loadMark img{width:min(210px,50vw);height:auto;filter:drop-shadow(0 10px 26px rgba(0,0,0,.42))}
+#playerLoader .loadMark svg:not(.tbMark){display:none}
+#playerLoader .loadMark .tbMark{width:min(170px,40vw);margin:4px 0 14px}
 #playerLoader .lc .pt{font:650 19px/1.18 "Sora";max-width:100%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:rgba(var(--fg),.9)}
 #playerLoader .loadSteps{width:min(340px,72vw);height:4px;border-radius:999px;background:rgba(var(--fg),.16);overflow:hidden;margin-top:3px;box-shadow:0 0 0 1px rgba(0,0,0,.14),0 10px 26px rgba(0,0,0,.20)}
 #playerLoader .loadStep{display:block;width:58%;height:100%;border-radius:inherit;background:linear-gradient(90deg,rgba(255,255,255,0),var(--focus) 24%,rgba(255,255,255,.94) 55%,var(--focus) 82%,rgba(255,255,255,0));box-shadow:0 0 18px var(--artFocusGlow);transform:translateX(-110%);animation:loadLane 1.35s ease-in-out infinite}
@@ -4029,9 +4032,9 @@ body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
 <body>
 
 <div id="appLoader"><div class="inner">
-  <!-- Boot splash (owner-approved 2026-08-06): the WORDMARK on tinted ink + one hairline lane
-       whose fill tracks REAL boot stages (splashStage). No ring, no reel — quiet and premium. -->
-  <div class="brandWordmarkClip"><div class="brandWordmark"><img src="triboon.png" alt="Triboon"></div></div>
+  <!-- Boot splash: the WORDMARK builds itself on tinted ink (CSS only, never waits for it) + one
+       hairline lane whose fill tracks REAL boot stages (splashStage). No ring, no glow. -->
+  <svg class="tbMark" xmlns="http://www.w3.org/2000/svg" viewBox="100 255 1106 204" role="img" aria-label="Triboon"><defs><clipPath id="tbSR"><rect x="348" y="338" width="112" height="112"/></clipPath><clipPath id="tbSN"><rect x="1045" y="264" width="154" height="186"/></clipPath><mask id="tbSO" maskUnits="userSpaceOnUse" x="600" y="200" width="500" height="320"><rect x="600" y="200" width="500" height="320" fill="#fff"/><path d="M836.5 301.2A76 76 0 1 0 836.5 412.8L897 357Z" fill="#000" stroke="#000" stroke-width="66" stroke-miterlimit="8"/></mask></defs><rect class="tbDot" x="107" y="264" width="38" height="37" rx="8" fill="#C13BD6"/><g fill="#F3EFF7"><g class="tbL tbT"><rect x="152" y="264" width="131" height="37" rx="8"/><rect x="178" y="264" width="38" height="186" rx="8"/></g><g class="tbL tbR"><rect x="294" y="264" width="38" height="186" rx="8"/><path d="M313 282.5H394.75A37.25 37.25 0 0 1 394.75 357H348" fill="none" stroke="#F3EFF7" stroke-width="38"/><path d="M349 340L447.6 465" fill="none" stroke="#F3EFF7" stroke-width="38.5" clip-path="url(#tbSR)"/></g><g class="tbL tbI"><rect x="465" y="264" width="39" height="186" rx="8"/></g><g class="tbL tbB"><rect x="522" y="264" width="39" height="186" rx="8"/><path d="M541 282H620.5A36.5 36.5 0 0 1 620.5 355H572M572 355H621A38.75 38.75 0 0 1 621 432.5H541" fill="none" stroke="#F3EFF7" stroke-width="37"/></g><path class="tbO1" pathLength="1" d="M836.5 301.2A76 76 0 1 0 836.5 412.8L897 357Z" fill="none" stroke="#F3EFF7" stroke-width="38" stroke-miterlimit="8"/><g mask="url(#tbSO)"><circle class="tbO2" pathLength="1" cx="941" cy="357" r="75.5" fill="none" stroke="#F3EFF7" stroke-width="38"/></g><g class="tbL tbN"><rect x="1045" y="264" width="38" height="186" rx="8"/><rect x="1161" y="264" width="38" height="186" rx="8"/><path d="M1031.5 240L1219.5 475" fill="none" stroke="#F3EFF7" stroke-width="39" clip-path="url(#tbSN)"/></g></g><path class="tbPlay" d="M778 326L827 357L778 388Z" fill="#C13BD6" stroke="#C13BD6" stroke-width="8" stroke-linejoin="round"/></svg>
   <div class="bootLaneTrack"><i id="bootLane"></i></div>
 </div></div>
 
@@ -5485,7 +5488,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <path d="M85.5 74 A47.7 47.7 0 0 1 72 89.5" fill="none" stroke="rgba(255,255,255,.22)"
           stroke-width="1.7" stroke-linecap="round"/>
       </svg>
-      <img src="triboon.png" alt="Triboon"></div>
+      <svg class="tbMark" xmlns="http://www.w3.org/2000/svg" viewBox="100 255 1106 204" role="img" aria-label="Triboon"><defs><clipPath id="tbPR"><rect x="348" y="338" width="112" height="112"/></clipPath><clipPath id="tbPN"><rect x="1045" y="264" width="154" height="186"/></clipPath><mask id="tbPO" maskUnits="userSpaceOnUse" x="600" y="200" width="500" height="320"><rect x="600" y="200" width="500" height="320" fill="#fff"/><path d="M836.5 301.2A76 76 0 1 0 836.5 412.8L897 357Z" fill="#000" stroke="#000" stroke-width="66" stroke-miterlimit="8"/></mask></defs><rect class="tbDot" x="107" y="264" width="38" height="37" rx="8" fill="#C13BD6"/><g fill="#F3EFF7"><g class="tbL tbT"><rect x="152" y="264" width="131" height="37" rx="8"/><rect x="178" y="264" width="38" height="186" rx="8"/></g><g class="tbL tbR"><rect x="294" y="264" width="38" height="186" rx="8"/><path d="M313 282.5H394.75A37.25 37.25 0 0 1 394.75 357H348" fill="none" stroke="#F3EFF7" stroke-width="38"/><path d="M349 340L447.6 465" fill="none" stroke="#F3EFF7" stroke-width="38.5" clip-path="url(#tbPR)"/></g><g class="tbL tbI"><rect x="465" y="264" width="39" height="186" rx="8"/></g><g class="tbL tbB"><rect x="522" y="264" width="39" height="186" rx="8"/><path d="M541 282H620.5A36.5 36.5 0 0 1 620.5 355H572M572 355H621A38.75 38.75 0 0 1 621 432.5H541" fill="none" stroke="#F3EFF7" stroke-width="37"/></g><path class="tbO1" pathLength="1" d="M836.5 301.2A76 76 0 1 0 836.5 412.8L897 357Z" fill="none" stroke="#F3EFF7" stroke-width="38" stroke-miterlimit="8"/><g mask="url(#tbPO)"><circle class="tbO2" pathLength="1" cx="941" cy="357" r="75.5" fill="none" stroke="#F3EFF7" stroke-width="38"/></g><g class="tbL tbN"><rect x="1045" y="264" width="38" height="186" rx="8"/><rect x="1161" y="264" width="38" height="186" rx="8"/><path d="M1031.5 240L1219.5 475" fill="none" stroke="#F3EFF7" stroke-width="39" clip-path="url(#tbPN)"/></g></g><path class="tbPlay" d="M778 326L827 357L778 388Z" fill="#C13BD6" stroke="#C13BD6" stroke-width="8" stroke-linejoin="round"/></svg></div>
     <div class="pt" id="plTitle"></div>
     <div class="loadSteps" aria-hidden="true"><span class="loadStep"></span></div>
     <div class="loadStatus" id="plStage">Preparing</div></div></div>
