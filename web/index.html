@@ -10434,6 +10434,13 @@ function restoreLeavingDetailFocus(snap) {
   }
   if (snap.focusKind === 'episode' && snap.epSeason != null) {
     if (focusRenderedDetailEpisode({ season: snap.epSeason, episode: snap.epEpisode })) return true;
+    // A multi-season show re-opens on its season grid: open the season that was left, on that episode.
+    const show = S.detailItem;
+    if (show && S.detailSeasons && S.detailSeasons.some((s) => s.season_number === snap.epSeason)) {
+      if (show._localShow) openLocalShowSeasonEpisodes(show, snap.epSeason, { focusEpisode: snap.epEpisode });
+      else openSeasonEpisodes(show, snap.epSeason, { focusEpisode: snap.epEpisode });
+      return true;
+    }
   }
   if (snap.focusKind === 'season' && snap.season != null) {
     const card = document.querySelector(`#seasonGrid .seasonCard[data-season="${snap.season}"], #seasonTabs .seasonTab[data-season="${snap.season}"]`);
@@ -10586,18 +10593,32 @@ function fillDetailRelated(it, recs) {
   });
   bindEdgeScroll(row);
 }
+// Resolves once the "More like this" row is filled (or known empty). Each title's list is kept for
+// PAGE_CACHE_MS so Back to a title fills the row at once: the Back focus restore needs the related
+// card that opened the next title to exist, or it fell back to Play at the top (owner report).
 function loadDetailRelated(it, d, reqId) {
   const cached = [...((((d || {}).recommendations || {}).results) || []), ...((((d || {}).similar || {}).results) || [])];
   if (cached.length) {
     fillDetailRelated(it, cached);
-    return;
+    return Promise.resolve();
   }
-  Promise.all([
+  const key = `${it.type}:${it.tmdbId}`;
+  const hit = S.detailRelatedCache && S.detailRelatedCache[key];
+  if (hit && Date.now() - hit.at < PAGE_CACHE_MS) {
+    fillDetailRelated(it, hit.recs);
+    return Promise.resolve();
+  }
+  return Promise.all([
     api(`/api/tmdb/${it.type}/${it.tmdbId}/recommendations`).catch(() => null),
     api(`/api/tmdb/${it.type}/${it.tmdbId}/similar`).catch(() => null),
   ]).then(([rec, sim]) => {
+    const recs = [...((rec && rec.results) || []), ...((sim && sim.results) || [])];
+    if (rec || sim) {
+      S.detailRelatedCache = S.detailRelatedCache || {};
+      S.detailRelatedCache[key] = { at: Date.now(), recs };
+    }
     if (reqId !== S.detailReq || S.view !== 'detail') return;
-    fillDetailRelated(it, [...((rec && rec.results) || []), ...((sim && sim.results) || [])]);
+    fillDetailRelated(it, recs);
   }).catch(() => {});
 }
 async function openDetail(it, push = true, opts = {}) {
@@ -10804,15 +10825,18 @@ async function openDetail(it, push = true, opts = {}) {
     $('dStartOver').style.display = hasProgress ? '' : 'none';
 
     // Related is a follow-up so a slow extras payload cannot hold back cast/seasons.
-    loadDetailRelated(it, d, reqId);
+    const relatedReady = loadDetailRelated(it, d, reqId);
     if (S._detailRestore && sameDetailIdentity(S.detailItem, S._detailRestore.item) && reqId === S.detailReq) {
       const snap = S._detailRestore;
       S._detailRestore = null;
       dropDetailSnap(snap.item);
-      requestAnimationFrame(() => {
+      // Back to a title left from "More like this": wait for that row before restoring, or the
+      // card is missing and focus fell back to Play at the top of the page.
+      const ready = snap.focusKind === 'related' ? relatedReady : Promise.resolve();
+      ready.then(() => requestAnimationFrame(() => {
         if (S.view !== 'detail' || reqId !== S.detailReq) return;
         if (!restoreLeavingDetailFocus(snap)) applyFocus($('dPlay'));
-      });
+      }));
     }
   }).catch((e) => {
     if (reqId !== S.detailReq || S.view !== 'detail') return;
@@ -12037,7 +12061,8 @@ async function focusDetailPlayEpisode(show, opts = {}) {
   return focusRenderedDetailEpisode(parts);
 }
 function queueDetailPlayEpisodeFocus(show, reqId) {
-  if (S.detailEpisodeAutoFocusDone) return;
+  // Back to a title restores where the user left it; the next-up auto-focus must not race it.
+  if (S.detailEpisodeAutoFocusDone || S._detailRestore) return;
   const parts = detailPlayEpisodeParts();
   if (!parts || !detailPlayShouldFocusEpisode()) return;
   requestAnimationFrame(() => {
