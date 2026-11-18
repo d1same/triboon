@@ -4073,6 +4073,27 @@ body[data-theme="graphite"] #player #playerEpisodes .playerEpCard.focus,body[dat
 body[data-theme="graphite"] #player #playerEpisodes .playerEpCard.focus .peStill,body[data-theme="graphite"] #player #playerEpisodes .playerEpCard:focus-visible .peStill{box-shadow:inset 0 0 0 3px var(--focus)!important}
 body[data-theme="graphite"] .playerEpCard.current .peStill{box-shadow:inset 0 0 0 1.5px rgba(237,239,243,.45)}
 body[data-theme="graphite"] .playerEpCard .peTag{color:var(--muted)}
+/* Labels: no letter-spaced amber mono capitals left ("CONTINUE WATCHING", "MOVIE", "THIS ACCOUNT",
+   "SERVER SETTINGS") — quiet sentence-style Sora in grey, matching the new wordmark. */
+body[data-theme="graphite"] #hero .eyebrow,body[data-theme="graphite"] .dInfo .eyebrow,
+body[data-theme="graphite"] .dashEyebrow,body[data-theme="graphite"] .prefTabDivider span{
+  font-family:"Sora",system-ui,sans-serif;font-weight:600;font-size:13px;letter-spacing:.01em;text-transform:none;color:var(--muted)}
+body[data-theme="graphite"].tv #hero .eyebrow{height:auto;overflow:visible}
+body[data-theme="graphite"] .prefTabDivider span{font-size:12px}
+/* Rating, credits and people links: quiet white and grey, not amber. */
+body[data-theme="graphite"] #dMeta .rating,body[data-theme="graphite"] .metaLine .rating{color:var(--text)}
+body[data-theme="graphite"] #bdInfo .bdiC,body[data-theme="graphite"] #heroCredits{color:rgba(var(--fg),.78)}
+body[data-theme="graphite"] .crewLink{color:var(--text)}
+/* Brand mark: the new T at the top of the side menu (not focusable; the menu list scrolls if short). */
+body[data-theme="graphite"] #railBrand{display:flex;flex:none;height:28px;margin:2px 0 14px;padding-left:11px;align-items:center}
+body[data-theme="graphite"] #railBrand svg{width:26px;height:26px}
+/* Calmer page: the per-title ambient colour stays, at a much lower strength (less purple/pink haze). */
+body[data-theme="graphite"] #colorBase{opacity:.45}
+body[data-theme="graphite"] #colorGlow{opacity:.3}
+/* Settings: rows pack to the top (no stretched empty gaps), more air between sections, one heading size. */
+body[data-theme="graphite"] #settings .setGrid,body[data-theme="graphite"] #prefs .setGrid{align-content:start}
+body[data-theme="graphite"] #settings .panel,body[data-theme="graphite"] #prefs .panel{padding:28px 0 32px}
+body[data-theme="graphite"] #settings .panel h2,body[data-theme="graphite"] #prefs .panel h2{font-weight:700;margin-bottom:8px}
 /* Quality badge: thin outline mono, reads as info, not a button. */
 body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px solid rgba(var(--fg),.28);border-radius:6px;
   font-weight:600;text-shadow:none}
@@ -4080,7 +4101,7 @@ body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
-<body>
+<body data-theme="graphite" data-spotlight>
 
 <div id="appLoader"><div class="inner">
   <!-- Boot splash: the WORDMARK builds itself on tinted ink (CSS only, never waits for it) + one
@@ -4173,6 +4194,7 @@ body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px
 <!-- ============ app shell ============ -->
 <button id="burger" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
 <nav id="rail">
+  <div id="railBrand" aria-hidden="true"><svg viewBox="100 255 190 204"><rect x="107" y="264" width="38" height="37" rx="8" fill="#C13BD6"/><g fill="#F3EFF7"><rect x="152" y="264" width="131" height="37" rx="8"/><rect x="178" y="264" width="38" height="186" rx="8"/></g></svg></div>
   <div id="railMain">
   <!-- Profile avatar sits at the TOP (was the Triboon logo): one account entry point, and it frees the
        footer so the nav list rises into the reclaimed bottom space. Opens Preferences; admins get
@@ -4784,7 +4806,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <button data-ts="S">Compact</button><button data-ts="M">Standard</button><button data-ts="L">Larger</button>
       </div>
     </div>
-    <div class="panel"><h2>Theme on this device</h2>
+    <div class="panel" style="display:none"><h2>Theme on this device</h2>
       <p>Accent colors for buttons, focus rings and badges.</p>
       <div id="themePick"></div>
     </div>
@@ -5492,7 +5514,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <button data-sz="S">Small</button><button data-sz="M">Medium</button><button data-sz="L">Large</button>
     </div>
   </div>
-  <div class="panel"><h2>Theme defaults</h2>
+  <div class="panel" style="display:none"><h2>Theme defaults</h2>
     <p>Accent colors for buttons, focus rings and badges (saved on this device).</p>
     <div id="themePickSet"></div>
   </div>
@@ -26523,7 +26545,9 @@ function savePrefTheme(name) {
   syncProfilePrefsUp();
 }
 function applyTheme() {
-  let name = prefTheme();
+  // 3.5.0 (owner, 2026-11-17): Graphite is the only look. Saved theme choices are ignored (not
+  // deleted); the old theme objects stay so nothing that reads them breaks.
+  let name = 'graphite';
   if (name !== 'custom' && !THEMES[name] && THEME_ALIASES[name]) name = THEME_ALIASES[name];
   const t = name === 'custom' ? (customTheme(prefThemeCustomColors()) || THEMES.graphite)
     : (THEMES[name] || THEMES.graphite);

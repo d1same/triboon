@@ -11663,3 +11663,26 @@ test('Quiet Graphite (3.5.0): flat Graphite look, labelled buttons, other themes
   assert.match(block, /\.row h2[^{]*\{\s*font-family:"Sora"[^}]*text-transform:none/);
   assert.ok(!/\.row h2[^{]*\{[^}]*font:/.test(block), 'row labels keep --ctSection sizing');
 });
+
+test('Graphite only (3.5.0): every device and profile gets Graphite, and the theme pickers are hidden', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /function applyTheme\(\) \{[\s\S]{0,300}let name = 'graphite';/, 'applyTheme ignores saved theme choices');
+  assert.ok(!/function applyTheme\(\) \{\s*let name = prefTheme\(\);/.test(ui), 'a saved gold/ocean/custom choice no longer applies');
+  assert.match(ui, /<\/head>\s*<body data-theme="graphite" data-spotlight>/, 'first paint is already Graphite (no gold flash before JS)');
+  assert.match(ui, /<div class="panel" style="display:none"><h2>Theme on this device<\/h2>/);
+  assert.match(ui, /<div class="panel" style="display:none"><h2>Theme defaults<\/h2>/);
+});
+
+test('Quiet Graphite polish (3.5.0): no amber capitals, quiet credits, T brand mark, calmer page, tidy settings', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('/* ===== Quiet Graphite (3.5.0');
+  const block = ui.slice(start, ui.indexOf('@media (prefers-reduced-motion:reduce)', start));
+  assert.match(block, /#hero \.eyebrow,[^{]*\.dashEyebrow,[^{]*\.prefTabDivider span\{\s*font-family:"Sora"[^}]*text-transform:none;color:var\(--muted\)\}/);
+  assert.match(block, /#dMeta \.rating,[^{]*\.metaLine \.rating\{color:var\(--text\)\}/);
+  assert.match(block, /\.crewLink\{color:var\(--text\)\}/);
+  assert.match(ui, /<nav id="rail">\s*<div id="railBrand" aria-hidden="true"><svg/, 'the T mark sits above the menu list and is not focusable');
+  assert.ok(!/id="railBrand"[^>]*class="[^"]*focusable/.test(ui));
+  assert.match(block, /#colorBase\{opacity:\.45\}/);
+  assert.match(block, /#colorGlow\{opacity:\.3\}/);
+  assert.match(block, /#prefs \.setGrid\{align-content:start\}/, 'settings rows pack to the top, no stretched gaps');
+});
