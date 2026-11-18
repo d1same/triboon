@@ -4114,6 +4114,20 @@ body[data-theme="graphite"] .gateCard .qcAlt .altSub{margin-top:10px}
 body[data-theme="graphite"] #gateLoginForm:has(#qcStart.focus) #liGo,
 body[data-theme="graphite"] #gateLoginForm:has(#qcStart:focus) #liGo{background:rgba(255,255,255,.12)!important;color:var(--text)!important}
 body[data-theme="graphite"] #gateArtCaption{font-family:"Sora",system-ui,sans-serif;font-weight:600;letter-spacing:.01em;text-transform:none;color:var(--muted)}
+/* Sources popup: sentence-case sort tabs with a white underline, readable rows, and a flat focused
+   row (light fill + white bar on the left, no zoom/glow). Release names stay mono (technical text). */
+body[data-theme="graphite"] #drawer h3{font:700 22px "Sora",system-ui,sans-serif}
+body[data-theme="graphite"] #srcSort{gap:4px;margin:0 0 14px}
+body[data-theme="graphite"] #srcSort button{height:38px;padding:0 14px;border-radius:10px;font:600 14px "Sora",system-ui,sans-serif;letter-spacing:0;text-transform:none}
+body[data-theme="graphite"] #srcSort button.sel{box-shadow:inset 0 -2px 0 var(--focus)}
+body[data-theme="graphite"] #srcSort button.focus,body[data-theme="graphite"] #srcSort button:hover{background:var(--btnHover);color:var(--btnFocusText)}
+body[data-theme="graphite"] .srcRow{opacity:.72;border-radius:10px;border-bottom:0;margin-bottom:4px;padding:12px 12px 12px 16px}
+body[data-theme="graphite"].tv .srcRow:hover:not(:focus):not(.focus){opacity:.72}
+body[data-theme="graphite"] .srcRow.focus,body[data-theme="graphite"] .srcRow:hover{opacity:1;background:rgba(255,255,255,.08)!important;box-shadow:inset 3px 0 0 var(--focus)!important;transform:none!important}
+body[data-theme="graphite"] .srcRow .srcMeta{font:600 15px "Sora",system-ui,sans-serif}
+body[data-theme="graphite"] .srcRow .chip{font:600 12px "Albert Sans",system-ui,sans-serif;letter-spacing:0;text-transform:none;color:rgba(var(--fg),.7)}
+body[data-theme="graphite"] .srcRow .chip.auto{color:var(--text)}
+body[data-theme="graphite"] .srcRow .chip.auto::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:#C13BD6;margin-right:6px;vertical-align:1px}
 /* Quality badge: thin outline mono, reads as info, not a button. */
 body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px solid rgba(var(--fg),.28);border-radius:6px;
   font-weight:600;text-shadow:none}
