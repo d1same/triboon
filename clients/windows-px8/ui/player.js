@@ -499,7 +499,7 @@
       const current = finite(program.start) <= now && finite(program.stop) > now;
       if (current) cell.className = 'now';
       const when = document.createElement('b');
-      when.textContent = current ? 'NOW' : new Date(finite(program.start)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      when.textContent = current ? 'Now' : new Date(finite(program.start)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       cell.append(when, document.createTextNode(text(program.title || 'Programme', 140)));
       return cell;
     }));

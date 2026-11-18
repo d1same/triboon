@@ -4249,6 +4249,16 @@ body[data-theme="graphite"].tv:has(:is(#discover,#browse) .card.focus) #bdInfo{j
 /* Quality badge: thin outline mono, reads as info, not a button. */
 body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px solid rgba(var(--fg),.28);border-radius:6px;
   font-weight:600;text-shadow:none}
+/* Player boxes (3.5.1, owner: "E corners on the box over the player and the About panel"): crisp
+   6px corners, no edge lines, no amber/mono capitals. Same on the Android player (native views). */
+body[data-theme="graphite"] .epgCell{border:0;border-radius:6px;background:rgba(237,239,243,.08)}
+body[data-theme="graphite"] .epgCell.now{background:rgba(237,239,243,.16);border:0}
+body[data-theme="graphite"] .epgCell .epgProg{background:rgba(237,239,243,.12);border-radius:6px 0 0 6px}
+body[data-theme="graphite"] .epgCell .epgWhen{font:600 11px "Albert Sans",system-ui,sans-serif;letter-spacing:0;text-transform:none}
+body[data-theme="graphite"] :is(.paPoster,.paCastPh){border-radius:6px}
+body[data-theme="graphite"] .paPoster{box-shadow:none}
+body[data-theme="graphite"] .paKicker{font:600 15px/1 "Sora",system-ui,sans-serif;letter-spacing:0;text-transform:none;color:var(--muted)}
+body[data-theme="graphite"] .paChip{font:600 13px/1 "Albert Sans",system-ui,sans-serif;border-radius:6px;background:transparent;border:1px solid rgba(237,239,243,.28)}
 /* Profiles (3.5.1, owner pick "Option 1"): the same characters on square tiles (the avatar SVGs now
    fill the square), crisp corners everywhere an avatar shows: menu chip, Settings rows, the avatar
    picker, Activity. */
@@ -18753,7 +18763,7 @@ function paintLiveEpgStrip() {
     const isNow = p.start <= now && p.stop > now;
     const pct = isNow ? Math.max(0, Math.min(100, ((now - p.start) / Math.max(1, p.stop - p.start)) * 100)) : 0;
     return `<div class="epgCell${isNow ? ' now' : ''}">${isNow ? `<div class="epgProg" style="width:${pct.toFixed(1)}%"></div>` : ''}`
-      + `<div class="epgRel"><div class="epgWhen">${isNow ? 'NOW' : esc(fmtT(p.start))}</div>`
+      + `<div class="epgRel"><div class="epgWhen">${isNow ? 'Now' : esc(fmtT(p.start))}</div>`
       + `<div class="epgT">${esc(p.title || '')}</div></div></div>`;
   }).join('');
 }

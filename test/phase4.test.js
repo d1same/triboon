@@ -11821,3 +11821,15 @@ test('Profiles: square avatar tiles and a clean Who\'s watching picker (3.5.1, o
   assert.match(ui, /:is\(\.profCard:hover,\.profCard\.focus,\.profCard:focus-visible\) \.av\{box-shadow:0 0 0 5px var\(--focus\)!important\}/);
   assert.match(ui, /\.profCard \.profileLevelChip\{background:none;border:0;[^}]*text-transform:none/);
 });
+
+test('Player boxes use crisp corners with no edge lines on web and Windows (3.5.1, owner)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /body\[data-theme="graphite"\] \.epgCell\{border:0;border-radius:6px;/);
+  assert.match(ui, /:is\(\.paPoster,\.paCastPh\)\{border-radius:6px\}/);
+  assert.match(ui, /\.paKicker\{font:600 15px\/1 "Sora"[^}]*text-transform:none/);
+  assert.match(ui, /\$\{isNow \? 'Now' : esc\(fmtT\(p\.start\)\)\}/);
+  const css = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'ui', 'player.css'), 'utf8');
+  assert.match(css, /\.menu, \.stats \{[^}]*border: 0; border-radius: 6px;/);
+  assert.match(css, /\.menu-item:hover, \.menu-item:focus-visible \{ background: #edeff3; color: #14161a;/);
+  assert.match(css, /\.live-epg span \{[^}]*border: 0; border-radius: 6px;/);
+});
