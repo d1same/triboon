@@ -4149,6 +4149,9 @@ body[data-theme="graphite"] #srcSort button.sel{background:rgba(237,239,243,.18)
 body[data-theme="graphite"] #srcSort button.focus,body[data-theme="graphite"] #srcSort button.sel.focus,body[data-theme="graphite"] #srcSort button:hover{
   background:var(--btnHover);color:var(--btnFocusText)}
 body[data-theme="graphite"] .srcRow{opacity:1;background:var(--btn);border-bottom:0;margin-bottom:8px;padding:12px 16px}
+/* On the plain dark popup a near-black fill alone would vanish: a faint hairline keeps each row and
+   tab readable (buttons over artwork read fine without it). */
+body[data-theme="graphite"] .srcRow:not(.focus):not(:hover),body[data-theme="graphite"] #srcSort button:not(.focus):not(:hover){box-shadow:inset 0 0 0 1px rgba(255,255,255,.07)!important}
 body[data-theme="graphite"].tv .srcRow:hover:not(:focus):not(.focus){opacity:1;background:var(--btn)}
 body[data-theme="graphite"] .srcRow.focus,body[data-theme="graphite"] .srcRow:hover{opacity:1;background:var(--btnHover)!important;color:var(--btnFocusText);
   box-shadow:none!important;transform:none!important}
@@ -26341,7 +26344,7 @@ const THEMES = {
     field: 'rgba(11,8,18,.76)', soft: 'rgba(34,25,52,.62)', panel: 'rgba(20,14,30,.96)',
     focus: '#EDEFF3', focusSoft: 'rgba(237,239,243,.42)', onAccent: '#14161A',
     success: '#7CE6A0', danger: '#FF8D8D',
-    btn: 'rgba(45,38,62,.75)', btnHover: '#EDEFF3', btnSelected: 'rgba(237,239,243,.26)', btnSelectedHover: '#F6F8FA', btnPrimary: '#EDEFF3', btnPrimaryHover: '#FFFFFF', btnFocusText: '#14161A',
+    btn: 'rgba(6,6,8,.55)', btnHover: '#EDEFF3', btnSelected: 'rgba(237,239,243,.26)', btnSelectedHover: '#F6F8FA', btnPrimary: '#EDEFF3', btnPrimaryHover: '#FFFFFF', btnFocusText: '#14161A',
     artFocusLine: 'rgba(237,239,243,.90)', artFocusGlow: 'transparent', artFocusTileLine: 'rgba(237,239,243,.85)', artFocusTileBorder: 'rgba(237,239,243,.70)', artFocusTileGlow: 'transparent',
     scrim: 'linear-gradient(0deg,rgba(11,8,18,.85) 0%,rgba(11,8,18,.30) 24%,rgba(11,8,18,.04) 50%)',
   },

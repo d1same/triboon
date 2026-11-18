@@ -4126,9 +4126,12 @@ test('Android native player: direct source and native chrome stay out of the web
     };
     const tok = (blk) => Object.fromEntries([...blk.matchAll(/(\w+):\s*'([^']*)'/g)].map((m) => [m[1], m[2]]));
     const tri = tok(block('triboon')), gra = tok(block('graphite'));
-    for (const k of ['ink', 'surface', 'raise', 'text', 'muted', 'line', 'field', 'soft', 'panel', 'scrim', 'btn', 'm', 'c']) {
+    // 'btn' left the shared list in 3.5.0: Graphite is the only look and the owner chose a
+    // translucent near-black button fill (2026-11-17) instead of the shared blue-purple.
+    for (const k of ['ink', 'surface', 'raise', 'text', 'muted', 'line', 'field', 'soft', 'panel', 'scrim', 'm', 'c']) {
       assert.strictEqual(gra[k], tri[k], `Graphite must share Triboon's ${k}`);
     }
+    assert.match(gra.btn, /^rgba\(\d+,\d+,\d+,\.\d+\)$/, 'Graphite buttons use a translucent near-black fill');
     assert.ok(/^#(E|F)/i.test(gra.focus) && gra.focus !== tri.focus,
       'Graphite focus is a near-white, not Triboon gold');
     assert.ok(!/(FFC65C|E5B44E|FB8B3C)/i.test([gra.a, gra.focus, gra.btnPrimary, gra.btnHover].join(',')),
