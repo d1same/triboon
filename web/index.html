@@ -4064,9 +4064,16 @@ body[data-theme="graphite"] .btn.primary:not(.focus):not(:focus-visible) svg{col
 body[data-theme="graphite"] .btn.primary{border-radius:12px}
 /* Season buttons: same rounded-rectangle shape and font as every other button. Not chosen = the
    neutral button fill; the chosen season = light fill + white underline; focused = white fill. */
-body[data-theme="graphite"] .seasonTab{border-radius:12px;min-height:44px;padding:0 18px;font:600 15px "Albert Sans",system-ui,sans-serif;
-  letter-spacing:0;background:var(--btn);color:rgba(var(--fg),.82)}
-body[data-theme="graphite"] .seasonTab.sel{background:rgba(237,239,243,.16);color:var(--text);box-shadow:inset 0 -2px 0 var(--focus)}
+body[data-theme="graphite"] .seasonTab{min-height:52px;padding:0 24px;font:600 15.5px "Albert Sans",system-ui,sans-serif;
+  letter-spacing:.01em;background:var(--btn);color:var(--text)}
+body[data-theme="graphite"] .seasonTab.sel{background:rgba(237,239,243,.18);color:var(--text);box-shadow:none}
+/* "Crisp" (owner pick E, 2026-11-17): one 6px corner on EVERY control — buttons, icon and player
+   buttons, tabs, season buttons, chips, fields, rows and the side menu — so the whole app reads as
+   one family with the wordmark's straight strokes. Artwork (posters, stills, faces) keeps its own. */
+body[data-theme="graphite"] :is(.btn,.iconBtn,.cbtn,.cbtn.big,.seasonTab,.sizePick,.sizePick button,#srcSort button,.srcRow,
+  .qToggle,.qToggle button,.railBtn,#prefTabs button,#setTabs button,.profileAction,.profileAddBtn,.ghostMini,.gChip,.chip,
+  .levelPick button,.menuRow button,.testBtn,.drawerClose,.un-play,.un-cancel,.mvIconBtn,.trailerCtl,.playerBackBtn,
+  input,select,textarea,.gateCard .qcAlt button.qcBtn){border-radius:6px!important}
 body[data-theme="graphite"] .seasonTab.focus,body[data-theme="graphite"] .seasonTab.sel.focus,body[data-theme="graphite"] .seasonTab:hover{
   background:var(--btnHover);color:var(--btnFocusText);box-shadow:none}
 body[data-theme="graphite"] #dBtns .iconBtn{border-radius:12px}

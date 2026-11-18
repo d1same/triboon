@@ -11616,7 +11616,11 @@ test('Quiet Graphite (3.5.0): flat Graphite look, labelled buttons, other themes
   const selectors = block.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@media[^{]+\{/g, '').match(/[^{}]+(?=\{)/g) || [];
   assert.ok(selectors.length > 10, 'the block has rules');
   for (const sel of selectors) {
-    for (const part of sel.split(',')) {
+    // split on top-level commas only (commas inside :is(...)/:has(...) belong to one selector)
+    const parts = []; let depth = 0; let cur = '';
+    for (const ch of sel) { if (ch === '(') depth++; if (ch === ')') depth--; if (ch === ',' && !depth) { parts.push(cur); cur = ''; } else cur += ch; }
+    parts.push(cur);
+    for (const part of parts) {
       if (!part.trim()) continue;
       assert.match(part.trim(), /^body\[data-theme="graphite"\]/, `rule must be Graphite-scoped: ${part.trim()}`);
     }
@@ -11653,7 +11657,8 @@ test('Quiet Graphite (3.5.0): flat Graphite look, labelled buttons, other themes
   // Option B: the main action is brand magenta unless focused (then white like every focused button).
   assert.match(block, /\.btn\.primary:not\(\.focus\):not\(:focus-visible\)\{background:#C13BD6!important;color:#fff!important/);
   // Season buttons: rounded rectangles; the chosen-and-focused season is readable (dark text on white).
-  assert.match(block, /\.seasonTab\{border-radius:12px;/);
+  assert.match(block, /\.seasonTab\{min-height:52px;/, 'season buttons match the other buttons');
+  assert.match(block, /:is\(\.btn,\.iconBtn,\.cbtn,[\s\S]*?\.seasonTab,[\s\S]*?\)\{border-radius:6px!important\}/, 'crisp 6px corners on every control (owner pick E)');
   assert.match(block, /\.seasonTab\.sel\.focus,[^{]*\{\s*background:var\(--btnHover\);color:var\(--btnFocusText\)/);
   // Player: the focused control shows its short name, positioned so the bar never changes height.
   for (const id of ['ccBtn', 'audBtn', 'qualBtn', 'back10', 'fwd30', 'fsBtn']) {
