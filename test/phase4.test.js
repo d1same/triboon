@@ -11784,3 +11784,18 @@ test('Home catalog rows survive a failed load and a new day, and a failed load r
   assert.match(ui, /document\.addEventListener\('visibilitychange', \(\) => \{\s*if \(document\.visibilityState !== 'visible' \|\| S\.view !== 'home'[\s\S]{0,120}if \(!homeCatalogFresh\(\)\) scheduleHomeCatalogRefresh\(\);/,
     'coming back to the app reloads missing rows');
 });
+
+test('Boot logo animates as composited layers so a busy page cannot freeze it (3.5.1, owner Android TV)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /function startBootLogo\(\) \{[\s\S]{0,200}layerBootLogo\(loader\);\s*loader\.classList\.add\('go'\);/,
+    'the mark is split into layers before the build starts');
+  assert.match(ui, /function layerBootLogo\(loader\) \{[\s\S]+part\.removeAttribute\('class'\);[\s\S]+\} catch \{\}\s*\}/,
+    'parts lose their old in-SVG (main-thread) animation; any failure keeps the old single-SVG build');
+  // Layer keyframes may only touch opacity and transform: those run on the compositor.
+  for (const name of ['tbLyRise', 'tbLySpin', 'tbLyPop', 'tbLyLand']) {
+    const m = new RegExp(`@keyframes ${name}\{([^@]*?)\}\}`).exec(ui);
+    assert.ok(m, `${name} keyframes exist`);
+    const props = (m[1].match(/[a-z-]+(?=:)/g) || []).filter((p) => !['from', 'to'].includes(p));
+    assert.deepEqual([...new Set(props)].sort(), ['opacity', 'transform'], `${name} animates only opacity/transform`);
+  }
+});
