@@ -4782,14 +4782,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android episode strip should slide/fade in and out instead of popping on screen');
   assert.match(android, /private void scrollNativeEpisodeIntoView\(View child\) \{[\s\S]+nativeEpisodeStrip\.scrollTo\(target, 0\);[\s\S]+nativeEpisodeStrip\.smoothScrollTo\(target, 0\);[\s\S]+nativeEpisodeScrollAtMs = now;[\s\S]+\}/,
     'native Android episode focus should use one throttled scroll path instead of stacking repeated smooth-scroll calls');
-  assert.match(android, /card\.setOnFocusChangeListener\(\(v, hasFocus\) -> \{[\s\S]+v\.animate\(\)\.cancel\(\);[\s\S]+v\.animate\(\)\.translationY\(-dp\(3\)\)\.setDuration\(120\)\.start\(\);[\s\S]+scrollNativeEpisodeIntoView\(v\);[\s\S]+v\.animate\(\)\.translationY\(0f\)\.setDuration\(100\)\.start\(\);[\s\S]+\}\);/,
-    'native Android episode cards should animate their focus lift without resizing the strip');
+  assert.match(android, /card\.setOnFocusChangeListener\(\(v, hasFocus\) -> \{[\s\S]+v\.animate\(\)\.cancel\(\);[\s\S]+v\.setTranslationY\(0f\);[\s\S]+scrollNativeEpisodeIntoView\(v\);[\s\S]+v\.animate\(\)\.translationY\(0f\)\.setDuration\(100\)\.start\(\);[\s\S]+\}\);/,
+    'native Android episode cards keep a flat focus (Quiet Graphite, 3.5.0: no lift) without resizing the strip');
   assert.match(android, /int thumbW = nativeEpisodeThumbDp\(\);[\s\S]+int stillH = Math\.round\(thumbW \* 9f \/ 16f\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(stillH\)[\s\S]+if \(ep\.watched && !ep\.about\) \{[\s\S]+check\.setText\("✓"\)[\s\S]+label\.setText\(ep\.tag\);[\s\S]+TextView name = new TextView\(this\);[\s\S]+name\.setMaxLines\(2\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(thumbW\), dp\(stillH \+ 56\)\)/,
     'native Android episode cards should show a 16:9 still that follows cover size, with a check on watched episodes and the name below');
   assert.match(androidStrings, /<string name="watched_episode">WATCHED  %1\$s<\/string>/,
     'native Android watched labels remain localized while preserving the episode tag');
-  assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused\) d\.setStroke\(dp\(2\), 0xFFC6B37A\);[\s\S]+else if \(current\) d\.setStroke\(dp\(1\), 0x66C6B37A\);[\s\S]+return d;/,
-    'native Android episode cards should use a clearer 2dp focus ring without a thick gold frame');
+  assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused\) d\.setStroke\(dp\(3\), 0xFFEDEFF3\);[\s\S]+else if \(current\) d\.setStroke\(dp\(1\), 0x73EDEFF3\);[\s\S]+return d;/,
+    'native Android episode cards use the Quiet Graphite flat 3dp white focus ring (3.5.0)');
   assert.match(android, /still\.setTag\("nativeEpisodeStill"\);[\s\S]+GradientDrawable stillBg = new GradientDrawable\(\);[\s\S]+stillBg\.setCornerRadius\(dp\(12\)\);[\s\S]+still\.setBackground\(stillBg\);[\s\S]+still\.setForeground\(nativeEpisodeStillFrame\(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep\.current\)\);[\s\S]+still\.setClipToOutline\(true\);/,
     'native Android episode thumbnails should clip and own the same contained hollow frame as the web player');
   assert.match(android, /public void updateEpisodeChoices\(String json\) \{[\s\S]+updateNativeEpisodeChoices\(json\)/,
@@ -11646,6 +11646,15 @@ test('Quiet Graphite (3.5.0): flat Graphite look, labelled buttons, other themes
   }
   assert.match(block, /#osd \.cbtn\[data-label\]::after\{content:attr\(data-label\);position:absolute;[^}]*opacity:0;pointer-events:none\}/);
   assert.match(block, /#osd \.cbtn\[data-label\]\.focusable\.focus::after\{opacity:1\}/);
+  // Player episode strip (web/TV-web): flat white ring, no lift.
+  // Same specificity as the base #player #playerEpisodes rules (which carry !important on the shadow).
+  assert.match(block, /#player #playerEpisodes \.playerEpCard\.focus,[^{]*\{transform:translateZ\(0\);filter:none\}/);
+  assert.match(block, /#player #playerEpisodes \.playerEpCard\.focus \.peStill,[^{]*\{box-shadow:inset 0 0 0 3px var\(--focus\)!important\}/);
+  // Windows libmpv player (own stylesheet, no theme switch): the same flat white focus, no glows.
+  const px8 = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'ui', 'player.css'), 'utf8');
+  assert.match(px8, /--focus: 0 0 0 3px #edeff3;/);
+  assert.match(px8, /--artFocusGlow: transparent;/);
+  assert.ok(!/drop-shadow\(0 0 5px var\(--coral\)\)/.test(px8) && !/focus-visible::-webkit-slider-thumb[^}]*18px/.test(px8), 'no glow on Windows player focus');
   // Row labels stay on the text-size token (no font shorthand that would pin a size).
   assert.match(block, /\.row h2[^{]*\{\s*font-family:"Sora"[^}]*text-transform:none/);
   assert.ok(!/\.row h2[^{]*\{[^}]*font:/.test(block), 'row labels keep --ctSection sizing');

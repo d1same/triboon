@@ -7528,8 +7528,10 @@ public class MainActivity extends Activity {
         d.setShape(GradientDrawable.RECTANGLE);
         d.setColor(0x00000000);
         d.setCornerRadius(dp(12));
-        if (focused) d.setStroke(dp(2), 0xFFC6B37A);
-        else if (current) d.setStroke(dp(1), 0x66C6B37A);
+        // Quiet Graphite (3.5.0): the same flat white ring as the web posters; the playing episode
+        // keeps a faint white line so it stays findable.
+        if (focused) d.setStroke(dp(3), 0xFFEDEFF3);
+        else if (current) d.setStroke(dp(1), 0x73EDEFF3);
         return d;
     }
 
@@ -7687,7 +7689,7 @@ public class MainActivity extends Activity {
                     ImageView focusedStill = v.findViewWithTag("nativeEpisodeStill");
                     if (focusedStill != null) focusedStill.setForeground(nativeEpisodeStillFrame(true, nativeEpisodes.get(idx).current));
                     v.setElevation(0);
-                    v.animate().translationY(-dp(3)).setDuration(120).start();
+                    v.setTranslationY(0f); // Quiet Graphite: the ring is the cue; the card never lifts
                     scrollNativeEpisodeIntoView(v);
                     loadNativeEpisodeStillsAround(idx); // D-pad movement pulls the next image window in
                 } else {

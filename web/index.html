@@ -4066,6 +4066,12 @@ body[data-theme="graphite"] #osd .cbtn.focusable.focus,body[data-theme="graphite
 body[data-theme="graphite"] #osd .cbtn[data-label]::after{content:attr(data-label);position:absolute;left:50%;top:calc(100% + 6px);
   transform:translateX(-50%);font:600 12.5px "Sora",system-ui,sans-serif;color:var(--text);white-space:nowrap;opacity:0;pointer-events:none}
 body[data-theme="graphite"] #osd .cbtn[data-label].focusable.focus::after{opacity:1}
+/* Player episode strip: the same flat white ring as posters; nothing lifts. The playing episode keeps
+   a faint line so it stays findable. */
+body[data-theme="graphite"] #player #playerEpisodes .playerEpCard.focus,body[data-theme="graphite"] #player #playerEpisodes .playerEpCard:focus-visible{transform:translateZ(0);filter:none}
+body[data-theme="graphite"] #player #playerEpisodes .playerEpCard.focus .peStill,body[data-theme="graphite"] #player #playerEpisodes .playerEpCard:focus-visible .peStill{box-shadow:inset 0 0 0 3px var(--focus)!important}
+body[data-theme="graphite"] .playerEpCard.current .peStill{box-shadow:inset 0 0 0 1.5px rgba(237,239,243,.45)}
+body[data-theme="graphite"] .playerEpCard .peTag{color:var(--muted)}
 /* Quality badge: thin outline mono, reads as info, not a button. */
 body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px solid rgba(var(--fg),.28);border-radius:6px;
   font-weight:600;text-shadow:none}
