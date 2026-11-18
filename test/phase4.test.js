@@ -11706,6 +11706,10 @@ test('Quiet Graphite polish (3.5.0): no amber capitals, quiet credits, calmer pa
   assert.match(block, /\.abCover,body\[data-theme="graphite"\] \.mCover\{border-radius:6px!important;transition:none\}/);
   assert.match(block, /:is\(#chBody,#pGuide,\.pgGuideShell,#chCats,\.liveCatPane,\.guideCats,\.pgCatPane\)\{\s*--focus:#EDEFF3;/);
   assert.match(block, /\.tv:has\(:is\(#discover,#browse\) \.card\.focus\) #bdInfo\{justify-content:flex-start;/);
+  // Live TV / TV guide / PiP guide: site focus (white, dark text), no edge lines, no mono caps.
+  assert.match(block, /\.gRow\.focus \.gCh,\.pgRow\.focus \.gCh,\.pgRow:focus \.gCh\) \*\{color:#14161A!important\}/);
+  assert.match(block, /:is\(#chGuideBtn,#chMultiBtn\)\{border:0!important;border-radius:6px!important\}/);
+  assert.match(block, /\.liveCatTitle\{font-family:"Sora"[^}]*text-transform:none\}/);
   // Every picture uses the buttons' crisp 6px corner (owner, 3.5.0).
   assert.match(block, /:is\(\.pcard \.art,\.card,\.seasonCard \.art,\.epCard,[^)]*\.castCard \.ph[^)]*\)\{border-radius:6px!important\}/);
   // A long one-line cast name must not widen its card (owner saw one face much bigger on the Shield).

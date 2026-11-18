@@ -4069,8 +4069,20 @@ body[data-theme="graphite"] .mCard:hover .mCover,body[data-theme="graphite"] .mC
    chosen category, no tinted panes. */
 body[data-theme="graphite"] :is(#chBody,#pGuide,.pgGuideShell,#chCats,.liveCatPane,.guideCats,.pgCatPane){
   --focus:#EDEFF3;--focusSoft:rgba(237,239,243,.3);--amber:#EDEFF3;--artFocusLine:#EDEFF3;--artFocusGlow:transparent;
-  --btnSelected:rgba(237,239,243,.16);--btnSelectedHover:rgba(237,239,243,.26)}
+  --btnSelected:rgba(237,239,243,.16);--btnSelectedHover:#EDEFF3;--btnHover:#EDEFF3}
 body[data-theme="graphite"] :is(.liveCatPane,.pgCatPane){background:var(--field)}
+/* Focus in the guide = the site's focus: white fill, dark text (category, channel cell, the
+   in-player / PiP guide rows). The programme strip next to it keeps its faint wash. */
+body[data-theme="graphite"] :is(.lcat.focus,.lcat:focus,.pgCat.focus,.pgCat:focus,.chGroupHead.focus,
+  .gRow.focus .gCh,.pgRow.focus .gCh,.pgRow:focus .gCh),
+body[data-theme="graphite"] :is(.lcat.focus,.lcat:focus,.pgCat.focus,.pgCat:focus,.chGroupHead.focus,
+  .gRow.focus .gCh,.pgRow.focus .gCh,.pgRow:focus .gCh) *{color:#14161A!important}
+body[data-theme="graphite"] :is(.lcat,.pgCat,.chGroupHead){border-radius:6px}
+/* Live TV header buttons (Multiview / Channels): the site button, no edge line, white on focus. */
+body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn){border:0!important;border-radius:6px!important}
+body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn):is(.focus,:focus,:hover){background:var(--btnHover)!important;color:var(--btnFocusText)!important;box-shadow:none!important}
+/* "Categories" label: quiet Sora like the other labels, not mono capitals. */
+body[data-theme="graphite"] .liveCatTitle{font-family:"Sora",system-ui,sans-serif;font-weight:600;letter-spacing:0;text-transform:none}
 body[data-theme="graphite"] .castCard{display:flex;flex-direction:column;justify-content:flex-start;align-self:flex-start;min-width:0}
 /* min-width:0 — a one-line name is a nowrap box, so a long name ("Philip Seymour Hoffman") made its
    card's minimum width the name's width and that face grew bigger than the rest. The card now keeps
