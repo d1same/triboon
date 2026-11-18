@@ -33867,6 +33867,10 @@ async function enterAppShell() {
     el._fadeWired = true;
     el.addEventListener('scroll', () => el.style.setProperty('--tf', Math.min(72, el.scrollTop) + 'px'), { passive: true });
   }
+  // 3.5.1 (owner, Android TV): building Home under the splash froze the logo build on the Shield
+  // (screen recordings: the letters stalled 100-300 ms at a time). Start the network work now, but
+  // build the page only once the wordmark has finished; the 2 s hold that follows covers it.
+  await holdHeavyBootWorkForLogo();
   // Refresh restores the view from the URL hash; stale/bad routes fall back to Home instead
   // of leaving the app behind a dead "refresh after update" shell.
   await restoreInitialRoute();
@@ -33875,6 +33879,17 @@ async function enterAppShell() {
   startPresence(); // mark this device "connected" (browsing or watching) for the admin Activity screen
   // Once the home has settled, check for a newer app version and prompt (native shells only).
   setTimeout(() => { maybePromptAppUpdate().catch(() => {}); }, 2500);
+}
+// Prefetch (network only, no DOM) while the boot logo builds, then wait for the build to finish.
+// Only on the first splash: a re-armed splash whose logo already finished does not wait. Capped
+// at 2.5 s so a stuck animation can never delay the app.
+async function holdHeavyBootWorkForLogo() {
+  const loader = $('appLoader');
+  const logo = loader && loader._logoDone;
+  if (!logo || loader.classList.contains('hide') || loader._logoDoneAt) return;
+  try { loadWatchState().catch(() => {}); } catch {}
+  try { if (S.serverInfo && S.serverInfo.tmdb) refreshHomeCatalogRows(); } catch {}
+  await Promise.race([logo, new Promise((r) => setTimeout(r, 2500))]);
 }
 async function restoreSavedSession() {
   try {

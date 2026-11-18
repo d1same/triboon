@@ -11799,3 +11799,12 @@ test('Boot logo animates as composited layers so a busy page cannot freeze it (3
     assert.deepEqual([...new Set(props)].sort(), ['opacity', 'transform'], `${name} animates only opacity/transform`);
   }
 });
+
+test('Boot builds Home only after the logo finishes; network starts at once (3.5.1, owner Android TV)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /await holdHeavyBootWorkForLogo\(\);[\s\S]{0,300}await restoreInitialRoute\(\);/, 'the page is built after the wait');
+  const fn = ui.slice(ui.indexOf('async function holdHeavyBootWorkForLogo()'), ui.indexOf('async function restoreSavedSession()'));
+  assert.match(fn, /loadWatchState\(\)[\s\S]+refreshHomeCatalogRows\(\)[\s\S]+await Promise\.race\(\[logo, new Promise\(\(r\) => setTimeout\(r, 2500\)\)\]\)/,
+    'watch state and catalog download during the build; the wait is capped at 2.5 s');
+  assert.match(fn, /if \(!logo \|\| loader\.classList\.contains\('hide'\) \|\| loader\._logoDoneAt\) return;/, 'no wait once the logo has finished');
+});
