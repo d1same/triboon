@@ -6275,6 +6275,11 @@ test('Android native player: direct source and native chrome stay out of the web
     assert.ok(/<svg[\s>]/.test(svgText) && !/<image|base64/.test(svgText) && svgText.length < 8000,
       `${rel} should be a small real vector, not an embedded raster`);
   }
+  for (const rel of ['web/T-Logo.svg', 'logo/T-Logo.svg']) {
+    const svgText = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+    assert.match(svgText, /viewBox="0 0 512 512"[\s\S]*?<rect width="512" height="512" rx="\d+" fill="#161020"\/>/,
+      `${rel} favicon keeps its dark tile (a rect without width/height draws nothing, leaving a pale T on light tab strips)`);
+  }
   assert.match(ui, /PLAYER_LOADING_STAGES = \['Preparing', 'Finding source', 'Mounting', 'Checking health\.\.\.', 'Starting stream'\][\s\S]+function clearPlayerLoadingStages\(\)[\s\S]+if \(hot\) \{[\s\S]+setPlayerLoadingStage\(2\);[\s\S]+S\._stageTimers = \[500, 1100\][\s\S]+S\._stageTimers = \[650, 1400, 2200, 3000\][\s\S]+setPlayerLoadingStage\(i \+ 1\)/,
     'web player loading status should skip Finding source after a details/trailer/next warmup');
   assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+ImageView loadingMark = new ImageView\(this\);[\s\S]+loadingMark\.setImageResource\(R\.drawable\.native_loading_wordmark\);[\s\S]+loadingCenter\.addView\(loadingMark, markLp\);[\s\S]+FrameLayout loadingLane = new FrameLayout\(this\);[\s\S]+nativeLoadingLaneGlow = new View\(this\);[\s\S]+nativeLoadingStatus = new TextView\(this\);[\s\S]+nativeLoadingStatus\.setText\(R\.string\.preparing\);[\s\S]+startNativeLoadingLane\(\);/,
