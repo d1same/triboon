@@ -4051,7 +4051,7 @@ body[data-theme="graphite"] :is(.pcard .art,.card,.seasonCard .art,.epCard,.epCa
 /* Audiobooks and Music match the posters: no zoom, crisp corner, the same clear 3px white ring. */
 body[data-theme="graphite"] .abCard.focusable.focus,body[data-theme="graphite"] .abCard:hover,
 body[data-theme="graphite"] .mCard.focusable.focus,body[data-theme="graphite"] .mCard:hover{transform:translateZ(0)}
-body[data-theme="graphite"] .abCover,body[data-theme="graphite"] .mCover{border-radius:6px!important}
+body[data-theme="graphite"] .abCover,body[data-theme="graphite"] .mCover{border-radius:6px!important;transition:none} /* ring shows at once, like posters: no repaint each frame of a fade */
 body[data-theme="graphite"] .abCard:hover .abCover,body[data-theme="graphite"] .abCard.focus .abCover,body[data-theme="graphite"] .abCard:focus .abCover,
 body[data-theme="graphite"] .mCard:hover .mCover,body[data-theme="graphite"] .mCard.focus .mCover,body[data-theme="graphite"] .mCard:focus .mCover{
   box-shadow:0 0 0 3px var(--focus)!important;filter:none}

@@ -11632,7 +11632,8 @@ test('Quiet Graphite (3.5.0): flat Graphite look, labelled buttons, other themes
   assert.match(block, /\.pcard\.focusable\.focus[^{]*\{transform:translateZ\(0\)\}/);
   assert.match(block, /\.pcard\.focus \.art[^{]*\{transform:none;box-shadow:0 0 0 3px var\(--focus\)!important\}/);
   assert.match(block, /\.btn\.focusable\.focus,[^{]*\.cbtn\.focusable\.focus\{box-shadow:none!important\}/);
-  assert.ok(!/transition/.test(block), 'no new transitions (TV focus must snap)');
+  // Only `transition:none` (turning an old fade OFF) is allowed — never a new animated transition.
+  assert.ok(!/transition(?!:none[;}])/.test(block), 'no new transitions (TV focus must snap)');
   // The Graphite theme carries no focus glow.
   assert.match(ui, /label: 'Graphite'[\s\S]{0,1400}artFocusGlow: 'transparent'[\s\S]{0,200}artFocusTileGlow: 'transparent'/);
   // Title page icon buttons say what they do; same buttons, same order (labels come from data-label).
@@ -11702,7 +11703,7 @@ test('Quiet Graphite polish (3.5.0): no amber capitals, quiet credits, calmer pa
   // Settings: OK on a menu item opens it and keeps the remote on the menu; OK again or Right goes in.
   assert.match(ui, /const wasOpen = tab && tab\.classList\.contains\('on'\);\s*formActivate\(tab\);\s*if \(!wasOpen\) \{\s*S\.settingsZone = 'tabs';\s*focusSectionControl\(tab\);/);
   // Audiobooks/Music covers match posters; Live TV drops its blue/teal; Discover title sits high too.
-  assert.match(block, /\.abCover,body\[data-theme="graphite"\] \.mCover\{border-radius:6px!important\}/);
+  assert.match(block, /\.abCover,body\[data-theme="graphite"\] \.mCover\{border-radius:6px!important;transition:none\}/);
   assert.match(block, /:is\(#chBody,#pGuide,\.pgGuideShell,#chCats,\.liveCatPane,\.guideCats,\.pgCatPane\)\{\s*--focus:#EDEFF3;/);
   assert.match(block, /\.tv:has\(:is\(#discover,#browse\) \.card\.focus\) #bdInfo\{justify-content:flex-start;/);
   // Every picture uses the buttons' crisp 6px corner (owner, 3.5.0).
