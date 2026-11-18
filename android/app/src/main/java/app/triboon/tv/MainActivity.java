@@ -6215,7 +6215,12 @@ public class MainActivity extends Activity {
                 && code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT
                 && code != KeyEvent.KEYCODE_DPAD_CENTER && code != KeyEvent.KEYCODE_ENTER) return false;
         java.util.ArrayList<View> rows = nativeSheetFocusableRows();
-        if (rows.isEmpty()) return true;
+        if (rows.isEmpty()) {
+            // Info card (Playback stats): nothing to pick, so OK closes it like Back.
+            if ((code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER)
+                    && e.getAction() == KeyEvent.ACTION_UP) hideNativeSheet();
+            return true;
+        }
         int cur = rows.indexOf(getCurrentFocus());
         if (cur < 0) {
             cur = 0;
@@ -8251,6 +8256,7 @@ public class MainActivity extends Activity {
 
     private void hideNativeSheet() {
         if (nativeSheet == null) return;
+        nativeStatsOpen = false;
         nativeSheet.setVisibility(View.GONE);
         nativeSheet.removeAllViews();
         nativeSheetScroll = null;
@@ -8574,8 +8580,150 @@ public class MainActivity extends Activity {
         return rows.toArray(new String[0]);
     }
 
+    // 3.5.0 (owner pick "C"): Playback stats is an info card, not a menu of selectable rows.
+    // Headline tags (how it plays, quality, codec, audio, size) then a few detail lines that refresh
+    // every second while the card is open. Nothing to select: OK or Back closes it.
+    private TextView nativeStatsVideoLine, nativeStatsAudioLine, nativeStatsSizeLine, nativeStatsBufferLine, nativeStatsBandwidthLine;
+    private boolean nativeStatsOpen;
+    private final Runnable nativeStatsTick = new Runnable() {
+        @Override public void run() {
+            if (!nativeStatsOpen || !nativeSheetOpen()) { nativeStatsOpen = false; return; }
+            updateNativeStatsLines();
+            if (nativeProgress != null) nativeProgress.postDelayed(this, 1000);
+        }
+    };
+
     private void showNativeStatsSheet() {
-        showNativeChoiceSheet("Playback stats", nativeStatsRows(), null, index -> {});
+        if (nativeSheet == null) return;
+        nativeProgress.removeCallbacks(nativeHideChrome);
+        nativeSheetReturnFocus = getCurrentFocus();
+        nativeSheet.removeAllViews();
+        nativeSheetScroll = null;
+        nativeSheetRows = null;
+        updateNativeSheetLayout();
+
+        TextView head = new TextView(this);
+        head.setText("Playback stats");
+        head.setTextColor(0xFFEDEFF3);
+        head.setTextSize(13);
+        head.setTypeface(Typeface.DEFAULT_BOLD);
+        head.setPadding(dp(4), dp(2), dp(4), dp(10));
+        nativeSheet.addView(head, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // Headline tags, wrapped onto as many lines as the card width needs.
+        java.util.ArrayList<String> tags = new java.util.ArrayList<>();
+        String kind = nativeKind == null ? "" : nativeKind.trim();
+        tags.add(kind.isEmpty() || "direct".equalsIgnoreCase(kind) ? "Direct play"
+                : Character.toUpperCase(kind.charAt(0)) + kind.substring(1));
+        if ("live".equals(nativeMode)) tags.add("Live TV");
+        tags.add(nativeQualityLabel == null || nativeQualityLabel.isEmpty() ? "Auto" : nativeQualityLabel);
+        Format vf = nativeSelectedFormat(C.TRACK_TYPE_VIDEO);
+        String vcodec = vf == null ? "" : nativeCodecName(vf.sampleMimeType, vf.codecs);
+        if (!vcodec.isEmpty()) tags.add(vcodec);
+        Format af = nativeSelectedFormat(C.TRACK_TYPE_AUDIO);
+        if (af != null) {
+            String acodec = nativeCodecName(af.sampleMimeType, af.codecs);
+            String ch = af.channelCount == 6 ? "5.1" : af.channelCount == 8 ? "7.1" : af.channelCount > 0 ? af.channelCount + "ch" : "";
+            String a = (acodec + " " + ch).trim();
+            if (!a.isEmpty()) tags.add(a);
+        }
+        if (nativePlaybackSizeBytes > 0) tags.add(nativeFileSizeLabel(nativePlaybackSizeBytes));
+        int avail = nativeSheetWidthPx() - nativeSheet.getPaddingLeft() - nativeSheet.getPaddingRight() - dp(8);
+        LinearLayout tagLine = null;
+        int used = 0;
+        for (int i = 0; i < tags.size(); i++) {
+            TextView t = nativeStatsTag(tags.get(i), i == 0);
+            t.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+            int w = t.getMeasuredWidth() + dp(6);
+            if (tagLine == null || used + w > avail) {
+                tagLine = new LinearLayout(this);
+                tagLine.setOrientation(LinearLayout.HORIZONTAL);
+                tagLine.setPadding(dp(4), 0, dp(4), dp(6));
+                nativeSheet.addView(tagLine, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                used = 0;
+            }
+            LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            tlp.rightMargin = dp(6);
+            tagLine.addView(t, tlp);
+            used += w;
+        }
+
+        nativeStatsVideoLine = nativeStatsLine("Video");
+        nativeStatsAudioLine = nativeStatsLine("Audio");
+        nativeStatsSizeLine = nativeStatsLine("File size");
+        nativeStatsBufferLine = nativeStatsLine("Buffered");
+        nativeStatsBandwidthLine = nativeStatsLine("Bandwidth");
+        nativeStatsLine("Player").setText("ExoPlayer (Android)");
+        updateNativeStatsLines();
+
+        nativeSheet.setVisibility(View.VISIBLE);
+        nativeSheet.bringToFront();
+        nativeSheet.requestFocus();
+        nativeStatsOpen = true;
+        nativeProgress.removeCallbacks(nativeStatsTick);
+        nativeProgress.postDelayed(nativeStatsTick, 1000);
+    }
+
+    private TextView nativeStatsTag(String text, boolean strong) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(12);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setSingleLine(true);
+        t.setTextColor(strong ? 0xFF14161A : 0xFFEDEFF3);
+        t.setPadding(dp(9), dp(4), dp(9), dp(5));
+        t.setBackground(nativePillBg(strong ? 0xFFEDEFF3 : 0x00000000, strong ? 0xFFEDEFF3 : 0x47EDEFF3, dp(6)));
+        return t;
+    }
+
+    // One "Label   value" line with a hairline above; returns the value view.
+    private TextView nativeStatsLine(String label) {
+        LinearLayout line = new LinearLayout(this);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+        line.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        line.setPadding(dp(4), dp(5), dp(4), dp(5));
+        View rule = new View(this);
+        rule.setBackgroundColor(0x1AEDEFF3);
+        nativeSheet.addView(rule, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
+        TextView k = new TextView(this);
+        k.setText(label);
+        k.setTextSize(12);
+        k.setTextColor(0x99EDEFF3);
+        line.addView(k, new LinearLayout.LayoutParams(dp(78), ViewGroup.LayoutParams.WRAP_CONTENT));
+        TextView v = new TextView(this);
+        v.setTextSize(12);
+        v.setTextColor(0xFFEDEFF3);
+        v.setSingleLine(true);
+        v.setEllipsize(TextUtils.TruncateAt.END);
+        line.addView(v, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        nativeSheet.addView(line, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return v;
+    }
+
+    private void updateNativeStatsLines() {
+        if (nativeStatsVideoLine != null) {
+            String video = nativeVideoStatsLabel(nativeSelectedFormat(C.TRACK_TYPE_VIDEO)).replace(" - ", " · ");
+            nativeStatsVideoLine.setText(video.isEmpty() ? "Detecting" : video);
+        }
+        if (nativeStatsAudioLine != null) {
+            String audio = nativeAudioStatsLabel(nativeSelectedFormat(C.TRACK_TYPE_AUDIO)).replace(" - ", " · ");
+            nativeStatsAudioLine.setText(audio.isEmpty() ? "Detecting" : audio);
+        }
+        if (nativeStatsSizeLine != null) {
+            nativeStatsSizeLine.setText(nativePlaybackSizeBytes > 0 ? nativeFileSizeLabel(nativePlaybackSizeBytes) : "Unknown");
+        }
+        if (nativeStatsBufferLine != null) {
+            long buffered = nativeBufferedAheadMs();
+            nativeStatsBufferLine.setText(buffered > 0 ? Math.round(buffered / 1000.0) + " s ahead" : "Detecting");
+        }
+        if (nativeStatsBandwidthLine != null) {
+            long bw = nativeBandwidthEstimate();
+            nativeStatsBandwidthLine.setText(bw > 0 ? nativeBitrateLabel((int) Math.min(Integer.MAX_VALUE, bw)) : "Detecting");
+        }
     }
 
     private void playNativeNextEpisode() {

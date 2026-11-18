@@ -11732,6 +11732,10 @@ test('Boot splash waits for the logo build-up to finish (3.5.0, owner), capped a
   assert.match(fn, /setTimeout\(r, 2500\)/, 'a stuck animation can never hold the app longer than 2.5 s');
   assert.match(ui, /perfMark\('boot-ready'[\s\S]{0,200}hideAppLoaderAfterLogo\(\);/, 'the app path closes the splash through it');
   assert.match(ui, /function showGate\(which\) \{\s*if \(which\) hideAppLoaderAfterLogo\(\);/, 'sign-in screens wait for the logo too');
+  // Android Playback stats = info card (owner pick C): tags + live detail lines, nothing to select, OK/Back close.
+  const androidSrc = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(androidSrc, /private void showNativeStatsSheet\(\) \{[\s\S]+nativeStatsTag\([\s\S]+nativeStatsLine\("Video"\)[\s\S]+nativeStatsLine\("Audio"\)[\s\S]+nativeStatsLine\("File size"\)[\s\S]+nativeStatsLine\("Buffered"\)[\s\S]+nativeStatsLine\("Bandwidth"\)[\s\S]+nativeProgress\.postDelayed\(nativeStatsTick, 1000\);/);
+  assert.match(androidSrc, /if \(rows\.isEmpty\(\)\) \{[\s\S]{0,420}hideNativeSheet\(\);\s*return true;/);
   // Search: Live TV channel cards must not collapse into 2px rows and pile up; no stale backdrop.
   assert.match(ui, /#grid \.card\{overflow:clip\}\s*body\.tv #grid \.card\{min-height:calc\(var\(--poster\) \* 9 \/ 16\)\}/);
   assert.match(ui, /if \(v === 'search'\) clearBackdrop\(\);/);
