@@ -8240,9 +8240,9 @@ function openSeasonMenu(show, season, card) {
     e.stopPropagation(); closeCwMenu();
     if (act === 'open') return isLocal ? openLocalShowSeasonEpisodes(show, season.season_number) : openSeasonEpisodes(show, season.season_number);
     if (act === 'wl') return toggleWatchlist(wlItem);
-    if (act === 'showwatch') return markShowWatched(show, true);
+    if (act === 'showwatch') return markShowWatched(show, true, { season: season.season_number });
     const watched = act === 'swatch';
-    if (isLocal) return markLocalEpisodeGroupWatched(show, localEpisodes, watched, `${label} marked ${watched ? 'watched' : 'unwatched'}`);
+    if (isLocal) return markLocalEpisodeGroupWatched(show, localEpisodes, watched, `${label} marked ${watched ? 'watched' : 'unwatched'}`, { season: season.season_number });
     markSeasonWatched(show, season, watched);
   };
 }
@@ -10930,6 +10930,7 @@ function renderSeasonGrid(show, seasons) {
   // Reached via the "All seasons" tab? Move focus into the season cards (the tab we came from is
   // about to be hidden). Initial detail load calls this with focus elsewhere — don't yank it.
   const cameFromTab = !!document.querySelector('#seasonTabs .seasonTab.focus');
+  const restoreScroll = $('seasonGrid').style.display !== 'none' ? keepRowScroll($('seasonGrid')) : () => {};
   $('seasonsTitle').textContent = 'Seasons';
   $('seasonTabs').style.display = 'none';
   $('epGrid').innerHTML = ''; $('epGrid').style.display = 'none';
@@ -10957,6 +10958,7 @@ function renderSeasonGrid(show, seasons) {
     grid.appendChild(c);
   });
   bindEdgeScroll(grid);
+  restoreScroll();
   if (cameFromTab) { const first = grid.querySelector('.seasonCard'); if (first) applyFocus(first, false); }
 }
 function localSeasonSummaries(episodes) {
@@ -10980,6 +10982,7 @@ function isLocalSeasonWatched(season) {
 }
 function renderLocalShowSeasonGrid(show, seasons) {
   const cameFromTab = !!document.querySelector('#seasonTabs .seasonTab.focus');
+  const restoreScroll = $('seasonGrid').style.display !== 'none' ? keepRowScroll($('seasonGrid')) : () => {};
   $('seasonsTitle').textContent = 'Seasons';
   $('seasonTabs').style.display = 'none';
   $('epGrid').innerHTML = ''; $('epGrid').style.display = 'none';
@@ -11004,6 +11007,7 @@ function renderLocalShowSeasonGrid(show, seasons) {
     grid.appendChild(c);
   });
   bindEdgeScroll(grid);
+  restoreScroll();
   if (cameFromTab) { const first = grid.querySelector('.seasonCard'); if (first) applyFocus(first, false); }
 }
 function isSeasonWatched(tmdbId, seasonNumber, epCount) {
@@ -11014,8 +11018,9 @@ function isSeasonWatched(tmdbId, seasonNumber, epCount) {
   return n >= epCount;
 }
 // Bulk-mark a whole show (all aired episodes across all seasons) watched/unwatched.
-async function markShowWatched(show, watched) {
+async function markShowWatched(show, watched, opts = {}) {
   if (!S.detailSeasons) return;
+  const marked = opts.season != null ? null : document.querySelector('#epGrid .epCard.focus');
   S.watchMap = S.watchMap || {};
   const items = [];
   for (const s of S.detailSeasons) {
@@ -11030,7 +11035,17 @@ async function markShowWatched(show, watched) {
     await api('/api/watch/bulk', { method: 'POST', body: { items, watched, profile: S.profile ? S.profile.id : undefined } });
     invalidateWatchCache();
   } catch {}
-  renderSeasonGrid(show, S.detailSeasons);
+  // Refresh the view on screen (the watched button on an episode list used to swap the page to
+  // the season grid) and keep focus where it was — see episodeMarkFocusPlan.
+  const cur = document.querySelector('.focus');
+  if (S.detailSeason != null && $('epGrid').style.display !== 'none') {
+    const plan = episodeMarkFocusPlan(cur, marked, false);
+    openSeasonEpisodes(show, S.detailSeason, plan.episode ? { focusEpisode: plan.episode } : {});
+  } else {
+    const focusSeason = seasonMarkFocusSeason(cur, opts.season != null ? opts.season : null);
+    renderSeasonGrid(show, S.detailSeasons);
+    focusSeasonCardAfterMark(focusSeason);
+  }
   pickNextUp(show, S.detailSeasons);
 }
 async function markSeasonWatched(show, season, watched) {
@@ -11050,9 +11065,11 @@ async function markSeasonWatched(show, season, watched) {
     await api('/api/watch/bulk', { method: 'POST', body: { items, watched, profile: S.profile ? S.profile.id : undefined } });
     invalidateWatchCache();
   } catch {}
+  const focusSeason = seasonMarkFocusSeason(document.querySelector('.focus'), sNum);
   renderSeasonGrid(show, S.detailSeasons || [season]);
   pickNextUp(show, S.detailSeasons || [season]);
-  const focus = [...document.querySelectorAll('.seasonCard')].find((c) => +c.dataset.season === sNum);
+  const focus = focusSeason == null ? null
+    : [...document.querySelectorAll('.seasonCard')].find((c) => +c.dataset.season === focusSeason);
   if (focus) applyFocus(focus, false);
   toast(`${season.name || 'Season ' + sNum} marked ${watched ? 'watched' : 'unwatched'}`);
 }
@@ -11081,6 +11098,11 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
   const cameFromTab = opts.fromTab
     || !!document.querySelector('#seasonTabs .seasonTab.focus')
     || !!(document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('seasonTab'));
+  // Same season re-rendered (a watched mark): keep the current cards up until the new ones are
+  // built (no "loading…" flash that collapses the row) and keep both rows' scroll position.
+  const refresh = S.detailSeason === seasonNumber && $('epGrid').style.display !== 'none'
+    && !!$('epGrid').querySelector('.epCard');
+  const restoreTabScroll = refresh ? keepRowScroll($('seasonTabs')) : () => {};
   S.detailSeason = seasonNumber;
   $('seasonsTitle').textContent = 'Episodes';
   $('seasonGrid').style.display = 'none';
@@ -11103,8 +11125,10 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
       renderSeasonGrid(show, S.detailSeasons || []);
     }); // last tab
     bindEdgeScroll(tabs);
+    restoreTabScroll();
   }
-  const grid = $('epGrid'); grid.style.display = 'flex'; grid.innerHTML = '<div class="sub" style="color:var(--muted)">loading episodes…</div>';
+  const grid = $('epGrid'); grid.style.display = 'flex';
+  if (!refresh) grid.innerHTML = '<div class="sub" style="color:var(--muted)">loading episodes…</div>';
   try {
     const season = await (async () => {
       const sk = `${show.tmdbId}:s${seasonNumber}`;
@@ -11116,6 +11140,7 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
       return data;
     })();
     if (!current()) return; // user already clicked another season tab or opened another title
+    const restoreEpScroll = refresh ? keepRowScroll(grid) : () => {};
     grid.innerHTML = '';
     (season.episodes || []).forEach((ep) => {
       const item = epItemOf(show, season, ep);
@@ -11152,6 +11177,7 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
       grid.appendChild(card);
     });
     bindEdgeScroll(grid);
+    restoreEpScroll();
     const focusEpisode = parseInt(opts.focusEpisode, 10) || 0;
     if (focusEpisode > 0) {
       if (focusRenderedDetailEpisode({ season: seasonNumber, episode: focusEpisode })) return;
@@ -11182,6 +11208,57 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
   }
 }
 document.addEventListener('click', () => document.querySelectorAll('.epMenu.open').forEach((m) => m.classList.remove('open')));
+// Watched marks on the title page re-render the episode/season row with innerHTML, which destroys
+// the focused card. With no .focus left, the detail D-pad handler restarts at row 0, so the next key
+// landed on Play (owner report). These decide where focus goes after the re-render:
+// - focus on the marked card, gone, or still inside the closing menu → the marked card's spot
+//   (marking watched moves to the NEXT card in row order; unmarking stays; the last card stays);
+// - focus on another card of the same row (the user moved during the save) → that card;
+// - focus on something that survives the re-render (Play, the watched button, cast) → untouched.
+function markFocusGone(cur) {
+  return !cur || !cur.isConnected || !!(cur.closest && cur.closest('#cwMenu'));
+}
+function episodeMarkFocusPlan(cur, marked, watched) {
+  if (markFocusGone(cur) || (marked && cur === marked)) {
+    if (!marked) return { mode: 'none' };
+    let next = watched ? marked.nextElementSibling : null;
+    while (next && !(next.classList && next.classList.contains('epCard'))) next = next.nextElementSibling;
+    const el = next || marked;
+    return { mode: 'marked', key: el.dataset.epKey, episode: parseInt(el.dataset.episode, 10) || 0 };
+  }
+  if (cur.classList && cur.classList.contains('epCard') && cur.closest && cur.closest('#epGrid')) {
+    return { mode: 'other', key: cur.dataset.epKey, episode: parseInt(cur.dataset.episode, 10) || 0 };
+  }
+  return { mode: 'none' };
+}
+function seasonMarkFocusSeason(cur, seasonNumber) {
+  if (markFocusGone(cur)) return seasonNumber;
+  if (cur.classList && cur.classList.contains('seasonCard') && cur.closest && cur.closest('#seasonGrid')) {
+    return +cur.dataset.season;
+  }
+  return null;
+}
+function renderedEpisodeCardByKey(key) {
+  if (!key) return null;
+  return [...document.querySelectorAll('#epGrid .epCard')].find((c) => c.dataset.epKey === key) || null;
+}
+function focusDetailMarkCard(card) {
+  if (!card) return false;
+  applyFocus(card, !S.pointer);
+  if (card.classList.contains('epCard')) retargetDetailFromEpisodeCard(card);
+  return true;
+}
+function focusSeasonCardAfterMark(seasonNumber) {
+  if (seasonNumber == null) return false;
+  const card = [...document.querySelectorAll('#seasonGrid .seasonCard')].find((c) => +c.dataset.season === +seasonNumber);
+  return focusDetailMarkCard(card);
+}
+// A refresh of the row the user is already in must not throw it back to the first card:
+// innerHTML = '' clamps scrollLeft to 0. Capture before the rebuild, put it back after.
+function keepRowScroll(el) {
+  const left = el && el.childElementCount ? el.scrollLeft : 0;
+  return () => { if (el && left) el.scrollLeft = left; };
+}
 function localEpisodeDisplayName(ep) {
   const code = `S${pad2(ep.s)}E${pad2(ep.e)}`;
   let name = String(ep.epTitle || '').trim();
@@ -11218,6 +11295,10 @@ function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
   const cameFromTab = opts.fromTab
     || !!document.querySelector('#seasonTabs .seasonTab.focus')
     || !!(document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('seasonTab'));
+  // Same season re-rendered (a watched mark) → keep both rows where the user left them.
+  const refresh = S.detailSeason === seasonNumber && $('epGrid').style.display !== 'none';
+  const restoreEpScroll = refresh ? keepRowScroll($('epGrid')) : () => {};
+  const restoreTabScroll = refresh ? keepRowScroll($('seasonTabs')) : () => {};
   S.detailSeason = seasonNumber;
   $('seasonsTitle').textContent = 'Episodes';
   $('seasonGrid').style.display = 'none';
@@ -11231,6 +11312,7 @@ function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
   });
   appendAllSeasonsTab(tabs, () => renderLocalShowSeasonGrid(show, S.detailSeasons || [])); // last tab
   bindEdgeScroll(tabs);
+  restoreTabScroll();
   const grid = $('epGrid'); grid.style.display = 'flex'; grid.innerHTML = '';
   const eps = (S.localDetailEpisodes || []).filter((ep) => +ep.s === +seasonNumber).sort((a, b) => a.e - b.e);
   eps.forEach((ep) => {
@@ -11259,6 +11341,8 @@ function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
     grid.appendChild(card);
   });
   bindEdgeScroll(grid);
+  restoreEpScroll();
+  if (opts.focusKey && focusDetailMarkCard(renderedEpisodeCardByKey(opts.focusKey))) return;
   const focusEpisode = parseInt(opts.focusEpisode, 10) || 0;
   if (focusEpisode > 0 && focusRenderedDetailEpisode({ season: seasonNumber, episode: focusEpisode })) return;
   if (cameFromTab) {
@@ -11273,6 +11357,7 @@ function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
   }
 }
 async function setLocalEpisodeWatched(item, watched, seasonNumber) {
+  const marked = renderedEpisodeCardByKey(item.key);
   S.watchMap = S.watchMap || {};
   const meta = wlMeta(item);
   const row = { key: item.key, watched: !!watched, position: 0, duration: 0, meta, updatedAt: Date.now() };
@@ -11285,14 +11370,15 @@ async function setLocalEpisodeWatched(item, watched, seasonNumber) {
     } }));
     upsertWatchCache(row);
   } catch {}
-  openLocalShowSeasonEpisodes(S.detailItem, seasonNumber);
+  const plan = episodeMarkFocusPlan(document.querySelector('.focus'), marked, watched);
+  openLocalShowSeasonEpisodes(S.detailItem, seasonNumber, plan.key ? { focusKey: plan.key } : {});
   pickLocalShowPlayTarget(S.detailItem, S.localDetailEpisodes || []);
 }
 function localEpisodeGroupWatched(episodes) {
   const items = (episodes || []).map((ep) => localEpisodeItemOf(S.detailItem, ep));
   return !!items.length && items.every((item) => S.watchMap && S.watchMap[item.key] && S.watchMap[item.key].watched);
 }
-async function markLocalEpisodeGroupWatched(show, episodes, watched, msg) {
+async function markLocalEpisodeGroupWatched(show, episodes, watched, msg, opts = {}) {
   S.watchMap = S.watchMap || {};
   const items = (episodes || []).map((ep) => {
     const item = localEpisodeItemOf(show, ep);
@@ -11310,12 +11396,24 @@ async function markLocalEpisodeGroupWatched(show, episodes, watched, msg) {
     }
   } catch {}
   $('dPlayed').classList.toggle('on', localEpisodeGroupWatched(S.localDetailEpisodes || []));
-  if (S.detailSeason != null) openLocalShowSeasonEpisodes(show, S.detailSeason);
-  else renderLocalShowSeasonGrid(show, S.detailSeasons || []);
+  // Re-render the view the user is LOOKING at. S.detailSeason outlives a trip to "All seasons", so a
+  // season mark from the season grid used to flip the page to that stale season's episode list.
+  const cur = document.querySelector('.focus');
+  const episodesShown = S.detailSeason != null && $('epGrid').style.display !== 'none';
+  if (episodesShown) {
+    const plan = episodeMarkFocusPlan(cur, null, watched);
+    openLocalShowSeasonEpisodes(show, S.detailSeason, plan.key ? { focusKey: plan.key } : {});
+  } else {
+    const seasonNumber = opts.season != null ? opts.season : null;
+    const focusSeason = seasonMarkFocusSeason(cur, seasonNumber);
+    renderLocalShowSeasonGrid(show, S.detailSeasons || []);
+    focusSeasonCardAfterMark(focusSeason);
+  }
   pickLocalShowPlayTarget(show, S.localDetailEpisodes || []);
   if (msg) toast(msg);
 }
 async function setEpisodeWatched(item, ep, show, seasonNumber, watched) {
+  const marked = renderedEpisodeCardByKey(item.key);
   S.watchMap = S.watchMap || {};
   if (watched) S.watchMap[item.key] = { watched: true, position: 0, duration: 0 };
   else delete S.watchMap[item.key];
@@ -11326,7 +11424,10 @@ async function setEpisodeWatched(item, ep, show, seasonNumber, watched) {
   // Re-render to update the watched badge, then keep D-pad focus PUT: advance to the next episode
   // after marking watched (natural when working through a season), or stay on the same one when
   // unmarking. Without a focus target the re-render destroys the focused card and focus jumps away.
-  openSeasonEpisodes(show, seasonNumber, { focusEpisode: watched ? ep.episode_number + 1 : ep.episode_number });
+  // A card the user moved to during the save keeps focus; a control outside the row is not yanked.
+  const plan = episodeMarkFocusPlan(document.querySelector('.focus'), marked, watched);
+  if (plan.mode === 'marked') openSeasonEpisodes(show, seasonNumber, { focusEpisode: watched ? ep.episode_number + 1 : ep.episode_number });
+  else openSeasonEpisodes(show, seasonNumber, plan.episode ? { focusEpisode: plan.episode } : {});
 }
 
 // Main Play button for a show: figure the next-up episode across the whole series.
