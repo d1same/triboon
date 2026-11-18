@@ -11808,3 +11808,16 @@ test('Boot builds Home only after the logo finishes; network starts at once (3.5
     'watch state and catalog download during the build; the wait is capped at 2.5 s');
   assert.match(fn, /if \(!logo \|\| loader\.classList\.contains\('hide'\) \|\| loader\._logoDoneAt\) return;/, 'no wait once the logo has finished');
 });
+
+test('Profiles: square avatar tiles and a clean Who\'s watching picker (3.5.1, owner pick Option 1)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  for (let i = 1; i <= 20; i++) {
+    const svg = fs.readFileSync(path.join(__dirname, '..', 'web', 'avatars', `av${String(i).padStart(2, '0')}.svg`), 'utf8');
+    assert.match(svg, /<rect width="96" height="96" fill="#[0-9A-F]{6}"\/>/, `av${i} fills the square`);
+    assert.doesNotMatch(svg, /<circle cx="48" cy="48" r="48"/, `av${i} has no round background left`);
+  }
+  assert.match(ui, /:is\(#railUser \.av,\.avatarOpt,\.avatarOpt img,\.activityAvatar,\.profileLevelIcon\)\{border-radius:6px!important\}/);
+  assert.match(ui, /#gateProfiles \.profileGatePanel\{background:none;border:0;box-shadow:none;/);
+  assert.match(ui, /:is\(\.profCard:hover,\.profCard\.focus,\.profCard:focus-visible\) \.av\{box-shadow:0 0 0 5px var\(--focus\)!important\}/);
+  assert.match(ui, /\.profCard \.profileLevelChip\{background:none;border:0;[^}]*text-transform:none/);
+});

@@ -4249,6 +4249,39 @@ body[data-theme="graphite"].tv:has(:is(#discover,#browse) .card.focus) #bdInfo{j
 /* Quality badge: thin outline mono, reads as info, not a button. */
 body[data-theme="graphite"] .playerMetaQuality{background:transparent;border:1px solid rgba(var(--fg),.28);border-radius:6px;
   font-weight:600;text-shadow:none}
+/* Profiles (3.5.1, owner pick "Option 1"): the same characters on square tiles (the avatar SVGs now
+   fill the square), crisp corners everywhere an avatar shows: menu chip, Settings rows, the avatar
+   picker, Activity. */
+body[data-theme="graphite"] :is(#railUser .av,.avatarOpt,.avatarOpt img,.activityAvatar,.profileLevelIcon){border-radius:6px!important}
+body[data-theme="graphite"] .profileLevelIcon.hasAvatar{border:0}
+body[data-theme="graphite"] .avatarOpt{border:0!important;transform:none!important}
+body[data-theme="graphite"] :is(.avatarOpt:hover,.avatarOpt.focus,.avatarOpt:focus-visible){box-shadow:0 0 0 3px var(--focus)!important}
+body[data-theme="graphite"] .avatarOpt.sel{box-shadow:0 0 0 3px rgba(237,239,243,.45)}
+/* "Who's watching?": no boxed card, centred, big square avatars, the poster ring as focus (no zoom),
+   quiet level text instead of mono-capital chips, and no poster strip behind it. */
+body[data-theme="graphite"] #gateProfiles{place-items:center}
+body[data-theme="graphite"]:has(#gateProfiles.open) :is(#gatePosterStrip,#gateArtCaption){display:none}
+body[data-theme="graphite"] #gateProfiles .profileGatePanel{background:none;border:0;box-shadow:none;backdrop-filter:none;padding:0;width:min(1500px,94vw)!important}
+body[data-theme="graphite"] #gateProfiles h1{font:700 48px "Sora",system-ui,sans-serif!important;letter-spacing:-.01em;margin-bottom:56px!important}
+body[data-theme="graphite"] #gateProfiles .sub{display:none}
+body[data-theme="graphite"] #profileGrid{gap:40px!important}
+body[data-theme="graphite"] .profCard{width:200px;gap:0}
+body[data-theme="graphite"] .profCard .av{width:200px;height:200px;border-radius:12px;border:0!important;background:#18181C9E;overflow:hidden;transform:none!important;box-shadow:none!important}
+body[data-theme="graphite"] .profCard .av.hasAvatar img{width:100%;height:100%;object-fit:cover;border-radius:0}
+body[data-theme="graphite"] :is(.profCard:hover,.profCard.focus,.profCard:focus-visible) .av{box-shadow:0 0 0 5px var(--focus)!important}
+body[data-theme="graphite"] .profCard .pn{font:600 22px "Sora",system-ui,sans-serif;margin-top:18px;color:rgba(237,239,243,.72)}
+body[data-theme="graphite"] :is(.profCard.focus,.profCard:hover) .pn{color:#fff}
+body[data-theme="graphite"] .profCard .profileLevelChip{background:none;border:0;padding:0;margin-top:6px;font:500 15px "Albert Sans",system-ui,sans-serif;letter-spacing:0;text-transform:none;color:var(--muted)}
+body[data-theme="graphite"] .profCard .profileLevelChip svg{display:none}
+body[data-theme="graphite"] .profCard .profileCardSub{display:none}
+body[data-theme="graphite"] .profCard .lock{border-radius:6px}
+@media (max-width:760px){
+  body[data-theme="graphite"] #gateProfiles h1{font-size:30px!important;margin-bottom:30px!important}
+  body[data-theme="graphite"] #profileGrid{gap:20px!important}
+  body[data-theme="graphite"] .profCard{width:120px}
+  body[data-theme="graphite"] .profCard .av{width:120px;height:120px;border-radius:10px}
+  body[data-theme="graphite"] .profCard .pn{font-size:16px;margin-top:12px}
+}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>

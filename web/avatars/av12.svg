@@ -1,5 +1,5 @@
 <svg viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
-<circle cx="48" cy="48" r="48" fill="#FFC65C"/>
+<!-- 3.5.1 (owner): square tile, calmer colour (was #FFC65C circle) --><rect width="96" height="96" fill="#716252"/>
 <path d="M31 24 L34 9 L41 21 Z" fill="#6B46C1"/>
 <path d="M65 24 L62 9 L55 21 Z" fill="#6B46C1"/>
 <circle cx="48" cy="55" r="31" fill="#8E5AE8"/>
