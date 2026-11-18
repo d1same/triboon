@@ -4371,9 +4371,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer choice rows should scroll inside the bounded sheet instead of growing offscreen');
   assert.match(android, /private java\.util\.ArrayList<View> nativeSheetFocusableRows\(\)[\s\S]+nativeSheetRows != null \? nativeSheetRows : nativeSheet[\s\S]+private void focusNativeSheetRow\([\s\S]+scrollTo\(0, Math\.max\(0, row\.getTop\(\) - dp\(8\)\)\)/,
     'native ExoPlayer D-pad focus should keep the highlighted sheet row visible');
-  assert.match(android, /private GradientDrawable nativePanelBg\(\) \{[\s\S]+new int\[\]\{0xF0181A1D, 0xF00D0F12\}[\s\S]+d\.setCornerRadius\(dp\(10\)\);[\s\S]+d\.setStroke\(dp\(1\), 0x12FFFFFF\)/,
+  assert.match(android, /private GradientDrawable nativePanelBg\(\) \{[\s\S]+new int\[\]\{0xF0181A1D, 0xF00D0F12\}[\s\S]+d\.setCornerRadius\(dp\(6\)\);[\s\S]+d\.setStroke\(dp\(1\), 0x12FFFFFF\)/, // 3.5.0 Graphite: crisp 6dp corner
     'native ExoPlayer option sheets should use compact graphite panels instead of bright purple glass');
-  assert.match(android, /private GradientDrawable nativeSheetRowBg\(boolean focused, boolean selected\) \{[\s\S]+focused[\s\S]+new int\[\]\{0xFF2B3137, 0xFF252A30\}[\s\S]+selected[\s\S]+new int\[\]\{0x403A3424, 0x30312D22\}[\s\S]+d\.setStroke\(dp\(1\), focused \? 0x66B8A46A : selected \? 0x55B8A46A : 0x00000000\)/,
+  assert.match(android, /private GradientDrawable nativeSheetRowBg\(boolean focused, boolean selected\) \{[\s\S]+focused[\s\S]+new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+selected[\s\S]+new int\[\]\{0x29EDEFF3, 0x29EDEFF3\}[\s\S]+d\.setStroke\(0, 0x00000000\)/, // 3.5.0 Graphite: white focus, grey chosen, no gold
     'native ExoPlayer sheet focused and selected rows should be visually distinct');
   assert.match(android, /row\.setSingleLine\(true\);[\s\S]+row\.setEllipsize\(TextUtils\.TruncateAt\.END\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(40\)/,
     'native ExoPlayer sheet rows should keep fixed height and ellipsize long track labels');
@@ -5030,8 +5030,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer should show the controller shade and top metadata cluster with the controls');
   assert.match(android, /nativeControlShade\.setVisibility\(View\.GONE\);[\s\S]+nativeMetaBar\.setVisibility\(View\.GONE\);[\s\S]+nativeChrome\.setVisibility\(View\.GONE\);/,
     'native ExoPlayer should hide the controller shade and metadata bar with the controls');
-  assert.match(android, /private GradientDrawable nativeButtonBg\(boolean focused, boolean primary\) \{[\s\S]+new int\[\]\{0xFFEDE8F5, 0xFFD9CBE7\}[\s\S]+new int\[\]\{0x18F3EFF7, 0x18F3EFF7\}/,
-    'native ExoPlayer buttons should use a very transparent circle background and switch fully light on focus');
+  assert.match(android, /private GradientDrawable nativeButtonBg\(boolean focused, boolean primary\) \{[\s\S]+new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+new int\[\]\{0x9E18181C, 0x9E18181C\}[\s\S]+d\.setCornerRadius\(dp\(6\)\);/,
+    'native ExoPlayer buttons use the site button: see-through near-black, crisp 6dp, fully light on focus (3.5.0 Graphite)');
   assert.match(android, /nativeChrome\.setPadding\(dp\(34\), dp\(12\), dp\(34\), dp\(18\)\);[\s\S]+controls\.setPadding\(0, dp\(18\), 0, 0\);/,
     'native ExoPlayer control row should balance the play button spacing above and below');
   assert.match(android, /FrameLayout\.LayoutParams chromeLp = new FrameLayout\.LayoutParams\([\s\S]+android\.view\.Gravity\.BOTTOM\);[\s\S]+chromeLp\.setMargins\(0, 0, 0, dp\(28\)\);/,
@@ -5998,9 +5998,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'web CC menu should avoid built-in probing in online-only mode and explain why local rows are hidden');
   assert.match(ui, /ctlButtons\(\) \{[\s\S]+!b\.disabled && !b\.classList\.contains\('disabled'\)/,
     'web player D-pad focus should skip disabled controls');
-  assert.match(android, /setNativeButtonIcon\(ImageButton b, int iconRes, boolean primary, boolean focused\) \{[\s\S]+!b\.isEnabled\(\) \? 0x88EDE8F5 : \(focused \? 0xFF0B0812 : 0xFFEDE8F5\)/,
+  assert.match(android, /setNativeButtonIcon\(ImageButton b, int iconRes, boolean primary, boolean focused\) \{[\s\S]+!b\.isEnabled\(\) \? 0x88EDEFF3 : \(focused \? 0xFF14161A : 0xFFEDEFF3\)/,
     'native player icons should turn dark when the focused button switches to light mode');
-  assert.match(android, /focused[\s\S]+\? new int\[\]\{0xFFEDE8F5, 0xFFD9CBE7\}[\s\S]+: new int\[\]\{0x18F3EFF7, 0x18F3EFF7\}/,
+  assert.match(android, /focused[\s\S]+\? new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+: new int\[\]\{0x9E18181C, 0x9E18181C\}/,
     'native player buttons should use a very transparent fill normally and full light fill while focused');
   // CC/audio enabled-state is LATCHED per playback: a server-seek (remux/transcode) respawns the
   // stream and options momentarily clear — without the latch the buttons dimmed→undimmed on every

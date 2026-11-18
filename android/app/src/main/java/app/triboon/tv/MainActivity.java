@@ -3330,12 +3330,12 @@ public class MainActivity extends Activity {
         subRow.setPadding(0, dp(6), 0, 0);
 
         nativePlayerBadge = new TextView(this);
-        nativePlayerBadge.setTextColor(0xFFEDE8F5);
+        nativePlayerBadge.setTextColor(0xFFEDEFF3);
         nativePlayerBadge.setTextSize(10);
         nativePlayerBadge.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         nativePlayerBadge.setGravity(android.view.Gravity.CENTER);
         nativePlayerBadge.setPadding(dp(9), dp(3), dp(9), dp(4));
-        nativePlayerBadge.setBackground(nativePillBg(0x55221934, 0x66C9B8D8, dp(14)));
+        nativePlayerBadge.setBackground(nativePillBg(0x00000000, 0x47EDEFF3, dp(6)));
         subRow.addView(nativePlayerBadge, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -3754,7 +3754,7 @@ public class MainActivity extends Activity {
     private GradientDrawable nativeLoadingLaneGlowBg() {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                new int[]{0x00FFFFFF, 0xCCB8A46A, 0xFFFFFFFF, 0xCCB8A46A, 0x00FFFFFF});
+                new int[]{0x00FFFFFF, 0x99EDEFF3, 0xFFFFFFFF, 0x99EDEFF3, 0x00FFFFFF});
         d.setCornerRadius(dp(999));
         return d;
     }
@@ -3949,7 +3949,7 @@ public class MainActivity extends Activity {
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{0xF0181A1D, 0xF00D0F12});
         d.setShape(GradientDrawable.RECTANGLE);
-        d.setCornerRadius(dp(10));
+        d.setCornerRadius(dp(6));
         d.setStroke(dp(1), 0x12FFFFFF);
         return d;
     }
@@ -3987,7 +3987,7 @@ public class MainActivity extends Activity {
 
         nativeAboutKicker = new TextView(this);
         nativeAboutKicker.setText("ABOUT");
-        nativeAboutKicker.setTextColor(0xE0FFCC67);
+        nativeAboutKicker.setTextColor(0xB3EDEFF3);
         nativeAboutKicker.setTextSize(10);
         nativeAboutKicker.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         nativeAboutKicker.setLetterSpacing(0.12f);
@@ -4002,7 +4002,7 @@ public class MainActivity extends Activity {
         body.addView(nativeAboutTitle);
 
         nativeAboutSubline = new TextView(this);
-        nativeAboutSubline.setTextColor(0xE6FFCC67);
+        nativeAboutSubline.setTextColor(0xE6EDEFF3);
         nativeAboutSubline.setTextSize(16);
         nativeAboutSubline.setPadding(0, dp(8), 0, 0);
         nativeAboutSubline.setVisibility(View.GONE);
@@ -4448,7 +4448,7 @@ public class MainActivity extends Activity {
 
     private void setNativeButtonIcon(ImageButton b, int iconRes, boolean primary, boolean focused) {
         b.setImageResource(iconRes);
-        int tint = !b.isEnabled() ? 0x88EDE8F5 : (focused ? 0xFF0B0812 : 0xFFEDE8F5);
+        int tint = !b.isEnabled() ? 0x88EDEFF3 : (focused ? 0xFF14161A : 0xFFEDEFF3);
         b.setImageTintList(ColorStateList.valueOf(tint));
     }
 
@@ -4487,10 +4487,10 @@ public class MainActivity extends Activity {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 focused
-                        ? new int[]{0xFFEDE8F5, 0xFFD9CBE7}
-                        : new int[]{0x18F3EFF7, 0x18F3EFF7});
+                        ? new int[]{0xFFEDEFF3, 0xFFEDEFF3}
+                        : new int[]{0x9E18181C, 0x9E18181C}); // Graphite 3.5.0: site button fill rgba(24,24,28,.62)
         d.setShape(GradientDrawable.RECTANGLE);
-        d.setCornerRadius(dp(primary ? 23 : 18));
+        d.setCornerRadius(dp(6)); // crisp corner, same as every site button
         d.setStroke(0, 0x00000000);
         return d;
     }
@@ -7737,7 +7737,7 @@ public class MainActivity extends Activity {
             TextView label = new TextView(this);
             label.setText(ep.tag);
             label.setSingleLine(true);
-            label.setTextColor(0xEFFFCC67);
+            label.setTextColor(0xB3EDEFF3);
             label.setTextSize(10);
             label.setTypeface(Typeface.DEFAULT_BOLD);
             label.setPadding(dp(1), dp(7), dp(1), 0);
@@ -8378,7 +8378,7 @@ public class MainActivity extends Activity {
     private TextView nativeSheetRow(String label, boolean selected) {
         TextView row = new TextView(this);
         row.setText(label);
-        row.setTextColor(selected ? 0xFFF4E6B7 : 0xDDF3EFF7);
+        row.setTextColor(selected ? 0xFFEDEFF3 : 0xDDEDEFF3);
         row.setTextSize(12);
         row.setTypeface(Typeface.DEFAULT_BOLD);
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -8394,7 +8394,7 @@ public class MainActivity extends Activity {
         row.setLayoutParams(lp);
         row.setOnFocusChangeListener((v, hasFocus) -> {
             v.setBackground(nativeSheetRowBg(hasFocus, selected));
-            ((TextView) v).setTextColor(hasFocus ? 0xFFF9F4FF : selected ? 0xFFF4E6B7 : 0xDDF3EFF7);
+            ((TextView) v).setTextColor(hasFocus ? 0xFF14161A : selected ? 0xFFEDEFF3 : 0xDDEDEFF3);
         });
         return row;
     }
@@ -8403,12 +8403,12 @@ public class MainActivity extends Activity {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 focused
-                        ? new int[]{0xFF2B3137, 0xFF252A30}
+                        ? new int[]{0xFFEDEFF3, 0xFFEDEFF3}
                         : selected
-                        ? new int[]{0x403A3424, 0x30312D22}
+                        ? new int[]{0x29EDEFF3, 0x29EDEFF3}
                         : new int[]{0x0012091D, 0x0012091D});
-        d.setCornerRadius(dp(8));
-        d.setStroke(dp(1), focused ? 0x66B8A46A : selected ? 0x55B8A46A : 0x00000000);
+        d.setCornerRadius(dp(6));
+        d.setStroke(0, 0x00000000); // Graphite: no edge lines
         return d;
     }
 
