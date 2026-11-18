@@ -4365,7 +4365,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native stats button should be the last ExoPlayer right-side control after CC/audio/quality');
   assert.match(android, /private ScrollView nativeSheetScroll;[\s\S]+private LinearLayout nativeSheetRows;/,
     'native ExoPlayer choice sheets should have a dedicated scroll viewport');
-  assert.match(android, /private int nativeSheetWidthPx\(\) \{[\s\S]+if \(isTvDevice\(\)\) return dp\(328\);[\s\S]+screen - dp\(32\)[\s\S]+private int nativeSheetBottomMarginPx\(\) \{[\s\S]+if \(isTvDevice\(\)\) return dp\(96\);[\s\S]+screen \/ 5[\s\S]+private int nativeSheetRowsViewportHeight\(int count\) \{[\s\S]+screen - nativeSheetVerticalReservePx\(\)[\s\S]+return Math\.min\(max, needed\);[\s\S]+\}/,
+  assert.match(android, /private int nativeSheetWidthPx\(\) \{[\s\S]+if \(isTvDevice\(\)\) return dp\(328\);[\s\S]+screen - dp\(32\)[\s\S]+private int nativeSheetBottomMarginPx\(\) \{[\s\S]+if \(isTvDevice\(\)\) return Math\.round\(screen \* 0\.28f\);[\s\S]+screen \/ 5[\s\S]+private int nativeSheetRowsViewportHeight\(int count\) \{[\s\S]+screen - nativeSheetVerticalReservePx\(\)[\s\S]+return Math\.min\(max, needed\);[\s\S]+\}/,
     'native ExoPlayer subtitle/audio/quality sheets should stay bounded on smaller screens');
   assert.match(android, /nativeSheetScroll = new ScrollView\(this\);[\s\S]+nativeSheetRows = new LinearLayout\(this\);[\s\S]+nativeSheetRows\.addView\(row\);[\s\S]+nativeSheet\.addView\(nativeSheetScroll, new LinearLayout\.LayoutParams\([\s\S]+nativeSheetRowsViewportHeight\(labels\.length\)\)\);/,
     'native ExoPlayer choice rows should scroll inside the bounded sheet instead of growing offscreen');
@@ -4915,7 +4915,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'TV About sizes ten faces across the remaining row');
   assert.doesNotMatch(ui, /\.paCastPh\{width:56px;height:56px;border-radius:50%/,
     'web About dropped circular faces');
-  assert.match(android, /nativeAboutKicker\.setText\(subline\.isEmpty\(\) \? "ABOUT" : "THIS EPISODE"\)/,
+  assert.match(android, /nativeAboutKicker\.setText\(subline\.isEmpty\(\) \? "About" : "This episode"\)/,
     'native episode About should switch the kicker to This episode');
   assert.match(android, /nativeAboutSubline\.setText\(subline\)/,
     'native episode About should show the episode line');

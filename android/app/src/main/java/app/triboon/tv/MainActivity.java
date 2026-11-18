@@ -3986,10 +3986,10 @@ public class MainActivity extends Activity {
         body.setOrientation(LinearLayout.VERTICAL);
 
         nativeAboutKicker = new TextView(this);
-        nativeAboutKicker.setText("ABOUT");
+        nativeAboutKicker.setText("About");
         nativeAboutKicker.setTextColor(0xB3EDEFF3);
-        nativeAboutKicker.setTextSize(10);
-        nativeAboutKicker.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nativeAboutKicker.setTextSize(12);
+        nativeAboutKicker.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         nativeAboutKicker.setLetterSpacing(0.12f);
         body.addView(nativeAboutKicker);
 
@@ -4068,7 +4068,7 @@ public class MainActivity extends Activity {
         nativeAboutTitle.setText(title);
         String subline = d.optString("subline", "");
         if (nativeAboutKicker != null) {
-            nativeAboutKicker.setText(subline.isEmpty() ? "ABOUT" : "THIS EPISODE");
+            nativeAboutKicker.setText(subline.isEmpty() ? "About" : "This episode");
         }
         if (nativeAboutSubline != null) {
             nativeAboutSubline.setText(subline);
@@ -8275,14 +8275,21 @@ public class MainActivity extends Activity {
         return isTvDevice() ? dp(42) : dp(16);
     }
 
+    // 3.5.0 (owner, Shield): on TV the popup sat only 96dp up, over the end of the seek bar and the
+    // time. It now ends just above the seek bar (28% of the screen height up, which tracks the bar on
+    // every TV size) and its rows fit between the title block (top 17%) and that line.
     private int nativeSheetBottomMarginPx() {
-        if (isTvDevice()) return dp(96);
         int screen = Math.max(1, getResources().getDisplayMetrics().heightPixels);
+        if (isTvDevice()) return Math.round(screen * 0.28f);
         return Math.max(dp(68), Math.min(dp(96), screen / 5));
     }
 
     private int nativeSheetVerticalReservePx() {
-        return isTvDevice() ? dp(260) : dp(190);
+        if (isTvDevice()) {
+            int screen = Math.max(1, getResources().getDisplayMetrics().heightPixels);
+            return nativeSheetBottomMarginPx() + Math.round(screen * 0.17f) + dp(64); // + sheet title and padding
+        }
+        return dp(190);
     }
 
     private void updateNativeSheetLayout() {
