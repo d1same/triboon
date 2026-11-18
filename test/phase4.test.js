@@ -966,8 +966,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the old thick amber ring on in-player episode stills is gone');
   assert.match(ui, /\.gChip,\.seasonChip,\.ghostMini,\.testBtn,#trailerPlay,#trailerWl,\s*\n\.levelPick button,\.sizePick button,\.mvActions\{border:0 !important\}/,
     'controls across every surface lose their hairline borders (one flat pill family)');
-  assert.match(ui, /#appLoader \.brandWordmarkClip\{width:330px;height:92px/,
-    'the boot splash wordmark is the larger size');
+  assert.match(ui, /#appLoader \.tbMark\{width:280px\}/,
+    'the boot splash wordmark keeps the larger size as an inline vector');
+  assert.match(ui, /<div id="appLoader"><div class="inner">[\s\S]{0,400}<svg class="tbMark"[^>]*aria-label="Triboon">[\s\S]*?<\/svg>\s*<div class="bootLaneTrack"><i id="bootLane"><\/i><\/div>/,
+    'the boot splash draws the vector wordmark above the real-stage boot lane');
+  assert.doesNotMatch(ui, /brandWordmarkClip|brandWordmark img/,
+    'the old clipped raster splash wordmark is gone');
   // Android TV performance: live backdrop-blur on large surfaces and the always-on backdrop drift
   // are the expensive effects on a Shield-class GPU, so static panels trade blur for frames.
   // THE RAIL IS EXEMPT (owner, 2026-08-06): stripping its blur and thickening its fill turned the
@@ -6248,8 +6252,29 @@ test('Android native player: direct source and native chrome stay out of the web
     'the Triboon logo was removed from the rail top (the profile avatar took its place; the favicon still uses the T logo)');
   assert.match(ui, /<div class="ssBrand"><img src="triboon\.png" alt="Triboon"><\/div>/,
     'web screensaver should use the updated transparent Triboon wordmark asset');
-  assert.match(ui, /#playerLoader \.loadMark\{display:grid;place-items:center\}[\s\S]+#playerLoader \.loadMark img\{[^}]*width:min\(210px,50vw\)[\s\S]+#playerLoader \.loadSteps\{[^}]*width:min\(340px,72vw\)[^}]*height:4px[\s\S]+#playerLoader \.loadStep\{[^}]*width:58%[\s\S]+#playerLoader \.loadStatus\{[\s\S]+<img src="triboon\.png" alt="Triboon">[\s\S]+<div class="loadSteps" aria-hidden="true"><span class="loadStep"><\/span><\/div>[\s\S]+<div class="loadStatus" id="plStage">Preparing<\/div>/,
+  assert.match(ui, /#playerLoader \.loadMark\{display:grid;place-items:center\}[\s\S]+#playerLoader \.loadMark \.tbMark\{width:min\(170px,40vw\);margin:4px 0 14px\}[\s\S]+#playerLoader \.loadSteps\{[^}]*width:min\(340px,72vw\)[^}]*height:4px[\s\S]+#playerLoader \.loadStep\{[^}]*width:58%[\s\S]+#playerLoader \.loadStatus\{[\s\S]+<svg class="tbMark"[^>]*aria-label="Triboon">[\s\S]*?<\/svg><\/div>\s*<div class="pt" id="plTitle"><\/div>\s*<div class="loadSteps" aria-hidden="true"><span class="loadStep"><\/span><\/div>[\s\S]+<div class="loadStatus" id="plStage">Preparing<\/div>/,
     'web player loading overlay should use the full wordmark, one calm progress lane, and one simple startup status line');
+  // New logo (3.4.16): the wordmark builds itself on the boot splash and the movie loader. It must
+  // never cost Play time: CSS only (no JS waits on it), only while the loader is showing, half time
+  // on the movie loader, and reduced motion shows the finished mark.
+  assert.match(ui, /#appLoader\{--tbS:1\}#playerLoader\{--tbS:\.5\}/,
+    'the movie loader runs the logo build-up at half the splash time');
+  assert.match(ui, /@media \(prefers-reduced-motion:no-preference\)\{#appLoader:not\(\.hide\) \.tbL,#playerLoader\.show \.tbL\{animation:tbRise [^}]+ both\}[\s\S]+#appLoader:not\(\.hide\) \.tbO1,#playerLoader\.show \.tbO1\{animation:tbDraw[\s\S]+#appLoader:not\(\.hide\) \.tbDot,#playerLoader\.show \.tbDot\{animation:tbLand[^}]+\}\}/,
+    'the logo animates only on a visible splash or loader, and only without reduced motion');
+  assert.match(ui, /@keyframes tbDraw\{from\{stroke-dasharray:1;stroke-dashoffset:1\}to\{stroke-dasharray:1;stroke-dashoffset:0\}\}/,
+    'the linked OO draws itself with stroke-dashoffset only');
+  assert.match(ui, /#playerLoader \.loadMark svg:not\(\.tbMark\)\{display:none\}/,
+    'the hidden legacy loader ring rule must not hide the new wordmark');
+  assert.doesNotMatch(ui, /animationend|animationiteration|getAnimations\(/,
+    'nothing in the app waits for the logo animation to finish');
+  const tbIds = [...ui.matchAll(/ id="(tb[A-Za-z0-9]+)"/g)].map((m) => m[1]);
+  assert.ok(tbIds.length >= 6 && new Set(tbIds).size === tbIds.length,
+    `the two inline wordmarks need unique mask/clip ids (${tbIds.join(', ')})`);
+  for (const rel of ['web/T-Logo.svg', 'logo/T-Logo.svg', 'web/triboon.svg', 'logo/triboon.svg']) {
+    const svgText = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+    assert.ok(/<svg[\s>]/.test(svgText) && !/<image|base64/.test(svgText) && svgText.length < 8000,
+      `${rel} should be a small real vector, not an embedded raster`);
+  }
   assert.match(ui, /PLAYER_LOADING_STAGES = \['Preparing', 'Finding source', 'Mounting', 'Checking health\.\.\.', 'Starting stream'\][\s\S]+function clearPlayerLoadingStages\(\)[\s\S]+if \(hot\) \{[\s\S]+setPlayerLoadingStage\(2\);[\s\S]+S\._stageTimers = \[500, 1100\][\s\S]+S\._stageTimers = \[650, 1400, 2200, 3000\][\s\S]+setPlayerLoadingStage\(i \+ 1\)/,
     'web player loading status should skip Finding source after a details/trailer/next warmup');
   assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+ImageView loadingMark = new ImageView\(this\);[\s\S]+loadingMark\.setImageResource\(R\.drawable\.native_loading_wordmark\);[\s\S]+loadingCenter\.addView\(loadingMark, markLp\);[\s\S]+FrameLayout loadingLane = new FrameLayout\(this\);[\s\S]+nativeLoadingLaneGlow = new View\(this\);[\s\S]+nativeLoadingStatus = new TextView\(this\);[\s\S]+nativeLoadingStatus\.setText\(R\.string\.preparing\);[\s\S]+startNativeLoadingLane\(\);/,
