@@ -16037,6 +16037,12 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
     p.nativeTried[kind] = true;
     if (kind === 'remux') p.triedRemux = true;
     if (kind === 'transcode') p.triedTranscode = true;
+    // An online subtitle that rode in with the handoff (auto pick at start, or the pick carried
+    // across a remount) asks for the audio sync like a menu pick does. Without this a native start
+    // never synced: the post-probe startup path skips a play that already has a subtitle
+    // (The Office S06E14/E15 on Android: "audio sync will try", then no sync, result 126). The
+    // queue waits for real playback and the server answers again from its per-minute cache.
+    if (typeof sub.rel === 'string' && sub.rel.startsWith('os:')) autoSyncNative(p, sub.rel);
     return true;
   } catch (e) {
     p.usingNative = false;

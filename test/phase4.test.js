@@ -263,6 +263,51 @@ test('final watch checkpoints coalesce duplicate lifecycle beacons without hidin
     'native Cast should checkpoint only on the playing-to-paused transition, not on every state sample');
 });
 
+test('native start with an online subtitle already picked asks for the audio sync (result 126)', () => {
+  // The Office S06E14/E15 on Android (E-AC3 direct): "[subs] pick auto ... audio sync will try" and then
+  // no subsync line. The handoff carried the online subtitle, so the post-probe startup path (the only
+  // other caller) skipped, and nothing ever queued the sync.
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const overlayStart = ui.indexOf('function nativeOverlaySource(p)');
+  const overlayEnd = ui.indexOf('function nativeMimeForKind(p, kind)', overlayStart);
+  const nativeStart = ui.indexOf('function tryNativeVideoPlayer(kind, atSeconds, opts = {})');
+  const nativeEnd = ui.indexOf('function tryNativePlaybackLadder(', nativeStart);
+  assert.ok(overlayStart >= 0 && overlayEnd > overlayStart && nativeStart >= 0 && nativeEnd > nativeStart);
+  const run = (rel) => {
+    const synced = [];
+    const payloads = [];
+    const state = { playing: {
+      item: { key: 'tmdb:tv:2316:6:14', type: 'episode', title: 'The Office' },
+      streamUrl: '/api/stream/one', remuxUrl: '/api/remux/one?t=token', transcodeUrl: '/api/transcode/one?t=token',
+      nativeTried: {}, duration: 0, nativeDuration: 0, playbackToken: 7, mountId: 'one',
+    } };
+    const window = { TriboonTV: { playVideo: (raw) => payloads.push(JSON.parse(raw)), updateActiveSubtitle: () => {} } };
+    const tryNative = new Function('S', 'canUseNativeVideoPlayer', 'remuxPlaybackUrl',
+      'nativeVideoSubtitleRel', 'nativeSubtitlePayload', 'updatePlayerMeta', 'episodePlayerMeta',
+      'absoluteArtworkUrl', 'nativeMimeForKind', 'nativeQualityLabel', 'applySubSize',
+      'nativeSubtitleChoices', 'nativeEpisodeChoices', 'loadSubShift', 'traktResumeFractionForItem',
+      'prefLang', 'nativeAudioChoices', 'nativeAudioDescriptionRels', 'prefAudioLang', 'audioLangKey', 'applyInitialAudioPreference',
+      'remuxKeyframeStart', 'startSource', 'autoSyncNative',
+      'window', 'location', `${ui.slice(overlayStart, overlayEnd)}\n${ui.slice(nativeStart, nativeEnd)}\nreturn tryNativeVideoPlayer;`)(
+      state, () => true, (_p, at) => `/api/remux/one?start=${at}`, () => ({ blocked: false, rel }),
+      (_p, r) => ({ rel: r, url: r ? `http://triboon.test/api/ossub/one?rel=${encodeURIComponent(r)}` : '', lang: 'en', label: 'English', shift: 0 }), () => {},
+      (it) => ({ title: it.title, subline: '' }), () => '', () => '', () => '1080p', () => 'M',
+      () => [], () => [], () => 0, () => 0,
+      () => '', () => [], () => [], () => 'eng', () => 'en', () => {},
+      (_p, at) => at, () => { throw new Error('web fallback must not run'); },
+      (p, r) => synced.push({ rel: r, native: !!p.usingNative, subTrack: p.subTrack }),
+      window, { origin: 'http://triboon.test' });
+    assert.strictEqual(tryNative('direct', 0), true);
+    return { synced, payloads };
+  };
+  const online = run('os:en');
+  assert.strictEqual(online.payloads[0].subtitleRel, 'os:en', 'the handoff carries the auto-picked online subtitle');
+  assert.deepStrictEqual(online.synced, [{ rel: 'os:en', native: true, subTrack: 'os:en' }],
+    'the native start queues the audio sync for that subtitle once');
+  assert.deepStrictEqual(run('em:0').synced, [], 'a subtitle from the file itself is never sent to the audio sync');
+  assert.deepStrictEqual(run('').synced, [], 'no subtitle, no sync');
+});
+
 test('Trakt percent-only native resume reaches direct and server-seek Android paths once', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
