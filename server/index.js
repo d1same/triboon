@@ -5252,6 +5252,11 @@ function showCamSources() {
 function visibleSourceDrawerCandidates(candidates) {
   return sourceDrawerCandidates(candidates, { hideCam: !showCamSources() });
 }
+function playEpisodePart(body, playParams, candidate) {
+  if (!body || body.mediaType !== 'tv' || !candidate) return undefined;
+  const e = (candidate.releaseEpisode && candidate.releaseEpisode.e) || Number(playParams && playParams.ep);
+  return episodeOrder.episodePartOf(candidate.name, playParams && playParams.season, e) || undefined;
+}
 function mountPayload(vf, uid, extra = {}) {
   const st = auth.streamToken(uid, vf.id);
   return {
@@ -7221,6 +7226,9 @@ const H = {
         attempts,
         relaxedResolution: relaxedResolution || undefined,
         bufferGoalSec,
+        // One file holds this episode and the one(s) before it (S05E14E15 for E15): the player starts
+        // at this part (brief 127).
+        episodePart: playEpisodePart(body, playParams, candidate),
       }));
     } catch (e) {
       // A maturity denial outranks a pipeline failure: a restricted profile must see "restricted",

@@ -164,3 +164,21 @@ function namedEpisode(name, seasonEpisodes) {
 }
 
 module.exports = { titleWords, pickAirOrderGroup, releaseNumbering, positionalTitle, titleNames, namedEpisode };
+
+// One file holds several episodes ("S05E14E15", "S05E14-E15") and the viewer chose a later one:
+// { index, of } of that episode inside the file (index 2 of 2 for E15), or null when it is the first
+// part or the name holds one episode. The player then starts at that part (brief 127).
+function episodePartOf(name, season, episode) {
+  const s = Number(season), e = Number(episode);
+  if (!Number.isInteger(s) || !Number.isInteger(e)) return null;
+  const norm = ' ' + fold(name).toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+  const m = new RegExp(`\\bs0?${s}((?:\\s?e0?\\d{1,3}){2,})\\b`).exec(norm);
+  if (!m) return null;
+  const eps = [...m[1].matchAll(/e0?(\d{1,3})/g)].map((x) => Number(x[1]));
+  const glued = !/\s/.test(m[1]);
+  let index = -1, of = 0;
+  if (glued || eps.length > 2) { index = eps.indexOf(e) + 1; of = eps.length; }
+  else if (eps[0] <= e && e <= eps[1]) { index = e - eps[0] + 1; of = eps[1] - eps[0] + 1; }
+  return index > 1 && of >= index && of <= 6 ? { index, of } : null;
+}
+module.exports.episodePartOf = episodePartOf;

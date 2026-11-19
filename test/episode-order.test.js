@@ -154,6 +154,36 @@ test('search: a normal show (names agree with TMDB) takes one search, no retry',
   });
 });
 
+test('part: a file holding this episode and the one before starts at this part', () => {
+  assert.deepEqual(episodeOrder.episodePartOf('Show.S05E14E15.1080p.BluRay', 5, 15), { index: 2, of: 2 });
+  assert.deepEqual(episodeOrder.episodePartOf('Show.S05E14-E15.1080p.WEB', 5, 15), { index: 2, of: 2 });
+  assert.equal(episodeOrder.episodePartOf('Show.S05E14E15.1080p.BluRay', 5, 14), null, 'the first part starts at 0:00');
+  assert.equal(episodeOrder.episodePartOf('Show.S05E15.1080p', 5, 15), null);
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('async function applyEpisodePartStart(p) {');
+  const end = ui.indexOf('\nfunction ', start);
+  assert.ok(start > 0 && end > start);
+  const seeks = [], toasts = [];
+  const S = {};
+  const run = (chapters) => new Function('S', 'api', 'seekTo', 'toast', `${ui.slice(start, end)}\nreturn applyEpisodePartStart;`)(
+    S, async () => ({ chapters }), (s) => seeks.push(s), (m) => toasts.push(m));
+  return (async () => {
+    const p = { episodePart: { index: 2, of: 2 }, mountId: 'm1', item: { resume: 0 }, tracks: { duration: 2640 } };
+    S.playing = p;
+    await run([{ startMs: 0 }, { startMs: 600000 }, { startMs: 1322000 }, { startMs: 2000000 }])(p);
+    assert.deepEqual(seeks, [1322], 'the chapter at Part 2');
+    const q = { episodePart: { index: 2, of: 2 }, mountId: 'm2', item: { resume: 0 }, tracks: { duration: 2640 } };
+    S.playing = q;
+    await run([])(q);
+    assert.equal(seeks.length, 1, 'no chapter: no guessed jump');
+    assert.match(toasts[1], /holds Parts 1 to 2 together\. Part 2 starts later/);
+    const r = { episodePart: { index: 2, of: 2 }, mountId: 'm3', item: { resume: 300 }, tracks: { duration: 2640 } };
+    S.playing = r;
+    await run([{ startMs: 1322000 }])(r);
+    assert.equal(seeks.length, 1, 'a saved position wins');
+  })();
+});
+
 test('server: Play and Sources search the release numbers, while the card keeps TMDB numbers', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const grab = (name) => {

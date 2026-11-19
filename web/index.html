@@ -15006,6 +15006,7 @@ async function openPlayer(it, mount, opts = {}) {
     _resumeSourceOk: !!opts.userPicked,
     size: mount.size || (mount.candidate && mount.candidate.sizeBytes) || 0,
     bufferGoalSec: mount.bufferGoalSec || 0, // server-side read-ahead goal → native player buffer depth
+    episodePart: mount.episodePart || null, // this file also holds the episode(s) before this one
     usingRemux: false, usingTranscode: false, startOffset: 0,
     duration: knownDuration, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
     tracks: null, _tracksJob: null, audioTrack: 0, subTrack: null, quality: 1080,
@@ -15198,13 +15199,38 @@ async function loadTracks() {
       if (!appliedStartupSubtitle) refreshNativeSubtitleChoices();
       refreshNativeAudioChoices(); // probe may resolve after handoff — the Audio menu fills in late
       maybeApplyNativePreferredAudio(p);
+      applyEpisodePartStart(p);
       return;
     }
     updatePlayerMeta();
     updatePlayerControlAvailability();
     applyTrackPrefs(); // preferred audio/subtitle language + surround button
     updateClocks(); // duration just arrived → "Ends at" can render
+    applyEpisodePartStart(p);
   } catch { updatePlayerControlAvailability(); }
+}
+// Brief 127: this file holds two (or more) episodes and the viewer chose a later one (S05E14E15
+// for Part 2). Start at that part: the chapter nearest its share of the file. Without a fitting
+// chapter, say so plainly instead of guessing a spot. A saved position always wins.
+async function applyEpisodePartStart(p) {
+  const part = p && p.episodePart;
+  if (!part || p._episodePartApplied || !(part.index > 1) || !(part.of >= part.index)) return;
+  p._episodePartApplied = true;
+  if ((+(p.item && p.item.resume) || 0) > 0) return;
+  const dur = Number(p.tracks && p.tracks.duration) || Number(p.duration) || 0;
+  if (!(dur > 0)) return;
+  const want = dur * (part.index - 1) / part.of;
+  let chapters = [];
+  try { const c = await api('/api/audiobook/chapters/' + encodeURIComponent(p.mountId)); chapters = (c && c.chapters) || []; } catch {}
+  if (S.playing !== p) return;
+  const near = chapters.map((c) => (Number(c && c.startMs) || 0) / 1000).filter((s) => s > 0)
+    .sort((a, b) => Math.abs(a - want) - Math.abs(b - want))[0];
+  if (near !== undefined && Math.abs(near - want) <= dur * 0.15) {
+    seekTo(near);
+    toast(`Part ${part.index} of ${part.of}: started where it begins in this file`);
+  } else {
+    toast(`This file holds Parts 1 to ${part.of} together. Part ${part.index} starts later in the file.`);
+  }
 }
 function jellyfinDesktopPlayer() {
   try {
