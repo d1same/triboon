@@ -11790,7 +11790,7 @@ test('Home catalog rows survive a failed load and a new day, and a failed load r
 
 test('Boot logo animates as composited layers so a busy page cannot freeze it (3.5.1, owner Android TV)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  assert.match(ui, /function startBootLogo\(\) \{[\s\S]{0,200}layerBootLogo\(loader\);[\s\S]{0,260}startBootSoundThen\(\(\) => \{ loader\.classList\.add\('go'\);/,
+  assert.match(ui, /startBootSoundThen\(\(\) => \{ layerBootLogo\(loader\); loader\.classList\.add\('go'\);/,
     'the mark is split into layers before the build starts');
   assert.match(ui, /function layerBootLogo\(loader\) \{[\s\S]+part\.removeAttribute\('class'\);[\s\S]+\} catch \{\}\s*\}/,
     'parts lose their old in-SVG (main-thread) animation; any failure keeps the old single-SVG build');
@@ -11826,7 +11826,7 @@ test('Boot sound plays with the logo build, once, never on phones (3.5.1, owner 
   assert.ok(ui.indexOf('id="bootSound"') > ui.indexOf('<div class="bootLaneTrack">'), 'outside the logo markup');
   // Owner (Shield): "the logo loads first and then the sound plays". The sound is decoded before the
   // build, started first, and the build (.go) follows by the reported audio output lag (capped).
-  assert.match(ui, /startBootSoundThen\(\(\) => \{ loader\.classList\.add\('go'\);/, 'the build starts from the sound, not before it');
+  assert.match(ui, /startBootSoundThen\(\(\) => \{ layerBootLogo\(loader\); loader\.classList\.add\('go'\);/, 'the build starts from the sound, not before it; the logo is split only then (no early flash)');
   assert.match(ui, /primeBootSound\(\); \/\/ decode the intro sound while the screen is still blank\s*requestAnimationFrame\(\(\) => requestAnimationFrame\(startBootLogo\)\)/, 'decoded before the build');
   assert.match(ui, /const lag = \(Number\(A\.ctx\.outputLatency\) \|\| 0\) \+ \(Number\(A\.ctx\.baseLatency\) \|\| 0\);\s*const ms = Math\.max\(0, Math\.min\(400, Math\.round\(lag \* 1000\)\)\);/, 'waits by the output lag, at most 400 ms');
   assert.match(ui, /a\.addEventListener\('playing', once, \{ once: true \}\);\s*setTimeout\(once, 300\);/, 'fallback: waits for the element to really play, at most 300 ms');

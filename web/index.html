@@ -34054,10 +34054,11 @@ function hideAppLoaderAfterLogo() {
 function startBootLogo() {
   const loader = $('appLoader');
   if (loader._logoDone) return loader._logoDone;
-  layerBootLogo(loader);
   loader._logoDone = new Promise((resolve) => {
     // The sound starts first; the build (.go) follows by the audio output lag so both land together.
-    startBootSoundThen(() => { loader.classList.add('go'); requestAnimationFrame(() => {
+    // The mark is split into layers only at that moment: split layers are visible, so splitting early
+    // showed the whole logo during the wait (owner, Shield).
+    startBootSoundThen(() => { layerBootLogo(loader); loader.classList.add('go'); requestAnimationFrame(() => {
       let finite = [];
       try {
         finite = loader.getAnimations({ subtree: true }).filter((a) => {
