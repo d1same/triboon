@@ -7274,6 +7274,31 @@ test('subtitles: a framerate stretch pivots on the line it was measured at, so e
   assert.ok(worst <= 150, `every line within 150ms after the stretch (worst ${worst}ms)`);
 });
 
+test('subtitles: slices that disagree are heard again with a padded clip; two wrong slices never outvote (result 126)', async () => {
+  const vtt = subSyncTestVtt(Array.from({ length: 70 }, (_, n) => ({ n, start: 1500 + n * 2900 })));
+  // Real alass 2.0.0 readings, offline, words 8.5s early (the right move is +8.5s). 30s clips: the
+  // playhead slice (a), the slice before (b), the tie slice after (c). With the padded clip all hear 8.46s.
+  const heard = (table) => { const calls = []; const hear = (w, o) => { calls.push(o.padded ? 'p' : o.tag); return o.padded ? 8461 : table[o.tag]; }; return { hear, calls }; };
+  // At 2:20: a right, b and c wrong but 1.47s apart. The old code applied b (-0.5s, the wrong way).
+  const one = heard({ a: 8388, b: -506, c: 963 });
+  const r1 = await subSyncCoreWith(one.hear)({ id: 't' }, vtt, 'u', 140, 0);
+  assert.strictEqual(r1.shiftMs, 8461, 'two wrong slices 1.47s apart do not outvote; the padded clip answers');
+  // At 1:40: only b right. The old code gave up ("witnesses disagree") and the words stayed 8.5s early.
+  const two = heard({ a: -5143, b: 8464, c: -1914 });
+  const r2 = await subSyncCoreWith(two.hear)({ id: 't' }, vtt, 'u', 100, 0);
+  assert.strictEqual(r2.shiftMs, 8461);
+  assert.ok(two.calls.includes('p'), 'the padded clip was asked');
+  // Slices that agree never pay for the padded clip.
+  const calm = heard({ a: -2534, b: -2536 });
+  const r3 = await subSyncCoreWith(calm.hear)({ id: 't' }, vtt, 'u', 100, 0);
+  assert.strictEqual(r3.shiftMs, -2534);
+  assert.deepStrictEqual(calm.calls, ['a', 'b'], 'two agreeing 30s slices: no third pull, no padded pull');
+  // A caption that fits nowhere (wrong language): the padded clip disagrees too, and nothing is applied.
+  let k = 0;
+  const lost = (w, o) => (o.padded ? [-4809, 2914, 5618][k++] : { a: 3232, b: -1119, c: 5618 }[o.tag]);
+  await assert.rejects(subSyncCoreWith(lost)({ id: 't' }, vtt, 'u', 100, 0), /witnesses disagree \(3232ms vs -1119ms\)/);
+});
+
 test('subtitles: Play waits for the moviehash only when OpenSubtitles (its only user) is on', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   assert.match(src, /if \(!variant && osActive && vf\._moviehash === undefined\) \{/);
