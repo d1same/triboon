@@ -11840,6 +11840,58 @@ test('Sign-in card matches the site: 6px corners, no edge line, straight 6px pos
   assert.match(ui, /\.gate:not\(#gateProfiles\) \.gateCard\{background:transparent;/, 'owner pick D: no card, the form floats on a soft fade');
 });
 
+test('In-player guide: the Back/Close row is readable on focus, 6px corners (3.5.1, owner Shield)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /body\[data-theme="graphite"\] :is\(\.pgBackTop:hover,\.pgBackTop:focus,\.pgBackTop:focus-visible,\.pgBackTop\.focus\)\{\s*background:#EDEFF3;color:#14161A;box-shadow:none\}/,
+    'white focus fill carries dark text (it was white on white)');
+  assert.match(ui, /body\[data-theme="graphite"\] \.pgGuideShell\{border:0;border-radius:6px;overflow:hidden\}/, 'guide panel: crisp corners, no edge line');
+  assert.match(ui, /body\[data-theme="graphite"\] \.pgBackTop\{border-radius:6px;/, 'the row itself has the same corners');
+});
+
+test('QR sign-in: the page QR encoder makes a valid, scannable code (3.5.1, owner)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const a = ui.indexOf('function qrMatrix(text) {'), b = ui.indexOf('// ---- 3.5.1 (owner): QR sign-in ----');
+  assert.ok(a > 0 && b > a, 'encoder sits in the page (no outside library)');
+  const qrMatrix = new Function(ui.slice(a, b) + ';return qrMatrix;')();
+  const bits = (m) => m.map((r) => r.map((x) => (x ? 1 : 0)).join('')).join('|');
+  // Golden: this exact matrix was decoded by ZXing and OpenCV to the same URL (2026-11-18), along with
+  // 145 other codes and 41 deliberately damaged ones (error correction proven).
+  const m = qrMatrix('https://media.mobasheri.us/?approve=123456');
+  assert.equal(m.length, 29, 'version 3 for a typical approve link');
+  assert.equal(require('crypto').createHash('sha256').update(bits(m)).digest('hex').slice(0, 16), '16d45df85f2e50bd');
+  // Structure checks on every size: three finder patterns, timing lines, and a valid format word.
+  for (const len of [1, 30, 60, 90, 120, 170, 210]) {
+    const q = qrMatrix('x'.repeat(len)), n = q.length, v = (n - 17) / 4;
+    assert.ok(Number.isInteger(v) && v >= 1 && v <= 10, `size ${n} is a real QR version`);
+    for (const [ox, oy] of [[0, 0], [n - 7, 0], [0, n - 7]]) for (let i = 0; i < 7; i++) {
+      assert.equal(q[oy][ox + i], true); assert.equal(q[oy + 6][ox + i], true); assert.equal(q[oy + 3][ox + 3], true);
+    }
+    for (let i = 8; i < n - 8; i++) { assert.equal(q[6][i], i % 2 === 0); assert.equal(q[i][6], i % 2 === 0); }
+    let f = 0; for (let i = 0; i <= 5; i++) f |= (q[i][8] ? 1 : 0) << i;
+    f |= (q[7][8] ? 1 : 0) << 6; f |= (q[8][8] ? 1 : 0) << 7; f |= (q[8][7] ? 1 : 0) << 8;
+    for (let i = 9; i < 15; i++) f |= (q[8][14 - i] ? 1 : 0) << i;
+    f ^= 0x5412; let r = f; for (let i = 14; i >= 10; i--) if ((r >>> i) & 1) r ^= 0x537 << (i - 10);
+    assert.equal(r, 0, 'format word is a valid BCH code');
+    assert.equal(f >>> 13, 0, 'error correction level M');
+  }
+  assert.throws(() => qrMatrix('x'.repeat(400)), /too long/);
+});
+
+test('QR sign-in: TV shows the QR beside the form, phone approves the same code (3.5.1, owner)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /<div id="liRow">\s*<form class="gateCard" id="gateLoginForm"[\s\S]+?<\/form>\s*<div id="liSplit"[\s\S]+?<div id="liQr">/, 'form and QR are one centered group');
+  assert.match(ui, /qrSvg\(`\$\{location\.origin\}\/\?approve=\$\{code\}`\)/, 'the QR opens this server with the code');
+  assert.match(ui, /if \(b\.contains\('androidApp'\) && !b\.contains\('tv'\)\) return false;/, 'never on the phone app');
+  assert.match(ui, /const LOGIN_QR_MAX_CODES = 5;/, 'refresh is capped (the create route is throttled)');
+  assert.match(ui, /if \(which === 'login'\) setTimeout\(\(\) => \{ if \(\$\('gateLogin'\)\.classList\.contains\('open'\)\) startLoginQr\(\); \}, 0\); else stopLoginQr\(\);/, 'starts and stops with the sign-in screen');
+  assert.match(ui, /p\.status === 'approved'\) \{ stopLoginQr\(\); tokenStore\.set\(p\.token\); S\.user = null; await enterApp\(\);/, 'approval signs the TV in');
+  assert.match(ui, /u\.searchParams\.delete\('approve'\);[\s\S]{0,120}history\.replaceState/, 'the code leaves the address bar at once');
+  assert.match(ui, /return \/\^\\d\{6\}\$\/\.test\(c\) \? c : null;/, 'only a 6-digit code is accepted');
+  assert.match(ui, /setTimeout\(maybeShowQcSheet, 900\);/, 'the phone asks once it is signed in');
+  assert.match(ui, /api\(`\/api\/quickconnect\/\$\{qcSheetCode\}\/approve`, \{ method: 'POST' \}\)/, 'approval uses the existing signed-in route');
+  assert.match(ui, /<button type="button" class="btn focusable" id="qcSheetNo">Not me<\/button>/, 'the phone can refuse');
+});
+
 test('Profiles: square avatar tiles and a clean Who\'s watching picker (3.5.1, owner pick Option 1)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   for (let i = 1; i <= 20; i++) {

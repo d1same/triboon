@@ -613,6 +613,38 @@ body.androidApp .gateCard input{min-height:54px;border-radius:16px}
 body.androidApp .gateCard .btn{min-height:56px;margin-top:20px}
 body.androidApp:not(.tv) #gateLogin .alt{display:none} /* phone app types the password; TV keeps Quick Connect (no on-screen typing) */
 body.androidApp #gateArtCaption{display:none}
+/* 3.5.1 (owner): QR sign-in. On a TV or a wide screen the sign-in form and a QR code sit side by
+   side as one centered group; scanning opens /?approve=CODE on a signed-in phone. Narrow screens
+   and the phone app keep only the form (and the "Sign in with your phone" code button). */
+#liRow{display:flex;align-items:center;justify-content:center;gap:clamp(28px,3.4vw,64px)}
+#liSplit,#liQr{display:none}
+body.authQr #gateLogin{place-items:center}
+body.authQr #gateLogin .gateCard{margin-left:0}
+body.authQr #gateLogin .qcAlt{display:none}
+body.authQr #liSplit{display:flex;flex-direction:column;align-items:center;align-self:stretch;gap:12px;
+  font:600 12px "Sora",system-ui,sans-serif;letter-spacing:.12em;color:rgba(237,239,243,.55)}
+body.authQr #liSplit::before,body.authQr #liSplit::after{content:"";flex:1;width:1px;background:rgba(237,239,243,.14)}
+body.authQr #liQr{display:block;width:300px}
+body.authQr #gatePosterStrip,body.authQr #gateArtCaption{display:none}
+#liQrTile{width:224px;height:224px;border-radius:6px;overflow:hidden;background:#EDEFF3}
+#liQrTile svg{display:block;width:100%;height:100%}
+#liQrTitle{font:600 22px "Sora",system-ui,sans-serif;margin:22px 0 8px;color:var(--text)}
+#liQrText{font-size:16px;line-height:1.45;color:rgba(237,239,243,.66)}
+#liQrCodeBox{margin-top:16px}
+#liQrCodeBox small{display:block;font-size:13px;color:rgba(237,239,243,.5);margin-bottom:4px}
+#liQrCode{font:600 26px "JetBrains Mono",ui-monospace,monospace;letter-spacing:.18em;color:var(--text)}
+#liQrNew{margin-top:16px}
+#liQrNew[hidden]{display:none}
+/* The phone side: "Sign in on your TV?" after scanning (signed-in phone or browser). */
+#qcSheet{position:fixed;inset:0;z-index:120;display:none;place-items:center;padding:24px;background:#0B0A10}
+#qcSheet.open{display:grid}
+#qcSheet .qcSheetCard{width:min(420px,100%);text-align:left}
+#qcSheet h2{font:600 26px "Sora",system-ui,sans-serif;line-height:1.2;margin:0 0 10px;color:var(--text)}
+#qcSheet p{font-size:16px;line-height:1.5;color:rgba(237,239,243,.66);margin:0 0 8px}
+#qcSheetCode{font:600 30px "JetBrains Mono",ui-monospace,monospace;letter-spacing:.18em;margin:18px 0 24px;color:var(--text)}
+#qcSheet .btn{display:flex;justify-content:center;width:100%;min-height:52px;border-radius:6px;margin:0 0 12px}
+#qcSheetNo{background:rgba(237,239,243,.08);color:var(--text)}
+#qcSheetMsg{font-size:14px;color:rgba(237,239,243,.75);min-height:20px;text-align:center}
 /* iPhone Safari/Chrome: body overflow:hidden + a fixed gate pins the login card under the
    software keyboard so taps look focused but keys go nowhere. Phone browsers only — TV and
    the Android app keep their own gate layout. */
@@ -4094,6 +4126,16 @@ body[data-theme="graphite"] :is(#chBody,#pGuide,.pgGuideShell,#chCats,.liveCatPa
   --focus:#EDEFF3;--focusSoft:rgba(237,239,243,.3);--amber:#EDEFF3;--artFocusLine:#EDEFF3;--artFocusGlow:transparent;
   --btnSelected:rgba(237,239,243,.16);--btnSelectedHover:#EDEFF3;--btnHover:#EDEFF3}
 body[data-theme="graphite"] :is(.liveCatPane,.pgCatPane){background:var(--field)}
+/* 3.5.1 (owner, Shield): the in-player guide. The "Back to <title> / Close guide" row turned into a
+   blank white bar on focus (white fill, white text). Focus is now the site focus (white fill, dark
+   text); the row and the guide panel get the crisp 6px corners with no edge line. */
+body[data-theme="graphite"] .pgGuideShell{border:0;border-radius:6px;overflow:hidden}
+body[data-theme="graphite"] .pgBackTop{border-radius:6px;margin:0 0 8px;background:rgba(237,239,243,.08)}
+body[data-theme="graphite"] :is(.pgBackTop:hover,.pgBackTop:focus,.pgBackTop:focus-visible,.pgBackTop.focus){
+  background:#EDEFF3;color:#14161A;box-shadow:none}
+body[data-theme="graphite"] :is(.pgBackTop:hover,.pgBackTop:focus,.pgBackTop:focus-visible,.pgBackTop.focus) .pgBackSub{color:rgba(20,22,26,.65)}
+body[data-theme="graphite"] :is(.pgBackTop:hover,.pgBackTop:focus,.pgBackTop:focus-visible,.pgBackTop.focus) .pgInit{background:#14161A;color:#EDEFF3}
+body[data-theme="graphite"] .pgBackTop .pgInit{border-radius:6px}
 /* Focus in the guide = the site's focus: white fill, dark text (category, channel cell, the
    in-player / PiP guide rows). The programme strip next to it keeps its faint wash. */
 body[data-theme="graphite"] :is(.lcat.focus,.lcat:focus,.pgCat.focus,.pgCat:focus,.chGroupHead.focus,
@@ -4225,6 +4267,8 @@ body[data-theme="graphite"] .gate:not(#gateProfiles) .gateCard{background:transp
 body[data-theme="graphite"] .gate:not(#gateProfiles){
   background:linear-gradient(90deg,rgba(8,8,11,.92) 0%,rgba(8,8,11,.78) 30%,rgba(8,8,11,.25) 52%,rgba(8,8,11,0) 66%)}
 @media (max-width:760px){body[data-theme="graphite"] .gate:not(#gateProfiles){background:rgba(8,8,11,.8)}}
+/* QR sign-in is one centered group, so the shade is even (darker in the middle) instead of a left fade. */
+body[data-theme="graphite"].authQr #gateLogin{background:radial-gradient(70% 80% at 50% 50%,rgba(8,8,11,.86) 0%,rgba(8,8,11,.72) 60%,rgba(8,8,11,.5) 100%)}
 body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn{border-radius:6px}
 body[data-theme="graphite"] #gatePosterStrip{transform:none}
 body[data-theme="graphite"] .gatePoster{border-radius:6px;box-shadow:none}
@@ -4355,6 +4399,7 @@ body[data-theme="graphite"] .profCard .lock{border-radius:6px}
 </div>
 
 <div class="gate" id="gateLogin">
+  <div id="liRow">
   <form class="gateCard" id="gateLoginForm" autocomplete="on">
     <div class="logoRow"><img src="triboon.png" alt="Triboon"></div>
     <div class="sub">Sign in to your server.</div>
@@ -4371,6 +4416,15 @@ body[data-theme="graphite"] .profCard .lock{border-radius:6px}
       <button type="button" id="qcStart" class="btn qcBtn focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg>Sign in with your phone</button>
       <div class="altSub">Get a code, approve it on a signed-in phone.</div></div>
   </form>
+  <div id="liSplit" aria-hidden="true">or</div>
+  <div id="liQr">
+    <div id="liQrTile" role="img" aria-label="QR code to sign in with your phone"></div>
+    <div id="liQrTitle">Scan to sign in</div>
+    <div id="liQrText">Point your phone camera here, then tap Approve on a phone that's already signed in.</div>
+    <div id="liQrCodeBox"><small>or enter this code on your phone</small><span id="liQrCode">··· ···</span></div>
+    <button type="button" id="liQrNew" class="btn qcBtn focusable" hidden>Show a new code</button>
+  </div>
+  </div>
 </div>
 
 <div class="gate" id="gateQc">
@@ -4380,6 +4434,18 @@ body[data-theme="graphite"] .profCard .lock{border-radius:6px}
     <div id="qcCode">······</div>
     <div class="sub" id="qcState">waiting for approval…</div>
     <div class="alt"><button id="qcCancel">Back to sign-in</button></div>
+  </div>
+</div>
+
+<div id="qcSheet" role="dialog" aria-modal="true" aria-labelledby="qcSheetTitle">
+  <div class="qcSheetCard">
+    <h2 id="qcSheetTitle">Sign in on your TV?</h2>
+    <p>A TV is asking to sign in to this server as <b id="qcSheetUser"></b>.</p>
+    <div id="qcSheetCode"></div>
+    <button type="button" class="btn primary focusable" id="qcSheetOk">Approve</button>
+    <button type="button" class="btn focusable" id="qcSheetNo">Not me</button>
+    <p style="font-size:13px;text-align:center">Only approve if this code matches the one on your TV.</p>
+    <div id="qcSheetMsg"></div>
   </div>
 </div>
 
@@ -6552,6 +6618,7 @@ window.addEventListener('orientationchange', () => { clearTimeout(adaptRowWindow
 function showGate(which) {
   if (which) hideAppLoaderAfterLogo(); // gate screens: drop the boot loader once the logo has built (app path hides it after content loads)
   if (which === 'login') setLogin2faMode(null);
+  if (which === 'login') setTimeout(() => { if ($('gateLogin').classList.contains('open')) startLoginQr(); }, 0); else stopLoginQr();
   document.body.classList.toggle('authOpen', !!which);
   if (which) ensureGateArt(); else stopGateArtCycle();
   for (const g of ['gateSetup', 'gateLogin', 'gateQc', 'gateInvite', 'gateProfiles', 'gatePin']) $(g).classList.remove('open');
@@ -6893,6 +6960,215 @@ $('qcStart').addEventListener('click', async () => {
   }, 2000);
 });
 $('qcCancel').addEventListener('click', () => { if (S.qcTimer) clearInterval(S.qcTimer); showGate('login'); });
+// 3.5.1 QR encoder (byte mode, error correction M, versions 1-10). Plain JS, no dependencies.
+// qrMatrix(text) -> array of rows of booleans (true = dark), without the quiet zone.
+function qrMatrix(text) {
+  const M_BLOCKS = [null, [10, 1, 16, 0, 0], [16, 1, 28, 0, 0], [26, 1, 44, 0, 0], [18, 2, 32, 0, 0], [24, 2, 43, 0, 0],
+    [16, 4, 27, 0, 0], [18, 4, 31, 0, 0], [22, 2, 38, 2, 39], [22, 3, 36, 2, 37], [26, 4, 43, 1, 44]];
+  const ALIGN = [null, [], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42], [6, 26, 46], [6, 28, 50]];
+  const bytes = Array.from(new TextEncoder().encode(String(text)));
+  let ver = 0;
+  for (let v = 1; v <= 10; v++) {
+    const [, n1, d1, n2, d2] = M_BLOCKS[v];
+    const cap = (n1 * d1 + n2 * d2) * 8;
+    if (4 + (v < 10 ? 8 : 16) + bytes.length * 8 <= cap) { ver = v; break; }
+  }
+  if (!ver) throw new Error('text too long for a QR code');
+  const [ecLen, n1, d1, n2, d2] = M_BLOCKS[ver];
+  const dataCap = n1 * d1 + n2 * d2;
+  // 1) bit stream
+  const bits = [];
+  const put = (val, len) => { for (let i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); };
+  put(4, 4); put(bytes.length, ver < 10 ? 8 : 16); bytes.forEach((b) => put(b, 8));
+  put(0, Math.min(4, dataCap * 8 - bits.length));
+  while (bits.length % 8) bits.push(0);
+  const data = [];
+  for (let i = 0; i < bits.length; i += 8) data.push(bits.slice(i, i + 8).reduce((a, b) => (a << 1) | b, 0));
+  for (let p = 0; data.length < dataCap; p++) data.push(p % 2 ? 0x11 : 0xEC);
+  // 2) Reed-Solomon per block, then interleave
+  const mul = (x, y) => { let z = 0; for (let i = 7; i >= 0; i--) { z = (z << 1) ^ ((z >>> 7) * 0x11D); z ^= ((y >>> i) & 1) * x; } return z; };
+  const div = new Array(ecLen).fill(0); div[ecLen - 1] = 1;
+  for (let i = 0, root = 1; i < ecLen; i++, root = mul(root, 2)) {
+    for (let j = 0; j < ecLen; j++) { div[j] = mul(div[j], root); if (j + 1 < ecLen) div[j] ^= div[j + 1]; }
+  }
+  const rem = (block) => { const r = new Array(ecLen).fill(0); for (const b of block) { const f = b ^ r.shift(); r.push(0); div.forEach((c, i) => { r[i] ^= mul(c, f); }); } return r; };
+  const blocks = [];
+  let off = 0;
+  for (let i = 0; i < n1 + n2; i++) { const len = i < n1 ? d1 : d2; const b = data.slice(off, off + len); off += len; blocks.push({ d: b, e: rem(b) }); }
+  const out = [];
+  for (let i = 0; i < Math.max(d1, d2); i++) blocks.forEach((b) => { if (i < b.d.length) out.push(b.d[i]); });
+  for (let i = 0; i < ecLen; i++) blocks.forEach((b) => out.push(b.e[i]));
+  // 3) function patterns
+  const size = ver * 4 + 17;
+  const mod = [...Array(size)].map(() => new Array(size).fill(false));
+  const fn = [...Array(size)].map(() => new Array(size).fill(false));
+  const set = (x, y, dark) => { mod[y][x] = !!dark; fn[y][x] = true; };
+  for (let i = 0; i < size; i++) { set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0); }
+  const finder = (cx, cy) => {
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      const x = cx + dx, y = cy + dy; if (x < 0 || y < 0 || x >= size || y >= size) continue;
+      const d = Math.max(Math.abs(dx), Math.abs(dy)); set(x, y, d !== 2 && d !== 4);
+    }
+  };
+  finder(3, 3); finder(size - 4, 3); finder(3, size - 4);
+  const al = ALIGN[ver], last = al.length - 1;
+  al.forEach((a, i) => al.forEach((b, j) => {
+    if ((i === 0 && j === 0) || (i === 0 && j === last) || (i === last && j === 0)) return;
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(a + dx, b + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+  }));
+  const drawFormat = (mask) => {
+    let r = mask; for (let i = 0; i < 10; i++) r = (r << 1) ^ ((r >>> 9) * 0x537);
+    const f = ((mask << 10) | r) ^ 0x5412, bit = (i) => (f >>> i) & 1;
+    for (let i = 0; i <= 5; i++) set(8, i, bit(i));
+    set(8, 7, bit(6)); set(8, 8, bit(7)); set(7, 8, bit(8));
+    for (let i = 9; i < 15; i++) set(14 - i, 8, bit(i));
+    for (let i = 0; i < 8; i++) set(size - 1 - i, 8, bit(i));
+    for (let i = 8; i < 15; i++) set(8, size - 15 + i, bit(i));
+    set(8, size - 8, true);
+  };
+  drawFormat(0); // reserve the format area before placing data
+  if (ver >= 7) {
+    let r = ver; for (let i = 0; i < 12; i++) r = (r << 1) ^ ((r >>> 11) * 0x1F25);
+    const v = (ver << 12) | r;
+    for (let i = 0; i < 18; i++) { const b = (v >>> i) & 1, a = size - 11 + (i % 3), c = Math.floor(i / 3); set(a, c, b); set(c, a, b); }
+  }
+  // 4) data placement (zigzag from the bottom-right, skipping the vertical timing column)
+  let k = 0;
+  for (let right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right = 5;
+    for (let vert = 0; vert < size; vert++) for (let j = 0; j < 2; j++) {
+      const x = right - j, up = ((right + 1) & 2) === 0, y = up ? size - 1 - vert : vert;
+      if (!fn[y][x] && k < out.length * 8) { mod[y][x] = ((out[k >>> 3] >>> (7 - (k & 7))) & 1) === 1; k++; }
+    }
+  }
+  // 5) pick the mask with the lowest penalty (runs, 2x2 blocks, finder look-alikes, dark balance)
+  const MASKS = [(x, y) => (x + y) % 2 === 0, (x, y) => y % 2 === 0, (x) => x % 3 === 0, (x, y) => (x + y) % 3 === 0,
+    (x, y) => (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0, (x, y) => (x * y) % 2 + (x * y) % 3 === 0,
+    (x, y) => ((x * y) % 2 + (x * y) % 3) % 2 === 0, (x, y) => ((x + y) % 2 + (x * y) % 3) % 2 === 0];
+  const apply = (m) => { for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (!fn[y][x] && MASKS[m](x, y)) mod[y][x] = !mod[y][x]; };
+  const penalty = () => {
+    let p = 0, dark = 0;
+    for (let y = 0; y < size; y++) for (let pass = 0; pass < 2; pass++) {
+      let run = 1;
+      for (let x = 1; x < size; x++) {
+        const a = pass ? mod[x][y] : mod[y][x], b = pass ? mod[x - 1][y] : mod[y][x - 1];
+        if (a === b) { run++; if (run === 5) p += 3; else if (run > 5) p++; } else run = 1;
+      }
+    }
+    for (let y = 0; y < size - 1; y++) for (let x = 0; x < size - 1; x++) {
+      const c = mod[y][x]; if (c === mod[y][x + 1] && c === mod[y + 1][x] && c === mod[y + 1][x + 1]) p += 3;
+    }
+    // finder look-alikes (1:1:3:1:1 with 4 light modules on one side) confuse scanners: +40 each
+    const P1 = [1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0], P2 = [0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1];
+    for (let y = 0; y < size; y++) for (let x = 0; x + 11 <= size; x++) for (const P of [P1, P2]) {
+      if (P.every((v, i) => +mod[y][x + i] === v)) p += 40;
+      if (P.every((v, i) => +mod[x + i][y] === v)) p += 40;
+    }
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (mod[y][x]) dark++;
+    return p + Math.floor(Math.abs(dark * 20 - size * size * 10) / (size * size)) * 10;
+  };
+  let best = 0, bestP = Infinity;
+  for (let m = 0; m < 8; m++) { apply(m); drawFormat(m); const pp = penalty(); if (pp < bestP) { bestP = pp; best = m; } apply(m); }
+  apply(best); drawFormat(best);
+  return mod;
+}
+// ---- 3.5.1 (owner): QR sign-in ----
+// TV / wide screens show a QR next to the sign-in form. It encodes <this server>/?approve=CODE:
+// a phone camera opens Triboon there, and a signed-in phone confirms the matching code (qcSheet).
+// The code is the existing Quick Connect code (60 s life, server-throttled), so it is refreshed
+// while the screen stays open, at most LOGIN_QR_MAX_CODES times, then waits for "Show a new code".
+const LOGIN_QR_HINT = "Point your phone camera here, then tap Approve on a phone that's already signed in.";
+const LOGIN_QR_MAX_CODES = 5; // about 5 minutes of codes per visit (the create route allows 30 per 10 min per address)
+function qrSvg(text) {
+  const m = qrMatrix(text), n = m.length, q = 2;
+  let d = '';
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (m[y][x]) d += `M${x} ${y}h1v1h-1z`;
+  return `<svg viewBox="${-q} ${-q} ${n + q * 2} ${n + q * 2}" shape-rendering="crispEdges" aria-hidden="true">`
+    + `<rect x="${-q}" y="${-q}" width="${n + q * 2}" height="${n + q * 2}" fill="#EDEFF3"/><path d="${d}" fill="#0B0A10"/></svg>`;
+}
+function loginQrWanted() {
+  const b = document.body.classList;
+  if (b.contains('androidApp') && !b.contains('tv')) return false; // phone app: the phone IS the device with a camera
+  return b.contains('tv') || window.innerWidth >= 1000;
+}
+function stopLoginQr() {
+  if (S.loginQr && S.loginQr.timer) clearTimeout(S.loginQr.timer);
+  S.loginQr = null;
+  document.body.classList.remove('authQr');
+}
+async function startLoginQr() {
+  stopLoginQr();
+  if (!loginQrWanted()) return;
+  const run = { timer: null, codes: 0 };
+  S.loginQr = run;
+  document.body.classList.add('authQr');
+  $('liQrNew').hidden = true;
+  const live = () => S.loginQr === run && $('gateLogin').classList.contains('open');
+  const newCode = async () => {
+    if (!live()) return;
+    const pause = (msg) => { $('liQrNew').hidden = false; $('liQrTile').style.opacity = '.25'; $('liQrCode').textContent = '··· ···'; $('liQrText').textContent = msg; };
+    if (run.codes >= LOGIN_QR_MAX_CODES) { pause('This code has run out. Show a new one, or sign in with your name and password.'); return; }
+    run.codes++;
+    let r;
+    try { r = await api('/api/quickconnect', { method: 'POST', body: { deviceName: 'TV' } }); }
+    catch (e) { if (live()) pause(/too many/i.test((e && e.message) || '') ? 'Too many sign-in codes right now. Try again in a few minutes, or use your name and password.' : 'Could not get a sign-in code. Show a new one to try again.'); return; }
+    if (!live()) return;
+    const code = String(r.code);
+    $('liQrTile').innerHTML = qrSvg(`${location.origin}/?approve=${code}`);
+    $('liQrTile').style.opacity = '';
+    $('liQrText').textContent = LOGIN_QR_HINT;
+    $('liQrCode').textContent = code.slice(0, 3) + ' ' + code.slice(3);
+    const until = Date.now() + Math.max(5000, Number(r.ttlMs) || 60000) - 1500;
+    const poll = async () => {
+      if (!live()) return;
+      const p = await api('/api/quickconnect/' + code).catch(() => ({ status: 'expired' }));
+      if (!live()) return;
+      if (p.status === 'approved') { stopLoginQr(); tokenStore.set(p.token); S.user = null; await enterApp(); return; }
+      if (p.status === 'expired' || Date.now() > until) { newCode(); return; }
+      run.timer = setTimeout(poll, 2000);
+    };
+    run.timer = setTimeout(poll, 2000);
+  };
+  newCode();
+}
+$('liQrNew').addEventListener('click', () => startLoginQr());
+// Phone side: /?approve=CODE (from the TV's QR). Kept until the phone is signed in, then asked once.
+const pendingQrApprove = (() => {
+  try {
+    const u = new URL(location.href), c = u.searchParams.get('approve');
+    if (c === null) return null;
+    u.searchParams.delete('approve');
+    history.replaceState(history.state, '', u.pathname + (u.search || '') + u.hash);
+    return /^\d{6}$/.test(c) ? c : null;
+  } catch { return null; }
+})();
+let qcSheetCode = null;
+function closeQcSheet() { $('qcSheet').classList.remove('open'); qcSheetCode = null; }
+function maybeShowQcSheet() {
+  if (!pendingQrApprove || qcSheetCode || S._qrApproveAsked) return;
+  S._qrApproveAsked = true;
+  qcSheetCode = pendingQrApprove;
+  $('qcSheetUser').textContent = (S.user && S.user.name) || 'you';
+  $('qcSheetCode').textContent = qcSheetCode.slice(0, 3) + ' ' + qcSheetCode.slice(3);
+  $('qcSheetMsg').textContent = '';
+  $('qcSheetOk').disabled = false;
+  $('qcSheet').classList.add('open');
+  try { $('qcSheetOk').focus(); } catch {}
+}
+$('qcSheetOk').addEventListener('click', async () => {
+  if (!qcSheetCode) return;
+  $('qcSheetOk').disabled = true;
+  try {
+    const r = await api(`/api/quickconnect/${qcSheetCode}/approve`, { method: 'POST' });
+    toast(`Approved: ${r.deviceName || 'the TV'} is signing in`);
+    closeQcSheet();
+  } catch (e) {
+    $('qcSheetOk').disabled = false;
+    $('qcSheetMsg').textContent = /expired|unknown/i.test(e.message) ? 'That code has expired. Scan the new code on your TV.' : e.message;
+  }
+});
+$('qcSheetNo').addEventListener('click', closeQcSheet);
+
 // Profile / account button → Settings. Dashboard is the first tab. Profile & Pins
 // (Switch profile / Sign out) is one Down if they want it.
 $('railUser').addEventListener('click', () => {
@@ -33874,6 +34150,7 @@ async function enterApp() {
 async function enterAppShell() {
   perfMark('enter-app-shell');
   showGate(null);
+  setTimeout(maybeShowQcSheet, 900); // 3.5.1: a phone opened from the TV's QR asks to approve once it is in
   // The boot loader covers the shell until the FIRST real content paints. Re-arm it HERE,
   // before any awaits: the gate screens (login / profile picker) hide the loader, so the
   // post-gate path used to expose an empty home shell ("Triboon" hero over blank rows)
