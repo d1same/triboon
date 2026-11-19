@@ -11837,6 +11837,7 @@ test('Sign-in card matches the site: 6px corners, no edge line, straight 6px pos
   assert.match(ui, /body\[data-theme="graphite"\] \.gateCard\{border:0;border-radius:6px;box-shadow:none;/, 'flat card, crisp corners, no border');
   assert.match(ui, /body\[data-theme="graphite"\] \.gateCard::before\{display:none\}/, 'no glass sheen');
   assert.match(ui, /body\[data-theme="graphite"\] \.gatePoster\{border-radius:6px;box-shadow:none\}/, 'posters use the same corners');
+  assert.match(ui, /\.gate:not\(#gateProfiles\) \.gateCard\{background:transparent;/, 'owner pick D: no card, the form floats on a soft fade');
 });
 
 test('Profiles: square avatar tiles and a clean Who\'s watching picker (3.5.1, owner pick Option 1)', () => {
