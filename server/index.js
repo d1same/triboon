@@ -1420,6 +1420,12 @@ function iptvSourceName(src = {}) {
   if (normalizeIptvMode(src.iptvMode || src.mode) === 'xtream') return iptvUrlHost(src.xtHost) || 'Xtream playlist';
   return iptvUrlHost(src.iptvUrl) || 'M3U playlist';
 }
+// How many provider streams Triboon may hold for one source at once: 1 to 10, or null (no limit).
+function normalizeIptvMaxConnections(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = parseInt(v, 10);
+  return Number.isInteger(n) && n >= 1 && n <= 10 ? n : null;
+}
 function normalizeIptvSource(raw = {}, fallbackId = IPTV_LEGACY_SOURCE_ID) {
   const mode = normalizeIptvMode(raw.iptvMode || raw.mode || raw.type);
   const src = {
@@ -1434,6 +1440,7 @@ function normalizeIptvSource(raw = {}, fallbackId = IPTV_LEGACY_SOURCE_ID) {
     epgUrl: normalizeIptvHttpUrl(raw.epgUrl || raw.xmltvUrl),
     users: Array.isArray(raw.users) ? raw.users.map(String).slice(0, 100) : [],
     ownerUserId: raw.ownerUserId ? String(raw.ownerUserId).slice(0, 64) : null,
+    maxConnections: normalizeIptvMaxConnections(raw.maxConnections),
   };
   if (mode === 'xtream') src.iptvUrl = null;
   else { src.xtHost = null; src.xtUser = null; src.xtPass = null; }
@@ -1513,6 +1520,7 @@ function redactIptvSource(src = {}) {
     epgUrl: src.epgUrl ? iptvUrlHost(src.epgUrl) : null,
     users: src.users || [],
     personal: !!src.ownerUserId,
+    maxConnections: src.maxConnections || null,
   };
 }
 function makeIptvSourceFromBody(b = {}, existing = null) {
@@ -1529,6 +1537,7 @@ function makeIptvSourceFromBody(b = {}, existing = null) {
     users: b.iptvUsers !== undefined ? b.iptvUsers : (b.users !== undefined ? b.users : (existing && existing.users)),
     ownerUserId: b.ownerUserId !== undefined ? b.ownerUserId : (existing && existing.ownerUserId),
     enabled: b.enabled !== undefined ? b.enabled !== false : !(existing && existing.enabled === false),
+    maxConnections: b.maxConnections !== undefined ? b.maxConnections : (existing && existing.maxConnections),
   });
   if (!iptvSourceConfigured(src)) {
     const e = new Error(mode === 'xtream' ? 'Xtream host is required' : 'M3U playlist URL is required');
@@ -1572,6 +1581,7 @@ function clearAllIptvRuntime() {
 }
 function cleanupDeletedIptvSource(sourceId, removed = null) {
   clearIptvSourceRuntime(sourceId);
+  forgetIptvSourceLimitState(sourceId);
   deleteIptvDiskCache(sourceId);
   store.update('iptvfavs', {}, (all) => {
     const prefix = `${sourceId}:`;
@@ -2029,6 +2039,97 @@ function closeIptvViewerLingers(slotKey, shareKey, userId = '', sourceId = '') {
     lingering.close('retuned');
   }
 }
+// ---- per-source provider connection limit (brief 113, P1-2) ----
+// Every provider stream Triboon holds for a source is one entry: a shared hub (native proxy or
+// browser TS pipe, a lingering one included) or a legacy browser remux whose ffmpeg opens the
+// URL itself. Joining a live hub costs nothing and is not counted. HLS playlists are snapshots
+// (their segments are separate short requests) and are not counted either.
+const IPTV_LIMIT_STOP_HOLD_MS = 60000;
+const iptvSourceStreams = new Map(); // sourceId -> Set(entry)
+const iptvLimitStops = new Map();    // `${userId}|${sourceId}` -> { at, max }
+function iptvSourceMaxConnections(sourceId) {
+  if (!sourceId) return 0;
+  const src = iptvSourcesFromSettings(settings.get()).find((x) => x.id === sourceId);
+  return (src && normalizeIptvMaxConnections(src.maxConnections)) || 0;
+}
+function iptvLimitMessage(max) {
+  return `This channel was stopped because the provider allows ${max} connection${max === 1 ? '' : 's'}`;
+}
+function trackIptvSourceStream(entry) {
+  if (!entry || !entry.sourceId) return () => {};
+  entry.openedAt = Date.now();
+  let set = iptvSourceStreams.get(entry.sourceId);
+  if (!set) { set = new Set(); iptvSourceStreams.set(entry.sourceId, set); }
+  set.add(entry);
+  return () => {
+    const cur = iptvSourceStreams.get(entry.sourceId);
+    if (!cur) return;
+    cur.delete(entry);
+    if (!cur.size) iptvSourceStreams.delete(entry.sourceId);
+  };
+}
+function iptvHubLimitEntry(hub) {
+  return {
+    sourceId: hub.sourceId,
+    kind: 'hub',
+    label: hub.label,
+    isClosed: () => hub.closed,
+    // A hub still starting has its opener waiting even before the opener subscribes.
+    viewerCount: () => (hub.state === 'starting' ? Math.max(1, hub.subs.size) : hub.subs.size),
+    viewerUsers: () => {
+      const users = new Set([...hub.subs].map((sub) => sub.slot && sub.slot.userId).filter(Boolean));
+      if (hub.state === 'starting' && hub.openerUserId) users.add(hub.openerUserId);
+      return users;
+    },
+    close: (reason) => hub.close(reason),
+  };
+}
+function trackIptvHub(hub, openerUserId = '') {
+  hub.openerUserId = String(openerUserId || '');
+  hub.untrack = trackIptvSourceStream(iptvHubLimitEntry(hub));
+}
+// Right before a NEW provider stream opens on `sourceId`. Under the limit: nothing to do. At the
+// limit: stop lingering (zero-viewer) streams of the source first, then the oldest ones, so the
+// new stream opens at once (with the usual short grace) — never a queue. The viewers whose stream
+// was stopped get the reason when their player asks again; for a minute such a retry does not
+// stop the other stream in turn (no ping-pong between two screens): it gets the reason instead.
+function makeRoomOnIptvSource(sourceId, userId) {
+  const max = iptvSourceMaxConnections(sourceId);
+  if (!max) return { ok: true, closed: 0, ffmpegClosed: false };
+  const set = iptvSourceStreams.get(sourceId);
+  const live = set ? [...set].filter((e) => !e.isClosed()) : [];
+  if (live.length < max) return { ok: true, closed: 0, ffmpegClosed: false };
+  const now = Date.now();
+  const stop = iptvLimitStops.get(`${userId}|${sourceId}`);
+  if (stop && now - stop.at < IPTV_LIMIT_STOP_HOLD_MS) {
+    return { ok: false, status: 429, reason: iptvLimitMessage(max) };
+  }
+  const byAge = (a, b) => a.openedAt - b.openedAt;
+  const idle = live.filter((e) => e.viewerCount() === 0).sort(byAge);
+  const busy = live.filter((e) => e.viewerCount() > 0).sort(byAge);
+  let count = live.length;
+  let closed = 0;
+  let ffmpegClosed = false;
+  for (const e of [...idle, ...busy]) {
+    if (count < max) break;
+    if (e.viewerCount() > 0) {
+      for (const uid of e.viewerUsers()) iptvLimitStops.set(`${uid}|${sourceId}`, { at: now, max });
+    }
+    if (e.kind === 'ffmpeg-url') ffmpegClosed = true;
+    console.log(`[iptv limit] ${e.label} stopped: the source allows ${max} connection(s)`);
+    e.close('provider limit');
+    count--;
+    closed++;
+  }
+  if (iptvLimitStops.size > 500) {
+    for (const [k, v] of iptvLimitStops) if (now - v.at >= IPTV_LIMIT_STOP_HOLD_MS) iptvLimitStops.delete(k);
+  }
+  return { ok: true, closed, ffmpegClosed };
+}
+function forgetIptvSourceLimitState(sourceId) {
+  const suffix = `|${sourceId}`;
+  for (const k of [...iptvLimitStops.keys()]) if (k.endsWith(suffix)) iptvLimitStops.delete(k);
+}
 function iptvShareKey(meta, cid, alt) {
   return `${Number.isInteger(meta.idx) ? meta.idx : 'x'}:${cid || ''}:${alt ? 1 : 0}`;
 }
@@ -2037,6 +2138,9 @@ function createIptvLiveHub(shareKey, label, opts = {}) {
     shareKey, label,
     sourceId: String(opts.sourceId || ''),
     lingerUserId: '',
+    openerUserId: '',
+    untrack: null,     // removes this hub from the per-source limit count
+    _untrack() { if (this.untrack) { const u = this.untrack; this.untrack = null; u(); } },
     state: 'starting', // starting -> live -> closed
     subs: new Set(),   // { res, slot, stallTimer, backpressured }
     headers: null,
@@ -2135,7 +2239,7 @@ function createIptvLiveHub(shareKey, label, opts = {}) {
       // leaves the share map immediately and each later viewer fetches fresh. Continuous TS keeps
       // the hub joinable and drops length headers so late joiners get an unbounded stream.
       this.finite = !!this.headers['content-length'] || status === 206 || isHls;
-      if (this.finite) iptvSharedHubs.delete(this.shareKey);
+      if (this.finite) { iptvSharedHubs.delete(this.shareKey); this._untrack(); }
       else { delete this.headers['content-length']; delete this.headers['content-range']; }
       if (isHls && playlistBase) {
         this._serveHlsPlaylist(upstreamRes, status, playlistBase, opts && opts.mediaUri);
@@ -2237,6 +2341,7 @@ function createIptvLiveHub(shareKey, label, opts = {}) {
       // Startup failed before any bytes: every queued viewer gets the SAME error response the
       // solo path would have produced (negative cache handling already ran in the opener).
       this.closed = true;
+      this._untrack();
       // Only remove OUR entry: a finite hub leaves the map early, and a newer hub may now hold
       // this key for other viewers (audit S1-8).
       if (iptvSharedHubs.get(this.shareKey) === this) iptvSharedHubs.delete(this.shareKey);
@@ -2256,6 +2361,7 @@ function createIptvLiveHub(shareKey, label, opts = {}) {
     close(reason = 'closed') {
       if (this.closed) return;
       this.closed = true;
+      this._untrack();
       if (this.lingerTimer) clearTimeout(this.lingerTimer);
       forgetIptvViewerLinger(this);
       if (iptvSharedHubs.get(this.shareKey) === this) iptvSharedHubs.delete(this.shareKey); // see failAll (S1-8)
@@ -2284,10 +2390,17 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     console.log(`[iptv share] ${iptvNativeLogLabel(meta)} joined shared upstream (${existingHub.subs.size} viewer(s))`);
     return;
   }
+  // A new provider stream: make room under the source's "Max connections" first (brief 113).
+  const room = makeRoomOnIptvSource(meta.sourceId, slot.userId);
+  if (!room.ok) {
+    slot.done('provider limit');
+    return sendIptvNativeError(ctx.res, room.status, room.reason);
+  }
   const hub = createIptvLiveHub(shareKey, iptvNativeLogLabel(meta), { sourceId: meta.sourceId });
   // HLS playlists are snapshots, not a TS pipe. Mark finite before the first byte so a remux
   // opener cannot join this hub and treat the playlist as a media stream.
   if (iptvNativeMime(target) === 'application/x-mpegURL') hub.finite = true;
+  else trackIptvHub(hub, slot.userId);
   iptvSharedHubs.set(shareKey, hub);
   let handedOff = false; // once the hub owns the upstream, the solo teardown below must not touch it
   let up = null;
@@ -2550,8 +2663,11 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     up.end();
   };
 
-  if (slot.replaced && hops === 0) {
-    delayTimer = setTimeout(() => { delayTimer = null; open(target, hops); }, IPTV_LIVE_RETUNE_GRACE_NATIVE_MS);
+  if ((slot.replaced || room.closed) && hops === 0) {
+    // A stream stopped for the limit gets the same short grace as a retune (longer if its
+    // connection belonged to an ffmpeg that has to exit first).
+    const graceMs = room.ffmpegClosed ? IPTV_LIVE_RETUNE_GRACE_MS : IPTV_LIVE_RETUNE_GRACE_NATIVE_MS;
+    delayTimer = setTimeout(() => { delayTimer = null; open(target, hops); }, graceMs);
     delayTimer.unref();
   } else {
     open(target, hops);
@@ -7711,8 +7827,12 @@ const H = {
       }
       return next;
     });
-    cleanupEditedIptvSource(sourceId, previous, updated);
-    scheduleIptvWarmSoon('source-updated');
+    // Only the connection limit changed: the channels and the guide stay as they are (no reload).
+    const limitOnly = JSON.stringify({ ...previous, maxConnections: null }) === JSON.stringify({ ...updated, maxConnections: null });
+    if (!limitOnly) {
+      cleanupEditedIptvSource(sourceId, previous, updated);
+      scheduleIptvWarmSoon('source-updated');
+    }
     send(ctx.res, 200, { source: redactIptvSource(updated) });
   },
 
@@ -7959,6 +8079,17 @@ const H = {
       // The validate/DNS-pin await can take a while on slow providers; if the client gave up in
       // that window, don't spawn ffmpeg + hold an upstream provider connection for nothing.
       if (liveSlot.closed || ctx.res.destroyed) { liveSlot.done('client closed'); return; }
+      // ffmpeg opens its own provider connection here: make room under "Max connections" first.
+      const room = makeRoomOnIptvSource(ch.sourceId, liveSlot.userId);
+      if (!room.ok) {
+        liveSlot.done('provider limit');
+        if (!ctx.res.headersSent && !ctx.res.destroyed) sendIptvNativeError(ctx.res, room.status, room.reason);
+        return;
+      }
+      if (room.closed) {
+        await new Promise((r) => setTimeout(r, room.ffmpegClosed ? IPTV_LIVE_RETUNE_GRACE_MS : IPTV_LIVE_RETUNE_GRACE_NATIVE_MS));
+        if (liveSlot.closed || ctx.res.destroyed) { liveSlot.done('client closed'); return; }
+      }
       let ff;
       try {
         // A playlist decides what ffmpeg opens next. For a viewer who is not an admin, ffmpeg reads it
@@ -7978,6 +8109,18 @@ const H = {
         else try { ctx.res.destroy(); } catch {}
         return;
       }
+      // This ffmpeg holds one provider connection of the source until it exits.
+      const untrackFfmpeg = trackIptvSourceStream({
+        sourceId: ch.sourceId,
+        kind: 'ffmpeg-url',
+        label: iptvNativeLogLabel({ idx: ch.idx, name: ch.name }),
+        isClosed: () => liveSlot.closed,
+        viewerCount: () => 1,
+        viewerUsers: () => new Set([liveSlot.userId].filter(Boolean)),
+        close: (reason) => liveSlot.close(reason),
+      });
+      ff.once('close', untrackFfmpeg);
+      ff.once('error', untrackFfmpeg);
       let wrote = false, err = '';
       let idleTimer = null;
       let clientClosed = false;
@@ -8249,7 +8392,16 @@ const H = {
         armIdle(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS);
         return;
       }
+      // A new provider stream: make room under the source's "Max connections" first (brief 113).
+      const room = makeRoomOnIptvSource(ch.sourceId, liveSlot.userId);
+      if (!room.ok) {
+        settled = true;
+        liveSlot.done('provider limit');
+        if (!ctx.res.headersSent && !ctx.res.destroyed) sendIptvNativeError(ctx.res, room.status, room.reason);
+        return;
+      }
       hub = createIptvLiveHub(shareKey, `${label} remux`, { sourceId: ch.sourceId });
+      trackIptvHub(hub, liveSlot.userId);
       iptvSharedHubs.set(shareKey, hub);
       openedHub = true;
       bindHub(hub);
@@ -8295,7 +8447,13 @@ const H = {
       };
       beginAttemptBudget(); // the TS-pipe open is its own attempt — don't let it eat the URL-remux fallback's budget
       armIdle(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS);
-      openUpstream(tsTarget, 0);
+      if (room.closed) {
+        // Same short grace as a retune after a stream was stopped for the limit.
+        const t = setTimeout(() => openUpstream(tsTarget, 0), room.ffmpegClosed ? IPTV_LIVE_RETUNE_GRACE_MS : IPTV_LIVE_RETUNE_GRACE_NATIVE_MS);
+        if (t.unref) t.unref();
+      } else {
+        openUpstream(tsTarget, 0);
+      }
     };
     const begin = () => {
       if (startDelayTimer) startDelayTimer = null;

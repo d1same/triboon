@@ -193,3 +193,90 @@ test('live: a stop on one screen and a different channel on another screen of th
     provider.close();
   }
 });
+
+test('live: Max connections = 1 stops the oldest stream for a new one, tells the stopped viewer why, and never ping-pongs (P1-2)', async () => {
+  const provider = await startProvider({ channels: 3 });
+  let rig = null;
+  const clients = [];
+  try {
+    rig = await bootWithSource(provider, { maxConnections: 1 });
+    const [c0, c1, c2] = rig.channels;
+    const tv = await open(rig.srv.port, withSurface(c0.nativeUrl, 'tv'), TV_UA);
+    clients.push(tv);
+    assert.ok(await waitFor(() => tv.bytes > 0), 'the first screen plays');
+    provider.resetPeak();
+    // A second screen opens another channel: the oldest stream (the TV) is stopped first.
+    const pane = await open(rig.srv.port, withSurface(c1.nativeUrl, 'mv1'), TV_UA);
+    clients.push(pane);
+    assert.ok(await waitFor(() => pane.bytes > 0, 3000), `the new screen plays (status ${pane.status})`);
+    assert.ok(await waitFor(() => tv.ended, 2000), 'the oldest stream was stopped');
+    assert.strictEqual(provider.state.peak, 1, `never two provider connections (peak ${provider.state.peak})`);
+    // The stopped screen's player asks again: it gets the reason, and the other screen keeps playing.
+    const retry = await open(rig.srv.port, withSurface(c0.nativeUrl, 'tv'), TV_UA);
+    clients.push(retry);
+    assert.strictEqual(retry.status, 429);
+    assert.match(retry.error, /This channel was stopped because the provider allows 1 connection$/);
+    const before = pane.bytes;
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(!pane.ended && pane.bytes > before, 'the newer screen is not stopped by the retry');
+    assert.strictEqual(provider.state.active, 1);
+    // A zap on the same screen does not count twice: the old channel closes, the new one opens.
+    const zap = await open(rig.srv.port, withSurface(c2.nativeUrl, 'mv1'), TV_UA);
+    clients.push(zap);
+    assert.ok(await waitFor(() => zap.bytes > 0, 3000), `the zap plays (status ${zap.status})`);
+    assert.strictEqual(provider.state.peak, 1, `a zap never holds two (peak ${provider.state.peak})`);
+  } finally {
+    clients.forEach(drop);
+    if (rig) await rig.srv.shutdown();
+    provider.close();
+  }
+});
+
+test('live: with no Max connections set, two screens keep two streams (unchanged behaviour)', async () => {
+  const provider = await startProvider({ channels: 2 });
+  let rig = null;
+  const clients = [];
+  try {
+    rig = await bootWithSource(provider);
+    const [c0, c1] = rig.channels;
+    const a = await open(rig.srv.port, withSurface(c0.nativeUrl, 'tv'), TV_UA);
+    const b = await open(rig.srv.port, withSurface(c1.nativeUrl, 'mv1'), TV_UA);
+    clients.push(a, b);
+    assert.ok(await waitFor(() => a.bytes > 0 && b.bytes > 0), 'both play');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(!a.ended, 'the first stream is not stopped');
+    assert.strictEqual(provider.state.active, 2);
+  } finally {
+    clients.forEach(drop);
+    if (rig) await rig.srv.shutdown();
+    provider.close();
+  }
+});
+
+test('live: Max connections is a source setting (1 to 10 or empty), and changing it alone keeps the channel list', async () => {
+  const provider = await startProvider({ channels: 2 });
+  let rig = null;
+  try {
+    rig = await bootWithSource(provider);
+    const id = rig.sourceId;
+    const set = async (v) => httpJson(rig.srv.port, 'PATCH', `/api/iptv/sources/${id}`, { maxConnections: v }, rig.admin);
+    const get = async () => (await httpJson(rig.srv.port, 'GET', '/api/iptv/sources', null, rig.admin)).json.sources.find((s) => s.id === id);
+    assert.strictEqual((await get()).maxConnections, null, 'empty by default (no limit)');
+    const statusBefore = (await httpJson(rig.srv.port, 'GET', '/api/iptv/status', null, rig.admin)).json;
+    const cachedAt = (statusBefore.sources || []).find((s) => s.sourceId === id).channelCachedAt;
+    assert.strictEqual((await set(3)).status, 200);
+    assert.strictEqual((await get()).maxConnections, 3);
+    const statusAfter = (await httpJson(rig.srv.port, 'GET', '/api/iptv/status', null, rig.admin)).json;
+    assert.strictEqual((statusAfter.sources || []).find((s) => s.sourceId === id).channelCachedAt, cachedAt,
+      'changing only the limit does not reload the channels');
+    await set(0); assert.strictEqual((await get()).maxConnections, null, '0 means no limit');
+    await set(11); assert.strictEqual((await get()).maxConnections, null, 'out of range means no limit');
+    await set('2'); assert.strictEqual((await get()).maxConnections, 2);
+    await set(''); assert.strictEqual((await get()).maxConnections, null, 'cleared');
+    const viewer = await httpJson(rig.srv.port, 'GET', '/api/iptv/sources', null, null);
+    assert.strictEqual(viewer.status, 401, 'the source list (with its limit) stays admin-only');
+  } finally {
+    if (rig) await rig.srv.shutdown();
+    provider.close();
+  }
+});
