@@ -128,6 +128,17 @@ function notTheMovie(name) {
   return null;
 }
 
+// AUDIO DESCRIPTION — a narrator describing the picture. Viewers who did not ask for it hate it, and
+// streaming rips post it as its own release ("with.Audio.Description" next to the normal one).
+// Only unambiguous spellings: a title word "Ad" (Ad Astra), "A.D.", "Bad", "Head", "ADD" or a group
+// named AD/DVS must not count. Letters/digits around a match are the boundary ("_" is a separator
+// in scene names, so \b would miss Audio_Description). The trailing -GROUP is cut off first.
+const AUDIO_DESCRIPTION_RELEASE = /(?<![a-z0-9])(?:audio[ ._-]?descri(?:ption|bed)|descriptive[ ._-]+(?:audio|video)|described[ ._-]+video|with[ ._-]+ad|dvs)(?![a-z0-9])/i;
+function isAudioDescriptionRelease(name) {
+  const n = String(name || '').trim().replace(/\.(mkv|mp4|avi|nzb)$/i, '').replace(/-[A-Za-z0-9]+$/, '');
+  return AUDIO_DESCRIPTION_RELEASE.test(n);
+}
+
 // Whole-disc images and 7z posts cannot stream. Largest-first Sources sorts put these
 // on top (50–80GB COMPLETE.BLURAY / ISO). Name them here so Auto skips them and a
 // failed tap can walk the next file without a full NZB mount.
@@ -342,6 +353,9 @@ function scoreRelease(candidate, policy = {}) {
     if (f.re.test(candidate.name)) add(f.key, f.score);
   }
   for (const b of BAD_FLAGS) if (b.re.test(candidate.name)) add(b.key, b.score);
+  // Stronger than a foreign dub (−800) and any resolution or preference bonus, so every healthy
+  // normal release wins; above the −5000 playability line, so an AD-only title still plays.
+  if (isAudioDescriptionRelease(candidate.name)) add('audio-description', -1500);
   const hasTrueHd = a.features.includes('truehd');
   const hasDtsHd = a.features.includes('dts-hd');
   const hasAtmos = a.features.includes('atmos');
@@ -630,6 +644,6 @@ function sourceDrawerCandidates(candidates, { hideCam = true } = {}) {
 module.exports = {
   parseRelease, scoreRelease, rankReleases, isCamCandidate, isCamKeywordTerm, camScoringEnabled, sourceDrawerCandidates,
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
-  notTheMovie, unstreamableContainer, normalizeLanguageCode, releaseLanguageTag, releaseLanguageTags, RES, SOURCE,
+  notTheMovie, unstreamableContainer, isAudioDescriptionRelease, normalizeLanguageCode, releaseLanguageTag, releaseLanguageTags, RES, SOURCE,
   parseAudiobook, scoreAudiobook, rankAudiobooks, audiobookLanguage,
 };
