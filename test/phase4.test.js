@@ -11814,8 +11814,12 @@ test('Boot builds Home only after the logo finishes; network starts at once (3.5
 
 test('Boot sound plays with the logo build, once, never on phones (3.5.1, owner pick L)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  const tag = ui.match(/<audio id="bootSound" preload="auto" src="data:audio\/mpeg;base64,([A-Za-z0-9+/=]+)"><\/audio>/);
+  const tag = ui.match(/<audio id="bootSound" preload="auto" data-mp3="([A-Za-z0-9+/=]+)"><\/audio>/);
   assert.ok(tag, 'the sound is embedded in the splash, ready at once');
+  // The page CSP allows media from 'self' and blob: only, so a data: src never loads (owner heard
+  // nothing on the Shield). The sound must play through a blob: URL built from the embedded bytes.
+  assert.match(ui, /a\.src = URL\.createObjectURL\(new Blob\(\[bytes\], \{ type: 'audio\/mpeg' \}\)\);/, 'played through a blob: URL');
+  assert.doesNotMatch(ui, /<audio id="bootSound"[^>]*src="data:/, 'never a data: src (blocked by media-src)');
   const mp3 = Buffer.from(tag[1], 'base64');
   assert.ok(mp3.length > 10000 && mp3.length < 40000, 'short clip, small page cost');
   assert.ok(mp3.slice(0, 3).toString() === 'ID3' || (mp3[0] === 0xff && (mp3[1] & 0xe0) === 0xe0), 'a real MP3');
