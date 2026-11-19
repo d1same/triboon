@@ -11861,6 +11861,25 @@ test('Live TV Channels / Multiview buttons are full site buttons, not squished c
   assert.match(ui, /body\[data-theme="graphite"\] #chSearch\{min-height:46px;border-radius:6px\}/, 'the filter box lines up with them');
 });
 
+test('Guide C: short channel names with tags, no filler blocks, past dimmed, magenta now-line (3.5.1, owner pick)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const a = ui.indexOf('const LIVE_TAG_MAP'), b = ui.indexOf('function liveTagsHtml');
+  const liveNameParts = new Function(ui.slice(a, b) + ';return liveNameParts;')();
+  assert.deepEqual(liveNameParts('SWE: [Radio][SE] Bandit Classic Rock [1080p]'), { name: 'Bandit Classic Rock', tags: ['SWE', 'Radio', 'HD'] });
+  assert.deepEqual(liveNameParts('UK: BBC One [1080p]'), { name: 'BBC One', tags: ['UK', 'HD'] }, 'channel names keep their own case');
+  assert.deepEqual(liveNameParts('Sky News (UK)'), { name: 'Sky News', tags: ['UK'] });
+  assert.deepEqual(liveNameParts('ifilm'), { name: 'ifilm', tags: [] }, 'plain names are untouched');
+  assert.deepEqual(liveNameParts('[VIP]'), { name: '[VIP]', tags: [] }, 'never an empty name');
+  assert.deepEqual(liveNameParts('UK: ENTERTAINMENT [H265]', true), { name: 'UK: Entertainment', tags: ['H265'] }, 'categories keep the prefix, sentence-cased');
+  // both guides (Live TV page + in-player) use the same programme loop
+  assert.equal((ui.match(/if \(p\.synthetic\) continue; \/\/ 3\.5\.1 guide C/g) || []).length, 2, 'filler blocks that repeat the name are skipped in both guides');
+  assert.equal((ui.match(/<span class="gpT">No guide info<\/span>/g) || []).length, 2, 'a quiet "No guide info" instead');
+  assert.doesNotMatch(ui, /Channel listing/, 'the old filler label is gone');
+  assert.match(ui, /el\.classList\.toggle\('past', \+el\.dataset\.e <= t\);/, 'shows dim as they end, without a re-render');
+  assert.match(ui, /\.guideTimeline \.gNow\{width:2px;background:#C13BD6;box-shadow:none\}/, 'magenta now-line');
+  assert.equal((ui.match(/liveChannelLabelHtml\(ch\.(name|title)\)/g) || []).length, 2, 'both guides show the short name with tags');
+});
+
 test('QR sign-in: the page QR encoder makes a valid, scannable code (3.5.1, owner)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const a = ui.indexOf('function qrMatrix(text) {'), b = ui.indexOf('// ---- 3.5.1 (owner): QR sign-in ----');

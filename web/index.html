@@ -4150,6 +4150,30 @@ body[data-theme="graphite"] :is(.lcat,.pgCat,.chGroupHead){border-radius:6px}
 body[data-theme="graphite"] :is(.pgRow,.gRow):is(.focus,:focus){background:rgba(237,239,243,.07)!important;color:var(--text)!important}
 /* Live TV header buttons (Multiview / Channels): the site button, no edge line, white on focus. */
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn){border:0!important;border-radius:6px!important}
+/* 3.5.1 (owner, browser): the round back button on title/person pages becomes the same 6px square as the profile tile above it. */
+body[data-theme="graphite"] :is(#detail .back,#person .back){border-radius:6px;box-shadow:none}
+/* 3.5.1 (owner pick "guide C", Live TV page + in-player guide): short channel names with small tags,
+   "No guide info" instead of a filler block repeating the name, no row lines, the show on now lifted,
+   ended shows dimmed, a magenta now-line; 6px everywhere. */
+body[data-theme="graphite"] .gCh .gChTxt{display:flex;flex-direction:column;min-width:0;gap:4px;-webkit-line-clamp:unset;overflow:visible}
+body[data-theme="graphite"] .gCh .gChName{display:block;font:600 14.5px "Sora",system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;-webkit-line-clamp:unset}
+body[data-theme="graphite"] .lTags{display:flex;gap:5px;flex-wrap:nowrap;overflow:hidden;-webkit-line-clamp:unset}
+body[data-theme="graphite"] .lTags .lTag{display:inline-block;font:600 11px "Albert Sans",system-ui,sans-serif;line-height:1;padding:3px 6px;border-radius:4px;
+  background:rgba(237,239,243,.1);color:rgba(237,239,243,.7);white-space:nowrap;-webkit-line-clamp:unset;overflow:visible}
+body[data-theme="graphite"] :is(.gRow.focus,.pgRow.focus,.pgRow:focus,.lcat.focus,.lcat:focus) .lTag{background:rgba(20,22,26,.12)}
+body[data-theme="graphite"] .lcat .lTags{margin-left:auto;flex:none}
+body[data-theme="graphite"] .lcat .lTags + .catCount{margin-left:10px}
+body[data-theme="graphite"] .gCh .pgInit{width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:6px;background:rgba(237,239,243,.08);color:rgba(237,239,243,.75);font:700 15px "Sora",system-ui,sans-serif;-webkit-line-clamp:unset}
+body[data-theme="graphite"] :is(.gRow.focus,.pgRow.focus,.pgRow:focus) .gCh .pgInit{background:rgba(20,22,26,.1)}
+body[data-theme="graphite"] .guideTimeline .gRow:not(.gHead){border:0;box-shadow:none}
+body[data-theme="graphite"] .guideTimeline .gProg{border:0;border-radius:6px;background:rgba(237,239,243,.05);box-shadow:none}
+body[data-theme="graphite"] .guideTimeline .gProg.live{background:rgba(237,239,243,.14)}
+body[data-theme="graphite"] .guideTimeline .gProg.past{opacity:.42}
+body[data-theme="graphite"] .guideTimeline .gProg.empty{background:transparent;opacity:1}
+body[data-theme="graphite"] .guideTimeline .gProg.empty .gpT{font:500 14px "Albert Sans",system-ui,sans-serif;color:rgba(237,239,243,.35)}
+body[data-theme="graphite"] .guideTimeline .gProg .gpS{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
+body[data-theme="graphite"] .guideTimeline .gNow{width:2px;background:#C13BD6;box-shadow:none}
+body[data-theme="graphite"] .guideTimeline .gTick{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
 /* 3.5.1 (owner: "Channels / Multiview look squished"): the site's button, not a compact chip: roomy,
    sentence-case Sora, light see-through fill, and the same for the player guide's Multiview button. */
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn,#pgMultiBtn){min-height:46px;height:auto;padding:0 22px;gap:10px;
@@ -7082,6 +7106,30 @@ function qrMatrix(text) {
   apply(best); drawFormat(best);
   return mod;
 }
+// 3.5.1 (owner pick "guide C"): provider names like "SWE: [Radio][SE] Bandit Classic Rock [1080p]" show as
+// a short name plus small tags ("Bandit Classic Rock" · SE · Radio · HD). Display only: ids, favorites,
+// search and playback keep the raw name. Categories keep their "UK:" prefix (it is how they group).
+const LIVE_TAG_MAP = { '1080P': 'HD', 'FHD': 'HD', '720P': 'HD', 'HD': 'HD', '2160P': '4K', 'UHD': '4K', '4K': '4K', 'H265': 'H265', 'HEVC': 'H265', 'SD': 'SD' };
+function liveNameParts(raw, keepPrefix = false) {
+  const src = String(raw || '').trim(); let s = src; const tags = []; let country = false;
+  const add = (t) => {
+    t = String(t || '').trim(); if (!t) return; const u = t.toUpperCase();
+    let tag = LIVE_TAG_MAP[u];
+    if (!tag && /^[A-Z]{2,3}$/.test(u)) { if (country) return; country = true; tag = u; }
+    if (!tag && t.length <= 10 && /^[\p{L}\d +&-]+$/u.test(t)) tag = t[0].toUpperCase() + t.slice(1).toLowerCase();
+    if (tag && !tags.includes(tag)) tags.push(tag);
+  };
+  const pre = s.match(/^([A-Za-z]{2,4})\s*[:|]\s+/);
+  if (pre && !keepPrefix) { add(pre[1]); s = s.slice(pre[0].length); }
+  s = s.replace(/[\[(]([^\])]{1,14})[\])]/g, (m, t) => { add(t); return ' '; }).replace(/\s{2,}/g, ' ').trim();
+  if (!s || /^[:|\-\s]*$/.test(s)) return { name: src, tags: [] };
+  // Categories arrive SHOUTED ("UK: ENTERTAINMENT"): sentence-case them; channel names keep their case (BBC One).
+  if (keepPrefix && s === s.toUpperCase() && /[A-Z]{3}/.test(s)) s = s.toLowerCase().replace(/(^|[\s:/&-])(\p{L})/gu, (m, a, c) => a + c.toUpperCase()).replace(/^([a-z]{2,4}):/i, (m) => m.toUpperCase());
+  return { name: s, tags: tags.slice(0, 3) };
+}
+function liveTagsHtml(tags) { return tags && tags.length ? `<span class="lTags">${tags.map((t) => `<span class="lTag">${esc(t)}</span>`).join('')}</span>` : ''; }
+function liveChannelLabelHtml(raw) { const p = liveNameParts(raw); return `<span class="gChTxt"><span class="gChName">${esc(p.name)}</span>${liveTagsHtml(p.tags)}</span>`; }
+function liveCatLabelHtml(raw) { const p = liveNameParts(raw, true); return `<span class="catLabel">${esc(p.name)}</span>${liveTagsHtml(p.tags)}`; }
 // ---- 3.5.1 (owner): QR sign-in ----
 // TV / wide screens show a QR next to the sign-in form. It encodes <this server>/?approve=CODE:
 // a phone camera opens Triboon there, and a signed-in phone confirms the matching code (qcSheet).
@@ -24251,7 +24299,7 @@ function renderLiveTvBody() {
     chip.dataset.grid = gi;
     chip.dataset.liveCat = name;
     S.gridItems.push({ title: name, _isHeader: true, _liveCat: name });
-    chip.innerHTML = `<span class="catLabel">${esc(name)}</span><span class="catCount">${count}</span>`;
+    chip.innerHTML = `${name === '★ Favorites' ? `<span class="catLabel">${esc(name)}</span>` : liveCatLabelHtml(name)}<span class="catCount">${count}</span>`;
     chip.addEventListener('click', () => {
       S.liveCat = name;
       S.liveCatNavIdx = names.indexOf(name);
@@ -24348,11 +24396,12 @@ async function renderGuideProgressive(body, pool) {
       if (r - l < 0.4) continue;
       const w = r - l;
       const live = p.start <= now && p.stop > now;
-      const fallback = !!p.synthetic;
-      blocks += `<div class="gProg p${pi++ % 5}${live ? ' live' : ''}${fallback ? ' fallback' : ''}${progFitClass(w)}" data-s="${+p.start || 0}" data-e="${+p.stop || 0}" style="left:${l}%;width:${w}%" title="${esc(p.title)}${fallback ? ' (channel listing)' : ` (${fmtH(p.start)}-${fmtH(p.stop)})`}">
-        <span class="gpT">${esc(p.title)}</span><span class="gpS">${fallback ? 'Channel listing' : fmtH(p.start)}</span></div>`;
+      if (p.synthetic) continue; // 3.5.1 guide C: a filler block only repeated the channel name
+      const past = p.stop <= now;
+      blocks += `<div class="gProg p${pi++ % 5}${live ? ' live' : ''}${past ? ' past' : ''}${progFitClass(w)}" data-s="${+p.start || 0}" data-e="${+p.stop || 0}" style="left:${l}%;width:${w}%" title="${esc(p.title)} (${fmtH(p.start)}-${fmtH(p.stop)})">
+        <span class="gpT">${esc(p.title)}</span><span class="gpS">${fmtH(p.start)}</span></div>`;
     }
-    return blocks || '<div class="gProg empty" style="left:0;width:100%"><span class="gpT">No guide data for this channel</span></div>';
+    return blocks || '<div class="gProg empty" style="left:0;width:100%"><span class="gpT">No guide info</span></div>';
   };
 
   const wrap = document.createElement('div'); wrap.id = 'guide'; wrap.className = 'guideTimeline';
@@ -24378,7 +24427,7 @@ async function renderGuideProgressive(body, pool) {
     S.gridItems.push(it);
     const logo = safeUrl(ch.logo);
     row._fillGuide = (nextProgs, isLoading) => {
-      row.innerHTML = `<div class="gCh">${logo ? `<img src="${logo}" loading="lazy">` : ''}<span>${esc(ch.name)}</span></div>
+      row.innerHTML = `<div class="gCh">${logo ? `<img src="${logo}" loading="lazy">` : `<span class="pgInit">${esc((liveNameParts(ch.name).name || '?')[0])}</span>`}${liveChannelLabelHtml(ch.name)}</div>
         <div class="gTl"><div class="gNow" style="left:${pct(now)}%"></div>${blocksFor(nextProgs, isLoading)}</div>`;
     };
     row._fillGuide(progs, loading);
@@ -24410,6 +24459,7 @@ async function renderGuideProgressive(body, pool) {
     wrap.querySelectorAll('.gProg[data-s]').forEach((el) => {
       const live = +el.dataset.s <= t && +el.dataset.e > t;
       if (el.classList.contains('live') !== live) el.classList.toggle('live', live);
+      el.classList.toggle('past', +el.dataset.e <= t); // 3.5.1 guide C: shows that ended dim
     });
   }, 60000);
 
@@ -25298,7 +25348,7 @@ async function renderPlayerGuideTimeline(pg, list) {
     btn.dataset.pg = '1';
     btn.dataset.pgCat = '1';
     btn.dataset.pgCatName = name;
-    btn.innerHTML = `<span class="catLabel">${esc(name)}</span><span class="catCount">${countFor(name)}</span>`;
+    btn.innerHTML = `${name === favName ? `<span class="catLabel">${esc(name)}</span>` : liveCatLabelHtml(name)}<span class="catCount">${countFor(name)}</span>`;
     btn.addEventListener('click', () => {
       S.pgLiveCat = name;
       S._pgFocusCat = name;
@@ -25332,15 +25382,16 @@ async function renderPlayerGuideTimeline(pg, list) {
       if (r - l < 0.4) continue;
       const w = r - l;
       const live = p.start <= now && p.stop > now;
-      const fallback = !!p.synthetic;
-      blocks += `<div class="gProg p${pi++ % 5}${live ? ' live' : ''}${fallback ? ' fallback' : ''}${progFitClass(w)}" data-s="${+p.start || 0}" data-e="${+p.stop || 0}" style="left:${l}%;width:${w}%" title="${esc(p.title)}${fallback ? ' (channel listing)' : ` (${fmtH(p.start)}-${fmtH(p.stop)})`}">
-        <span class="gpT">${esc(p.title)}</span><span class="gpS">${fallback ? 'Channel listing' : fmtH(p.start)}</span></div>`;
+      if (p.synthetic) continue; // 3.5.1 guide C: a filler block only repeated the channel name
+      const past = p.stop <= now;
+      blocks += `<div class="gProg p${pi++ % 5}${live ? ' live' : ''}${past ? ' past' : ''}${progFitClass(w)}" data-s="${+p.start || 0}" data-e="${+p.stop || 0}" style="left:${l}%;width:${w}%" title="${esc(p.title)} (${fmtH(p.start)}-${fmtH(p.stop)})">
+        <span class="gpT">${esc(p.title)}</span><span class="gpS">${fmtH(p.start)}</span></div>`;
     }
-    return blocks || '<div class="gProg empty" style="left:0;width:100%"><span class="gpT">No guide data for this channel</span></div>';
+    return blocks || '<div class="gProg empty" style="left:0;width:100%"><span class="gpT">No guide info</span></div>';
   };
   const fillPlayerGuideRow = (row, ch, loading = false) => {
     const logo = safeUrl(ch._logo);
-    row.innerHTML = `<div class="gCh">${logo ? `<img src="${logo}" loading="lazy">` : `<span class="pgInit">${esc((ch.title || '?')[0])}</span>`}<span>${esc(ch.title)}</span></div>
+    row.innerHTML = `<div class="gCh">${logo ? `<img src="${logo}" loading="lazy">` : `<span class="pgInit">${esc((liveNameParts(ch.title).name || '?')[0])}</span>`}${liveChannelLabelHtml(ch.title)}</div>
       <div class="gTl"><div class="gNow" style="left:${pct(now)}%"></div>${blocksFor(ch, loading)}</div>`;
   };
   // Progressive channel loading. The in-player guide used to hard-slice the category to
