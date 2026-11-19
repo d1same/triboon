@@ -8213,6 +8213,12 @@ const H = {
             }
             settled = true;
             cleanup();
+            // The opener left (a zap away) before the provider answered: its upstream request is
+            // gone with it, so the hub can never go live. Fail it and take it out of the share map,
+            // or every later viewer of this channel joins a hub that never starts (brief 113, P1-3).
+            if (openedHub && hub && !hub.closed && hub.state === 'starting') {
+              hub.failAll((res) => { if (!res.headersSent && !res.destroyed) sendIptvNativeError(res, 503, 'live stream restarting — retry'); });
+            }
             try { if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.destroy(); } catch {}
           },
         });
