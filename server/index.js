@@ -1811,9 +1811,13 @@ function beginIptvLiveSlot(ctx, meta = {}, shareKey = '') {
   // ExoPlayer/web often DROP the old request before opening the next channel. That leave is
   // "client closed" (linger), not "retuned". Kill a lingering different-channel hub so one
   // app/surface never holds ESPN+CNN against a 1-connection provider.
-  closeIptvViewerLingerIfDifferentChannel(key, shareKey);
+  const userId = String((ctx.user && ctx.user.id) || (ctx.claims && ctx.claims.uid) || '');
+  const sourceId = String(meta.sourceId || '');
+  closeIptvViewerLingers(key, shareKey, userId, sourceId);
   const entry = {
     key,
+    userId,
+    sourceId,
     label,
     replaced,
     // What kind of stream was evicted — the retune grace protects the PREVIOUS stream's provider-
@@ -2004,26 +2008,35 @@ function forgetIptvViewerLinger(hub) {
     if (held === hub) iptvViewerLingerHubs.delete(key);
   }
 }
-function rememberIptvViewerLinger(slotKey, hub) {
-  if (slotKey && hub) iptvViewerLingerHubs.set(slotKey, hub);
+function rememberIptvViewerLinger(slotKey, hub, userId = '') {
+  if (!slotKey || !hub) return;
+  iptvViewerLingerHubs.set(slotKey, hub);
+  if (userId) hub.lingerUserId = String(userId);
 }
-function closeIptvViewerLingerIfDifferentChannel(slotKey, shareKey) {
-  const lingering = iptvViewerLingerHubs.get(slotKey);
-  if (!lingering) return;
-  if (shareKey && lingering.shareKey === shareKey && lingering.joinable()) return;
-  if (lingering.subs && lingering.subs.size > 0) {
-    iptvViewerLingerHubs.delete(slotKey);
-    return;
+// A new stream ends the lingering (zero-viewer) hubs this viewer left behind on a different
+// channel: the one on its own slot, and every one the same user left on the same source from
+// another screen, app or device. Without the second part a stop on the TV and a different
+// channel on the phone within the 12 s linger held two provider connections (brief 113, P1-1).
+// The same channel is kept, so a reconnect or a zap back still rejoins it instantly.
+function closeIptvViewerLingers(slotKey, shareKey, userId = '', sourceId = '') {
+  for (const [key, lingering] of [...iptvViewerLingerHubs]) {
+    const sameSlot = key === slotKey;
+    const sameUserSource = !!(userId && sourceId && lingering.lingerUserId === String(userId) && lingering.sourceId === sourceId);
+    if (!sameSlot && !sameUserSource) continue;
+    if (shareKey && lingering.shareKey === shareKey && lingering.joinable()) continue;
+    iptvViewerLingerHubs.delete(key);
+    if (lingering.subs && lingering.subs.size > 0) continue;
+    lingering.close('retuned');
   }
-  lingering.close('retuned');
-  iptvViewerLingerHubs.delete(slotKey);
 }
 function iptvShareKey(meta, cid, alt) {
   return `${Number.isInteger(meta.idx) ? meta.idx : 'x'}:${cid || ''}:${alt ? 1 : 0}`;
 }
-function createIptvLiveHub(shareKey, label) {
+function createIptvLiveHub(shareKey, label, opts = {}) {
   const hub = {
     shareKey, label,
+    sourceId: String(opts.sourceId || ''),
+    lingerUserId: '',
     state: 'starting', // starting -> live -> closed
     subs: new Set(),   // { res, slot, stallTimer, backpressured }
     headers: null,
@@ -2093,7 +2106,7 @@ function createIptvLiveHub(shareKey, label) {
         // Same-channel reconnects still reuse this hub off the ring buffer.
         // A pipe that falls back to the URL remux is not coming back to this hub either.
         if (/retuned|shutdown|remux fallback/i.test(String(reason || ''))) return this.close(reason);
-        rememberIptvViewerLinger(sub.slot && sub.slot.key, this);
+        rememberIptvViewerLinger(sub.slot && sub.slot.key, this, sub.slot && sub.slot.userId);
         this.lingerTimer = setTimeout(() => this.close('idle (no viewers)'), IPTV_SHARE_LINGER_MS);
         if (this.lingerTimer.unref) this.lingerTimer.unref();
       }
@@ -2271,7 +2284,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     console.log(`[iptv share] ${iptvNativeLogLabel(meta)} joined shared upstream (${existingHub.subs.size} viewer(s))`);
     return;
   }
-  const hub = createIptvLiveHub(shareKey, iptvNativeLogLabel(meta));
+  const hub = createIptvLiveHub(shareKey, iptvNativeLogLabel(meta), { sourceId: meta.sourceId });
   // HLS playlists are snapshots, not a TS pipe. Mark finite before the first byte so a remux
   // opener cannot join this hub and treat the playlist as a media stream.
   if (iptvNativeMime(target) === 'application/x-mpegURL') hub.finite = true;
@@ -7845,7 +7858,7 @@ const H = {
     // keeps going straight to its provider, so it costs the server nothing.
     const src = iptvSourcesFromSettings(settings.get()).find((x) => x.id === ch.sourceId);
     const mediaUri = user.role === 'admin' || (src && src.ownerUserId === user.id) ? null : iptvMediaUriFor(ctx, user, ch);
-    return proxyIptvNative(ctx, target, 0, { idx: ch.idx, name: ch.name, alt, mediaUri });
+    return proxyIptvNative(ctx, target, 0, { idx: ch.idx, name: ch.name, alt, mediaUri, sourceId: ch.sourceId });
   },
 
   iptvMedia: async (ctx) => {
@@ -7904,7 +7917,7 @@ const H = {
     if (ctx.res.destroyed) return;
     const shareCid = String(ctx.url.searchParams.get('cid') || '');
     const remuxShareKey = iptvShareKey({ idx: ch.idx }, shareCid, false);
-    const liveSlot = beginIptvLiveSlot(ctx, { idx: ch.idx, name: ch.name }, remuxShareKey);
+    const liveSlot = beginIptvLiveSlot(ctx, { idx: ch.idx, name: ch.name, sourceId: ch.sourceId }, remuxShareKey);
     // Overall cap bounds the whole startup; each attempt gets its own fresh first-byte budget
     // (reset via beginAttemptBudget) so a slow high-ranked source can't starve its alternates.
     // startupRemaining is the tighter of the two, so timers/redirect gates respect both.
@@ -8236,7 +8249,7 @@ const H = {
         armIdle(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS);
         return;
       }
-      hub = createIptvLiveHub(shareKey, `${label} remux`);
+      hub = createIptvLiveHub(shareKey, `${label} remux`, { sourceId: ch.sourceId });
       iptvSharedHubs.set(shareKey, hub);
       openedHub = true;
       bindHub(hub);

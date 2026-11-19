@@ -158,3 +158,38 @@ test('live: when the browser TS pipe fails, the URL remux fallback runs and no u
     provider.close();
   }
 });
+
+test('live: a stop on one screen and a different channel on another screen of the same user hold one connection (P1-1)', async () => {
+  const provider = await startProvider({ channels: 3 });
+  let rig = null;
+  const clients = [];
+  try {
+    rig = await bootWithSource(provider);
+    const [c0, c1] = rig.channels;
+    // The TV plays channel 0, then stops (the app drops the request: the hub lingers 12 s).
+    const tv = await open(rig.srv.port, withSurface(c0.nativeUrl, 'tv'), TV_UA);
+    clients.push(tv);
+    assert.ok(await waitFor(() => tv.bytes > 0), 'the TV plays');
+    drop(tv);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.strictEqual(provider.state.active, 1, 'the stopped channel lingers (same-channel rejoin)');
+    provider.resetPeak();
+    // The same user opens a DIFFERENT channel on another screen (a Multiview pane, another app).
+    const pane = await open(rig.srv.port, withSurface(c1.nativeUrl, 'mv0'), CHROME_UA);
+    clients.push(pane);
+    assert.ok(await waitFor(() => pane.bytes > 0), 'the other screen plays');
+    assert.ok(await waitFor(() => provider.state.active === 1, 2000),
+      `the lingering channel closed when the same user opened another channel (active ${provider.state.active})`);
+    assert.strictEqual(provider.state.peak, 1, `never two provider connections (peak ${provider.state.peak})`);
+    // The same channel still rejoins instantly from another screen (no new provider connection).
+    const before = provider.state.total;
+    const again = await open(rig.srv.port, withSurface(c1.nativeUrl, 'tv'), TV_UA);
+    clients.push(again);
+    assert.ok(await waitFor(() => again.bytes > 0), 'a second screen on the same channel plays');
+    assert.strictEqual(provider.state.total, before, 'it joined the live upstream');
+  } finally {
+    clients.forEach(drop);
+    if (rig) await rig.srv.shutdown();
+    provider.close();
+  }
+});
