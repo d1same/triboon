@@ -225,6 +225,13 @@ test('live: Max connections = 1 stops the oldest stream for a new one, tells the
     clients.push(zap);
     assert.ok(await waitFor(() => zap.bytes > 0, 3000), `the zap plays (status ${zap.status})`);
     assert.strictEqual(provider.state.peak, 1, `a zap never holds two (peak ${provider.state.peak})`);
+    // Only the stopped screen's retries are held back: a different screen (a new Multiview pane)
+    // is a deliberate open and stops the oldest stream as usual, also right after a stop.
+    const third = await open(rig.srv.port, withSurface(c0.nativeUrl, 'mv2'), TV_UA);
+    clients.push(third);
+    assert.ok(await waitFor(() => third.bytes > 0, 3000), `a new screen plays (status ${third.status} ${third.error})`);
+    assert.ok(await waitFor(() => zap.ended, 2000), 'the oldest stream (the zapped pane) was stopped');
+    assert.strictEqual(provider.state.peak, 1, `still never two (peak ${provider.state.peak})`);
   } finally {
     clients.forEach(drop);
     if (rig) await rig.srv.shutdown();
@@ -287,4 +294,12 @@ test('web: the Live TV source editor has a Max connections field that is saved, 
   assert.match(ui, /maxConnections: \$\('iptvMaxConn'\)\.value\.trim\(\) \? parseInt\(\$\('iptvMaxConn'\)\.value, 10\) : null/, 'save sends it (empty = no limit)');
   assert.match(ui, /\$\('iptvMaxConn'\)\.value = src\.maxConnections \? String\(src\.maxConnections\) : ''/, 'editing a source shows its limit');
   assert.ok((ui.match(/'epgUrl', 'iptvMaxConn'\]/g) || []).length >= 3, 'every form reset clears it');
+});
+
+test('web: a live stream cut mid-play asks the server once why, and shows a Max connections reason', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /async function liveStopReason\(url\) \{[\s\S]+return \/provider allows\/i\.test\(reason\) \? reason : '';/,
+    'only the limit reason is taken from the answer');
+  assert.match(ui, /if \(!e\.liveProviderReason && appended > 0\) e\.liveStreamCut = true;/, 'a started stream that breaks is a cut');
+  assert.match(ui, /if \(!split && e\.liveStreamCut && !e\.liveProviderReason && !e\.liveStopChecked\) \{/, 'asked once, main player and Multiview panes');
 });
