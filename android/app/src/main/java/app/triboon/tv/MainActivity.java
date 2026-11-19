@@ -7973,15 +7973,17 @@ public class MainActivity extends Activity {
         int syncEarlierIndex = -1;
         int resetIndex = -1;
         if (trackType == C.TRACK_TYPE_TEXT) {
-            syncLaterIndex = labels.size();
-            labels.add("Sync: subtitles later");
+            labels.add("\u00a7Timing" + nativeSubShiftLabel()); // 3.5.1 option A: a quiet section label
             selected.add(false);
             syncEarlierIndex = labels.size();
-            labels.add("Sync: subtitles earlier");
+            labels.add("Earlier \u00b7 subtitles 0.5 s sooner");
+            selected.add(false);
+            syncLaterIndex = labels.size();
+            labels.add("Later \u00b7 subtitles 0.5 s later");
             selected.add(false);
             if (Math.abs(nativeSubtitleShift) >= 0.05f) {
                 resetIndex = labels.size();
-                labels.add("Reset subtitle sync" + nativeSubShiftLabel());
+                labels.add("Reset timing");
                 selected.add(false);
             }
         }
@@ -7994,13 +7996,13 @@ public class MainActivity extends Activity {
         showNativeChoiceSheet(trackType == C.TRACK_TYPE_TEXT ? "Subtitles" : "Audio",
                 labelArray, selectedArray, which -> {
                     if (which == later) {
-                        nativeSheetRestoreIndex = later;
+                        nativeSheetRestoreIndex = later - 1; // the "Timing" label is not a row
                         shiftNativeSubtitles(0.5f);
                     } else if (which == earlier) {
-                        nativeSheetRestoreIndex = earlier;
+                        nativeSheetRestoreIndex = earlier - 1;
                         shiftNativeSubtitles(-0.5f);
                     } else if (which == reset) {
-                        nativeSheetRestoreIndex = later >= 0 ? later : 0;
+                        nativeSheetRestoreIndex = earlier >= 1 ? earlier - 1 : 0;
                         resetNativeSubtitleShift();
                     }
                     else applyNativeTrackChoice(trackType, choices.get(which));
@@ -8352,10 +8354,10 @@ public class MainActivity extends Activity {
 
         TextView head = new TextView(this);
         head.setText(title);
-        head.setTextColor(0xFFEDE8F5);
-        head.setTextSize(13);
+        head.setTextColor(0xFFEDEFF3);
+        head.setTextSize(17); // 3.5.1 option A: a real title, like the web menus
         head.setTypeface(Typeface.DEFAULT_BOLD);
-        head.setPadding(dp(8), 0, dp(8), dp(9));
+        head.setPadding(dp(10), dp(2), dp(10), dp(10));
         nativeSheet.addView(head, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -8371,6 +8373,16 @@ public class MainActivity extends Activity {
         for (int i = 0; i < labels.length; i++) {
             final int index = i;
             boolean selected = selectedRows != null && i < selectedRows.length && selectedRows[i];
+            if (labels[i] != null && labels[i].startsWith("§")) { // 3.5.1 option A: a section label ("Timing")
+                TextView sec = new TextView(this);
+                sec.setText(labels[i].substring(1));
+                sec.setTextColor(0x80EDEFF3);
+                sec.setTextSize(12);
+                sec.setPadding(dp(12), dp(10), dp(12), dp(2));
+                sec.setFocusable(false);
+                nativeSheetRows.addView(sec);
+                continue;
+            }
             TextView row = nativeSheetRow(labels[i], selected);
             row.setOnClickListener(v -> {
                 hideNativeSheet();
@@ -8389,11 +8401,33 @@ public class MainActivity extends Activity {
         if (!rows.isEmpty()) focusNativeSheetRow(rows, focusIndex);
     }
 
+    // 3.5.1 (owner pick option A): "English  online · best match" — the name, then its detail quieter.
+    private CharSequence nativeSheetRowText(String label, boolean focused) {
+        String text = label == null ? "" : label;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^(.*?)\\s+(?:\u00b7|-|\u2014)\\s+(.+)$").matcher(text);
+        if (!m.find()) return text;
+        String name = m.group(1), detail = m.group(2);
+        android.text.SpannableString sp = new android.text.SpannableString(name + "  " + detail);
+        int at = name.length() + 2;
+        sp.setSpan(new android.text.style.ForegroundColorSpan(focused ? 0x9914161A : 0x80EDEFF3), at, sp.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        sp.setSpan(new android.text.style.RelativeSizeSpan(0.86f), at, sp.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        sp.setSpan(new android.text.style.StyleSpan(Typeface.NORMAL), at, sp.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return sp;
+    }
+
+    private void setNativeSheetCheck(TextView row, boolean selected, boolean focused) {
+        if (!selected) { row.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0); return; }
+        android.graphics.drawable.Drawable d = getDrawable(R.drawable.ic_sheet_check);
+        if (d != null) { d = d.mutate(); d.setTint(focused ? 0xFF14161A : 0xFFEDEFF3); }
+        row.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, d, null);
+        row.setCompoundDrawablePadding(dp(8));
+    }
+
     private TextView nativeSheetRow(String label, boolean selected) {
         TextView row = new TextView(this);
-        row.setText(label);
+        row.setText(nativeSheetRowText(label, false));
         row.setTextColor(selected ? 0xFFEDEFF3 : 0xDDEDEFF3);
-        row.setTextSize(12);
+        row.setTextSize(14);
         row.setTypeface(Typeface.DEFAULT_BOLD);
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
         row.setSingleLine(true);
@@ -8402,13 +8436,16 @@ public class MainActivity extends Activity {
         row.setClickable(true);
         row.setPadding(dp(12), 0, dp(12), 0);
         row.setBackground(nativeSheetRowBg(false, selected));
+        setNativeSheetCheck(row, selected, false);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
-        lp.topMargin = dp(4);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        lp.topMargin = dp(2);
         row.setLayoutParams(lp);
         row.setOnFocusChangeListener((v, hasFocus) -> {
             v.setBackground(nativeSheetRowBg(hasFocus, selected));
             ((TextView) v).setTextColor(hasFocus ? 0xFF14161A : selected ? 0xFFEDEFF3 : 0xDDEDEFF3);
+            ((TextView) v).setText(nativeSheetRowText(label, hasFocus));
+            setNativeSheetCheck((TextView) v, selected, hasFocus);
         });
         return row;
     }
@@ -8418,9 +8455,7 @@ public class MainActivity extends Activity {
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 focused
                         ? new int[]{0xFFEDEFF3, 0xFFEDEFF3}
-                        : selected
-                        ? new int[]{0x29EDEFF3, 0x29EDEFF3}
-                        : new int[]{0x0012091D, 0x0012091D});
+                        : new int[]{0x0012091D, 0x0012091D}); // 3.5.1 option A: the check marks the chosen row
         d.setCornerRadius(dp(6));
         d.setStroke(0, 0x00000000); // Graphite: no edge lines
         return d;
@@ -8606,7 +8641,7 @@ public class MainActivity extends Activity {
         TextView head = new TextView(this);
         head.setText("Playback stats");
         head.setTextColor(0xFFEDEFF3);
-        head.setTextSize(13);
+        head.setTextSize(17); // 3.5.1 option A: same title size as the menus
         head.setTypeface(Typeface.DEFAULT_BOLD);
         head.setPadding(dp(4), dp(2), dp(4), dp(10));
         nativeSheet.addView(head, new LinearLayout.LayoutParams(

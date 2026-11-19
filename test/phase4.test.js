@@ -4374,9 +4374,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer D-pad focus should keep the highlighted sheet row visible');
   assert.match(android, /private GradientDrawable nativePanelBg\(\) \{[\s\S]+new int\[\]\{0xC8181A1D, 0xC80D0F12\}[\s\S]+d\.setCornerRadius\(dp\(6\)\);[\s\S]+d\.setStroke\(0, 0x00000000\)/, // 3.5.0 Graphite: crisp 6dp corner
     'native ExoPlayer option sheets should use compact graphite panels instead of bright purple glass');
-  assert.match(android, /private GradientDrawable nativeSheetRowBg\(boolean focused, boolean selected\) \{[\s\S]+focused[\s\S]+new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+selected[\s\S]+new int\[\]\{0x29EDEFF3, 0x29EDEFF3\}[\s\S]+d\.setStroke\(0, 0x00000000\)/, // 3.5.0 Graphite: white focus, grey chosen, no gold
+  assert.match(android, /private GradientDrawable nativeSheetRowBg\(boolean focused, boolean selected\) \{[\s\S]+focused[\s\S]+new int\[\]\{0xFFEDEFF3, 0xFFEDEFF3\}[\s\S]+d\.setStroke\(0, 0x00000000\)/, // 3.5.0 Graphite: white focus, no gold; 3.5.1 option A: the chosen row carries a check, not a fill
     'native ExoPlayer sheet focused and selected rows should be visually distinct');
-  assert.match(android, /row\.setSingleLine\(true\);[\s\S]+row\.setEllipsize\(TextUtils\.TruncateAt\.END\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(40\)/,
+  assert.match(android, /private void setNativeSheetCheck\(TextView row, boolean selected, boolean focused\) \{[\s\S]+R\.drawable\.ic_sheet_check/, 'the chosen row shows a check (option A)');
+  assert.match(android, /row\.setSingleLine\(true\);[\s\S]+row\.setEllipsize\(TextUtils\.TruncateAt\.END\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(44\)/,
     'native ExoPlayer sheet rows should keep fixed height and ellipsize long track labels');
   assert.match(android, /private String nativeStatsJson\(\)[\s\S]+nativeVideoStatsLabel[\s\S]+nativeAudioStatsLabel[\s\S]+nativeBandwidthEstimate/,
     'native stats should report video, audio, and bandwidth estimates to the web player stats panel');
@@ -5146,7 +5147,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'web CC sync controls should expose one clean later/earlier pair with the current offset in the heading');
   assert.doesNotMatch(ui, /Later \+5s|Earlier -5s|shiftSubs\(5\)|shiftSubs\(-5\)/,
     'web CC sync controls should not show duplicate fine and coarse sync rows');
-  assert.match(android, /labels\.add\("Sync: subtitles later"\);[\s\S]+labels\.add\("Sync: subtitles earlier"\);[\s\S]+shiftNativeSubtitles\(0\.5f\);[\s\S]+shiftNativeSubtitles\(-0\.5f\);/,
+  assert.match(android, /labels\.add\("\\u00a7Timing" \+ nativeSubShiftLabel\(\)\);[\s\S]+labels\.add\("Earlier \\u00b7 subtitles 0\.5 s sooner"\);[\s\S]+labels\.add\("Later \\u00b7 subtitles 0\.5 s later"\);[\s\S]+shiftNativeSubtitles\(0\.5f\);[\s\S]+shiftNativeSubtitles\(-0\.5f\);/,
     'native Android CC sync controls should expose one clean later/earlier pair');
   assert.doesNotMatch(android, /subtitles later \+5s|subtitles earlier -5s|shiftNativeSubtitles\(5f\)|shiftNativeSubtitles\(-5f\)/,
     'native Android CC sync controls should not show duplicate fine and coarse sync rows');
@@ -6410,11 +6411,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'selecting an online subtitle row should notify the web app instead of leaving the row inert');
   assert.doesNotMatch(android, /No subtitle is loaded for this stream/,
     'native CC should not stop before showing online subtitle choices');
-  assert.match(android, /labels\.add\("Sync: subtitles later"\)/,
+  assert.match(android, /labels\.add\("Later \\u00b7 subtitles 0\.5 s later"\)/,
     'native CC sheet should include a subtitle-later sync action');
   assert.match(android, /shiftNativeSubtitles\(0\.5f\)/,
     'native subtitle sync action should move subtitles later in 0.5s steps');
-  assert.match(android, /nativeSheetRestoreIndex = later;[\s\S]+shiftNativeSubtitles\(0\.5f\);[\s\S]+nativeSheetRestoreIndex = earlier;[\s\S]+shiftNativeSubtitles\(-0\.5f\)/,
+  // 3.5.1 option A: the rows sit under a non-focusable "Timing" label, so the focus index is one less.
+  assert.match(android, /nativeSheetRestoreIndex = later - 1;[\s\S]+shiftNativeSubtitles\(0\.5f\);[\s\S]+nativeSheetRestoreIndex = earlier - 1;[\s\S]+shiftNativeSubtitles\(-0\.5f\)/,
     'native subtitle sync adjustments should reopen the CC sheet on the sync row');
   assert.match(android, /int focusIndex = nativeSheetRestoreIndex >= 0 \? nativeSheetRestoreIndex : 0;[\s\S]+java\.util\.ArrayList<View> rows = nativeSheetFocusableRows\(\);[\s\S]+focusNativeSheetRow\(rows, focusIndex\);/,
     'native choice sheets should honor a requested restore row after rebuilding');
