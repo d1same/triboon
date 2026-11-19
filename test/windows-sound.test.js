@@ -1,0 +1,135 @@
+'use strict';
+
+// Windows app no-sound (3.5.3). A browser engine (Edge/WebView2) plays AC3/E-AC3 video as a moving
+// picture with zero audio decoded and no error, so nothing fell back. Names below are made up.
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { decidePlayback, detectFfmpeg } = require('../server/transcode');
+
+const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+function extractFunction(name) {
+  let start = html.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `${name} exists in web/index.html`);
+  if (html.slice(start - 6, start) === 'async ') start -= 6;
+  let depth = 0;
+  for (let i = html.indexOf(') {', start) + 2; i < html.length; i++) {
+    if (html[i] === '{') depth++;
+    else if (html[i] === '}' && --depth === 0) return html.slice(start, i + 1);
+  }
+  throw new Error(`${name} has no end`);
+}
+
+const WEB = { mkv: true, mp4: true, h264: true, hevc: true, aac: true, ac3: false, eac3: false, dts: false };
+const remuxOr = () => (detectFfmpeg() ? 'remux' : 'direct');
+
+test('F1: an MP4/M4V/WebM named with AC3-family, DTS or TrueHD audio is not sent direct to a browser', () => {
+  for (const name of [
+    'Some.Show.S01E02.1080p.WEB-DL.DDP5.1.H.265-GRP.mp4',
+    'Some.Show.S01E02.1080p.WEB-DL.DD+5.1.H.264-GRP.mp4',
+    'Some.Film.2020.1080p.BluRay.AC3.x264.m4v',
+    'Some.Film.2020.2160p.WEB-DL.EAC3.Atmos.H.265.mp4',
+    'Some.Film.2020.1080p.BluRay.DD5.1.x264.mp4',
+    'Some.Film.2020.1080p.BluRay.DTS.x264.mp4',
+    'Some.Film.2020.2160p.BluRay.TrueHD.Atmos.mp4',
+    'Some.Film.2020.1080p.WEB.E-AC-3.webm',
+  ]) {
+    assert.equal(decidePlayback(name, WEB).method, remuxOr(), name);
+  }
+});
+
+test('F1: AAC (or unnamed audio) MP4s stay direct in a browser, and Dolby-capable clients keep direct', () => {
+  assert.equal(decidePlayback('Some.Film.2020.1080p.WEB-DL.AAC2.0.H.264.mp4', WEB).method, 'direct');
+  assert.equal(decidePlayback('Movie.mp4', WEB).method, 'direct');
+  assert.equal(decidePlayback('Movie.webm', WEB).method, 'direct');
+  assert.equal(decidePlayback('Some.Show.S01E02.1080p.WEB-DL.DDP5.1.H.265-GRP.mp4',
+    { ...WEB, ac3: true, eac3: true }).method, 'direct', 'a client that decodes E-AC3 plays it direct');
+  assert.equal(decidePlayback('Some.Film.2020.1080p.BluRay.DTS.x264.mp4',
+    { ...WEB, dts: true }).method, 'direct', 'a client that decodes DTS plays it direct');
+  assert.equal(decidePlayback('Some.Film.2020.2160p.BluRay.TrueHD.Atmos.mp4',
+    { ...WEB, native: true, passthrough: true, truehd: true, ac3: true, eac3: true }).method, 'direct');
+});
+
+function silentCheck() {
+  const S = {};
+  const calls = { start: [], issues: [] };
+  const src = `const SILENT_AUDIO_CHECK_SEC = 3;\n${extractFunction('checkWebSilentAudio')}\nreturn checkWebSilentAudio;`;
+  const fn = new Function('S', 'fetchPlayerTracks', 'notePlaybackIssue', 'startSource', 'currentTime', src)(
+    S, async () => null, (kind, msg, at) => calls.issues.push({ kind, msg, at }),
+    (kind, at, opts) => { calls.start.push({ kind, at, quiet: !!(opts && opts.quietSeek) }); return true; },
+    () => S._now || 0);
+  return { S, fn, calls };
+}
+function video(over = {}) {
+  return { currentSrc: '/api/stream/x', currentTime: 0, muted: false, volume: 1, webkitAudioDecodedByteCount: 0, ...over };
+}
+const tick = () => new Promise((r) => setImmediate(r));
+const AUDIO = { audio: [{ rel: 0, codec: 'eac3', channels: 6 }] };
+
+test('F2: picture with zero decoded audio after 3 s switches once to the AAC remux at the same second', async () => {
+  const t = silentCheck();
+  const p = { item: { type: 'movie' }, remuxUrl: '/api/remux/x?t=1', tracks: AUDIO, audioTrack: 0 };
+  t.S.playing = p;
+  const v = video({ currentTime: 10 });
+  t.fn(p, v);                       // first sight of this source
+  v.currentTime = 12; t.fn(p, v); await tick();
+  assert.equal(t.calls.start.length, 0, 'not before 3 s of play');
+  v.currentTime = 13.4; t.S._now = 13.4; t.fn(p, v); await tick();
+  assert.deepEqual(t.calls.start, [{ kind: 'remux', at: 13.4, quiet: true }]);
+  assert.equal(p.forceAacRemux, true, 'remux asks for browser-safe AAC');
+  assert.match(t.calls.issues[0].msg, /no sound is decoded \(eac3\)/);
+  v.currentSrc = '/api/remux/x?t=1&audioSafe=1'; v.currentTime = 20; t.fn(p, v); v.currentTime = 25; t.fn(p, v); await tick();
+  assert.equal(t.calls.start.length, 1, 'never switches twice (no loop)');
+});
+
+test('F2: no switch when audio decodes, the user muted, the counter is missing, or the file has no audio', async () => {
+  const cases = [
+    [video({ webkitAudioDecodedByteCount: 81920 }), AUDIO],
+    [video({ muted: true }), AUDIO],
+    [video({ volume: 0 }), AUDIO],
+    [(() => { const v = video(); delete v.webkitAudioDecodedByteCount; return v; })(), AUDIO],
+    [video(), { audio: [] }],
+  ];
+  for (const [v, tracks] of cases) {
+    const t = silentCheck();
+    const p = { item: { type: 'movie' }, remuxUrl: '/api/remux/x?t=1', tracks };
+    t.S.playing = p;
+    t.fn(p, v); v.currentTime = 4; t.fn(p, v); await tick();
+    assert.equal(t.calls.start.length, 0, JSON.stringify({ muted: v.muted, volume: v.volume, tracks }));
+  }
+});
+
+test('F2: already on the AAC remux and still silent → logs once, does not switch again', async () => {
+  const t = silentCheck();
+  const p = { item: { type: 'movie' }, remuxUrl: '/r', usingRemux: true, forceAacRemux: true, tracks: AUDIO };
+  t.S.playing = p;
+  const v = video();
+  t.fn(p, v); v.currentTime = 4; t.fn(p, v); await tick();
+  assert.equal(t.calls.start.length, 0);
+  assert.equal(t.calls.issues.length, 1);
+  assert.match(html, /if \(!\(playingRef\.item && playingRef\.item\.type === 'live'\)\) checkWebSilentAudio\(playingRef, v\);/,
+    'the web player runs the check from its timeupdate handler');
+});
+
+test('F3: a late Windows bridge still gets client=windows and native caps (no cached "no bridge")', () => {
+  const win = {};
+  const S = {};
+  const doc = { createElement: () => ({ canPlayType: () => '' }) };
+  const src = `${extractFunction('playbackClientKind')}\n${extractFunction('nativePlaybackCaps')}\n${extractFunction('clientCaps')}\nreturn { playbackClientKind, nativePlaybackCaps, clientCaps };`;
+  const fns = new Function('S', 'window', 'document', 'TriboonTV', src.replace(/\bTriboonTV\./g, 'window.TriboonTV.'))(S, win, doc, undefined);
+  assert.equal(fns.playbackClientKind(), 'web', 'before the bridge: web');
+  assert.equal(fns.nativePlaybackCaps(), null);
+  assert.equal(fns.clientCaps().native, undefined, 'browser caps before the bridge');
+  win.TriboonTV = {
+    appVersion: () => JSON.stringify({ platform: 'windows' }),
+    nativePlaybackCaps: () => JSON.stringify({ native: true, source: 'libmpv', ac3: true, eac3: true }),
+  };
+  assert.equal(fns.playbackClientKind(), 'windows', 'after a late bridge: windows');
+  assert.equal(fns.nativePlaybackCaps().source, 'libmpv');
+  const caps = fns.clientCaps();
+  assert.equal(caps.native, true, 'caps are recomputed once the bridge appears');
+  assert.equal(caps.eac3, true);
+  assert.equal(fns.clientCaps(), caps, 'then cached');
+});

@@ -138,6 +138,21 @@ function releaseLosslessAudioDirectOk(name, caps = {}) {
   return true;
 }
 
+// MP4/M4V/WebM direct play used to skip every audio check: a browser plays an AC3/E-AC3 MP4 as a
+// moving picture with NO sound and no error, so nothing falls back (Windows app no-sound, 3.5.2).
+// The server only has the file NAME here, so read the release's audio tokens. An AAC/Opus MP4 (or
+// one whose name says nothing) stays direct; the web player's silent-audio check catches the rest.
+const AC3_FAMILY_NAME_RE = /\b(e-?ac-?3|ac-?3|ddp(?:[ ._-]?[257][ ._][01])?|dd\+|dd[257][ ._][01]|atmos|dolby[ ._-]?digital)\b/i;
+function releaseNamedAudioDirectOk(name, caps = {}) {
+  const s = String(name || '');
+  const passthrough = !!(caps.native && caps.passthrough);
+  if (!releaseLosslessAudioDirectOk(name, caps)) return false;
+  if (AC3_FAMILY_NAME_RE.test(s) && !(caps.ac3 && caps.eac3) && !passthrough) return false;
+  const a = releaseAudioProfile(s);
+  if (a.dts && !a.dtsHd && !caps.dts && !passthrough) return false;
+  return true;
+}
+
 function encoderIsHardware(enc = detectEncoder()) {
   return !!(enc && enc.hardware);
 }
@@ -165,7 +180,8 @@ function decidePlayback(name, caps = {}) {
   // and Chromium happily claims matroska while decoding none of it — a "direct" DDP MKV
   // plays silent video. Devices with full container+audio hardware DO skip the server
   // entirely (true direct play); everything else gets the video-copy remux.
-  if (isMp4 || isWebm || (isMkv && caps.mkv && caps.ac3 && caps.eac3 && losslessAudioOk)) {
+  const mp4AudioOk = (isMp4 || isWebm) && releaseNamedAudioDirectOk(name, caps);
+  if (mp4AudioOk || (isMkv && caps.mkv && caps.ac3 && caps.eac3 && losslessAudioOk)) {
     if (fourKNeedsHelp) {
       if (canTranscode4k()) return { method: 'transcode' };
       return { method: detectFfmpeg() ? 'remux' : 'direct', skip4k: true };
@@ -181,7 +197,7 @@ function decidePlayback(name, caps = {}) {
   }
   // Usenet release names often do not expose the inner filename extension until after mount.
   // Treat that unknown container like MKV: remux first when ffmpeg is available.
-  if ((isMkv || !hasKnownContainer) && detectFfmpeg()) return { method: 'remux' };
+  if ((isMkv || isMp4 || isWebm || !hasKnownContainer) && detectFfmpeg()) return { method: 'remux' };
   return { method: 'direct', warning: 'container may not play in this client — use VLC/Android' };
 }
 

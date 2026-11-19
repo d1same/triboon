@@ -10237,11 +10237,15 @@ function sourceIdentityFor(it) {
 // decodes the source (e.g. a Shield with native HEVC, a TV with DDP) gets TRUE direct play —
 // the server copies bits instead of spending CPU. WebView/Chromium honestly answer "" for
 // AC3/EAC3, which is exactly why those still get the audio-only AAC pass.
+// The Windows app's bridge can arrive AFTER the first read (an eval after the page's own scripts).
+// A "no bridge" answer is therefore never cached: once TriboonTV appears, the next read sees it
+// and Play hands off to libmpv instead of staying on the WebView2 <video> player (no Dolby sound).
 function nativePlaybackCaps() {
-  if (S._nativeCaps !== undefined) return S._nativeCaps;
+  if (S._nativeCaps !== undefined && S._nativeCaps !== null) return S._nativeCaps;
+  if (!window.TriboonTV) return null;
   S._nativeCaps = null;
   try {
-    if (window.TriboonTV && TriboonTV.nativePlaybackCaps) {
+    if (TriboonTV.nativePlaybackCaps) {
       const caps = JSON.parse(TriboonTV.nativePlaybackCaps() || '{}');
       if (caps && caps.native) S._nativeCaps = caps;
     }
@@ -10249,7 +10253,9 @@ function nativePlaybackCaps() {
   return S._nativeCaps;
 }
 function clientCaps() {
-  if (S._caps) return S._caps;
+  // Cached per bridge state: caps read before a late bridge are recomputed once it appears.
+  if (S._caps && S._capsBridge === !!window.TriboonTV) return S._caps;
+  S._capsBridge = !!window.TriboonTV;
   const v = document.createElement('video');
   const ok = (t) => !!v.canPlayType(t);
   const webCaps = {
@@ -14677,13 +14683,14 @@ function postPlayNote(kind, detail, item) {
 // log cannot tell their sessions apart without it.
 function playbackClientKind() {
   if (S._clientKind) return S._clientKind;
-  let kind = 'web';
+  // No bridge YET is not "web" for good: the Windows app's bridge may land after this first read.
+  // Only a bridge answer is cached; without one, report "web" now and look again next time.
+  if (!window.TriboonTV) return 'web';
+  let kind;
   try {
-    if (window.TriboonTV) {
-      const app = TriboonTV.appVersion ? JSON.parse(TriboonTV.appVersion() || '{}') : {};
-      kind = app && app.platform === 'windows' ? 'windows' : 'android';
-    }
-  } catch { kind = window.TriboonTV ? 'android' : 'web'; }
+    const app = TriboonTV.appVersion ? JSON.parse(TriboonTV.appVersion() || '{}') : {};
+    kind = app && app.platform === 'windows' ? 'windows' : 'android';
+  } catch { kind = 'android'; }
   S._clientKind = kind;
   return kind;
 }
@@ -15096,6 +15103,7 @@ async function openPlayer(it, mount, opts = {}) {
     if (v.currentTime === lastTu) return;
     if (!(playingRef.item && playingRef.item.type === 'live')) notePictureHop(playingRef, lastTu, v.currentTime);
     lastTu = v.currentTime;
+    if (!(playingRef.item && playingRef.item.type === 'live')) checkWebSilentAudio(playingRef, v);
     const rebufferWatch = S._webRebufferWatch;
     if (rebufferWatch && rebufferWatch.playing === playingRef
         && Math.abs(v.currentTime - rebufferWatch.position) >= 0.5) clearWebRebufferRecovery();
@@ -17226,6 +17234,47 @@ async function reMountAndResume(reason = '', attempt = 0) {
       showPlaybackInterrupted(reason);
     }
   }
+}
+// Picture with no sound and no error: a browser engine (Edge, the Windows app's WebView2) plays
+// AC3/E-AC3/DTS video as a moving picture while decoding zero audio, so failover() never runs.
+// After about 3 s of play on one source, a zero audio byte count on a file that HAS an audio track
+// switches once to the server remux with browser-safe AAC, at the same second. Only where the
+// browser exposes the counter; never when the user muted; never twice for one play (no loop).
+const SILENT_AUDIO_CHECK_SEC = 3;
+function checkWebSilentAudio(p, v) {
+  if (!p || !v || p._silentAudioDone || p.usingNative) return;
+  if (typeof v.webkitAudioDecodedByteCount !== 'number') { p._silentAudioDone = true; return; }
+  const src = v.currentSrc || v.src || '';
+  if (!p._silentProbe || p._silentProbe.src !== src) { p._silentProbe = { src, from: v.currentTime }; return; }
+  if (v.currentTime - p._silentProbe.from < SILENT_AUDIO_CHECK_SEC || p._silentProbe.checking) return;
+  if (v.muted || v.volume === 0) return; // user muted: the counter can stay 0 by design; check later
+  if (v.webkitAudioDecodedByteCount > 0) { p._silentAudioDone = true; return; }
+  p._silentProbe.checking = true;
+  Promise.resolve(p.tracks || fetchPlayerTracks(p, 1500)).catch(() => null).then((t) => {
+    if (S.playing !== p || p._silentAudioDone) return;
+    p._silentProbe.checking = false;
+    if (v.webkitAudioDecodedByteCount > 0) { p._silentAudioDone = true; return; }
+    const hasAudio = !!(t && Array.isArray(t.audio) && t.audio.length);
+    if (!hasAudio) { p._silentAudioDone = true; return; }
+    p._silentAudioDone = true;
+    const at = currentTime();
+    const codec = (t.audio[p.audioTrack || 0] || t.audio[0] || {}).codec || 'this audio';
+    if (p.usingRemux && p.forceAacRemux) {
+      notePlaybackIssue('audio', `picture plays but no sound is decoded (${codec}) even on the AAC remux — not switching again`, at);
+      return;
+    }
+    if (p.remuxUrl) {
+      p.forceAacRemux = true;
+      notePlaybackIssue('audio', `picture plays but no sound is decoded (${codec}) — switching to server remux with AAC audio at the same second`, at);
+      startSource('remux', at, { quietSeek: true });
+    } else if (p.transcodeUrl && !p.usingTranscode) {
+      p.forceAacRemux = true;
+      notePlaybackIssue('audio', `picture plays but no sound is decoded (${codec}) — switching to server transcode at the same second`, at);
+      startSource('transcode', at, { quietSeek: true });
+    } else {
+      notePlaybackIssue('audio', `picture plays but no sound is decoded (${codec}) and the server has no remux here`, at);
+    }
+  });
 }
 function failover() {
   const p = S.playing; if (!p) return;

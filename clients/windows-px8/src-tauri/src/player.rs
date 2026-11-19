@@ -280,6 +280,114 @@ fn finite_seconds(value: f64, field: &str) -> Result<f64, String> {
     Ok(value)
 }
 
+/// How long after "ready" (and while playing) the libmpv session checks its picture and sound.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+const PLAYBACK_HEALTH_DELAY: Duration = Duration::from_secs(3);
+/// The mpv warning log rotates past this size (one older file is kept).
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+const MPV_LOG_MAX_BYTES: u64 = 512 * 1024;
+
+/// A play that mpv calls healthy can still show no picture or play no sound (the readiness check
+/// accepts any clock movement). Given what the file holds and what mpv set up, name what is missing.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn playback_health_issue(
+    has_video: bool,
+    vo_configured: bool,
+    has_audio: bool,
+    current_ao: &str,
+    aid: &str,
+) -> Option<String> {
+    let mut missing = Vec::new();
+    if has_video && !vo_configured {
+        missing.push("no picture: the video output was not configured (vo-configured=no)".to_string());
+    }
+    let aid = aid.trim();
+    if has_audio && (aid.is_empty() || aid == "no") {
+        missing.push("no sound: the file has audio but no audio track is selected (aid=no)".to_string());
+    } else if has_audio && current_ao.trim().is_empty() {
+        missing.push("no sound: no audio output is open (current-ao is empty)".to_string());
+    }
+    (!missing.is_empty()).then(|| format!("Windows libmpv: {}", missing.join("; ")))
+}
+
+/// The sound state a fresh VOD play starts with: unmuted, and audible (a volume at or near 0
+/// becomes 100). Any other volume the viewer chose is kept.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn fresh_play_audio_state(current_volume: f64) -> (bool, f64) {
+    let volume = if current_volume.is_finite() && current_volume >= 1.0 {
+        current_volume.min(130.0)
+    } else {
+        100.0
+    };
+    (false, volume)
+}
+
+/// Strip what must never reach a log file: URL queries (stream tokens ride `?t=`) and any bare
+/// `t=`/`token=` value left outside a URL.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn scrub_log_line(line: &str) -> String {
+    let mut out = redact_url_query(line);
+    for key in ["t=", "token="] {
+        let mut scrubbed = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(at) = rest.find(key) {
+            let boundary = at == 0 || !rest[..at].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+            scrubbed.push_str(&rest[..at + key.len()]);
+            rest = &rest[at + key.len()..];
+            if boundary {
+                let end = rest
+                    .find(|c: char| c.is_whitespace() || matches!(c, '&' | '"' | '\'' | ',' | ';'))
+                    .unwrap_or(rest.len());
+                if end > 0 {
+                    scrubbed.push_str("[redacted]");
+                }
+                rest = &rest[end..];
+            }
+        }
+        scrubbed.push_str(rest);
+        out = scrubbed;
+    }
+    out
+}
+
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+static MPV_LOG_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// `<app local data>/logs/mpv.log`: mpv warnings and errors plus Triboon's health notes, so a
+/// "no sound" report has evidence. Rotates to mpv.log.1 past MPV_LOG_MAX_BYTES. Best effort.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn init_mpv_log(app: &tauri::AppHandle) {
+    if let Ok(dir) = app.path().app_local_data_dir() {
+        let dir = dir.join("logs");
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = MPV_LOG_PATH.set(dir.join("mpv.log"));
+        }
+    }
+}
+
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn mpv_log_line(line: &str) {
+    let Some(path) = MPV_LOG_PATH.get() else { return };
+    write_rotating_log(path, &scrub_log_line(line), MPV_LOG_MAX_BYTES);
+}
+
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn write_rotating_log(path: &std::path::Path, line: &str, max_bytes: u64) {
+    use std::io::Write;
+    if std::fs::metadata(path).map(|m| m.len() >= max_bytes).unwrap_or(false) {
+        let old = path.with_extension("log.1");
+        let _ = std::fs::remove_file(&old);
+        let _ = std::fs::rename(path, &old);
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{stamp} {}", line.trim_end());
+    }
+}
+
 fn redact_url_query(message: &str) -> String {
     let mut safe = String::with_capacity(message.len());
     let mut rest = message;
@@ -1930,6 +2038,11 @@ struct NativeSession {
     last_duration: f64,
     last_paused: Option<bool>,
     loaded_at: Instant,
+    // When this session turned ready, and whether its sound/picture health was checked (F5).
+    ready_at: Option<Instant>,
+    health_checked: bool,
+    // A fresh VOD play (not a seek restart or source swap) starts with a known sound state (F6).
+    reset_audio_state: bool,
     buffering_since: Option<Instant>,
     last_progress: Instant,
     last_stats: Instant,
@@ -1942,6 +2055,7 @@ struct NativeSession {
 
 impl NativeSession {
     fn from_vod(request: VodRequest) -> Self {
+        let fresh_play = !request.quiet_seek;
         let episode_focus_index = request
             .episode_choices
             .iter()
@@ -2008,6 +2122,9 @@ impl NativeSession {
             last_duration: request.duration,
             last_paused: None,
             loaded_at: Instant::now(),
+            ready_at: None,
+            health_checked: false,
+            reset_audio_state: fresh_play,
             buffering_since: None,
             last_progress: Instant::now(),
             last_stats: Instant::now(),
@@ -2055,6 +2172,9 @@ impl NativeSession {
             last_duration: 0.0,
             last_paused: None,
             loaded_at: Instant::now(),
+            ready_at: None,
+            health_checked: false,
+            reset_audio_state: false,
             buffering_since: None,
             last_progress: Instant::now(),
             last_stats: Instant::now(),
@@ -2116,13 +2236,16 @@ fn actor_loop(
     cast_stop: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     cmd_tx: Sender<PlayerCommand>,
 ) {
+    init_mpv_log(&app);
     let mpv = match create_mpv(surface) {
         Ok(mpv) => mpv,
         Err(error) => {
+            mpv_log_line(&format!("[init] {error}"));
             actor_init_failed(&app, rx, &shared, &error);
             return;
         }
     };
+    request_warning_logs(&mpv);
     let mut session: Option<NativeSession> = None;
     loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
@@ -2398,7 +2521,11 @@ fn load_session(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> Result<(), S
         .ok_or_else(|| "no media candidate".to_string())?;
     // Drop lifecycle events belonging to the previous file before arming this session. `loadfile`
     // is asynchronous; the new StartFile/FileLoaded sequence below is the generation boundary.
-    while mpv.wait_event(0.0).is_some() {}
+    while let Some(event) = mpv.wait_event(0.0) {
+        if let Ok(libmpv2::events::Event::LogMessage { prefix, level, text, .. }) = event {
+            mpv_log_line(&format!("[{level}] {prefix}: {text}"));
+        }
+    }
     session.start_seen = false;
     session.file_loaded = false;
     session.playback_restarted = false;
@@ -2406,6 +2533,18 @@ fn load_session(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> Result<(), S
     session.subtitle_attached = session.subtitle.url.is_empty();
     session.audio_description_checked = false;
     apply_session_buffer(mpv, session)?;
+    if session.reset_audio_state {
+        // The shared mpv keeps `mute` (and a volume of 0) from the previous title, so a new film
+        // could start silent with nothing on screen saying why. A fresh play starts unmuted and
+        // audible; the viewer's own volume above 0 is kept. Seek restarts keep the current state.
+        session.reset_audio_state = false;
+        let current = property::<f64>(mpv, "volume").unwrap_or(100.0);
+        let (muted, volume) = fresh_play_audio_state(current);
+        let _ = mpv.set_property("mute", muted);
+        let _ = mpv.set_property("volume", volume);
+        session.ui.muted = muted;
+        session.ui.volume = volume;
+    }
     mpv.set_property("force-media-title", session.ui.title.as_str())
         .map_err(|e| e.to_string())?;
     mpv.set_property("alang", mpv_alang(&session.preferred_audio_language).as_str())
@@ -2532,6 +2671,75 @@ fn property<T: libmpv2::GetData>(mpv: &libmpv2::Mpv, name: &str) -> Option<T> {
 }
 
 #[cfg(all(feature = "player", target_os = "windows"))]
+fn probe_playback_health(mpv: &libmpv2::Mpv) -> Option<String> {
+    let count = property::<i64>(mpv, "track-list/count").unwrap_or(0).clamp(0, 256);
+    let (mut has_video, mut has_audio) = (false, false);
+    for i in 0..count {
+        match property::<String>(mpv, &format!("track-list/{i}/type")).as_deref() {
+            Some("video") => {
+                // Cover art ("albumart") is a picture, not a video stream that needs a vo.
+                if !property::<bool>(mpv, &format!("track-list/{i}/albumart")).unwrap_or(false) {
+                    has_video = true;
+                }
+            }
+            Some("audio") => has_audio = true,
+            _ => {}
+        }
+    }
+    playback_health_issue(
+        has_video,
+        property::<bool>(mpv, "vo-configured").unwrap_or(false),
+        has_audio,
+        &property::<String>(mpv, "current-ao").unwrap_or_default(),
+        &property::<String>(mpv, "aid").unwrap_or_default(),
+    )
+}
+
+/// One line per play, 3 s after ready: how mpv set up the picture and sound. Names and numbers
+/// only (no file name, no URL), so a "no picture" or "no sound" report can be read from mpv.log.
+#[cfg(all(feature = "player", target_os = "windows"))]
+fn playback_setup_line(mpv: &libmpv2::Mpv) -> String {
+    let s = |name: &str| property::<String>(mpv, name).unwrap_or_else(|| "-".into());
+    format!(
+        "[play] vo={} configured={} hwdec={} video={} {}x{} primaries={} gamma={} ao={} aid={} audio={} channels={} mute={} volume={}",
+        s("current-vo"),
+        s("vo-configured"),
+        s("hwdec-current"),
+        s("video-codec"),
+        s("video-params/w"),
+        s("video-params/h"),
+        s("video-params/primaries"),
+        s("video-params/gamma"),
+        s("current-ao"),
+        s("aid"),
+        s("audio-codec-name"),
+        s("audio-params/channel-count"),
+        s("mute"),
+        s("volume"),
+    )
+}
+
+// libmpv2 7.0 has no wrapper for this; the symbol is in the linked libmpv (mpv.lib).
+#[cfg(all(feature = "player", target_os = "windows"))]
+extern "C" {
+    fn mpv_request_log_messages(
+        ctx: *mut std::ffi::c_void,
+        min_level: *const std::os::raw::c_char,
+    ) -> std::os::raw::c_int;
+}
+
+#[cfg(all(feature = "player", target_os = "windows"))]
+fn request_warning_logs(mpv: &libmpv2::Mpv) {
+    if MPV_LOG_PATH.get().is_none() {
+        return;
+    }
+    // SAFETY: ctx is the live handle owned by `mpv`; the level is a NUL-terminated literal.
+    unsafe {
+        mpv_request_log_messages(mpv.ctx.as_ptr().cast(), c"warn".as_ptr());
+    }
+}
+
+#[cfg(all(feature = "player", target_os = "windows"))]
 fn current_file_eof(start_seen: bool, file_loaded: bool, reason: libmpv2::EndFileReason) -> bool {
     start_seen && file_loaded && reason == libmpv2::mpv_end_file_reason::Eof
 }
@@ -2580,6 +2788,9 @@ fn drain_session_events(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> (boo
             }
             Err(event_error) if session.start_seen => {
                 error = Some(redact_url_query(&event_error.to_string()));
+            }
+            Ok(libmpv2::events::Event::LogMessage { prefix, level, text, .. }) => {
+                mpv_log_line(&format!("[{level}] {prefix}: {text}"));
             }
             _ => {}
         }
@@ -2673,6 +2884,7 @@ fn tick_session(
             let _ = mpv.command("seek", &[target_string.as_str(), "absolute+keyframes"]);
         }
         session.ready = true;
+        session.ready_at = Some(Instant::now());
         session.ui.playing = !paused && !buffering;
         session.ui.buffering = false;
         session.ui.event_type = if session.ui.playing {
@@ -2694,6 +2906,25 @@ fn tick_session(
             eval_callback(app, "__tvNativeLiveReady", Vec::new());
         }
         publish_ui(app, shared, session.ui.clone());
+    }
+
+    if session.ready
+        && !session.health_checked
+        && !paused
+        && !buffering
+        && session.ready_at.is_some_and(|at| now.duration_since(at) >= PLAYBACK_HEALTH_DELAY)
+    {
+        session.health_checked = true;
+        mpv_log_line(&playback_setup_line(mpv));
+        if let Some(issue) = probe_playback_health(mpv) {
+            // The web page logs this as a playback issue (server log + Activity), like Android's.
+            eval_callback(
+                app,
+                "__tvPlaybackIssue",
+                vec![json!("native"), json!(issue), json!(session.last_position)],
+            );
+            mpv_log_line(&format!("[health] {issue}"));
+        }
     }
 
     if eof && session.ready {
@@ -3634,6 +3865,53 @@ mod tests {
         ];
         assert_eq!(normal_audio_instead(&only_english_is_ad), None);
         assert_eq!(normal_audio_instead(&[track("1", "eng", "English", false, false, 2)]), None);
+    }
+
+    #[test]
+    fn health_names_missing_picture_and_sound() {
+        assert_eq!(playback_health_issue(true, true, true, "wasapi", "1"), None, "healthy play");
+        assert_eq!(playback_health_issue(false, false, true, "wasapi", "1"), None, "audio-only: no vo needed");
+        assert_eq!(playback_health_issue(true, true, false, "", "no"), None, "a silent file: no audio expected");
+        let no_vo = playback_health_issue(true, false, true, "wasapi", "1").unwrap();
+        assert!(no_vo.contains("vo-configured=no") && !no_vo.contains("no sound"));
+        let no_aid = playback_health_issue(true, true, true, "wasapi", "no").unwrap();
+        assert!(no_aid.contains("aid=no"));
+        let no_ao = playback_health_issue(true, true, true, "", "1").unwrap();
+        assert!(no_ao.contains("current-ao is empty"));
+        let both = playback_health_issue(true, false, true, "", "").unwrap();
+        assert!(both.contains("no picture") && both.contains("no sound"));
+    }
+
+    #[test]
+    fn log_lines_never_keep_stream_tokens() {
+        let line = scrub_log_line("ffmpeg: http://127.0.0.1:7777/api/stream/abc?t=SECRET1&x=1 failed t=SECRET2, token=SECRET3");
+        assert!(!line.contains("SECRET"), "{line}");
+        assert!(line.contains("/api/stream/abc?[redacted]"));
+        assert_eq!(scrub_log_line("audio: format=s16 stereo"), "audio: format=s16 stereo");
+        assert_eq!(scrub_log_line("width t=  height"), "width t=  height", "empty value stays as is");
+    }
+
+    #[test]
+    fn fresh_play_is_unmuted_and_audible_but_keeps_a_chosen_volume() {
+        assert_eq!(fresh_play_audio_state(0.0), (false, 100.0));
+        assert_eq!(fresh_play_audio_state(0.4), (false, 100.0));
+        assert_eq!(fresh_play_audio_state(f64::NAN), (false, 100.0));
+        assert_eq!(fresh_play_audio_state(42.0), (false, 42.0));
+        assert_eq!(fresh_play_audio_state(500.0), (false, 130.0));
+    }
+
+    #[test]
+    fn mpv_log_rotates_and_keeps_one_old_file() {
+        let dir = std::env::temp_dir().join(format!("triboon-mpvlog-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mpv.log");
+        for i in 0..40 {
+            write_rotating_log(&path, &format!("line {i} {}", "x".repeat(40)), 512);
+        }
+        assert!(std::fs::metadata(&path).unwrap().len() < 1024);
+        assert!(dir.join("mpv.log.1").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn server() -> &'static str {
