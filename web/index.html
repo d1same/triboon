@@ -4150,6 +4150,15 @@ body[data-theme="graphite"] :is(.lcat,.pgCat,.chGroupHead){border-radius:6px}
 body[data-theme="graphite"] :is(.pgRow,.gRow):is(.focus,:focus){background:rgba(237,239,243,.07)!important;color:var(--text)!important}
 /* Live TV header buttons (Multiview / Channels): the site button, no edge line, white on focus. */
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn){border:0!important;border-radius:6px!important}
+/* 3.5.1 (owner: "Channels / Multiview look squished"): the site's button, not a compact chip: roomy,
+   sentence-case Sora, light see-through fill, and the same for the player guide's Multiview button. */
+body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn,#pgMultiBtn){min-height:46px;height:auto;padding:0 22px;gap:10px;
+  font:600 15px "Sora",system-ui,sans-serif;letter-spacing:0;text-transform:none;box-shadow:none;border:0;border-radius:6px;
+  background:rgba(237,239,243,.08);color:var(--text)}
+body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn,#pgMultiBtn) svg{width:19px;height:19px}
+body[data-theme="graphite"] #chGuideBtn.on{background:rgba(237,239,243,.16)}
+body[data-theme="graphite"] #pgMultiBtn:is(.focus,:focus,:hover){background:#EDEFF3!important;color:#14161A!important;box-shadow:none!important}
+body[data-theme="graphite"] #chSearch{min-height:46px;border-radius:6px}
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn):is(.focus,:focus,:hover){background:var(--btnHover)!important;color:var(--btnFocusText)!important;box-shadow:none!important}
 /* "Categories" label: quiet Sora like the other labels, not mono capitals. */
 body[data-theme="graphite"] .liveCatTitle{font-family:"Sora",system-ui,sans-serif;font-weight:600;letter-spacing:0;text-transform:none}

@@ -11855,6 +11855,12 @@ test('In-player guide: the Back/Close row is readable on focus, 6px corners (3.5
   assert.match(ui, /body\[data-theme="graphite"\] \.pgBackTop\{border-radius:6px;/, 'the row itself has the same corners');
 });
 
+test('Live TV Channels / Multiview buttons are full site buttons, not squished chips (3.5.1, owner)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /body\[data-theme="graphite"\] :is\(#chGuideBtn,#chMultiBtn,#pgMultiBtn\)\{min-height:46px;height:auto;padding:0 22px;gap:10px;\s*font:600 15px "Sora"/, 'roomy, sentence-case Sora on the Live TV page and in the player guide');
+  assert.match(ui, /body\[data-theme="graphite"\] #chSearch\{min-height:46px;border-radius:6px\}/, 'the filter box lines up with them');
+});
+
 test('QR sign-in: the page QR encoder makes a valid, scannable code (3.5.1, owner)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const a = ui.indexOf('function qrMatrix(text) {'), b = ui.indexOf('// ---- 3.5.1 (owner): QR sign-in ----');
