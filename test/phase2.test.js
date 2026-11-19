@@ -7287,7 +7287,12 @@ test('subtitles: slices that disagree are heard again with a padded clip; two wr
   const two = heard({ a: -5143, b: 8464, c: -1914 });
   const r2 = await subSyncCoreWith(two.hear)({ id: 't' }, vtt, 'u', 100, 0);
   assert.strictEqual(r2.shiftMs, 8461);
-  assert.ok(two.calls.includes('p'), 'the padded clip was asked');
+  assert.deepStrictEqual(two.calls, ['a', 'b', 'c', 'p', 'p'], 'two padded slices that agree end the retry (no third 50s pull)');
+  // A timeout is not a "no" vote: it ends the try, so the handler's timeout stop still applies.
+  const slow = (w, o) => { if (o.padded) throw new Error('subtitle sync audio sample took too long'); return { a: -5143, b: 8464, c: -1914 }[o.tag]; };
+  await assert.rejects(subSyncCoreWith(slow)({ id: 't' }, vtt, 'u', 100, 0), /took too long/);
+  const slowTie = (w, o) => { if (o.tag === 'c') throw new Error('subtitle sync took too long'); return o.padded ? 8461 : { a: -5143, b: 8464 }[o.tag]; };
+  await assert.rejects(subSyncCoreWith(slowTie)({ id: 't' }, vtt, 'u', 100, 0), /took too long/);
   // Slices that agree never pay for the padded clip.
   const calm = heard({ a: -2534, b: -2536 });
   const r3 = await subSyncCoreWith(calm.hear)({ id: 't' }, vtt, 'u', 100, 0);

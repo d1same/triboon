@@ -529,15 +529,24 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
     // When the 30-second slices cannot agree, hear the same lines again with a padded clip (see
     // measurePaddedSyncWindow). Two padded slices that agree win; otherwise nothing is applied.
     let rescued = null;
+    // A slice whose lines found no single gap is one more "no" vote. Anything else (a timeout, a
+    // failed audio pull) still ends the try, so the handler's timeout and failure stops apply.
+    const unalignedSlice = (e) => {
+      if (!/not a single gap|cue-count/i.test(String(e && e.message))) throw e;
+      return null;
+    };
     const paddedRetry = async (why, witnessWin) => {
       const tieAt = tieAtFor(witnessWin && witnessWin.originMs < spoken.originMs);
       const tieWin = windowSrt(srt, tieAt, 30000);
       const wins = [spoken, witnessWin, tieWin ? { ...tieWin, originMs: tieAt } : null].filter(Boolean);
+      // Two padded slices first; the third only when those two do not agree. Each padded slice
+      // reads 50s of audio, so stopping early keeps the retry short beside the viewer.
       const xs = [];
-      for (let k = 0; k < wins.length; k++) {
-        xs.push(await measurePaddedSyncWindow(dir, `p${k}`, selfUrl, wins[k], audioIndex).catch(() => null));
+      let pick = null;
+      for (let k = 0; k < wins.length && !pick; k++) {
+        xs.push(await measurePaddedSyncWindow(dir, `p${k}`, selfUrl, wins[k], audioIndex).catch(unalignedSlice));
+        if (k >= 1) pick = pickAgreedSyncShift(xs.map((x) => (x == null ? NaN : x)));
       }
-      const pick = pickAgreedSyncShift(xs.map((x) => (x == null ? NaN : x)));
       if (!pick || pick.agreed < 2) throw new Error(why);
       const partner = xs.filter((x) => x != null && x !== pick.shiftMs)
         .sort((x, y) => Math.abs(x - pick.shiftMs) - Math.abs(y - pick.shiftMs))[0];
@@ -578,7 +587,7 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
         // the correction is thrown away, so a real multi-second gap is not replaced by noise.
         const tieAt = tieAtFor(!!before);
         const tie = windowSrt(srt, tieAt, 30000);
-        const third = tie ? await measureSubSyncWindow(dir, 'c', selfUrl, { ...tie, originMs: tieAt }, audioIndex).catch(() => null) : null;
+        const third = tie ? await measureSubSyncWindow(dir, 'c', selfUrl, { ...tie, originMs: tieAt }, audioIndex).catch(unalignedSlice) : null;
         if (third != null && Math.abs(third - shiftMs) <= 1500) { paired = third; pairedOrigin = tieAt; }
         else if (third != null && Math.abs(third - second) <= 600) shiftMs = second;
         else await paddedRetry(`subtitle sync witnesses disagree (${shiftMs}ms vs ${second}ms)`, witness);
