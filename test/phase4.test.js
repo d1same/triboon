@@ -11848,8 +11848,9 @@ test('Sign-in card matches the site: 6px corners, no edge line, straight 6px pos
 
 test('In-player guide: the Back/Close row is readable on focus, 6px corners (3.5.1, owner Shield)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  assert.match(ui, /body\[data-theme="graphite"\] :is\(\.pgBackTop:hover,\.pgBackTop:focus,\.pgBackTop:focus-visible,\.pgBackTop\.focus\)\{\s*background:#EDEFF3;color:#14161A;box-shadow:none\}/,
+  assert.match(ui, /body\[data-theme="graphite"\] :is\(\.pgBackTop:hover,\.pgBackTop:focus,\.pgBackTop:focus-visible,\.pgBackTop\.focus\)\{\s*background:#EDEFF3!important;color:#14161A!important;box-shadow:none!important\}/,
     'white focus fill carries dark text (it was white on white)');
+  assert.match(ui, /\.pgBackTop\.focus\) \.pgBackTitle\{color:#14161A!important\}/, 'the title itself is dark (another focus rule kept it light on the Shield)');
   assert.match(ui, /body\[data-theme="graphite"\] \.pgGuideShell\{border:0;border-radius:6px;overflow:hidden\}/, 'guide panel: crisp corners, no edge line');
   assert.match(ui, /body\[data-theme="graphite"\] \.pgBackTop\{border-radius:6px;/, 'the row itself has the same corners');
 });
