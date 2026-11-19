@@ -2044,9 +2044,9 @@ function closeIptvViewerLingers(slotKey, shareKey, userId = '', sourceId = '') {
 // browser TS pipe, a lingering one included) or a legacy browser remux whose ffmpeg opens the
 // URL itself. Joining a live hub costs nothing and is not counted. HLS playlists are snapshots
 // (their segments are separate short requests) and are not counted either.
-const IPTV_LIMIT_STOP_HOLD_MS = 60000;
+const IPTV_LIMIT_STOP_HOLD_MS = 20000;
 const iptvSourceStreams = new Map(); // sourceId -> Set(entry)
-const iptvLimitStops = new Map();    // `${userId}|${sourceId}` -> { at, max }
+const iptvLimitStops = new Map();    // `${slotKey}|${sourceId}` -> { at, max } (the stopped screen)
 function iptvSourceMaxConnections(sourceId) {
   if (!sourceId) return 0;
   const src = iptvSourcesFromSettings(settings.get()).find((x) => x.id === sourceId);
@@ -2076,31 +2076,32 @@ function iptvHubLimitEntry(hub) {
     isClosed: () => hub.closed,
     // A hub still starting has its opener waiting even before the opener subscribes.
     viewerCount: () => (hub.state === 'starting' ? Math.max(1, hub.subs.size) : hub.subs.size),
-    viewerUsers: () => {
-      const users = new Set([...hub.subs].map((sub) => sub.slot && sub.slot.userId).filter(Boolean));
-      if (hub.state === 'starting' && hub.openerUserId) users.add(hub.openerUserId);
-      return users;
+    viewerSlots: () => {
+      const slots = new Set([...hub.subs].map((sub) => sub.slot && sub.slot.key).filter(Boolean));
+      if (hub.state === 'starting' && hub.openerSlotKey) slots.add(hub.openerSlotKey);
+      return slots;
     },
     close: (reason) => hub.close(reason),
   };
 }
-function trackIptvHub(hub, openerUserId = '') {
-  hub.openerUserId = String(openerUserId || '');
+function trackIptvHub(hub, openerSlotKey = '') {
+  hub.openerSlotKey = String(openerSlotKey || '');
   hub.untrack = trackIptvSourceStream(iptvHubLimitEntry(hub));
 }
 // Right before a NEW provider stream opens on `sourceId`. Under the limit: nothing to do. At the
 // limit: stop lingering (zero-viewer) streams of the source first, then the oldest ones, so the
 // new stream opens at once (with the usual short grace) — never a queue. The viewers whose stream
-// was stopped get the reason when their player asks again; for a minute such a retry does not
-// stop the other stream in turn (no ping-pong between two screens): it gets the reason instead.
-function makeRoomOnIptvSource(sourceId, userId) {
+// was stopped get the reason when their player asks again; for 20 s such a retry from the stopped
+// screen does not stop the other stream in turn (no ping-pong between two screens): it gets the
+// reason instead. Another screen, or the same user's deliberate new pane, is not held back.
+function makeRoomOnIptvSource(sourceId, slotKey) {
   const max = iptvSourceMaxConnections(sourceId);
   if (!max) return { ok: true, closed: 0, ffmpegClosed: false };
   const set = iptvSourceStreams.get(sourceId);
   const live = set ? [...set].filter((e) => !e.isClosed()) : [];
   if (live.length < max) return { ok: true, closed: 0, ffmpegClosed: false };
   const now = Date.now();
-  const stop = iptvLimitStops.get(`${userId}|${sourceId}`);
+  const stop = iptvLimitStops.get(`${slotKey}|${sourceId}`);
   if (stop && now - stop.at < IPTV_LIMIT_STOP_HOLD_MS) {
     return { ok: false, status: 429, reason: iptvLimitMessage(max) };
   }
@@ -2113,7 +2114,7 @@ function makeRoomOnIptvSource(sourceId, userId) {
   for (const e of [...idle, ...busy]) {
     if (count < max) break;
     if (e.viewerCount() > 0) {
-      for (const uid of e.viewerUsers()) iptvLimitStops.set(`${uid}|${sourceId}`, { at: now, max });
+      for (const key of e.viewerSlots()) iptvLimitStops.set(`${key}|${sourceId}`, { at: now, max });
     }
     if (e.kind === 'ffmpeg-url') ffmpegClosed = true;
     console.log(`[iptv limit] ${e.label} stopped: the source allows ${max} connection(s)`);
@@ -2138,7 +2139,7 @@ function createIptvLiveHub(shareKey, label, opts = {}) {
     shareKey, label,
     sourceId: String(opts.sourceId || ''),
     lingerUserId: '',
-    openerUserId: '',
+    openerSlotKey: '',
     untrack: null,     // removes this hub from the per-source limit count
     _untrack() { if (this.untrack) { const u = this.untrack; this.untrack = null; u(); } },
     state: 'starting', // starting -> live -> closed
@@ -2391,7 +2392,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     return;
   }
   // A new provider stream: make room under the source's "Max connections" first (brief 113).
-  const room = makeRoomOnIptvSource(meta.sourceId, slot.userId);
+  const room = makeRoomOnIptvSource(meta.sourceId, slot.key);
   if (!room.ok) {
     slot.done('provider limit');
     return sendIptvNativeError(ctx.res, room.status, room.reason);
@@ -2400,7 +2401,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   // HLS playlists are snapshots, not a TS pipe. Mark finite before the first byte so a remux
   // opener cannot join this hub and treat the playlist as a media stream.
   if (iptvNativeMime(target) === 'application/x-mpegURL') hub.finite = true;
-  else trackIptvHub(hub, slot.userId);
+  else trackIptvHub(hub, slot.key);
   iptvSharedHubs.set(shareKey, hub);
   let handedOff = false; // once the hub owns the upstream, the solo teardown below must not touch it
   let up = null;
@@ -8080,7 +8081,7 @@ const H = {
       // that window, don't spawn ffmpeg + hold an upstream provider connection for nothing.
       if (liveSlot.closed || ctx.res.destroyed) { liveSlot.done('client closed'); return; }
       // ffmpeg opens its own provider connection here: make room under "Max connections" first.
-      const room = makeRoomOnIptvSource(ch.sourceId, liveSlot.userId);
+      const room = makeRoomOnIptvSource(ch.sourceId, liveSlot.key);
       if (!room.ok) {
         liveSlot.done('provider limit');
         if (!ctx.res.headersSent && !ctx.res.destroyed) sendIptvNativeError(ctx.res, room.status, room.reason);
@@ -8116,7 +8117,7 @@ const H = {
         label: iptvNativeLogLabel({ idx: ch.idx, name: ch.name }),
         isClosed: () => liveSlot.closed,
         viewerCount: () => 1,
-        viewerUsers: () => new Set([liveSlot.userId].filter(Boolean)),
+        viewerSlots: () => new Set([liveSlot.key].filter(Boolean)),
         close: (reason) => liveSlot.close(reason),
       });
       ff.once('close', untrackFfmpeg);
@@ -8393,7 +8394,7 @@ const H = {
         return;
       }
       // A new provider stream: make room under the source's "Max connections" first (brief 113).
-      const room = makeRoomOnIptvSource(ch.sourceId, liveSlot.userId);
+      const room = makeRoomOnIptvSource(ch.sourceId, liveSlot.key);
       if (!room.ok) {
         settled = true;
         liveSlot.done('provider limit');
@@ -8401,7 +8402,7 @@ const H = {
         return;
       }
       hub = createIptvLiveHub(shareKey, `${label} remux`, { sourceId: ch.sourceId });
-      trackIptvHub(hub, liveSlot.userId);
+      trackIptvHub(hub, liveSlot.key);
       iptvSharedHubs.set(shareKey, hub);
       openedHub = true;
       bindHub(hub);
