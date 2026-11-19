@@ -20551,6 +20551,9 @@ async function runPendingWebSync() {
   if ((p._webSyncTries = (p._webSyncTries || 0) + 1) > 8) { p._pendingWebSync = null; return; }
   const audio = Math.max(0, parseInt(p.audioTrack, 10) || 0);
   p._webSyncRunning = true;
+  // A newer pick may replace the job while this one waits on the server. Only the current job
+  // may clear the queue or set its retry wait (result 126: a pick made meanwhile never synced).
+  const mine = () => p._pendingWebSync === job;
   try {
     // Strip any manual &shift before asking for the alass-corrected sub: alass aligns the RAW sub
     // to the audio, so re-applying the user's hand-offset on top would double-shift it. Mirrors
@@ -20562,6 +20565,7 @@ async function runPendingWebSync() {
     u.searchParams.set('audio', String(audio));
     if (p._webSyncTries === 1) notePlaybackIssue('subs', `subtitle sync asked at ${at}s on audio ${audio}`, 0);
     const r = await fetch(u.href);
+    if (!mine()) return;
     if (!S.playing || S.playing !== p || p.subTrack !== rel) { p._pendingWebSync = null; return; }
     if ((parseInt(p.audioTrack, 10) || 0) !== audio) return;
     if (!r.ok) return;
@@ -20576,7 +20580,7 @@ async function runPendingWebSync() {
     }
     if (verdict !== 'corrected') { p._webSyncNextAt = Date.now() + 60000; return; }
     const synced = await r.text();
-    if (!S.playing || S.playing !== p || p.subTrack !== rel || !synced) return;
+    if (!mine() || !S.playing || S.playing !== p || p.subTrack !== rel || !synced) return;
     if (synced === p._subVttText) { p._pendingWebSync = null; return; }
     if ((parseInt(p.audioTrack, 10) || 0) !== audio) return;
     p._pendingWebSync = null;
@@ -20588,6 +20592,7 @@ async function runPendingWebSync() {
   } catch {
   } finally {
     p._webSyncRunning = false;
+    if (!mine() && p._pendingWebSync && S.playing === p) runPendingWebSync();
   }
 }
 // Native (ExoPlayer) equivalent of autoSyncSubtitle: the native side loaded the subtitle URL we
@@ -20604,6 +20609,7 @@ function autoSyncNative(p, rel) {
   // progress/stats ticks drive it: those are pushed FROM native ~1-2s regardless of timer
   // throttling — the same mechanism the presence heartbeat rides on. See runPendingNativeSync.
   p._pendingNativeSyncRel = rel;
+  p._nativeSyncJob = (p._nativeSyncJob || 0) + 1;
   p._nativeSyncTries = 0;
   p._nativeSyncNextAt = 0;
   runPendingNativeSync();
@@ -20629,6 +20635,10 @@ async function runPendingNativeSync() {
   // later attempt on warm audio succeeds, instead of giving up after a few and leaving the raw sub.
   if ((p._nativeSyncTries = (p._nativeSyncTries || 0) + 1) > 12) { p._pendingNativeSyncRel = null; return; }
   p._nativeSyncRunning = true;
+  // A newer pick may queue while this run waits on the server. Only the current job may clear the
+  // queue or set its retry wait (result 126, House S05E10: the third pick never synced).
+  const job = p._nativeSyncJob;
+  const mine = () => p._nativeSyncJob === job;
   try {
     const payload = nativeSubtitlePayload(p, rel, 'manual');
     if (!payload.url) { p._pendingNativeSyncRel = null; return; }
@@ -20639,6 +20649,7 @@ async function runPendingNativeSync() {
     baseUrl.searchParams.delete('shift');
     const base = baseUrl.href;
     const head = await fetch(base); // cached from the native load; just read the sync verdict
+    if (!mine()) return;
     if (!S.playing || S.playing !== p || p.subTrack !== rel) { p._pendingNativeSyncRel = null; return; }
     if (!head.ok) return; // transient — leave queued for the next native tick
     if (head.headers.get('x-triboon-subsync') !== 'pending') { p._pendingNativeSyncRel = null; return; }
@@ -20647,6 +20658,7 @@ async function runPendingNativeSync() {
     const syncUrl = base + (base.includes('?') ? '&' : '?') + 'sync=1&at=' + at + '&audio=' + audio;
     if (p._nativeSyncTries === 1) notePlaybackIssue('subs', `subtitle sync asked at ${at}s on audio ${audio}`, 0);
     const r = await fetch(syncUrl); // triggers/awaits the alass correction, then caches it
+    if (!mine()) return;
     if (!r.ok) return; // transient — leave queued
     const syncVerdict = r.headers.get('x-triboon-subsync');
     // 'failed' = the server declared the sync terminally dead (300s timeout / repeated alass
@@ -20671,6 +20683,7 @@ async function runPendingNativeSync() {
     // transient — leave queued so the next native tick retries (capped above)
   } finally {
     p._nativeSyncRunning = false;
+    if (!mine() && p._pendingNativeSyncRel && S.playing === p) runPendingNativeSync();
   }
 }
 async function setSubtitle(rel, opts = {}) {
