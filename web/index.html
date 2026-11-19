@@ -4254,6 +4254,8 @@ body[data-theme="graphite"] .guideTimeline .gProg.empty .gpT{font:500 14px "Albe
 body[data-theme="graphite"] .guideTimeline .gProg .gpS{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
 body[data-theme="graphite"] .guideTimeline .gNow{width:2px;background:#C13BD6;box-shadow:none}
 body[data-theme="graphite"] .guideTimeline .gTick{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
+/* 3.5.1 (owner): no half-hour lines running down through the channel rows; a short mark in the time bar only */
+body[data-theme="graphite"] .gTick::before{bottom:auto;height:6px;background:rgba(237,239,243,.18)}
 /* 3.5.1 (owner, Shield): logos sit on a dark 6px tile that stays dark on focus (white logos stay visible on the
    white focus), no outline (owner: plain tile). */
 body[data-theme="graphite"] .gCh img{width:44px;height:44px;flex:none;object-fit:contain;padding:4px;border-radius:6px;background:#26272D;box-sizing:border-box}
@@ -4267,7 +4269,7 @@ body[data-theme="graphite"] .guideTimeline .gProg{background-color:#1C1C22}
 body[data-theme="graphite"] .guideTimeline .gProg.live{background-color:#2C2D33}
 body[data-theme="graphite"] .guideTimeline .gProg.past{opacity:1;background-color:#16161B}
 body[data-theme="graphite"] .guideTimeline .gProg.past :is(.gpT,.gpS){color:rgba(237,239,243,.4)}
-body[data-theme="graphite"] .guideTimeline .gProg.empty{background-color:transparent}
+body[data-theme="graphite"] .guideTimeline .gProg.empty{background-color:#141419} /* 3.5.1: a quiet solid tile, so the now-line runs behind "No guide info", not through it */
 /* the Live TV top bar stops before the clock (TV) */
 body[data-theme="graphite"].tv #chBar{padding-right:150px;flex-wrap:nowrap}
 body[data-theme="graphite"].tv #chBar #chSearch{width:auto;max-width:none;flex:1 1 380px;min-width:240px}
@@ -24508,7 +24510,7 @@ async function renderGuideProgressive(body, pool) {
     const d = new Date(t);
     const h = d.getHours() % 12 || 12;
     const m = d.getMinutes();
-    return m ? `${h}:${String(m).padStart(2, '0')}` : String(h);
+    return `${h}:${String(m).padStart(2, '0')}`; // 3.5.1 (owner): 9:00, not 9
   };
   const progFitClass = (w) => w < 3 ? ' micro' : (w < 10 ? ' tiny' : (w < 16 ? ' short' : ''));
   const blocksFor = (progs, loading) => {
@@ -25377,7 +25379,7 @@ async function renderPlayerGuideTimeline(pg, list) {
     const d = new Date(t);
     const h = d.getHours() % 12 || 12;
     const m = d.getMinutes();
-    return m ? `${h}:${String(m).padStart(2, '0')}` : String(h);
+    return `${h}:${String(m).padStart(2, '0')}`; // 3.5.1 (owner): 9:00, not 9
   };
   const progFitClass = (w) => w < 3 ? ' micro' : (w < 10 ? ' tiny' : (w < 16 ? ' short' : ''));
   const isLive = $('player').classList.contains('live');
