@@ -1933,6 +1933,10 @@ struct NativeSession {
     buffering_since: Option<Instant>,
     last_progress: Instant,
     last_stats: Instant,
+    // Audio Description is never the start track (brief 121): checked once per loaded file; a
+    // viewer's own audio pick is never moved.
+    audio_description_checked: bool,
+    user_picked_audio: bool,
     ui: PlayerUiState,
 }
 
@@ -2007,6 +2011,8 @@ impl NativeSession {
             buffering_since: None,
             last_progress: Instant::now(),
             last_stats: Instant::now(),
+            audio_description_checked: false,
+            user_picked_audio: false,
             ui,
         }
     }
@@ -2052,6 +2058,8 @@ impl NativeSession {
             buffering_since: None,
             last_progress: Instant::now(),
             last_stats: Instant::now(),
+            audio_description_checked: false,
+            user_picked_audio: false,
             ui: PlayerUiState {
                 event_type: "session".into(),
                 title: request.title,
@@ -2396,6 +2404,7 @@ fn load_session(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> Result<(), S
     session.playback_restarted = false;
     session.video_reconfigured = false;
     session.subtitle_attached = session.subtitle.url.is_empty();
+    session.audio_description_checked = false;
     apply_session_buffer(mpv, session)?;
     mpv.set_property("force-media-title", session.ui.title.as_str())
         .map_err(|e| e.to_string())?;
@@ -2547,6 +2556,7 @@ fn drain_session_events(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> (boo
                 session.playback_restarted = false;
                 session.video_reconfigured = false;
                 session.subtitle_attached = session.subtitle.url.is_empty();
+                session.audio_description_checked = false;
             }
             Ok(libmpv2::events::Event::FileLoaded) if session.start_seen => {
                 session.file_loaded = true;
@@ -2824,6 +2834,7 @@ fn update_stats(mpv: &libmpv2::Mpv, session: &mut NativeSession) {
     session.ui.audio_codec = property::<String>(mpv, "audio-codec-name").unwrap_or_default();
     session.ui.audio_label = property::<String>(mpv, "audio-codec-name").unwrap_or_default();
     update_audio_tracks(mpv, &mut session.ui);
+    maybe_leave_audio_description(mpv, session);
     session.ui.width = property::<i64>(mpv, "video-out-params/w").unwrap_or(0);
     session.ui.height = property::<i64>(mpv, "video-out-params/h").unwrap_or(0);
     session.ui.fps = property::<f64>(mpv, "estimated-vf-fps").unwrap_or(0.0);
@@ -2831,6 +2842,123 @@ fn update_stats(mpv: &libmpv2::Mpv, session: &mut NativeSession) {
     session.ui.bitrate = property::<i64>(mpv, "cache-speed")
         .unwrap_or(0)
         .saturating_mul(8);
+}
+
+// Audio Description (a narrator describing the picture) is never the start track (brief 121). Same
+// words as isAudioDescriptionTrack in server/transcode.js: "English - Audio Description",
+// "Descriptive", "Described Video", "Visually Impaired", "DVS", or "AD" as its own word (not "Ad-free").
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn audio_description_title(title: &str) -> bool {
+    let lower = title.to_ascii_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    for (i, word) in words.iter().enumerate() {
+        let next = words.get(i + 1).copied().unwrap_or("");
+        let hit = match *word {
+            "audio" => matches!(next, "description" | "described" | "descriptive"),
+            "audiodescription" | "audiodescribed" | "audiodescriptive" | "descriptive" | "dvs" => true,
+            "described" => next == "video",
+            "visual" | "visually" => next == "impaired",
+            _ => false,
+        };
+        if hit {
+            return true;
+        }
+    }
+    lower
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .any(|w| w == "ad")
+}
+
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+#[derive(Clone, Debug)]
+struct AudioTrackPick {
+    id: String,
+    lang: String,
+    title: String,
+    visual_impaired: bool,
+    selected: bool,
+    channels: i64,
+}
+
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn audio_track_is_description(track: &AudioTrackPick) -> bool {
+    track.visual_impaired || audio_description_title(&track.title)
+}
+
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn audio_lang_key(raw: &str) -> String {
+    let lang = raw.trim().to_ascii_lowercase();
+    if lang == "und" {
+        String::new()
+    } else {
+        lang
+    }
+}
+
+// When mpv started on an Audio Description track: the id of the normal track in the same language to
+// play instead (the most channels; the first on a tie). None when the start track is normal, nothing
+// is selected, or Audio Description is the only track in that language.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn normal_audio_instead(tracks: &[AudioTrackPick]) -> Option<String> {
+    let current = tracks.iter().find(|t| t.selected)?;
+    if !audio_track_is_description(current) {
+        return None;
+    }
+    let want = audio_lang_key(&current.lang);
+    let mut best: Option<&AudioTrackPick> = None;
+    for track in tracks {
+        if track.selected || audio_track_is_description(track) || audio_lang_key(&track.lang) != want {
+            continue;
+        }
+        if best.map_or(true, |b| track.channels > b.channels) {
+            best = Some(track);
+        }
+    }
+    best.map(|t| t.id.clone())
+}
+
+#[cfg(all(feature = "player", target_os = "windows"))]
+fn maybe_leave_audio_description(mpv: &libmpv2::Mpv, session: &mut NativeSession) {
+    if session.audio_description_checked || session.user_picked_audio || !session.file_loaded {
+        return;
+    }
+    let count = property::<i64>(mpv, "track-list/count")
+        .unwrap_or(0)
+        .clamp(0, 64);
+    let mut tracks = Vec::new();
+    for index in 0..count {
+        let prefix = format!("track-list/{index}");
+        if property::<String>(mpv, &format!("{prefix}/type")).as_deref() != Some("audio") {
+            continue;
+        }
+        tracks.push(AudioTrackPick {
+            id: property::<i64>(mpv, &format!("{prefix}/id"))
+                .unwrap_or(index)
+                .to_string(),
+            lang: property::<String>(mpv, &format!("{prefix}/lang")).unwrap_or_default(),
+            title: property::<String>(mpv, &format!("{prefix}/title")).unwrap_or_default(),
+            // mpv reads the Matroska FlagVisualImpaired into this field.
+            visual_impaired: property::<bool>(mpv, &format!("{prefix}/visual-impaired"))
+                .unwrap_or(false),
+            selected: property::<bool>(mpv, &format!("{prefix}/selected")).unwrap_or(false),
+            channels: property::<i64>(mpv, &format!("{prefix}/demux-channel-count")).unwrap_or(0),
+        });
+    }
+    if !tracks.iter().any(|t| t.selected) {
+        return; // mpv has not chosen yet; look again on the next tick
+    }
+    session.audio_description_checked = true;
+    if let Some(id) = normal_audio_instead(&tracks) {
+        if let Ok(track_id) = id.parse::<i64>() {
+            if mpv.set_property("aid", track_id).is_ok() {
+                session.ui.audio_id = id;
+                update_audio_tracks(mpv, &mut session.ui);
+            }
+        }
+    }
 }
 
 #[cfg(all(feature = "player", target_os = "windows"))]
@@ -3236,6 +3364,7 @@ fn handle_control(
             );
         }
         ControlAction::Audio(id) => {
+            active.user_picked_audio = true;
             if let Ok(track_id) = id.parse::<i64>() {
                 match mpv.set_property("aid", track_id) {
                     Ok(()) => {
@@ -3449,6 +3578,63 @@ fn close_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn track(id: &str, lang: &str, title: &str, visual_impaired: bool, selected: bool, channels: i64) -> AudioTrackPick {
+        AudioTrackPick {
+            id: id.into(),
+            lang: lang.into(),
+            title: title.into(),
+            visual_impaired,
+            selected,
+            channels,
+        }
+    }
+
+    #[test]
+    fn audio_description_titles_are_told_apart() {
+        for t in [
+            "English - Audio Description",
+            "English (AD)",
+            "English AD",
+            "Descriptive Audio",
+            "Described Video",
+            "Visually Impaired",
+            "DVS",
+            "AudioDescription",
+        ] {
+            assert!(audio_description_title(t), "{t}");
+        }
+        for t in ["English", "", "Director Commentary", "Headphone Mix", "Ad-free mix", "Stereo"] {
+            assert!(!audio_description_title(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn audio_description_start_moves_to_the_normal_track() {
+        // The test MKV: mpv starts on track 1 (default + visual-impaired, "English - Audio Description").
+        let tracks = vec![
+            track("1", "eng", "English - Audio Description", true, true, 2),
+            track("2", "eng", "English", false, false, 2),
+        ];
+        assert_eq!(normal_audio_instead(&tracks).as_deref(), Some("2"));
+        let flag_only = vec![track("1", "eng", "", true, true, 2), track("2", "eng", "", false, false, 6)];
+        assert_eq!(normal_audio_instead(&flag_only).as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn a_normal_start_or_the_only_track_in_the_language_stays() {
+        let normal = vec![
+            track("1", "eng", "English", false, true, 2),
+            track("2", "eng", "English - Audio Description", true, false, 2),
+        ];
+        assert_eq!(normal_audio_instead(&normal), None);
+        let only_english_is_ad = vec![
+            track("1", "fre", "Francais", false, false, 2),
+            track("2", "eng", "English - Audio Description", true, true, 2),
+        ];
+        assert_eq!(normal_audio_instead(&only_english_is_ad), None);
+        assert_eq!(normal_audio_instead(&[track("1", "eng", "English", false, false, 2)]), None);
+    }
 
     fn server() -> &'static str {
         "https://media.example:8443"

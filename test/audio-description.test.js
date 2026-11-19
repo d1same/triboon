@@ -63,12 +63,13 @@ test('scoring: no false positives on titles, groups or words that only contain A
 });
 
 // Part 2: the default audio track. A test MKV (made here with ffmpeg) has two English tracks: the
-// first titled "English - Audio Description" with the visual-impaired flag, the second plain.
+// first titled "English - Audio Description" with the visual-impaired flag (mono), the second plain
+// (stereo), so the channel count of a remux shows which track it carries.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { probeTracks, isAudioDescriptionTrack, defaultAudioTrack, detectFfmpeg, detectFfprobe } = require('../server/transcode');
+const { probeTracks, isAudioDescriptionTrack, defaultAudioTrack, detectFfmpeg, detectFfprobe, spawnRemux } = require('../server/transcode');
 const { mediaStreamsFromProbe } = require('../server/jellyfin-api');
 
 const tracks = (...rows) => rows.map((r, rel) => ({ rel, codec: 'aac', channels: 2, ...r }));
@@ -112,7 +113,7 @@ function makeAdMkv() {
   const file = path.join(dir, 'ad.mkv');
   const r = spawnSync(detectFfmpeg().path, ['-v', 'error', '-y',
     '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-f', 'lavfi', '-i', 'sine=frequency=440', '-f', 'lavfi', '-i', 'sine=frequency=660',
-    '-t', '2', '-map', '0:v', '-map', '1:a', '-map', '2:a', '-c:v', 'mpeg4', '-c:a', 'aac',
+    '-t', '2', '-map', '0:v', '-map', '1:a', '-map', '2:a', '-c:v', 'mpeg4', '-c:a', 'aac', '-ac:a:0', '1', '-ac:a:1', '2',
     '-metadata:s:a:0', 'language=eng', '-metadata:s:a:0', 'title=English - Audio Description', '-disposition:a:0', 'default+visual_impaired',
     '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=English', '-disposition:a:1', '0', file], { windowsHide: true });
   if (r.status !== 0) throw new Error('ffmpeg could not build the test MKV: ' + String(r.stderr || '').slice(0, 300));
@@ -133,6 +134,17 @@ test('tracks: the probe of a real MKV flags the Audio Description track and the 
     // Jellyfin clients take IsDefault as the playing audio.
     const audioRows = mediaStreamsFromProbe(probe).filter((s) => s.Type === 'Audio');
     assert.deepStrictEqual(audioRows.map((s) => s.IsDefault), [false, true]);
+    // The real remux of the default track carries the normal (stereo) track.
+    const out = path.join(mkv.dir, 'remux.mp4');
+    await new Promise((resolve, reject) => {
+      const ff = spawnRemux(mkv.file, { audioTrack: defaultAudioTrack(probe.audio) });
+      ff.stdout.pipe(fs.createWriteStream(out));
+      ff.on('error', reject);
+      ff.on('close', (code) => (code === 0 ? resolve() : reject(new Error('remux exit ' + code))));
+    });
+    const remuxed = await probeTracks(out);
+    assert.strictEqual(remuxed.audio.length, 1);
+    assert.strictEqual(remuxed.audio[0].channels, 2, 'the remux carries the normal track, not the AD one');
   } finally { fs.rmSync(mkv.dir, { recursive: true, force: true }); }
 });
 
@@ -227,4 +239,14 @@ test('android: the native player leaves an Audio Description start once, and a v
   for (const title of ['English - Audio Description', 'English (AD)', 'Descriptive', 'English', 'Ad-free mix', 'Headphone Mix']) {
     assert.strictEqual(re.test(title), isAudioDescriptionTrack({ title }), title);
   }
+});
+
+test('windows: the libmpv player leaves an Audio Description start once per file, and a viewer pick wins', () => {
+  const rs = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'src-tauri', 'src', 'player.rs'), 'utf8');
+  assert.match(rs, /update_audio_tracks\(mpv, &mut session\.ui\);\s+maybe_leave_audio_description\(mpv, session\);/, 'checked on the stats tick until it ran');
+  assert.match(rs, /if session\.audio_description_checked \|\| session\.user_picked_audio \|\| !session\.file_loaded \{/);
+  assert.match(rs, /ControlAction::Audio\(id\) => \{\s+active\.user_picked_audio = true;/, 'a manual aid pick is never moved');
+  assert.match(rs, /\{prefix\}\/visual-impaired/, 'reads the Matroska visual-impaired flag from mpv');
+  assert.match(rs, /mpv\.set_property\("aid", track_id\)\.is_ok\(\)/);
+  assert.strictEqual((rs.match(/session\.audio_description_checked = false;/g) || []).length, 2, 'reset on load and on StartFile');
 });
