@@ -2071,7 +2071,7 @@ function createIptvLiveHub(shareKey, label) {
       }
       return sub;
     },
-    unsubscribe(sub, reason = 'closed') {
+    unsubscribe(sub, reason = 'closed', opts = {}) {
       if (!this.subs.has(sub)) return;
       this.subs.delete(sub);
       if (sub.stallTimer) { clearTimeout(sub.stallTimer); sub.stallTimer = null; }
@@ -2080,7 +2080,9 @@ function createIptvLiveHub(shareKey, label) {
       } else {
         try { if (!sub.res.destroyed && !sub.res.writableEnded) sub.res.destroy(); } catch {}
       }
-      sub.slot.done(reason);
+      // A browser TS pipe that gives up keeps its live slot: the same request goes on to the URL
+      // remux fallback, and a done slot would stop it (brief 113, P2-1).
+      if (!opts.keepSlot) sub.slot.done(reason);
       // Only a LIVE hub self-manages its lifecycle here — while 'starting', the opener request
       // owns cleanup (a queued joiner bailing must not close the hub under the opener's feet).
       if (this.subs.size === 0 && !this.closed && this.state === 'live') {
@@ -2089,7 +2091,8 @@ function createIptvLiveHub(shareKey, label) {
         // gone before the new one opens. A drop-then-open zap (ExoPlayer) is "client closed" and
         // would linger; beginIptvLiveSlot then kills that linger if the next channel is different.
         // Same-channel reconnects still reuse this hub off the ring buffer.
-        if (/retuned|shutdown/i.test(String(reason || ''))) return this.close(reason);
+        // A pipe that falls back to the URL remux is not coming back to this hub either.
+        if (/retuned|shutdown|remux fallback/i.test(String(reason || ''))) return this.close(reason);
         rememberIptvViewerLinger(sub.slot && sub.slot.key, this);
         this.lingerTimer = setTimeout(() => this.close('idle (no viewers)'), IPTV_SHARE_LINGER_MS);
         if (this.lingerTimer.unref) this.lingerTimer.unref();
@@ -2228,10 +2231,12 @@ function createIptvLiveHub(shareKey, label) {
         this.subs.delete(sub);
         if (sub.stallTimer) clearTimeout(sub.stallTimer);
         if (sub.mode === 'pipe') {
+          // The pipe's owner decides: its onFail runs the URL remux fallback on the same slot,
+          // or ends the request and the slot itself when no fallback can run.
           try { if (sub.onFail) sub.onFail(); } catch {}
-        } else {
-          try { respond(sub.res); } catch {}
+          continue;
         }
+        try { respond(sub.res); } catch {}
         sub.slot.done('startup failed');
       }
     },
@@ -8126,7 +8131,7 @@ const H = {
       const leaveHub = (reason) => {
         if (!pipeSub || !hub || !hub.subs.has(pipeSub)) return;
         pipeSub.onClose = null;
-        hub.unsubscribe(pipeSub, reason);
+        hub.unsubscribe(pipeSub, reason, { keepSlot: reason === 'remux fallback' });
       };
       const giveUp = (reason) => {
         if (settled) return; settled = true;
@@ -8285,7 +8290,18 @@ const H = {
       // Kill-switch: ?nopipe=1 (per request) or TRIBOON_IPTV_NOPIPE=1 (whole box) reverts to the
       // legacy ffmpeg-opens-the-URL remux without a redeploy, in case a provider misbehaves.
       if (tsPipeTarget && ctx.url.searchParams.get('nopipe') !== '1' && process.env.TRIBOON_IPTV_NOPIPE !== '1') {
-        return tsPipeRemux(tsPipeTarget, () => { if (!liveSlot.closed && !ctx.res.destroyed && !ctx.res.headersSent) startAttempt(); });
+        return tsPipeRemux(tsPipeTarget, () => {
+          if (!liveSlot.closed && !ctx.res.destroyed && !ctx.res.headersSent) return startAttempt();
+          // No fallback can run (the viewer left, or bytes were already sent): end the request
+          // instead of leaving it open with nothing behind it.
+          liveSlot.done('failed');
+          try {
+            if (ctx.res.destroyed || ctx.res.writableEnded) return undefined;
+            if (!ctx.res.headersSent) sendIptvNativeError(ctx.res, 502, 'live stream unavailable');
+            else ctx.res.end();
+          } catch {}
+          return undefined;
+        });
       }
       startAttempt();
     };
