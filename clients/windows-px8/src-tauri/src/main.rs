@@ -439,6 +439,40 @@ fn bridge_script() -> String {
     )
 }
 
+/// The bridge as a document-created script (WebView2 AddScriptToExecuteOnDocumentCreated), so
+/// `window.TriboonTV` exists before Triboon's boot code reads the client kind and caps. An eval at
+/// ContentLoading can be lost and an eval at NavigationCompleted lands after boot, which left the
+/// page on the WebView2 `<video>` player (no AC3/E-AC3 sound). The script installs only when the
+/// page origin is the server saved at window creation; Rust still re-checks every command's caller.
+fn bridge_init_script(saved_origin: Option<&str>) -> Option<String> {
+    let origin = saved_origin?.trim();
+    if origin.is_empty() {
+        return None;
+    }
+    let origin_json = serde_json::to_string(origin).ok()?;
+    Some(format!(
+        "(function(){{if(location.origin!=={origin_json})return;\n{}\n}})();",
+        bridge_script()
+    ))
+}
+
+fn create_catalog_window(app: &tauri::App) -> Result<(), String> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == CONNECT_WINDOW_LABEL)
+        .cloned()
+        .ok_or_else(|| "main window config is missing".to_string())?;
+    let mut builder =
+        tauri::WebviewWindowBuilder::from_config(app.handle(), &config).map_err(|e| e.to_string())?;
+    if let Some(script) = bridge_init_script(read_saved_server(app.handle()).as_deref()) {
+        builder = builder.initialization_script(&script);
+    }
+    builder.build().map(|_| ()).map_err(|e| e.to_string())
+}
+
 fn navigation_allowed(webview: &tauri::Webview, raw: &str) -> bool {
     if webview.label() == PLAYER_WINDOW_LABEL {
         return is_internal_app_url(raw);
@@ -463,6 +497,7 @@ fn main() {
         .manage(AppState::default())
         .manage(player::PlayerController::default())
         .setup(|app| {
+            create_catalog_window(app).map_err(std::io::Error::other)?;
             player::initialize_player_window(app.handle()).map_err(std::io::Error::other)?;
             #[cfg(debug_assertions)]
             if let Some(server) = debug_smoke_server().map_err(std::io::Error::other)? {
@@ -523,8 +558,10 @@ fn main() {
                 })
                 .unwrap_or(false);
             if trusted {
-                // Started makes the synchronous bridge visible to Triboon's boot code.  Finished is
-                // an idempotent retry for WebView2 versions that reject eval before document start.
+                // The document-created script (create_catalog_window) normally installed the bridge
+                // already. This guarded eval is the fallback for a server connected or changed after
+                // the window was made (its init script holds the origin saved at launch). The bridge
+                // is idempotent, so a repeat is a no-op.
                 let _ = webview.eval(bridge_script());
             }
         })
@@ -566,6 +603,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_init_script_is_guarded_by_the_saved_origin() {
+        assert!(bridge_init_script(None).is_none(), "no saved server, no document script");
+        assert!(bridge_init_script(Some("  ")).is_none());
+        let script = bridge_init_script(Some("http://127.0.0.1:7777")).unwrap();
+        assert!(
+            script.starts_with("(function(){if(location.origin!==\"http://127.0.0.1:7777\")return;"),
+            "the script returns early on any other origin"
+        );
+        assert!(script.contains("__TRIBOON_WINDOWS_BOOTSTRAP__"));
+        assert!(script.contains("installTriboonWindowsBridge"));
+        let quoted = bridge_init_script(Some("https://a\"b.example")).unwrap();
+        assert!(quoted.contains("\"https://a\\\"b.example\""), "the origin is JSON-quoted");
+    }
 
     #[test]
     fn normalizes_server_origins_without_paths() {

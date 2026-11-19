@@ -10,6 +10,8 @@
     "withGlobalTauri": false,
     "windows": [
       {
+        "label": "main",
+        "create": false,
         "title": "Triboon",
         "width": 1280,
         "height": 800,

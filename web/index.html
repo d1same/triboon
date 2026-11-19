@@ -10237,11 +10237,15 @@ function sourceIdentityFor(it) {
 // decodes the source (e.g. a Shield with native HEVC, a TV with DDP) gets TRUE direct play —
 // the server copies bits instead of spending CPU. WebView/Chromium honestly answer "" for
 // AC3/EAC3, which is exactly why those still get the audio-only AAC pass.
+// The Windows app's bridge can arrive AFTER the first read (an eval after the page's own scripts).
+// A "no bridge" answer is therefore never cached: once TriboonTV appears, the next read sees it
+// and Play hands off to libmpv instead of staying on the WebView2 <video> player (no Dolby sound).
 function nativePlaybackCaps() {
-  if (S._nativeCaps !== undefined) return S._nativeCaps;
+  if (S._nativeCaps !== undefined && S._nativeCaps !== null) return S._nativeCaps;
+  if (!window.TriboonTV) return null;
   S._nativeCaps = null;
   try {
-    if (window.TriboonTV && TriboonTV.nativePlaybackCaps) {
+    if (TriboonTV.nativePlaybackCaps) {
       const caps = JSON.parse(TriboonTV.nativePlaybackCaps() || '{}');
       if (caps && caps.native) S._nativeCaps = caps;
     }
@@ -10249,7 +10253,9 @@ function nativePlaybackCaps() {
   return S._nativeCaps;
 }
 function clientCaps() {
-  if (S._caps) return S._caps;
+  // Cached per bridge state: caps read before a late bridge are recomputed once it appears.
+  if (S._caps && S._capsBridge === !!window.TriboonTV) return S._caps;
+  S._capsBridge = !!window.TriboonTV;
   const v = document.createElement('video');
   const ok = (t) => !!v.canPlayType(t);
   const webCaps = {
@@ -14677,13 +14683,14 @@ function postPlayNote(kind, detail, item) {
 // log cannot tell their sessions apart without it.
 function playbackClientKind() {
   if (S._clientKind) return S._clientKind;
-  let kind = 'web';
+  // No bridge YET is not "web" for good: the Windows app's bridge may land after this first read.
+  // Only a bridge answer is cached; without one, report "web" now and look again next time.
+  if (!window.TriboonTV) return 'web';
+  let kind;
   try {
-    if (window.TriboonTV) {
-      const app = TriboonTV.appVersion ? JSON.parse(TriboonTV.appVersion() || '{}') : {};
-      kind = app && app.platform === 'windows' ? 'windows' : 'android';
-    }
-  } catch { kind = window.TriboonTV ? 'android' : 'web'; }
+    const app = TriboonTV.appVersion ? JSON.parse(TriboonTV.appVersion() || '{}') : {};
+    kind = app && app.platform === 'windows' ? 'windows' : 'android';
+  } catch { kind = 'android'; }
   S._clientKind = kind;
   return kind;
 }

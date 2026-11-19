@@ -112,3 +112,24 @@ test('F2: already on the AAC remux and still silent → logs once, does not swit
   assert.match(html, /if \(!\(playingRef\.item && playingRef\.item\.type === 'live'\)\) checkWebSilentAudio\(playingRef, v\);/,
     'the web player runs the check from its timeupdate handler');
 });
+
+test('F3: a late Windows bridge still gets client=windows and native caps (no cached "no bridge")', () => {
+  const win = {};
+  const S = {};
+  const doc = { createElement: () => ({ canPlayType: () => '' }) };
+  const src = `${extractFunction('playbackClientKind')}\n${extractFunction('nativePlaybackCaps')}\n${extractFunction('clientCaps')}\nreturn { playbackClientKind, nativePlaybackCaps, clientCaps };`;
+  const fns = new Function('S', 'window', 'document', 'TriboonTV', src.replace(/\bTriboonTV\./g, 'window.TriboonTV.'))(S, win, doc, undefined);
+  assert.equal(fns.playbackClientKind(), 'web', 'before the bridge: web');
+  assert.equal(fns.nativePlaybackCaps(), null);
+  assert.equal(fns.clientCaps().native, undefined, 'browser caps before the bridge');
+  win.TriboonTV = {
+    appVersion: () => JSON.stringify({ platform: 'windows' }),
+    nativePlaybackCaps: () => JSON.stringify({ native: true, source: 'libmpv', ac3: true, eac3: true }),
+  };
+  assert.equal(fns.playbackClientKind(), 'windows', 'after a late bridge: windows');
+  assert.equal(fns.nativePlaybackCaps().source, 'libmpv');
+  const caps = fns.clientCaps();
+  assert.equal(caps.native, true, 'caps are recomputed once the bridge appears');
+  assert.equal(caps.eac3, true);
+  assert.equal(fns.clientCaps(), caps, 'then cached');
+});
