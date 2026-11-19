@@ -15749,11 +15749,12 @@ function selectedPlayerAudioTrack(p) {
 }
 // Audio Description (a narrator describing the picture) is never the default track (brief 121): the
 // Matroska visual-impaired flag or a title like "English - Audio Description", "Descriptive", "AD".
-// Same rule as isAudioDescriptionTrack in server/transcode.js.
+// Same rule as isAudioDescriptionTrack in server/transcode.js. No lookbehind here: older Safari and TV
+// browsers cannot parse it, and one unparsable regex literal stops the whole page.
 function isAudioDescriptionTrack(t) {
   if (!t) return false;
   return !!(t.visualImpaired || t.audioDescription
-    || /(?<![a-z0-9])(?:audio[ ._-]?descri(?:ption|bed|ptive)|descriptive|described[ ._-]+video|visual(?:ly)?[ ._-]+impaired|dvs)(?![a-z0-9])|(?<![a-z0-9-])ad(?![a-z0-9-])/i.test(String(t.title || '')));
+    || /(?:^|[^a-z0-9])(?:audio[ ._-]?descri(?:ption|bed|ptive)|descriptive|described[ ._-]+video|visual(?:ly)?[ ._-]+impaired|dvs)(?![a-z0-9])|(?:^|[^a-z0-9-])ad(?![a-z0-9-])/i.test(String(t.title || '')));
 }
 // The track to switch to at start, or null to stay. The viewer's language first; inside a language a
 // normal track beats Audio Description, which plays only when it is the only track in that language.
