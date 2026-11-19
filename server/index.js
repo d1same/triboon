@@ -37,7 +37,7 @@ const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInW
 const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, audioHintFromName, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, audioHintFromName, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, defaultAudioTrack } = require('./transcode');
 const { spawn: spawnResumePad } = require('child_process');
 let resumePadReady = null;
 function ensureResumePad() {
@@ -4527,6 +4527,15 @@ function highestHlsSegment(dir) {
     if (n > max) max = n;
   }
   return max;
+}
+
+// The audio track a remux/transcode/HLS request plays. A client that names one gets it (a saved or
+// manual pick). Without `audio=`, the file's default is used, which is never an Audio Description
+// track while a normal one exists in the same language (brief 121).
+function requestedAudioTrack(ctx, vf) {
+  const raw = ctx.url.searchParams.get('audio');
+  if (raw !== null && raw !== '') return parseInt(raw, 10) || 0;
+  return defaultAudioTrack(vf && vf._tracks && vf._tracks.audio);
 }
 
 // A drag past the pieces already made used to fall off the end of a short bar.
@@ -10907,7 +10916,7 @@ Object.assign(H, {
     // real disconnect, and the mount sweep reaps a zombie.
     try { ctx.res.setTimeout(0); if (ctx.res.socket) ctx.res.socket.setTimeout(0); } catch {}
     const startSeconds = parseFloat(ctx.url.searchParams.get('start') || '0') || 0;
-    const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;
+    const audioTrack = requestedAudioTrack(ctx, vf);
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
     // Audio decides itself: most browsers can't decode DDP/AC3/DTS, so a pure copy-remux of
     // most releases error'd the <video> and fell to a FULL transcode ("codec not supported"
@@ -11005,7 +11014,7 @@ Object.assign(H, {
     // default 30s socket idle timeout, which killed it mid-buffer and forced a re-mount.
     try { ctx.res.setTimeout(0); if (ctx.res.socket) ctx.res.socket.setTimeout(0); } catch {}
     const startSeconds = parseFloat(ctx.url.searchParams.get('start') || '0') || 0;
-    const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;
+    const audioTrack = requestedAudioTrack(ctx, vf);
     // Same as /api/remux: a plain browser <video> sends audioSafe=1 → downmix to stereo AAC so a 5.1
     // source isn't played silent. Native ExoPlayer omits it and keeps 5.1.
     const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
@@ -11052,7 +11061,7 @@ Object.assign(H, {
     const fsp = fs.promises;
     const os2 = require('os');
     const startSeconds = parseFloat(ctx.url.searchParams.get('start') || '0') || 0;
-    const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;
+    const audioTrack = requestedAudioTrack(ctx, vf);
     let fileReq = ctx.m[3] ? String(ctx.m[3]) : '';
     // master.m3u8 is the Jellyfin play link. Keep every piece from the resume
     // point. A short rolling list that then ends was only the last few seconds

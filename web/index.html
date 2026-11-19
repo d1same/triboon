@@ -15676,6 +15676,11 @@ function nativeAudioChoices() {
     selected: a.rel === cur,
   }));
 }
+function nativeAudioDescriptionRels() {
+  const p = S.playing;
+  const audio = p && p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
+  return audio.filter((a) => a && Number.isInteger(a.rel) && isAudioDescriptionTrack(a)).map((a) => a.rel);
+}
 function refreshNativeAudioChoices() {
   const p = S.playing;
   if (!p || !p.usingNative || !canUseNativeVideoPlayer()) return;
@@ -15742,15 +15747,33 @@ function selectedPlayerAudioTrack(p) {
   if (!audio.length) return null;
   return audio.find((a) => a && a.rel === p.audioTrack) || audio[p.audioTrack || 0] || audio[0] || null;
 }
+// Audio Description (a narrator describing the picture) is never the default track (brief 121): the
+// Matroska visual-impaired flag or a title like "English - Audio Description", "Descriptive", "AD".
+// Same rule as isAudioDescriptionTrack in server/transcode.js. No lookbehind here: older Safari and TV
+// browsers cannot parse it, and one unparsable regex literal stops the whole page.
+function isAudioDescriptionTrack(t) {
+  if (!t) return false;
+  return !!(t.visualImpaired || t.audioDescription
+    || /(?:^|[^a-z0-9])(?:audio[ ._-]?descri(?:ption|bed|ptive)|descriptive|described[ ._-]+video|visual(?:ly)?[ ._-]+impaired|dvs)(?![a-z0-9])|(?:^|[^a-z0-9-])ad(?![a-z0-9-])/i.test(String(t.title || '')));
+}
+// The track to switch to at start, or null to stay. The viewer's language first; inside a language a
+// normal track beats Audio Description, which plays only when it is the only track in that language.
+// With no language wish, only an Audio Description start is moved (to a normal track of its language).
 function preferredAudioTrackForPlayer(p) {
   const audio = p && p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
   if (audio.length <= 1) return null;
   const wantA = audioLangKey(prefAudioLang());
-  if (!wantA) return null;
   const cur = selectedPlayerAudioTrack(p);
-  if (cur && audioLangKey(cur.lang) === wantA) return null;
-  return audio.filter((a) => audioLangKey(a.lang) === wantA)
-    .sort((a, b) => (b.channels || 0) - (a.channels || 0))[0] || null;
+  const curPlain = !!cur && !isAudioDescriptionTrack(cur);
+  if (wantA && curPlain && audioLangKey(cur.lang) === wantA) return null;
+  let pool = wantA ? audio.filter((a) => audioLangKey(a.lang) === wantA) : [];
+  if (!pool.length) {
+    if (!cur || curPlain) return null;
+    pool = audio.filter((a) => audioLangKey(a.lang) === audioLangKey(cur.lang));
+  }
+  const plain = pool.filter((a) => !isAudioDescriptionTrack(a));
+  const best = (plain.length ? plain : pool).slice().sort((a, b) => (b.channels || 0) - (a.channels || 0))[0] || null;
+  return best && cur && best.rel === cur.rel ? null : best;
 }
 function applyInitialAudioPreference(p) {
   if (!p || p._userPickedAudio) return;
@@ -15975,6 +15998,9 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
     // Empty preference means English. A French/German MULTI file otherwise starts on track 0.
     preferredAudioLanguage: audioLangKey(prefAudioLang()),
     audioChoices: nativeAudioChoices(),
+    // Direct play: ExoPlayer cannot read the Matroska visual-impaired flag, so it gets the probed
+    // Audio Description tracks and moves off one at start (brief 121).
+    audioDescriptionRels: nativeAudioDescriptionRels(),
     hasNext: p.item.type === 'episode',
     subtitleRel: subPayload.rel,
     subtitleUrl: subPayload.url,
@@ -20116,15 +20142,9 @@ function applyTrackPrefs() {
   applyStartupSubtitlePref();
   if (!p.tracks) { updateSrndBtn(); return; }
   if (p._userPickedAudio) { updateSrndBtn(); return; }
-  const wantA = audioLangKey(prefAudioLang());
-  if (wantA && (p.tracks.audio || []).length > 1) {
-    const cur = p.tracks.audio.find((a) => a.rel === p.audioTrack);
-    if (!cur || audioLangKey(cur.lang) !== wantA) {
-      const best = p.tracks.audio.filter((a) => audioLangKey(a.lang) === wantA)
-        .sort((a, b) => (b.channels || 0) - (a.channels || 0))[0];
-      if (best && best.rel !== p.audioTrack) setAudio(best.rel);
-    }
-  }
+  // Preferred language, and never an Audio Description track by default (brief 121).
+  const best = preferredAudioTrackForPlayer(p);
+  if (best && best.rel !== p.audioTrack) setAudio(best.rel);
   updateSrndBtn();
 }
 // Surround button only matters when the CURRENT language exists in several layouts.

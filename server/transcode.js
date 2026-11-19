@@ -207,6 +207,36 @@ function videoRangeType(s) {
   if (hlg) return 'HLG';
   return 'SDR';
 }
+// Audio Description (a narrator describing the picture for blind viewers) is never the default
+// track (brief 121). Matroska flags it FlagVisualImpaired (ffprobe disposition.visual_impaired);
+// many files only say so in the track title ("English - Audio Description", "Descriptive", "AD").
+// The web page carries the same rule (isAudioDescriptionTrack in web/index.html).
+// A bare "AD" counts only as its own word ("English AD", "English (AD)"), not "Ad-free".
+const AUDIO_DESCRIPTION_TRACK = /(?<![a-z0-9])(?:audio[ ._-]?descri(?:ption|bed|ptive)|descriptive|described[ ._-]+video|visual(?:ly)?[ ._-]+impaired|dvs)(?![a-z0-9])|(?<![a-z0-9-])ad(?![a-z0-9-])/i;
+function isAudioDescriptionTrack(track) {
+  if (!track) return false;
+  return !!(track.visualImpaired || track.audioDescription || AUDIO_DESCRIPTION_TRACK.test(String(track.title || '')));
+}
+function audioLang(raw) {
+  const s = String(raw || '').trim().toLowerCase().replace(/[^a-z]/g, '');
+  if (!s || s === 'und') return '';
+  return ({ eng: 'en', english: 'en', ger: 'de', deu: 'de', fre: 'fr', fra: 'fr', ita: 'it', spa: 'es', rus: 'ru', jpn: 'ja', kor: 'ko', chi: 'zh', zho: 'zh', ara: 'ar', per: 'fa', fas: 'fa', dut: 'nl', nld: 'nl', por: 'pt', pol: 'pl', tur: 'tr', swe: 'sv', nor: 'no', dan: 'da', fin: 'fi', hin: 'hi' })[s] || s.slice(0, 2);
+}
+// The default audio track `rel` for a probed file: the first track in the wanted language (the
+// viewer's preference, else the file's first track) that is not Audio Description. An AD track is
+// the default only when it is the only track in that language. Saved/user picks never come here.
+function defaultAudioTrack(audio, preferredLang = '') {
+  const list = (Array.isArray(audio) ? audio : []).filter((a) => a && Number.isInteger(a.rel));
+  if (!list.length) return 0;
+  const want = audioLang(preferredLang);
+  let pool = want ? list.filter((a) => audioLang(a.lang) === want) : [];
+  if (!pool.length) {
+    const first = audioLang(list[0].lang);
+    pool = list.filter((a) => audioLang(a.lang) === first);
+  }
+  const plain = pool.find((a) => !isAudioDescriptionTrack(a));
+  return (plain || pool[0] || list[0]).rel;
+}
 function probeTracks(url) {
   return new Promise((resolve, reject) => {
     const fp = detectFfprobe();
@@ -248,7 +278,12 @@ function probeTracks(url) {
             level: Number(s.level) > 0 ? Number(s.level) : null,
             rangeType: videoRangeType(s),
             hdr: ['smpte2084', 'arib-std-b67'].includes(s.color_transfer) });
-          else if (t === 'audio') result.audio.push({ ...base, channels: s.channels || 2 });
+          else if (t === 'audio') {
+            const visualImpaired = !!(s.disposition && Number(s.disposition.visual_impaired) === 1);
+            const track = { ...base, channels: s.channels || 2, visualImpaired };
+            track.audioDescription = isAudioDescriptionTrack(track);
+            result.audio.push(track);
+          }
           else if (t === 'subtitle') result.subs.push({ ...base, text: TEXT_SUB_CODECS.has(s.codec_name) });
         }
         resolve(result);
@@ -808,4 +843,4 @@ function probeCacheKey(name, size) {
   return `${label}|${bytes}`;
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, LIVE_AUDIO_LAYOUTS };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, isAudioDescriptionTrack, defaultAudioTrack, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, LIVE_AUDIO_LAYOUTS };
