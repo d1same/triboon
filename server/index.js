@@ -2106,6 +2106,9 @@ function makeRoomOnIptvSource(sourceId, slotKey, opts = {}) {
   const now = Date.now();
   const stop = iptvLimitStops.get(`${slotKey}|${sourceId}`);
   if (stop && now - stop.at < IPTV_LIMIT_STOP_HOLD_MS) {
+    // Each refused retry renews the hold: a player that keeps retrying stays stopped, and the
+    // screen gets the stream back only after 20 s of silence (result 115 P2-1).
+    stop.at = now;
     return { ok: false, status: 429, reason: iptvLimitMessage(max) };
   }
   if (opts.evict === false) return { ok: true, closed: 0, ffmpegClosed: false };

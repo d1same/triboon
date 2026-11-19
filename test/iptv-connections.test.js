@@ -342,3 +342,37 @@ test('live: under Max connections an HLS playlist poll never stops another scree
     provider.close();
   }
 });
+
+test('live: a stopped screen that keeps retrying stays stopped; the other screen is not taken back (result 115 P2-1)', async () => {
+  const provider = await startProvider({ channels: 2 });
+  let rig = null;
+  const clients = [];
+  try {
+    rig = await bootWithSource(provider, { maxConnections: 1 });
+    const [c0, c1] = rig.channels;
+    const a = await open(rig.srv.port, withSurface(c0.nativeUrl, 'tv-a'), TV_UA);
+    clients.push(a);
+    assert.ok(await waitFor(() => a.bytes > 0), 'TV A plays');
+    const b = await open(rig.srv.port, withSurface(c1.nativeUrl, 'tv-b'), TV_UA);
+    clients.push(b);
+    assert.ok(await waitFor(() => b.bytes > 0 && a.ended, 3000), 'TV B took the connection from TV A');
+    // TV A's player retries every 3 s for 26 s, past the 20 s hold: every retry is refused
+    // with the reason, and TV B keeps playing.
+    const statuses = [];
+    const until = Date.now() + 26000;
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const retry = await open(rig.srv.port, withSurface(c0.nativeUrl, 'tv-a'), TV_UA);
+      clients.push(retry);
+      statuses.push(retry.status);
+      if (retry.status === 200) break;
+    }
+    assert.ok(statuses.length >= 8 && statuses.every((s) => s === 429), `every retry was refused (${statuses.join(',')})`);
+    assert.ok(!b.ended, 'TV B was never taken back');
+    assert.strictEqual(provider.state.opens[1], 1, 'TV B\'s channel opened once');
+  } finally {
+    clients.forEach(drop);
+    if (rig) await rig.srv.shutdown();
+    provider.close();
+  }
+});
