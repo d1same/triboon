@@ -92,6 +92,26 @@ test('order: the air-order episode group gives the release numbers, with merged 
   assert.deepEqual(episodeOrder.releaseNumbering(tail, tailGroup, 3).get(4), [5, 6]);
 });
 
+test('order: a release title is read right after the episode number, part markers dropped', () => {
+  assert.deepEqual(episodeOrder.positionalTitle('Paper.Street.S03E09.Snow.Day.720p.WEB-DL'), ['snow', 'day']);
+  assert.deepEqual(episodeOrder.positionalTitle('Paper.Street.S03E04.Harbor.Lights.Part.1.720p'), ['harbor', 'lights']);
+  assert.deepEqual(episodeOrder.positionalTitle('Paper.Street.S03E09.1080p.BluRay.x264-BLU'), []);
+  assert.deepEqual(episodeOrder.positionalTitle('Paper.Street.S03E06.Ledger.EXTENDED.1080p.WEB-DL'), ['ledger']);
+  assert.equal(episodeOrder.namedEpisode('Paper.Street.S03E09.Snow.Day.720p', SEASON), 8);
+  assert.equal(episodeOrder.namedEpisode('Paper.Street.S03E05.Harbor.Lights.Part.2.720p', SEASON), 4);
+  assert.equal(episodeOrder.titleNames(['money', 'in', 'bank'], 'Money'), false, 'a longer title is a different title');
+});
+
+test('title check: a release that names another episode is skipped, even with a short one-word title', () => {
+  const wanted = parseWantedTitle('Paper Street S03E06');
+  wanted.episodeTitle = 'The Raise';
+  wanted.otherEpisodeTitles = SEASON.filter((x) => x.n !== 6).map((x) => x.name);
+  assert.equal(releaseMatches('Paper.Street.S03E06.Ledger.720p.WEB-DL.DD5.1.H.264-GRP', wanted), false,
+    '"Ledger" right after the number names TMDB E05, not The Raise');
+  assert.equal(releaseMatches('Paper.Street.S03E06.The.Raise.720p.WEB-DL', wanted), true);
+  assert.equal(releaseMatches('Paper.Street.S03E06.1080p.BluRay.x264-BLU', wanted), true, 'no title: the number check alone, as before');
+});
+
 test('search: with the group translation, TMDB S03E08 plays release S03E09 "Snow Day"', async () => {
   const map = episodeOrder.releaseNumbering(TMDB_S3, AIR_GROUP, 3);
   await withIndexer(async (pipeline, asked) => {

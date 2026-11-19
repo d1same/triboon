@@ -534,9 +534,18 @@ function untaggedEditionOk(norm, wanted) {
   }
   return false;
 }
-function episodeTitleConflicts(norm, wanted) {
+function episodeTitleConflicts(norm, wanted, rawName) {
   const others = Array.isArray(wanted && wanted.otherEpisodeTitles) ? wanted.otherEpisodeTitles : [];
   if (!others.length) return false;
+  // The words right after SxxEyy are the release's own episode title (brief 127). There even a short
+  // one-word title counts: "S06E15.Sabre" is TMDB's "Sabre", not "The Manager and the Salesman".
+  if (rawName) {
+    const pos = episodeOrder.positionalTitle(rawName);
+    if (pos.length) {
+      if (wanted.episodeTitle && episodeOrder.titleNames(pos, wanted.episodeTitle)) return false;
+      if (others.some((title) => episodeOrder.titleNames(pos, title))) return true;
+    }
+  }
   const mine = episodeTitlePhrase(wanted.episodeTitle);
   if (mine && norm.includes(` ${mine.join(' ')} `)) return false;
   return others.some((title) => {
@@ -685,7 +694,7 @@ function releaseMatches(name, wanted) {
       && !/\b(?:2160p|1080p|720p|576p|480p|4k|uhd|x26[45]|h\.?26[45]|hevc|avc|av1|xvid|web-?dl|webrip|web|bluray|blu-ray|bdrip|brrip|remux|hdtv|dvdrip|mkv|mp4)\b/i.test(String(name || ''))) {
     return false;
   }
-  if (wanted.s !== null && episodeTitleConflicts(norm, wanted)) return false;
+  if (wanted.s !== null && episodeTitleConflicts(norm, wanted, name)) return false;
   return true;
 }
 

@@ -118,4 +118,49 @@ function releaseNumbering(tmdbEpisodes, group, season) {
   return differs ? map : null;
 }
 
-module.exports = { titleWords, pickAirOrderGroup, releaseNumbering };
+// The episode title a release name carries right after its episode token:
+// "The.Office.US.S06E15.Sabre.720p.WEB-DL" → ['sabre'];
+// "The.Office.US.S04E03.Dunder.Mifflin.Infinity.Part.1.720p" → ['dunder', 'mifflin', 'infinity'].
+// Empty when the name has no title there (a quality tag follows the number).
+const STOP = /^(?:\d{3,4}p|4k|uhd|hdr\d*|dv|dovi|sdr|web|webrip|webdl|dl|hdtv|bluray|bdrip|brrip|blu|ray|dvdrip|dvd|remux|x26[45]|h26[45]|hevc|avc|xvid|aac\d*|ac3|eac3|ddp?\d*|dts|truehd|atmos|flac|mp3|opus|proper|repack|rerip|internal|extended|uncut|unrated|directors|superfan|readnfo|nfo|subbed|dubbed|multi|amzn|nf|dsnp|hulu|hmax|pcok|atvp|itunes|(?:19|20)\d{2}|\d{1,2})$/;
+function positionalTitle(name) {
+  const norm = fold(name).toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const toks = norm.split(' ');
+  let at = -1;
+  for (let i = 0; i < toks.length; i++) {
+    if (/^s\d{1,2}e\d{1,3}(?:e\d{1,3})*$/.test(toks[i]) || /^\d{1,2}x\d{1,3}$/.test(toks[i])) { at = i; break; }
+  }
+  if (at < 0) return [];
+  let j = at + 1;
+  if (j < toks.length && /^e\d{1,3}$/.test(toks[j])) j++; // S04E03-E04
+  const out = [];
+  for (; j < toks.length; j++) {
+    const w = toks[j];
+    if (STOP.test(w)) break;
+    out.push(w);
+  }
+  return titleWords(out.join(' '));
+}
+
+// Does a release title (positional words) name this TMDB title? The same words exactly, after articles
+// and part markers are dropped ("Sabre Superfan Cut" was already cut at "superfan"). A longer title that
+// only starts with it is a different title: "Money In The Bank" is not "Money".
+function titleNames(posWords, tmdbTitle) {
+  const t = titleWords(tmdbTitle);
+  if (!posWords.length || !t.length || posWords.length !== t.length) return false;
+  for (let i = 0; i < t.length; i++) if (posWords[i] !== t[i]) return false;
+  return true;
+}
+
+// Which TMDB episode (number) a release names, or null. `seasonEpisodes`: [{ n, name }].
+function namedEpisode(name, seasonEpisodes) {
+  const pos = positionalTitle(name);
+  if (!pos.length) return null;
+  const hits = (seasonEpisodes || []).filter((row) => row && row.name && titleNames(pos, row.name));
+  if (!hits.length) return null;
+  // Two TMDB titles with the same words (a split "Part 1"/"Part 2"): the first.
+  hits.sort((a, b) => Number(a.n) - Number(b.n));
+  return Number(hits[0].n);
+}
+
+module.exports = { titleWords, pickAirOrderGroup, releaseNumbering, positionalTitle, titleNames, namedEpisode };
