@@ -133,6 +133,27 @@ test('search: a TMDB two-parter prefers the release that holds both parts', asyn
   });
 });
 
+test('search: without a group, the release titles move the search to the right number', async () => {
+  // TMDB S03E08 "Snow Day" searched as E08: release E08 is "Fire Drill" (TMDB E07). One retry at E09.
+  await withIndexer(async (pipeline, asked) => {
+    const r = await pipeline.search({ q: 'Paper Street', season: 3, ep: 8 }, policyFor(8));
+    assert.match(top(r), /S03E09/, `played ${top(r)}`);
+    assert.ok(r.candidates.every((c) => !/S03E08/.test(c.name)), 'the untitled S03E08 copies are Fire Drill too');
+    assert.deepEqual(r.episodeNumbering, { from: 8, to: 9, evidence: 7 });
+    assert.ok(r.candidates.every((c) => c.releaseEpisode && c.releaseEpisode.e === 9), 'a pack would mount release E09');
+    assert.ok(asked.includes(9));
+  });
+});
+
+test('search: a normal show (names agree with TMDB) takes one search, no retry', async () => {
+  await withIndexer(async (pipeline, asked) => {
+    const r = await pipeline.search({ q: 'Paper Street', season: 3, ep: 2 }, policyFor(2));
+    assert.match(top(r), /S03E02/);
+    assert.ok(!r.episodeNumbering);
+    assert.ok(asked.every((e) => e === 2));
+  });
+});
+
 test('server: Play and Sources search the release numbers, while the card keeps TMDB numbers', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const grab = (name) => {
