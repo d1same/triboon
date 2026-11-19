@@ -34544,6 +34544,12 @@ function primeBootSound() {
     });
   } catch {}
 }
+function closeBootAudioCtx(A) {
+  const ctx = A && A.ctx;
+  if (!ctx) return;
+  A.ctx = null;
+  try { if (ctx.state !== 'closed' && ctx.close) { const p = ctx.close(); if (p && p.catch) p.catch(() => {}); } } catch {}
+}
 // Starts the sound; calls go() when the picture should start so both land together.
 function startBootSoundThen(go) {
   let started = false;
@@ -34558,11 +34564,16 @@ function startBootSoundThen(go) {
         gain.gain.value = 0.8;
         src.buffer = A.buf; src.connect(gain); gain.connect(A.ctx.destination);
         src.start();
+        // Close the context once the sound has played: an open one keeps the WebView's audio
+        // output running for the whole session, beside ExoPlayer on a TV.
+        src.onended = () => closeBootAudioCtx(A);
+        setTimeout(() => closeBootAudioCtx(A), Math.round(((Number(A.buf.duration) || 4) + 1) * 1000));
         const lag = (Number(A.ctx.outputLatency) || 0) + (Number(A.ctx.baseLatency) || 0);
         const ms = Math.max(0, Math.min(400, Math.round(lag * 1000)));
         bootAudio.leadMs = ms; bootAudio.path = 'webaudio';
         return ms ? setTimeout(once, ms) : once();
       }
+      closeBootAudioCtx(A); // the <audio> element plays instead: the context is not needed
       const a = $('bootSound');
       if (!a.src) { const bytes = bootSoundBytes(); if (bytes) a.src = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' })); }
       a.volume = 0.8;
