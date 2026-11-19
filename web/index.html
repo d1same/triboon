@@ -4215,6 +4215,13 @@ body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn{width:100%;justify-con
 body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn svg{width:20px;height:20px}
 body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn.focus,body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn:focus{background:var(--btnHover);color:var(--btnFocusText);text-decoration:none;filter:none}
 body[data-theme="graphite"] .gateCard .qcAlt .altSub{margin-top:10px}
+/* 3.5.1 (owner): the sign-in card matches the site: crisp 6px corners, no edge line, no glow sheen,
+   a calm flat panel; the poster wall behind it gets the same 6px corners and sits straight. */
+body[data-theme="graphite"] .gateCard{border:0;border-radius:6px;box-shadow:none;background:rgba(14,15,18,.82)}
+body[data-theme="graphite"] .gateCard::before{display:none}
+body[data-theme="graphite"] .gateCard .qcAlt button.qcBtn{border-radius:6px}
+body[data-theme="graphite"] #gatePosterStrip{transform:none}
+body[data-theme="graphite"] .gatePoster{border-radius:6px;box-shadow:none}
 body[data-theme="graphite"] #gateArtCaption{font-family:"Sora",system-ui,sans-serif;font-weight:600;letter-spacing:.01em;text-transform:none;color:var(--muted)}
 /* Sources popup: sentence-case sort tabs with a white underline, readable rows, and a flat focused
    row (light fill + white bar on the left, no zoom/glow). Release names stay mono (technical text). */

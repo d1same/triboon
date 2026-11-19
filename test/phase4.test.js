@@ -11832,6 +11832,13 @@ test('Boot sound plays with the logo build, once, never on phones (3.5.1, owner 
   assert.match(fn, /p\.catch\(\(\) => \{\}\)/, 'a blocked autoplay stays silent, no error');
 });
 
+test('Sign-in card matches the site: 6px corners, no edge line, straight 6px poster wall (3.5.1, owner)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /body\[data-theme="graphite"\] \.gateCard\{border:0;border-radius:6px;box-shadow:none;/, 'flat card, crisp corners, no border');
+  assert.match(ui, /body\[data-theme="graphite"\] \.gateCard::before\{display:none\}/, 'no glass sheen');
+  assert.match(ui, /body\[data-theme="graphite"\] \.gatePoster\{border-radius:6px;box-shadow:none\}/, 'posters use the same corners');
+});
+
 test('Profiles: square avatar tiles and a clean Who\'s watching picker (3.5.1, owner pick Option 1)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   for (let i = 1; i <= 20; i++) {
