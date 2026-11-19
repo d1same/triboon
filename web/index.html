@@ -7147,16 +7147,6 @@ function liveNameParts(raw, keepPrefix = false) {
 function liveTagsHtml(tags) { return tags && tags.length ? `<span class="lTags">${tags.map((t) => `<span class="lTag">${esc(t)}</span>`).join('')}</span>` : ''; }
 function liveChannelLabelHtml(raw) { const p = liveNameParts(raw); return `<span class="gChTxt"><span class="gChName">${esc(p.name)}</span>${liveTagsHtml(p.tags)}</span>`; }
 function liveCatLabelHtml(raw) { const p = liveNameParts(raw, true); return `<span class="catLabel">${esc(p.name)}</span>${liveTagsHtml(p.tags)}`; }
-// 3.5.1 (owner): on a desktop browser the Genre / Sort controls open the app's menu (as on TV) instead of the
-// browser's plain list. Phones keep their native picker; keyboard use still works on the select itself.
-['genreSel', 'sortSel'].forEach((id) => {
-  const el = $(id); if (!el) return;
-  el.addEventListener('mousedown', (e) => {
-    const b = document.body.classList;
-    if (b.contains('mobileShell') || b.contains('tv') || window.innerWidth <= 600 || e.button !== 0) return;
-    e.preventDefault(); openFilterMenu(id === 'sortSel' ? 'sort' : 'genre');
-  });
-});
 // ---- 3.5.1 (owner): QR sign-in ----
 // TV / wide screens show a QR next to the sign-in form. It encodes <this server>/?approve=CODE:
 // a phone camera opens Triboon there, and a signed-in phone confirms the matching code (qcSheet).
@@ -32054,6 +32044,16 @@ function chooseFilterOption(i) {
   closeFilterMenu(false);
   setTimeout(() => focusBrowseFilter(kind === 'sort' ? 1 : 0), 90);
 }
+// 3.5.1 (owner): on a desktop browser the Genre / Sort controls open the app's menu (as on TV) instead of the
+// browser's plain list. Phones keep their native picker; keyboard use still works on the select itself.
+['genreSel', 'sortSel'].forEach((id) => {
+  const el = $(id); if (!el) return;
+  el.addEventListener('mousedown', (e) => {
+    const b = document.body.classList;
+    if (b.contains('mobileShell') || b.contains('tv') || window.innerWidth <= 600 || e.button !== 0) return;
+    e.preventDefault(); openFilterMenu(id === 'sortSel' ? 'sort' : 'genre');
+  });
+});
 function openFilterMenu(kind) {
   const sel = kind === 'sort' ? $('sortSel') : $('genreSel');
   if (!sel || !sel.options || !sel.options.length) return;
