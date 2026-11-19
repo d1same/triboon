@@ -461,6 +461,20 @@ function scoreRelease(candidate, policy = {}) {
     } catch { /* a malformed term never breaks ranking */ }
   }
 
+  // A TMDB episode that is a two-part hour-long in release numbering (brief 127: The Office
+  // "Niagara" = release S06E04 + S06E05). A release holding both parts plays the whole episode;
+  // a Part 1 file alone stays a fallback.
+  const span = policy.wantedEpisode;
+  if (span && Number.isInteger(+span.eTo) && +span.eTo > +span.e) {
+    const n = String(candidate.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+    const s = +span.s, a = +span.e, b = +span.eTo;
+    const list = new RegExp(`\\bs0?${s}((?:\\s?e0?\\d{1,3}){2,})\\b`).exec(n);
+    const eps = list ? [...list[1].matchAll(/e0?(\d{1,3})/g)].map((m) => +m[1]) : [];
+    const covers = eps.length >= 2 && (eps.includes(a) && eps.includes(b) || (eps.length === 2 && eps[0] <= a && b <= eps[1]));
+    if (covers) add('whole two-part episode', 150);
+    else if (new RegExp(`\\bs0?${s}\\s?e0?${a}\\b`).test(n)) add('part 1 of 2 only', -60);
+  }
+
   if (candidate.streamClass && candidate.streamClass in STREAM_SCORE) {
     add(`stream:${candidate.streamClass}`, STREAM_SCORE[candidate.streamClass]);
   }

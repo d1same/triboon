@@ -16,6 +16,7 @@ const { CAP_HIT_COOLDOWN_MS } = require('./nntp');
 const { getNzbStore } = require('./nzb-store');
 const { getSegmentDisk } = require('./segment-cache');
 const { runByteCheck } = require('./byte-check');
+const episodeOrder = require('./episode-order');
 
 // ---- title verification ----
 // Catalog titles carry accents (Shōgun, Amélie, Léon); scene names never do (Shogun, Amelie). The
@@ -131,7 +132,10 @@ function wantedEpisodeOf(params) {
   const s = Number(params && params.season), e = Number(params && params.ep);
   // TMDB uses season 0 for specials. It is still an episode selection contract: dropping it here
   // makes a specials pack mount its largest member and lets its prepared mount alias a movie.
-  return (Number.isInteger(s) && Number.isInteger(e) && s >= 0 && e > 0) ? { s, e } : null;
+  if (!(Number.isInteger(s) && Number.isInteger(e) && s >= 0 && e > 0)) return null;
+  // A TMDB two-parter maps to two release numbers (brief 127): epTo is the last one.
+  const eTo = Number(params && params.epTo);
+  return Number.isInteger(eTo) && eTo > e ? { s, e, eTo } : { s, e };
 }
 
 // Only collection-shaped releases need request-scoped negative verdicts. A normal exact

@@ -406,7 +406,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.ok(serverForPolicy.includes('function parseCapsQuery(raw) {')
     && serverForPolicy.includes("caps: parseCapsQuery(ctx.url.searchParams.get('caps'))"),
     'Sources search should parse native device caps into the server scoring policy');
-  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, originCountry, articleSiblings, episodeTitle, otherEpisodeTitles, runtimeMin, tmdbId, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.akaTitles = [\s\S]+policy\.otherYears = [\s\S]+policy\.originCountry = originCountry[\s\S]+policy\.articleSiblings = [\s\S]+policy\.episodeTitle = [\s\S]+policy\.otherEpisodeTitles = [\s\S]+policy\.mediaType = mediaType[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.wantedYear[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
+  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, originCountry, articleSiblings, episodeTitle, otherEpisodeTitles, runtimeMin, tmdbId, season, ep, seasonEpisodes, releaseEpisodes, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.akaTitles = [\s\S]+policy\.otherYears = [\s\S]+policy\.originCountry = originCountry[\s\S]+policy\.articleSiblings = [\s\S]+policy\.episodeTitle = [\s\S]+policy\.otherEpisodeTitles = [\s\S]+policy\.mediaType = mediaType[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.wantedYear[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
     'Server playback policy should preserve media-type/language/year/aka/device hints for the scorer and verifier');
   // The restored-page year gap + same-title films: search/play/prepare pull catalog facts (year,
   // alternative titles, other same-title years) from TMDB before building the policy, so a
@@ -426,7 +426,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.match(ui, /c\.health === 'wrong-runtime' \? `<span class="chip warn">Wrong length/, 'Sources shows a Wrong length chip');
   const scoringSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'scoring.js'), 'utf8');
   assert.match(scoringSrc, /'wrong-runtime': -100000,/, 'wrong-runtime is never auto-picked');
-  assert.match(serverForPolicy, /\.\.\.\(await catalogFactsFor\(ctx\.url\.searchParams\.get\('year'\), ctx\.url\.searchParams\.get\('tmdbId'\), ctx\.url\.searchParams\.get\('mediaType'\), ctx\.url\.searchParams\.get\('season'\), ctx\.url\.searchParams\.get\('ep'\)\)\)/, 'Sources search carries the facts');
+  // Brief 127: the facts are fetched first so the search parameters can use the release numbers too.
+  assert.match(serverForPolicy, /const facts = await catalogFactsFor\(ctx\.url\.searchParams\.get\('year'\), ctx\.url\.searchParams\.get\('tmdbId'\), ctx\.url\.searchParams\.get\('mediaType'\), ctx\.url\.searchParams\.get\('season'\), ctx\.url\.searchParams\.get\('ep'\)\);[\s\S]{0,400}releaseEpisodes: facts\.releaseEpisodes,[\s\S]{0,1600}\.\.\.facts,/, 'Sources search carries the facts');
   assert.strictEqual((serverForPolicy.match(/Object\.assign\(body, await catalogFactsFor\(body\.year, body\.tmdbId, body\.mediaType, body\.season, body\.ep\)\);/g) || []).length, 3, 'play, prepare, and Jellyfin play carry the facts');
   assert.match(serverForPolicy, /policy\.preferredAudioLanguage = preferredAudio \|\| 'en'/,
     'Play defaults to English audio unless the owner saved a different language');
