@@ -4315,8 +4315,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'Settings D-pad must use the folded Preferences tabs, not the emptied #setTabs');
   assert.match(ui, /if \(S\.user && S\.user\.role === 'admin' && !S\._srvSettingsLoaded\) \{[\s\S]+S\._srvSettingsLoaded = true;[\s\S]+refreshSettings\(\);/,
     'opening Settings warms server panels in the background so the first Right is instant');
-  assert.match(ui, /if \(k === 'ArrowRight'\) \{[\s\S]+activateAccountTab\(tab\)[\s\S]+focusSectionControl\(formCtls\(activeSectionPanel\(cfg\)\)\[0\]\)/,
-    'Settings Right commits the focused tab then enters that panel');
+  assert.match(ui, /if \(k === 'ArrowRight'\) \{[\s\S]+activateAccountTab\(tab\)[\s\S]+focusSectionControl\(sectionPanelEntry\(activeSectionPanel\(cfg\)\)\)/,
+    'Settings Right commits the focused tab then enters that panel (at the item last used there, 3.5.1)');
+  assert.match(ui, /return panel && panel\._lastCtl && ctls\.includes\(panel\._lastCtl\) \? panel\._lastCtl : ctls\[0\];/, 'each settings page remembers the item you left');
   assert.match(ui, /function leaveSettingsPanelToTabs\(\) \{[\s\S]+focusActiveSectionTab\(cfg\)[\s\S]+if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+leaveSettingsPanelToTabs\(\)[\s\S]+window\.__tvBack = \(\) => \{[\s\S]+S\.view === 'prefs' \|\| S\.view === 'settings'[\s\S]+leaveSettingsPanelToTabs\(\)/,
     'TV Back from a Settings panel control returns to the left tab before leaving Settings');
   assert.match(ui, /function focusContent\(retried\) \{[\s\S]+if \(S\.view === 'settings' \|\| S\.view === 'prefs'\) \{[\s\S]+focusActiveSectionTab\(cfg\)[\s\S]+formCtls\(\$\('prefs'\) \|\| \$\('settings'\)\)/,
@@ -4325,7 +4326,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'focusing a Settings tab scrolls only the tab list, not the whole page');
   assert.match(ui, /function focusSectionControl\(el\) \{[\s\S]+el\.focus\(\{ preventScroll: true \}\)/,
     'Settings tab focus must not let the browser jump the page');
-  assert.match(ui, /function dpadSectionForm\(k\) \{[\s\S]+const inTabs = cfg\.tabs && cfg\.tabs\.contains\(active\);[\s\S]+if \(S\.settingsZone === 'panel'\) \{[\s\S]+if \(inTabs \|\| markedTab\) \{[\s\S]+if \(k === 'ArrowDown'\)[\s\S]+if \(k === 'ArrowRight'\) \{[\s\S]+focusSectionControl\(formCtls\(activeSectionPanel\(cfg\)\)\[0\]\);[\s\S]+if \(k === 'ArrowLeft'\) \{ active\.blur\(\); enterRail\(\); return true; \}/,
+  assert.match(ui, /function dpadSectionForm\(k\) \{[\s\S]+const inTabs = cfg\.tabs && cfg\.tabs\.contains\(active\);[\s\S]+if \(S\.settingsZone === 'panel'\) \{[\s\S]+if \(inTabs \|\| markedTab\) \{[\s\S]+if \(k === 'ArrowDown'\)[\s\S]+if \(k === 'ArrowRight'\) \{[\s\S]+focusSectionControl\(sectionPanelEntry\(activeSectionPanel\(cfg\)\)\);[\s\S]+if \(k === 'ArrowLeft'\) \{ active\.blur\(\); enterRail\(\); return true; \}/,
     'section tabs should move vertically, Right should enter the active panel, and Left should return to the rail');
   assert.match(ui, /if \(S\.settingsZone === 'panel'\) \{[\s\S]+const moved = dpadForm\(panel, k, \{ leftEdge: false \}\);[\s\S]+if \(!moved && \(k === 'ArrowLeft' \|\| k === 'ArrowUp'\)\) \{[\s\S]+return focusActiveSectionTab\(cfg\);[\s\S]+return true;/,
     'Right then Down stays in the Settings panel; only Left or Up from the first row returns to the tab list');

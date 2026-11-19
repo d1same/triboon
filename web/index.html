@@ -32751,6 +32751,17 @@ function leaveSettingsPanelToTabs() {
   S.settingsZone = 'tabs';
   return focusActiveSectionTab(cfg);
 }
+// 3.5.1 (D-pad check): each settings page remembers the item you left it on; Right / OK goes back there.
+function sectionPanelEntry(panel) {
+  const ctls = panel ? formCtls(panel) : [];
+  return panel && panel._lastCtl && ctls.includes(panel._lastCtl) ? panel._lastCtl : ctls[0];
+}
+function rememberSectionPanelCtl(panel) {
+  if (!panel) return;
+  const ae = document.activeElement, marked = panel.querySelector('.focus');
+  const cur = panel.contains(ae) ? ae : marked;
+  if (cur) panel._lastCtl = cur;
+}
 function dpadSectionForm(k) {
   const cfg = sectionFormConfig();
   if (!cfg) return false;
@@ -32765,6 +32776,7 @@ function dpadSectionForm(k) {
   // after Right, so "not in panel" used to bounce Down back to the left menu.
   if (S.settingsZone === 'panel') {
     if ((inTabs || markedTab) && (k === 'ArrowLeft' || k === 'ArrowUp')) {
+      rememberSectionPanelCtl(panel);
       S.settingsZone = 'tabs';
       return focusActiveSectionTab(cfg);
     }
@@ -32773,6 +32785,7 @@ function dpadSectionForm(k) {
     if (k === 'Enter') { formActivate(document.activeElement || cur); return true; }
     const moved = dpadForm(panel, k, { leftEdge: false });
     if (!moved && (k === 'ArrowLeft' || k === 'ArrowUp')) {
+      rememberSectionPanelCtl(panel);
       S.settingsZone = 'tabs';
       return focusActiveSectionTab(cfg);
     }
@@ -32795,7 +32808,7 @@ function dpadSectionForm(k) {
         return true;
       }
       S.settingsZone = 'panel';
-      focusSectionControl(formCtls(activeSectionPanel(cfg))[0]);
+      focusSectionControl(sectionPanelEntry(activeSectionPanel(cfg)));
       return true;
     }
     if (k === 'ArrowUp') { focusSectionControl(tabs[Math.max(0, i - 1)] || tabs[0]); return true; }
@@ -32804,7 +32817,7 @@ function dpadSectionForm(k) {
       const tab = i >= 0 ? tabs[i] : tabNow || active;
       if (tab && tab.tagName === 'BUTTON') activateAccountTab(tab);
       S.settingsZone = 'panel';
-      focusSectionControl(formCtls(activeSectionPanel(cfg))[0]);
+      focusSectionControl(sectionPanelEntry(activeSectionPanel(cfg)));
       return true;
     }
     if (k === 'ArrowLeft') { active.blur(); enterRail(); return true; }
@@ -32814,6 +32827,7 @@ function dpadSectionForm(k) {
     S.settingsZone = 'panel';
     const moved = dpadForm(panel, k, { leftEdge: false });
     if (!moved && (k === 'ArrowLeft' || k === 'ArrowUp')) {
+      rememberSectionPanelCtl(panel);
       S.settingsZone = 'tabs';
       return focusActiveSectionTab(cfg);
     }
@@ -32824,7 +32838,7 @@ function dpadSectionForm(k) {
     const tab = tabs.find((b) => b.classList.contains('on')) || tabs[0];
     if (tab) activateAccountTab(tab);
     S.settingsZone = 'panel';
-    focusSectionControl(formCtls(activeSectionPanel(cfg))[0]);
+    focusSectionControl(sectionPanelEntry(activeSectionPanel(cfg)));
     return true;
   }
   if (k === 'ArrowUp' || k === 'ArrowDown') {
