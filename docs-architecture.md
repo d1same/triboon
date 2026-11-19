@@ -429,8 +429,10 @@ Playback contract:
   already flowing costs nothing. A new stream over the limit stops lingering
   streams of the source first, then the oldest, and opens at once with the usual
   short retune grace; the stopped player gets "This channel was stopped because
-  the provider allows N connections" when it asks again, and for a minute such a
-  retry gets that answer instead of stopping the other stream. A new stream also
+  the provider allows N connections" when it asks again (the page asks once when
+  a stream is cut mid-play), and for 20 s a retry from that stopped screen gets
+  that answer instead of stopping the other stream; any other screen stops the
+  oldest stream as usual. A new stream also
   ends every lingering hub the same user left on the same source on a different
   channel (any screen or app), not only the one on its own slot. A hub whose
   opener left before the provider answered is failed and removed, so the channel
