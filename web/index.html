@@ -1234,10 +1234,10 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .epgCell .epgRel{position:relative}
 .epgCell .epgT{font:500 12.5px "Albert Sans";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .epgCell .epgWhen{font:600 9.5px "JetBrains Mono";letter-spacing:.06em;color:var(--muted);margin-bottom:1px}
-#player.live #liveBar{display:flex;align-items:center;gap:10px;padding:2px clamp(16px,2.4vw,36px) 0;margin-bottom:4px}
+#player.live #liveBar{display:flex;align-items:center;gap:10px;padding:2px clamp(16px,2.4vw,36px) 0;margin-bottom:16px} /* 3.5.1 owner: same gap above the buttons as the movie seek bar */
 #liveBar .liveBehind{font:600 11px "JetBrains Mono";color:var(--muted);min-width:42px}
-#liveBar .liveTrack{position:relative;flex:1;height:4px;background:rgba(var(--fg),.18);border-radius:2px}
-#liveBar .liveTrackFill{position:absolute;left:0;top:0;bottom:0;width:100%;background:var(--coral);border-radius:2px}
+#liveBar .liveTrack{position:relative;flex:1;height:6px;background:rgba(var(--fg),.18);border-radius:999px}
+#liveBar .liveTrackFill{position:absolute;left:0;top:0;bottom:0;width:100%;background:var(--coral);border-radius:999px}
 #liveBar .liveEdge{position:absolute;right:0;top:50%;width:7px;height:7px;margin-top:-3.5px;background:#ff5a5a;border-radius:50%}
 #liveBar .liveTag{font:600 11px "JetBrains Mono";color:#ff5a5a}
 #player.live #liveBtn{display:inline-flex;align-items:center;gap:6px;width:auto;padding:0 12px;border-radius:999px}
@@ -24262,7 +24262,7 @@ function scaffoldLiveTv(grid) {
     // D-pad exits from the filter: ↓ back to the grid, → (caret at end) to the clear (X) if a filter
     // is typed, else to the Multiview toolbar button.
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); input.blur(); focusLiveCategory() || focusFirstLiveContent(); }
+      if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); input.blur(); liveTopDown(); }
       else if (e.key === 'ArrowRight' && input.selectionStart >= input.value.length) {
         e.preventDefault(); e.stopPropagation(); input.blur();
         if (chClear && !chClear.hidden) chClear.focus();
@@ -24273,7 +24273,7 @@ function scaffoldLiveTv(grid) {
     if (chClear) chClear.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); chClear.blur(); input.focus(); }
       else if (e.key === 'ArrowRight' && $('chMultiBtn')) { e.preventDefault(); e.stopPropagation(); chClear.blur(); focusLiveToolbar('chMultiBtn'); }
-      else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); chClear.blur(); focusLiveCategory() || focusFirstLiveContent(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); chClear.blur(); liveTopDown(); }
       else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); chClear.click(); }
     });
     if ($('chGuideBtn')) $('chGuideBtn').addEventListener('click', () => {
@@ -32006,7 +32006,15 @@ function focusLiveFilter() {
   // Up from the categories/channels lands on the channel SEARCH bar (the primary top control) — on TV
   // this used to jump to the Multiview button instead, leaving #chSearch unreachable by D-pad. Right
   // from the search steps onto the Multiview/Guide buttons; Left reaches the rail.
+  // 3.5.1 (D-pad check): remember the channel we came up from, so Down returns to it (not the category).
+  const from = document.querySelector('#chBody .focus');
+  S.liveTopReturn = from && !from.classList.contains('lcat') && from.dataset && from.dataset.grid != null ? +from.dataset.grid : null;
   return focusLiveSearchInput();
+}
+function liveTopDown() {
+  const i = S.liveTopReturn; S.liveTopReturn = null;
+  if (Number.isFinite(i) && document.querySelector('#chBody [data-grid="' + i + '"]')) { focusGrid(i); return true; }
+  return focusLiveCategory() || focusFirstLiveContent();
 }
 function liveContentEls() {
   const root = $('chBody');
@@ -32932,7 +32940,7 @@ document.addEventListener('keydown', (e) => {
   if (inInput && S.view === 'livetv' && ae === $('chSearch')) {
     if (k === 'ArrowDown') {
       e.preventDefault(); ae.blur();
-      return focusLiveCategory() || focusFirstLiveContent();
+      return liveTopDown();
     }
     if (k === 'ArrowRight' && ae.selectionStart >= ae.value.length) {
       // The X sits between the field and the Multiview button — step onto it first when a filter is
@@ -33699,7 +33707,7 @@ document.addEventListener('keydown', (e) => {
       if (k === 'Enter') { if (!e.repeat) clr.click(); return; }
       if (k === 'ArrowLeft' || k === 'ArrowUp') { clr.blur(); return focusLiveSearchInput(); }
       if (k === 'ArrowRight') { clr.blur(); return $('chMultiBtn') ? focusLiveToolbar('chMultiBtn') : (focusLiveCategory() || focusFirstLiveContent()); }
-      if (k === 'ArrowDown') { clr.blur(); return focusLiveCategory() || focusFirstLiveContent(); }
+      if (k === 'ArrowDown') { clr.blur(); return liveTopDown(); }
       if (k === 'Escape' || k === 'Backspace') { clr.blur(); return focusLiveSearchInput(); }
       return;
     }
@@ -33711,7 +33719,7 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowLeft') return focusLiveSearchInput();
       if (k === 'ArrowRight' && $('chGuideBtn')) return focusLiveToolbar('chGuideBtn');
       if (k === 'ArrowUp') return focusLiveToolbar('chMultiBtn');
-      if (k === 'ArrowDown') { ae.blur(); return focusLiveCategory() || focusFirstLiveContent(); }
+      if (k === 'ArrowDown') { ae.blur(); return liveTopDown(); }
       return;
     }
     if (liveToolbarId === 'chGuideBtn') {
@@ -33719,7 +33727,7 @@ document.addEventListener('keydown', (e) => {
       if (k === 'Enter') { if (!e.repeat) ae.click(); return; }
       if (k === 'ArrowLeft') return $('chMultiBtn') ? focusLiveToolbar('chMultiBtn') : enterRail();
       if (k === 'ArrowUp' || k === 'ArrowRight') return focusLiveToolbar('chGuideBtn');
-      if (k === 'ArrowDown') { ae.blur(); return focusLiveCategory() || focusFirstLiveContent(); }
+      if (k === 'ArrowDown') { ae.blur(); return liveTopDown(); }
       return;
     }
     if (k === 'Escape' || k === 'Backspace') {
