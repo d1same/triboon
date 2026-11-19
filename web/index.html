@@ -4255,8 +4255,8 @@ body[data-theme="graphite"] .guideTimeline .gProg .gpS{font-family:"Albert Sans"
 body[data-theme="graphite"] .guideTimeline .gNow{width:2px;background:#C13BD6;box-shadow:none}
 body[data-theme="graphite"] .guideTimeline .gTick{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
 /* 3.5.1 (owner, Shield): logos sit on a dark 6px tile that stays dark on focus (white logos stay visible on the
-   white focus), with a faint light edge so dark logos read on the dark guide. */
-body[data-theme="graphite"] .gCh img{width:44px;height:44px;flex:none;object-fit:contain;padding:4px;border-radius:6px;background:#26272D;box-sizing:border-box;filter:drop-shadow(0 0 1px rgba(237,239,243,.55))}
+   white focus), no outline (owner: plain tile). */
+body[data-theme="graphite"] .gCh img{width:44px;height:44px;flex:none;object-fit:contain;padding:4px;border-radius:6px;background:#26272D;box-sizing:border-box}
 body[data-theme="graphite"] :is(.gRow.focus,.pgRow.focus,.pgRow:focus) .gCh img{background:#26272D}
 /* the now-line runs behind the show tiles, never through their text; narrow tiles drop the time */
 body[data-theme="graphite"] .guideTimeline .gProg{z-index:2}
