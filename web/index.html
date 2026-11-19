@@ -4167,6 +4167,9 @@ body[data-theme="graphite"] #trackMenu button.sel{background:transparent;color:v
 body[data-theme="graphite"] #trackMenu button:is(.focus,:hover,.sel.focus){background:#EDEFF3;color:#14161A}
 body[data-theme="graphite"] #trackMenu button:is(.focus,:hover) .tmSub{color:rgba(20,22,26,.6)}
 body[data-theme="graphite"] #playerStats h3{font:600 20px "Sora",system-ui,sans-serif;margin:4px 6px 12px}
+body[data-theme="graphite"] #playerStats .statTags{display:flex;flex-wrap:wrap;gap:8px;margin:0 6px 12px}
+body[data-theme="graphite"] #playerStats .statTags span{padding:5px 10px;border-radius:6px;background:rgba(237,239,243,.1);font:600 14px "Albert Sans",system-ui,sans-serif;color:var(--text);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body[data-theme="graphite"] #playerStats .statTags span.on{background:#EDEFF3;color:#14161A}
 body[data-theme="graphite"] #playerStats .statGrid{font:500 15px "Albert Sans",system-ui,sans-serif;gap:0 14px;padding:0 6px}
 body[data-theme="graphite"] #playerStats .statGrid span{min-height:38px;border-bottom:0}
 body[data-theme="graphite"] #playerStats .statGrid span:nth-child(odd){text-transform:none;letter-spacing:0;font-size:14px;color:rgba(237,239,243,.55)}
@@ -18555,7 +18558,10 @@ function renderPlayerStats() {
   const box = $('playerStats'); if (!box) return;
   refreshPlayerRuntimeStats().catch(() => {});
   const rows = collectPlayerStats();
-  box.innerHTML = `<h3>Playback stats</h3><div class="statGrid">${
+  // 3.5.1 (option A, same as the Android sheet): a row of tags first — how it plays (white), quality, size.
+  const tagVals = ['Player', 'Quality', 'Size'].map((k) => (rows.find((r) => r[0] === k) || [])[1]).filter((v) => v && v !== '—' && v !== '--');
+  const tags = tagVals.length ? `<div class="statTags">${tagVals.map((v, i) => `<span class="${i ? '' : 'on'}">${esc(String(v))}</span>`).join('')}</div>` : '';
+  box.innerHTML = `<h3>Playback stats</h3>${tags}<div class="statGrid">${
     rows.map(([k, v]) => {
       const label = k === 'Buffered' ? 'Player buffer' : k;
       return `<span>${esc(label)}</span><span title="${esc(v)}">${esc(v)}</span>`;

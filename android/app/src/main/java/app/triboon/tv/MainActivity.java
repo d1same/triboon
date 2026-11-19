@@ -8711,7 +8711,7 @@ public class MainActivity extends Activity {
         t.setSingleLine(true);
         t.setTextColor(strong ? 0xFF14161A : 0xFFEDEFF3);
         t.setPadding(dp(9), dp(4), dp(9), dp(5));
-        t.setBackground(nativePillBg(strong ? 0xFFEDEFF3 : 0x00000000, strong ? 0xFFEDEFF3 : 0x47EDEFF3, dp(6)));
+        t.setBackground(nativePillBg(strong ? 0xFFEDEFF3 : 0x1AEDEFF3, 0x00000000, dp(6))); // 3.5.1 option A: soft fill, no outline
         return t;
     }
 
@@ -8722,7 +8722,7 @@ public class MainActivity extends Activity {
         line.setGravity(android.view.Gravity.CENTER_VERTICAL);
         line.setPadding(dp(4), dp(5), dp(4), dp(5));
         View rule = new View(this);
-        rule.setBackgroundColor(0x1AEDEFF3);
+        rule.setBackgroundColor(0x00000000); // 3.5.1 option A: no lines between rows (spacing only)
         nativeSheet.addView(rule, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
         TextView k = new TextView(this);
         k.setText(label);
