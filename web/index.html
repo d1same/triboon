@@ -4153,6 +4153,23 @@ body[data-theme="graphite"] :is(.lcat,.pgCat,.chGroupHead){border-radius:6px}
 body[data-theme="graphite"] :is(.pgRow,.gRow):is(.focus,:focus){background:rgba(237,239,243,.07)!important;color:var(--text)!important}
 /* Live TV header buttons (Multiview / Channels): the site button, no edge line, white on focus. */
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn){border:0!important;border-radius:6px!important}
+/* 3.5.1 (owner pick option A): every player menu (Subtitles, Audio, Sound, Quality) and the Stats panel share one
+   look on web, Android and Windows: a calm 6px card, a sentence-case title, roomy rows with the detail quieter,
+   a ✓ on the chosen one (no tinted fill), white focus with dark text. */
+body[data-theme="graphite"] :is(#trackMenu,#playerStats){border:0;border-radius:6px;background:rgba(14,15,18,.9);box-shadow:none;padding:12px}
+body[data-theme="graphite"] #trackMenu{width:min(460px,calc(100vw - 88px))}
+body[data-theme="graphite"] #trackMenu .tmHead{font:600 20px "Sora",system-ui,sans-serif;letter-spacing:0;text-transform:none;color:var(--text);padding:8px 12px 12px}
+body[data-theme="graphite"] #trackMenu button{min-height:52px;border-radius:6px;padding:10px 14px;font:600 16px "Albert Sans",system-ui,sans-serif;color:rgba(237,239,243,.88);gap:10px}
+body[data-theme="graphite"] #trackMenu button .tmName{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body[data-theme="graphite"] #trackMenu button .tmSub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 14px "Albert Sans",system-ui,sans-serif;color:rgba(237,239,243,.5)}
+body[data-theme="graphite"] #trackMenu button .mark{font:700 17px "Sora",system-ui,sans-serif}
+body[data-theme="graphite"] #trackMenu button.sel{background:transparent;color:var(--text);font-weight:600}
+body[data-theme="graphite"] #trackMenu button:is(.focus,:hover,.sel.focus){background:#EDEFF3;color:#14161A}
+body[data-theme="graphite"] #trackMenu button:is(.focus,:hover) .tmSub{color:rgba(20,22,26,.6)}
+body[data-theme="graphite"] #playerStats h3{font:600 20px "Sora",system-ui,sans-serif;margin:4px 6px 12px}
+body[data-theme="graphite"] #playerStats .statGrid{font:500 15px "Albert Sans",system-ui,sans-serif;gap:0 14px;padding:0 6px}
+body[data-theme="graphite"] #playerStats .statGrid span{min-height:38px;border-bottom:0}
+body[data-theme="graphite"] #playerStats .statGrid span:nth-child(odd){text-transform:none;letter-spacing:0;font-size:14px;color:rgba(237,239,243,.55)}
 /* 3.5.1 (owner): Multiview matches the guide and the player: site type instead of mono caps, short channel
    names with tags, 6px corners, no edge lines, white focus with dark text, a calm picker sheet. */
 body[data-theme="graphite"] #multiView :is(.mvText,.mvStatus:not(.warn)){font:600 13px "Sora",system-ui,sans-serif;letter-spacing:0;text-transform:none;border:0;border-radius:6px;background:rgba(8,8,11,.66);color:var(--text)}
@@ -4181,6 +4198,9 @@ body[data-theme="graphite"] .mvChLogo{border-radius:6px}
 body[data-theme="graphite"] #appClock{font:600 18px "Sora",system-ui,sans-serif;font-variant-numeric:tabular-nums;letter-spacing:0;justify-content:flex-end;gap:6px;text-shadow:0 1px 8px rgba(0,0,0,.5)}
 body[data-theme="graphite"] #appClock .ampm{font:500 .62em "Albert Sans",system-ui,sans-serif;letter-spacing:.04em;color:rgba(237,239,243,.62)}
 body[data-theme="graphite"].tv #appClock{font-size:22px}
+body[data-theme="graphite"] #osd .osdClock{font:600 18px "Sora",system-ui,sans-serif;font-variant-numeric:tabular-nums;letter-spacing:0;background:transparent;border:0;box-shadow:none;padding:0;align-items:baseline}
+body[data-theme="graphite"] #osd .osdClock .ampm{font:500 .62em "Albert Sans",system-ui,sans-serif;color:rgba(237,239,243,.62);margin-left:4px}
+body[data-theme="graphite"] #osd .osdClock #endsAt{font:500 14px "Albert Sans",system-ui,sans-serif;color:rgba(237,239,243,.62)}
 /* 3.5.1 (owner): Genre / Sort menus look like the platform: a calm 6px sheet, sentence-case title,
    even rows, white focus with dark text, a magenta tick on the chosen one. The bar buttons match. */
 body[data-theme="graphite"] #filterMenu{background:rgba(8,8,11,.72);backdrop-filter:none}
@@ -20131,7 +20151,10 @@ function openTrackMenu(kind, restore = {}) {
   const mkRow = (label, sel, fn, opts = {}) => {
     const b = document.createElement('button');
     if (opts.key) b.dataset.focusKey = opts.key;
-    b.innerHTML = `${esc(label)}<span class="mark">${sel ? '✓' : ''}</span>`;
+    // 3.5.1 (owner pick option A): the name, then its detail quieter ("English  online · best match"), ✓ on the right.
+    const lm = String(label).match(/^(.*?)\s+(?:·|-|—)\s+(.+)$/);
+    b.innerHTML = lm ? `<span class="tmName">${esc(lm[1])}</span><span class="tmSub">${esc(lm[2])}</span><span class="mark">${sel ? '✓' : ''}</span>`
+      : `<span class="tmName">${esc(label)}</span><span class="mark">${sel ? '✓' : ''}</span>`;
     if (sel) b.classList.add('sel');
     if (opts.disabled) {
       b.disabled = true;
