@@ -11880,6 +11880,17 @@ test('Guide C: short channel names with tags, no filler blocks, past dimmed, mag
   assert.equal((ui.match(/liveChannelLabelHtml\(ch\.(name|title)\)/g) || []).length, 2, 'both guides show the short name with tags');
 });
 
+test('Clock, Genre/Sort menus and bar match the platform (3.5.1, owner)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /body\[data-theme="graphite"\] #appClock\{font:600 18px "Sora"[^}]*font-variant-numeric:tabular-nums/, 'clock in Sora with steady digits');
+  assert.match(ui, /body\[data-theme="graphite"\] #filterMenu \.box\{border:0;border-radius:6px;/, 'menu sheet: 6px, no edge line');
+  assert.match(ui, /body\[data-theme="graphite"\] #filterMenuTitle\{font:600 20px "Sora"[^}]*text-transform:none/, 'sentence-case title, not mono caps');
+  assert.match(ui, /body\[data-theme="graphite"\] #filterMenuList button:is\(\.focus,:hover\)\{background:#EDEFF3!important;color:#14161A!important\}/, 'white focus with dark text');
+  assert.match(ui, /body\[data-theme="graphite"\] \.filterBar select\{min-height:46px;[^}]*border-radius:6px/, 'bar controls match the other buttons');
+  assert.match(ui, /e\.preventDefault\(\); openFilterMenu\(id === 'sortSel' \? 'sort' : 'genre'\);/, 'desktop clicks open the app menu');
+  assert.match(ui, /if \(b\.contains\('mobileShell'\) \|\| b\.contains\('tv'\) \|\| window\.innerWidth <= 600 \|\| e\.button !== 0\) return;/, 'phones keep the native picker');
+});
+
 test('QR sign-in: the page QR encoder makes a valid, scannable code (3.5.1, owner)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const a = ui.indexOf('function qrMatrix(text) {'), b = ui.indexOf('// ---- 3.5.1 (owner): QR sign-in ----');
