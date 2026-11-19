@@ -15,17 +15,27 @@ const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 const TV_UA = 'TriboonTV-test';
 
 // A provider with N TS channels (ts bytes every 25 ms) and one garbage channel (index `garbage`).
-function startProvider({ channels = 3, garbage = -1 } = {}) {
-  const state = { active: 0, peak: 0, total: 0, opens: {}, delayMs: {}, delayOnce: {}, timers: new Set() };
+// With `hls`, one more channel (index N) is an HLS playlist that a TV app polls.
+function startProvider({ channels = 3, garbage = -1, hls = false } = {}) {
+  const state = { active: 0, peak: 0, total: 0, opens: {}, hlsPolls: 0, delayMs: {}, delayOnce: {}, timers: new Set() };
   const playlist = ['#EXTM3U'];
   for (let i = 0; i < channels; i++) {
     playlist.push(`#EXTINF:-1 group-title="Test",Conn ${i}`);
     playlist.push(`http://127.0.0.1:PORT/live/${i}.ts`);
   }
+  if (hls) {
+    playlist.push('#EXTINF:-1 group-title="Test",Conn HLS');
+    playlist.push('http://127.0.0.1:PORT/hls/live.m3u8');
+  }
   const server = http.createServer((req, res) => {
     if (req.url === '/list.m3u') {
       res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
       return res.end(playlist.join('\n').replaceAll('PORT', String(server.address().port)));
+    }
+    if (req.url.startsWith('/hls/live.m3u8')) {
+      state.hlsPolls++;
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end('#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg1.ts\n');
     }
     const m = /^\/live\/(\d+)\.ts/.exec(req.url);
     if (!m) { res.writeHead(404); return res.end(); }
@@ -302,4 +312,33 @@ test('web: a live stream cut mid-play asks the server once why, and shows a Max 
     'only the limit reason is taken from the answer');
   assert.match(ui, /if \(!e\.liveProviderReason && appended > 0\) e\.liveStreamCut = true;/, 'a started stream that breaks is a cut');
   assert.match(ui, /if \(!split && e\.liveStreamCut && !e\.liveProviderReason && !e\.liveStopChecked\) \{/, 'asked once, main player and Multiview panes');
+});
+
+test('live: under Max connections an HLS playlist poll never stops another screen\'s stream (result 115 P1-1)', async () => {
+  const provider = await startProvider({ channels: 2, hls: true });
+  let rig = null;
+  const clients = [];
+  try {
+    rig = await bootWithSource(provider, { maxConnections: 1 });
+    const ts = rig.channels[0];
+    const hlsCh = rig.channels.find((c) => /Conn HLS/.test(c.name));
+    assert.ok(hlsCh, 'the HLS channel is listed');
+    const tv = await open(rig.srv.port, withSurface(ts.nativeUrl, 'tv-a'), TV_UA);
+    clients.push(tv);
+    assert.ok(await waitFor(() => tv.bytes > 0), 'TV A plays the TS channel');
+    // TV B polls the HLS channel's playlist, as ExoPlayer does, ten times.
+    for (let i = 0; i < 10; i++) {
+      const poll = await open(rig.srv.port, withSurface(hlsCh.nativeUrl, 'tv-b'), TV_UA);
+      clients.push(poll);
+      await waitFor(() => poll.ended, 2000);
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    assert.ok(provider.state.hlsPolls >= 10, `the playlist was served (${provider.state.hlsPolls})`);
+    assert.ok(!tv.ended, 'TV A was never cut by a playlist poll');
+    assert.strictEqual(provider.state.opens[0], 1, `the TS channel opened once (${provider.state.opens[0]})`);
+  } finally {
+    clients.forEach(drop);
+    if (rig) await rig.srv.shutdown();
+    provider.close();
+  }
 });

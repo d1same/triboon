@@ -2094,7 +2094,10 @@ function trackIptvHub(hub, openerSlotKey = '') {
 // was stopped get the reason when their player asks again; for 20 s such a retry from the stopped
 // screen does not stop the other stream in turn (no ping-pong between two screens): it gets the
 // reason instead. Another screen, or the same user's deliberate new pane, is not held back.
-function makeRoomOnIptvSource(sourceId, slotKey) {
+// `evict: false` (an HLS playlist request): only the hold applies. A playlist is a short snapshot
+// that is not counted, and a TV app polls it every few seconds, so letting it stop the oldest
+// stream would cut another screen on every poll (second check, result 115 P1-1).
+function makeRoomOnIptvSource(sourceId, slotKey, opts = {}) {
   const max = iptvSourceMaxConnections(sourceId);
   if (!max) return { ok: true, closed: 0, ffmpegClosed: false };
   const set = iptvSourceStreams.get(sourceId);
@@ -2105,6 +2108,7 @@ function makeRoomOnIptvSource(sourceId, slotKey) {
   if (stop && now - stop.at < IPTV_LIMIT_STOP_HOLD_MS) {
     return { ok: false, status: 429, reason: iptvLimitMessage(max) };
   }
+  if (opts.evict === false) return { ok: true, closed: 0, ffmpegClosed: false };
   const byAge = (a, b) => a.openedAt - b.openedAt;
   const idle = live.filter((e) => e.viewerCount() === 0).sort(byAge);
   const busy = live.filter((e) => e.viewerCount() > 0).sort(byAge);
@@ -2392,7 +2396,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     return;
   }
   // A new provider stream: make room under the source's "Max connections" first (brief 113).
-  const room = makeRoomOnIptvSource(meta.sourceId, slot.key);
+  const room = makeRoomOnIptvSource(meta.sourceId, slot.key, { evict: iptvNativeMime(target) !== 'application/x-mpegURL' });
   if (!room.ok) {
     slot.done('provider limit');
     return sendIptvNativeError(ctx.res, room.status, room.reason);
