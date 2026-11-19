@@ -4260,9 +4260,9 @@ body[data-theme="graphite"] .gTick::before{bottom:auto;height:6px;background:rgb
    white focus), no outline (owner: plain tile). */
 body[data-theme="graphite"] .gCh img{width:44px;height:44px;flex:none;object-fit:contain;padding:4px;border-radius:6px;background:#26272D;box-sizing:border-box}
 body[data-theme="graphite"] :is(.gRow.focus,.pgRow.focus,.pgRow:focus) .gCh img{background:#26272D}
-/* the now-line runs behind the show tiles, never through their text; narrow tiles drop the time */
+/* the now-line runs over the show tiles (owner, 3.5.1); narrow tiles drop the time */
 body[data-theme="graphite"] .guideTimeline .gProg{z-index:2}
-body[data-theme="graphite"] .guideTimeline .gNow{z-index:1}
+body[data-theme="graphite"] .guideTimeline .gNow{z-index:3}
 body[data-theme="graphite"] .guideTimeline .gProg:is(.short,.tiny,.micro) .gpS{display:none}
 /* solid tiles so the now-line passes behind them; finished shows dim by their text, not by transparency */
 body[data-theme="graphite"] .guideTimeline .gProg{background-color:#1C1C22}
