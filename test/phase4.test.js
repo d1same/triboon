@@ -11878,6 +11878,8 @@ test('Guide C: short channel names with tags, no filler blocks, past dimmed, mag
   assert.match(ui, /el\.classList\.toggle\('past', \+el\.dataset\.e <= t\);/, 'shows dim as they end, without a re-render');
   assert.match(ui, /\.guideTimeline \.gNow\{width:2px;background:#C13BD6;box-shadow:none\}/, 'magenta now-line');
   assert.equal((ui.match(/liveChannelLabelHtml\(ch\.(name|title)\)/g) || []).length, 2, 'both guides show the short name with tags');
+  assert.match(ui, /\.filter\(\(p\) => p && p\.start && p\.stop && !p\.synthetic\);/, 'no filler Now box in the web or native player strip');
+  assert.match(ui, /title: \(it\.title \? liveNameParts\(it\.title\)\.name : ''\) \|\| 'Live TV',/, 'the native player gets the short channel name');
 });
 
 test('Clock, Genre/Sort menus and bar match the platform (3.5.1, owner)', () => {

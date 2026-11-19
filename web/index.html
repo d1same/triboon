@@ -14827,7 +14827,7 @@ async function openPlayer(it, mount, opts = {}) {
   S.view = 'player'; $('vlcPanel').classList.remove('show'); $('player').classList.remove('open');
   $('player').classList.toggle('guideMode', keepGuideMode);
   $('player').classList.toggle('live', it.type === 'live'); // zap/guide controls only for live
-  $('pTitle').textContent = it.title;
+  $('pTitle').textContent = it.type === 'live' ? liveNameParts(it.title).name : it.title; // 3.5.1 guide C: short live name
   const sourceName = mount.candidate ? mount.candidate.name : mount.name;
   const playerMeta = episodePlayerMeta(it);
   $('pSrc').textContent = it.type === 'live' ? '' : (playerMeta.subline || '');
@@ -19113,7 +19113,7 @@ async function renderLiveEpgStrip(idx) {
   try {
     const byIdx = await fetchGuideBatch([ch]);
     if (_liveEpgIdx !== idx) return; // channel changed mid-fetch
-    _liveEpgProgs = (byIdx[ch.idx ?? ch._channel] || byIdx[idx] || []).filter((p) => p && p.start && p.stop);
+    _liveEpgProgs = (byIdx[ch.idx ?? ch._channel] || byIdx[idx] || []).filter((p) => p && p.start && p.stop && !p.synthetic); // 3.5.1 guide C: no filler "Now: <channel name>"
     paintLiveEpgStrip();
     pushLiveEpgToNative();
   } catch {}
@@ -24728,7 +24728,7 @@ function tryNativeLivePlayer(it, guide = false) {
     // saves Onn/Chromecast-class devices when raw provider TS/HLS stalls or the extractor chokes.
     addLiveFallback(it._streamUrl, 'video/mp4');
     window.TriboonTV.playLive(JSON.stringify({
-      title: it.title || 'Live TV',
+      title: (it.title ? liveNameParts(it.title).name : '') || 'Live TV', // 3.5.1 guide C: short name
       source: it.genre || it.group || '',
       url: primaryAbs,
       mime: primaryMime,
