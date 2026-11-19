@@ -280,3 +280,11 @@ test('live: Max connections is a source setting (1 to 10 or empty), and changing
     provider.close();
   }
 });
+
+test('web: the Live TV source editor has a Max connections field that is saved, shown on edit and cleared', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /<input id="iptvMaxConn" type="number" min="1" max="10"/, 'the field is in the source form');
+  assert.match(ui, /maxConnections: \$\('iptvMaxConn'\)\.value\.trim\(\) \? parseInt\(\$\('iptvMaxConn'\)\.value, 10\) : null/, 'save sends it (empty = no limit)');
+  assert.match(ui, /\$\('iptvMaxConn'\)\.value = src\.maxConnections \? String\(src\.maxConnections\) : ''/, 'editing a source shows its limit');
+  assert.ok((ui.match(/'epgUrl', 'iptvMaxConn'\]/g) || []).length >= 3, 'every form reset clears it');
+});
