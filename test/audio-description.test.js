@@ -61,3 +61,96 @@ test('scoring: no false positives on titles, groups or words that only contain A
     'Made.With.Love.2026.1080p.WEB-DL.H.264-FLUX',
   ]) assert.strictEqual(isAudioDescriptionRelease(name), false, name);
 });
+
+// Part 2: the default audio track. A test MKV (made here with ffmpeg) has two English tracks: the
+// first titled "English - Audio Description" with the visual-impaired flag, the second plain.
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+const { probeTracks, isAudioDescriptionTrack, defaultAudioTrack, detectFfmpeg, detectFfprobe } = require('../server/transcode');
+const { mediaStreamsFromProbe } = require('../server/jellyfin-api');
+
+const tracks = (...rows) => rows.map((r, rel) => ({ rel, codec: 'aac', channels: 2, ...r }));
+
+test('tracks: Audio Description is told by its flag or title, and normal titles are not', () => {
+  for (const t of [
+    { title: 'English - Audio Description' }, { title: 'Audio Description' }, { title: 'English (AD)' },
+    { title: 'English AD' }, { title: 'Descriptive Audio' }, { title: 'English Descriptive' },
+    { title: 'Described Video' }, { title: 'Visually Impaired' }, { title: 'DVS' }, { title: 'AudioDescription' },
+    { title: '', visualImpaired: true }, { title: 'English', visualImpaired: true },
+  ]) assert.strictEqual(isAudioDescriptionTrack(t), true, JSON.stringify(t));
+  for (const t of [
+    { title: 'English' }, { title: '' }, {}, { title: 'Dolby Digital 5.1' }, { title: 'Director Commentary' },
+    { title: 'Headphone Mix' }, { title: 'Stereo' }, { title: 'Radio Edit' }, { title: 'English Adult Swim' },
+    { title: 'DTS-HD MA 5.1' }, { title: 'Ad-free mix' },
+  ]) assert.strictEqual(isAudioDescriptionTrack(t), false, JSON.stringify(t));
+});
+
+test('tracks: the default is the first normal track in the wanted language', () => {
+  const adFirst = tracks({ lang: 'eng', title: 'English - Audio Description', visualImpaired: true }, { lang: 'eng', title: 'English' });
+  assert.strictEqual(defaultAudioTrack(adFirst), 1, 'the file language: skip the AD track');
+  assert.strictEqual(defaultAudioTrack(adFirst, 'en'), 1, 'the viewer language: skip the AD track');
+  const mixed = tracks({ lang: 'eng', title: 'AD', visualImpaired: true }, { lang: 'fre', title: 'Francais' }, { lang: 'eng', title: 'English 5.1' });
+  assert.strictEqual(defaultAudioTrack(mixed, 'en'), 2);
+  assert.strictEqual(defaultAudioTrack(mixed, 'fr'), 1);
+  assert.strictEqual(defaultAudioTrack(mixed), 2, 'no preference: the first track\'s language, without AD');
+  const plainFirst = tracks({ lang: 'eng', title: 'English' }, { lang: 'eng', title: 'English - Audio Description' });
+  assert.strictEqual(defaultAudioTrack(plainFirst, 'en'), 0, 'a normal first track is left alone');
+});
+
+test('tracks: Audio Description is the default only when it is the only track in that language', () => {
+  assert.strictEqual(defaultAudioTrack(tracks({ lang: 'eng', title: 'Audio Description', visualImpaired: true })), 0);
+  const onlyEnglishIsAd = tracks({ lang: 'fre', title: 'Francais' }, { lang: 'eng', title: 'English - Audio Description' });
+  assert.strictEqual(defaultAudioTrack(onlyEnglishIsAd, 'en'), 1, 'the only English track plays for an English viewer');
+  assert.strictEqual(defaultAudioTrack([], 'en'), 0);
+});
+
+function makeAdMkv() {
+  if (!detectFfmpeg() || !detectFfprobe()) return null;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-ad-'));
+  const file = path.join(dir, 'ad.mkv');
+  const r = spawnSync(detectFfmpeg().path, ['-v', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-f', 'lavfi', '-i', 'sine=frequency=440', '-f', 'lavfi', '-i', 'sine=frequency=660',
+    '-t', '2', '-map', '0:v', '-map', '1:a', '-map', '2:a', '-c:v', 'mpeg4', '-c:a', 'aac',
+    '-metadata:s:a:0', 'language=eng', '-metadata:s:a:0', 'title=English - Audio Description', '-disposition:a:0', 'default+visual_impaired',
+    '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=English', '-disposition:a:1', '0', file], { windowsHide: true });
+  if (r.status !== 0) throw new Error('ffmpeg could not build the test MKV: ' + String(r.stderr || '').slice(0, 300));
+  return { dir, file };
+}
+
+test('tracks: the probe of a real MKV flags the Audio Description track and the default is the second track', async (t) => {
+  const mkv = makeAdMkv();
+  if (!mkv) return t.skip('ffmpeg/ffprobe not available');
+  try {
+    const probe = await probeTracks(mkv.file);
+    assert.strictEqual(probe.audio.length, 2);
+    assert.strictEqual(probe.audio[0].visualImpaired, true, 'Matroska FlagVisualImpaired is read');
+    assert.strictEqual(probe.audio[0].audioDescription, true);
+    assert.strictEqual(probe.audio[1].audioDescription, false);
+    assert.strictEqual(defaultAudioTrack(probe.audio), 1);
+    assert.strictEqual(defaultAudioTrack(probe.audio, 'en'), 1);
+    // Jellyfin clients take IsDefault as the playing audio.
+    const audioRows = mediaStreamsFromProbe(probe).filter((s) => s.Type === 'Audio');
+    assert.deepStrictEqual(audioRows.map((s) => s.IsDefault), [false, true]);
+  } finally { fs.rmSync(mkv.dir, { recursive: true, force: true }); }
+});
+
+test('server: remux, transcode and HLS without audio= play the default track; a named track always wins', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const start = src.indexOf('function requestedAudioTrack(ctx, vf) {');
+  const end = src.indexOf('\n}', start) + 2;
+  assert.ok(start >= 0 && end > start, 'requestedAudioTrack is in index.js');
+  const requestedAudioTrack = new Function('defaultAudioTrack', `${src.slice(start, end)}\nreturn requestedAudioTrack;`)(defaultAudioTrack);
+  const vf = { _tracks: { audio: tracks({ lang: 'eng', title: 'English - Audio Description', visualImpaired: true }, { lang: 'eng', title: 'English' }) } };
+  const ctx = (q) => ({ url: new URL(`http://x/api/remux/m1${q}`) });
+  assert.strictEqual(requestedAudioTrack(ctx('?t=a'), vf), 1, 'no audio=: the normal track');
+  assert.strictEqual(requestedAudioTrack(ctx('?t=a&audio='), vf), 1);
+  assert.strictEqual(requestedAudioTrack(ctx('?t=a&audio=0'), vf), 0, 'a saved or manual pick of the AD track is kept');
+  assert.strictEqual(requestedAudioTrack(ctx('?t=a&audio=1'), vf), 1);
+  assert.strictEqual(requestedAudioTrack(ctx('?t=a'), {}), 0, 'not probed yet: track 0 as before');
+  const uses = src.match(/const audioTrack = requestedAudioTrack\(ctx, vf\);/g) || [];
+  assert.strictEqual(uses.length, 3, 'remux, transcode and HLS all use it');
+  assert.ok(!src.includes("const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;"),
+    'no endpoint falls back to track 0 on its own');
+});

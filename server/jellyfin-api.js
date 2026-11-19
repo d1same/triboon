@@ -13,6 +13,7 @@ const zlib = require('zlib');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const debug = require('./debug');
 const { parseLocalKey } = require('./library-keys');
+const { defaultAudioTrack } = require('./transcode');
 
 // Longest sign-in name accepted before any throttle key is built; the same constant caps account
 // creation (server/auth.js), so the two cannot drift apart.
@@ -1262,6 +1263,8 @@ function mediaStreamsFromProbe(probe) {
   const video = Array.isArray(probe.video) ? probe.video : [];
   const audio = Array.isArray(probe.audio) ? probe.audio : [];
   if (!video.length && !audio.length) return null;
+  // The default audio is never an Audio Description track while a normal one exists (brief 121).
+  const defaultAudioRel = audio.length ? defaultAudioTrack(audio.map((a, i) => ({ ...a, rel: Number.isInteger(a.rel) ? a.rel : i }))) : 0;
   for (const track of video) {
     streams.push(completeStream({
       Index: index++,
@@ -1290,7 +1293,7 @@ function mediaStreamsFromProbe(probe) {
       Profile: track.profile || null,
       Language: lang,
       Channels: track.channels || 2,
-      IsDefault: audioIndex === 0,
+      IsDefault: (Number.isInteger(track.rel) ? track.rel : audioIndex) === defaultAudioRel,
       DisplayTitle: track.title || lang || `Audio ${audioIndex + 1}`,
     }));
   });
