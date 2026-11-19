@@ -310,6 +310,18 @@ fn playback_health_issue(
     (!missing.is_empty()).then(|| format!("Windows libmpv: {}", missing.join("; ")))
 }
 
+/// The sound state a fresh VOD play starts with: unmuted, and audible (a volume at or near 0
+/// becomes 100). Any other volume the viewer chose is kept.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn fresh_play_audio_state(current_volume: f64) -> (bool, f64) {
+    let volume = if current_volume.is_finite() && current_volume >= 1.0 {
+        current_volume.min(130.0)
+    } else {
+        100.0
+    };
+    (false, volume)
+}
+
 /// Strip what must never reach a log file: URL queries (stream tokens ride `?t=`) and any bare
 /// `t=`/`token=` value left outside a URL.
 #[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
@@ -2029,6 +2041,8 @@ struct NativeSession {
     // When this session turned ready, and whether its sound/picture health was checked (F5).
     ready_at: Option<Instant>,
     health_checked: bool,
+    // A fresh VOD play (not a seek restart or source swap) starts with a known sound state (F6).
+    reset_audio_state: bool,
     buffering_since: Option<Instant>,
     last_progress: Instant,
     last_stats: Instant,
@@ -2037,6 +2051,7 @@ struct NativeSession {
 
 impl NativeSession {
     fn from_vod(request: VodRequest) -> Self {
+        let fresh_play = !request.quiet_seek;
         let episode_focus_index = request
             .episode_choices
             .iter()
@@ -2105,6 +2120,7 @@ impl NativeSession {
             loaded_at: Instant::now(),
             ready_at: None,
             health_checked: false,
+            reset_audio_state: fresh_play,
             buffering_since: None,
             last_progress: Instant::now(),
             last_stats: Instant::now(),
@@ -2152,6 +2168,7 @@ impl NativeSession {
             loaded_at: Instant::now(),
             ready_at: None,
             health_checked: false,
+            reset_audio_state: false,
             buffering_since: None,
             last_progress: Instant::now(),
             last_stats: Instant::now(),
@@ -2507,6 +2524,18 @@ fn load_session(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> Result<(), S
     session.video_reconfigured = false;
     session.subtitle_attached = session.subtitle.url.is_empty();
     apply_session_buffer(mpv, session)?;
+    if session.reset_audio_state {
+        // The shared mpv keeps `mute` (and a volume of 0) from the previous title, so a new film
+        // could start silent with nothing on screen saying why. A fresh play starts unmuted and
+        // audible; the viewer's own volume above 0 is kept. Seek restarts keep the current state.
+        session.reset_audio_state = false;
+        let current = property::<f64>(mpv, "volume").unwrap_or(100.0);
+        let (muted, volume) = fresh_play_audio_state(current);
+        let _ = mpv.set_property("mute", muted);
+        let _ = mpv.set_property("volume", volume);
+        session.ui.muted = muted;
+        session.ui.volume = volume;
+    }
     mpv.set_property("force-media-title", session.ui.title.as_str())
         .map_err(|e| e.to_string())?;
     mpv.set_property("alang", mpv_alang(&session.preferred_audio_language).as_str())
@@ -3649,6 +3678,15 @@ mod tests {
         assert!(line.contains("/api/stream/abc?[redacted]"));
         assert_eq!(scrub_log_line("audio: format=s16 stereo"), "audio: format=s16 stereo");
         assert_eq!(scrub_log_line("width t=  height"), "width t=  height", "empty value stays as is");
+    }
+
+    #[test]
+    fn fresh_play_is_unmuted_and_audible_but_keeps_a_chosen_volume() {
+        assert_eq!(fresh_play_audio_state(0.0), (false, 100.0));
+        assert_eq!(fresh_play_audio_state(0.4), (false, 100.0));
+        assert_eq!(fresh_play_audio_state(f64::NAN), (false, 100.0));
+        assert_eq!(fresh_play_audio_state(42.0), (false, 42.0));
+        assert_eq!(fresh_play_audio_state(500.0), (false, 130.0));
     }
 
     #[test]
