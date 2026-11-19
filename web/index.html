@@ -4150,6 +4150,30 @@ body[data-theme="graphite"] :is(.lcat,.pgCat,.chGroupHead){border-radius:6px}
 body[data-theme="graphite"] :is(.pgRow,.gRow):is(.focus,:focus){background:rgba(237,239,243,.07)!important;color:var(--text)!important}
 /* Live TV header buttons (Multiview / Channels): the site button, no edge line, white on focus. */
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn){border:0!important;border-radius:6px!important}
+/* 3.5.1 (owner): Multiview matches the guide and the player: site type instead of mono caps, short channel
+   names with tags, 6px corners, no edge lines, white focus with dark text, a calm picker sheet. */
+body[data-theme="graphite"] #multiView :is(.mvText,.mvStatus:not(.warn)){font:600 13px "Sora",system-ui,sans-serif;letter-spacing:0;text-transform:none;border:0;border-radius:6px;background:rgba(8,8,11,.66);color:var(--text)}
+body[data-theme="graphite"] #multiView .mvAudio{border-radius:6px;background:#EDEFF3;color:#14161A;font:700 11px "Sora",system-ui,sans-serif}
+body[data-theme="graphite"] #multiView .mvName{font:600 17px "Sora",system-ui,sans-serif}
+body[data-theme="graphite"] #multiView .mvLayout button{min-width:44px;height:40px;border:0!important;border-radius:6px!important;background:rgba(237,239,243,.08)!important;color:var(--text)!important;font:600 15px "Sora",system-ui,sans-serif!important;letter-spacing:0;text-transform:none;box-shadow:none!important}
+body[data-theme="graphite"] #multiView .mvLayout button.on{background:rgba(237,239,243,.2)!important}
+body[data-theme="graphite"] #multiView :is(.mvLayout button,.mvIconBtn,.mvAction):is(.focus,:focus,:hover){background:#EDEFF3!important;color:#14161A!important;box-shadow:none!important;border-color:transparent!important}
+body[data-theme="graphite"] #multiView .mvAdd{border:0;border-radius:6px;background:rgba(237,239,243,.1)}
+body[data-theme="graphite"] #multiView .mvAdd:is(.focus,:focus,:hover){background:#EDEFF3;color:#14161A}
+body[data-theme="graphite"] .mvPicker{border:0;border-radius:6px;background:rgba(14,15,18,.97);box-shadow:none}
+body[data-theme="graphite"] .mvPickerHead{border-bottom:0}
+body[data-theme="graphite"] .mvPicker{width:min(640px,calc(100vw - 30px))}
+body[data-theme="graphite"] .mvPickerBody{grid-template-columns:minmax(150px,230px) minmax(0,1fr)}
+body[data-theme="graphite"] .mvPickerTitle{font:600 18px "Sora",system-ui,sans-serif}
+body[data-theme="graphite"] :is(.mvCat,.mvChannel){border:0;border-radius:6px;background:transparent;font:600 14px "Albert Sans",system-ui,sans-serif;min-height:46px}
+body[data-theme="graphite"] .mvChannel .mvChName{font:600 15px "Sora",system-ui,sans-serif}
+body[data-theme="graphite"] .mvChannel .lTags{margin-left:auto;flex:none}
+body[data-theme="graphite"] .mvCat .mvCatLbl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body[data-theme="graphite"] .mvCat.sel{background:rgba(237,239,243,.1)}
+body[data-theme="graphite"] :is(.mvCat,.mvChannel):is(.focus,:focus,:hover){background:#EDEFF3!important;color:#14161A!important;border-color:transparent;box-shadow:none}
+body[data-theme="graphite"] :is(.mvCat,.mvChannel):is(.focus,:focus,:hover) *{color:#14161A}
+body[data-theme="graphite"] :is(.mvCat,.mvChannel):is(.focus,:focus,:hover) .lTags .lTag{background:rgba(20,22,26,.12)!important;color:rgba(20,22,26,.75)!important}
+body[data-theme="graphite"] .mvChLogo{border-radius:6px}
 /* 3.5.1 (owner): the top-right clock in the site type (Sora, steady digits, quiet AM/PM) instead of a code font. */
 body[data-theme="graphite"] #appClock{font:600 18px "Sora",system-ui,sans-serif;font-variant-numeric:tabular-nums;letter-spacing:0;justify-content:flex-end;gap:6px;text-shadow:0 1px 8px rgba(0,0,0,.5)}
 body[data-theme="graphite"] #appClock .ampm{font:500 .62em "Albert Sans",system-ui,sans-serif;letter-spacing:.04em;color:rgba(237,239,243,.62)}
@@ -4177,7 +4201,7 @@ body[data-theme="graphite"] .gCh .gChName{display:block;font:600 14.5px "Sora",s
 body[data-theme="graphite"] .lTags{display:flex;gap:5px;flex-wrap:nowrap;overflow:hidden;-webkit-line-clamp:unset}
 body[data-theme="graphite"] .lTags .lTag{display:inline-block;font:600 11px "Albert Sans",system-ui,sans-serif;line-height:1;padding:3px 6px;border-radius:4px;
   background:rgba(237,239,243,.1);color:rgba(237,239,243,.7);white-space:nowrap;-webkit-line-clamp:unset;overflow:visible}
-body[data-theme="graphite"] :is(.gRow.focus,.pgRow.focus,.pgRow:focus,.lcat.focus,.lcat:focus) .lTag{background:rgba(20,22,26,.12)}
+body[data-theme="graphite"] :is(.gRow.focus,.pgRow.focus,.pgRow:focus,.lcat.focus,.lcat:focus) .lTags .lTag{background:rgba(20,22,26,.12)!important;color:rgba(20,22,26,.75)!important}
 body[data-theme="graphite"] .lcat .lTags{margin-left:auto;flex:none}
 body[data-theme="graphite"] .lcat .lTags + .catCount{margin-left:10px}
 body[data-theme="graphite"] .gCh .pgInit{width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:6px;background:rgba(237,239,243,.08);color:rgba(237,239,243,.75);font:700 15px "Sora",system-ui,sans-serif;-webkit-line-clamp:unset}
@@ -13787,7 +13811,7 @@ function renderMultiView() {
     el.classList.toggle('mvMain', visible && count === 3 && pos === 0);
     el.classList.toggle('swapSource', visible && swapSlot === i);
     el.classList.toggle('swapTarget', visible && swapSlot >= 0 && swapSlot !== i);
-    el.querySelector('.mvText').textContent = slot && slot.item ? (slot.item.title || slot.item.name || 'Live TV') : `Add channel ${i + 1}`;
+    el.querySelector('.mvText').textContent = slot && slot.item ? (liveNameParts(slot.item.title || slot.item.name || 'Live TV').name || 'Live TV') : `Add channel ${i + 1}`;
     const swapStatus = swapSlot >= 0
       ? (swapSlot === i ? 'Pick another screen' : `OK swaps with screen ${swapSlot + 1}`)
       : '';
@@ -13892,7 +13916,8 @@ function renderMultiViewPicker() {
   names.forEach((name) => {
     const btn = document.createElement('button');
     btn.className = 'mvCat focusable' + (name === S.multiView.cat ? ' sel' : '');
-    btn.innerHTML = `<span>${esc(name)}</span><span>${countFor(name)}</span>`;
+    const cp = (name === cwName || name === favName) ? { name, tags: [] } : liveNameParts(name, true); // 3.5.1 guide C names
+    btn.innerHTML = `<span class="mvCatLbl">${esc(cp.name + (cp.tags.length ? ' · ' + cp.tags.join(' ') : ''))}</span><span>${countFor(name)}</span>`;
     btn.addEventListener('click', () => {
       S.multiView.cat = name;
       renderMultiViewPicker();
@@ -13916,7 +13941,8 @@ function renderMultiViewPicker() {
       const logo = ch.logo
         ? `<img class="mvChLogo" src="${esc(ch.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.classList.add('mvChLogoOff')">`
         : '<span class="mvChLogo mvChLogoOff"></span>';
-      btn.innerHTML = `${logo}<span class="mvChName">${esc(ch.title || ch.name || 'Live TV')}</span>`;
+      const np = liveNameParts(ch.title || ch.name || 'Live TV'); // 3.5.1 guide C: short name + tags
+      btn.innerHTML = `${logo}<span class="mvChName">${esc(np.name)}</span>${liveTagsHtml(np.tags)}`;
     }
     btn.addEventListener('click', () => {
       const slot = S.multiView.pickSlot ?? multiViewActiveSlot();

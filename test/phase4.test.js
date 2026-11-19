@@ -6854,7 +6854,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(ui, /function renderLiveFavListKeepingFocus\(\) \{[\s\S]+focusGrid\(Math\.max\(0, Math\.min\(count - 1, savedIdx\)\)\)/,
     'favorite toggle in the Favorites view should preserve focus instead of resetting to the top');
   // Multiview picker rows: logo + name, no repeated group label (the unprofessional "United States").
-  assert.match(ui, /'mvChannel focusable' \+ \(isContinue \? '' : ' mvChannelLive'\)[\s\S]+mvChLogo[\s\S]+<span class="mvChName">\$\{esc\(ch\.title \|\| ch\.name/,
+  assert.match(ui, /'mvChannel focusable' \+ \(isContinue \? '' : ' mvChannelLive'\)[\s\S]+mvChLogo[\s\S]+const np = liveNameParts\(ch\.title \|\| ch\.name[\s\S]{0,140}<span class="mvChName">\$\{esc\(np\.name\)\}/,
     'multiview live channel rows should show a logo + name, not a repeated group label');
   assert.match(ui, /function openMultiViewActions\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+if \(!pane \|\| !pane\.item\) \{[\s\S]+openMultiViewPicker\(i\);[\s\S]+S\.multiView\.actionSlot = i;[\s\S]+return setMultiViewActionFocus\(S\.multiViewActionIdx\);/,
     'OK on a filled Multiview pane should open pane actions while empty panes still open the picker');
@@ -11891,6 +11891,15 @@ test('Clock, Genre/Sort menus and bar match the platform (3.5.1, owner)', () => 
   assert.match(ui, /body\[data-theme="graphite"\] \.filterBar select\{min-height:46px;[^}]*border-radius:6px/, 'bar controls match the other buttons');
   assert.match(ui, /e\.preventDefault\(\); openFilterMenu\(id === 'sortSel' \? 'sort' : 'genre'\);/, 'desktop clicks open the app menu');
   assert.match(ui, /if \(b\.contains\('mobileShell'\) \|\| b\.contains\('tv'\) \|\| window\.innerWidth <= 600 \|\| e\.button !== 0\) return;/, 'phones keep the native picker');
+});
+
+test('Multiview matches the guide: short names, site type, 6px, white focus (3.5.1, owner)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /const np = liveNameParts\(ch\.title \|\| ch\.name \|\| 'Live TV'\);/, 'picker channels use the short name + tags');
+  assert.match(ui, /el\.querySelector\('\.mvText'\)\.textContent = slot && slot\.item \? \(liveNameParts\(/, 'screen labels use the short name');
+  assert.match(ui, /body\[data-theme="graphite"\] #multiView :is\(\.mvText,\.mvStatus:not\(\.warn\)\)\{font:600 13px "Sora"[^}]*text-transform:none/, 'no mono caps labels');
+  assert.match(ui, /body\[data-theme="graphite"\] \.mvPicker\{border:0;border-radius:6px;/, 'picker sheet: 6px, no edge line');
+  assert.match(ui, /body\[data-theme="graphite"\] :is\(\.mvCat,\.mvChannel\):is\(\.focus,:focus,:hover\)\{background:#EDEFF3!important;color:#14161A!important/, 'white focus, dark text');
 });
 
 test('QR sign-in: the page QR encoder makes a valid, scannable code (3.5.1, owner)', () => {
