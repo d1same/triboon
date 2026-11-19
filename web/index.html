@@ -4218,6 +4218,15 @@ body[data-theme="graphite"] .guideTimeline .gProg.empty .gpT{font:500 14px "Albe
 body[data-theme="graphite"] .guideTimeline .gProg .gpS{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
 body[data-theme="graphite"] .guideTimeline .gNow{width:2px;background:#C13BD6;box-shadow:none}
 body[data-theme="graphite"] .guideTimeline .gTick{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
+/* Guide C colours as in the mock-up: neutral dark greys (no purple tint), no outline, a wider channel column. */
+body[data-theme="graphite"] :is(#chBody.liveGuideShell,.pgGuideShell.liveGuideShell){background:#0F0F14;border:0;border-radius:6px;grid-template-columns:minmax(230px,300px) minmax(0,1fr)}
+body[data-theme="graphite"].tv #chBody.liveGuideShell{border-radius:6px 0 0 0}
+body[data-theme="graphite"] :is(.liveCatPane,.pgCatPane){background:#121218!important}
+body[data-theme="graphite"] :is(.guideTimeline,.pgTimeline,.liveGuidePane){background:#0F0F14}
+body[data-theme="graphite"] .guideTimeline .gRow.gHead{background:#0F0F14}
+body[data-theme="graphite"] .guideTimeline .gRow:not(.gHead) .gTl{background:transparent}
+body[data-theme="graphite"] .guideTimeline .gCh{width:300px}
+body[data-theme="graphite"] .guideTimeline :is(.gRow.focus,.pgRow.focus,.pgRow:focus) .gTl{background:rgba(237,239,243,.04)}
 /* 3.5.1 (owner: "Channels / Multiview look squished"): the site's button, not a compact chip: roomy,
    sentence-case Sora, light see-through fill, and the same for the player guide's Multiview button. */
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn,#pgMultiBtn){min-height:46px;height:auto;padding:0 22px;gap:10px;
