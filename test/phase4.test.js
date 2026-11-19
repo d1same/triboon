@@ -11745,7 +11745,7 @@ test('Boot splash waits for the logo build-up to finish (3.5.0, owner), capped a
   assert.match(ui, /if \(safe === bdCurrent\) \{ _bdPendingUrl = null; return; \}/);
   // Owner: smooth build, then hold the finished logo 2 s before Home.
   assert.match(ui, /const BOOT_LOGO_HOLD_MS = 2000;/, 'the finished logo is held 2 s');
-  assert.match(ui, /\(async function boot\(\) \{\s*requestAnimationFrame\(\(\) => requestAnimationFrame\(startBootLogo\)\);/,
+  assert.match(ui, /\(async function boot\(\) \{\s*primeBootSound\(\);[^\n]*\s*requestAnimationFrame\(\(\) => requestAnimationFrame\(startBootLogo\)\);/,
     'the build starts only once the code has loaded, so the parse cannot freeze it');
   assert.match(ui, /#appLoader:not\(\.go\) \.tbMark\{visibility:hidden\}/, 'plain ink before the build starts');
   assert.match(ui, /\$\('appLoader'\)\._logoWait = false;/, 'the splash re-armed after sign-in can close again');
@@ -11790,7 +11790,7 @@ test('Home catalog rows survive a failed load and a new day, and a failed load r
 
 test('Boot logo animates as composited layers so a busy page cannot freeze it (3.5.1, owner Android TV)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  assert.match(ui, /function startBootLogo\(\) \{[\s\S]{0,200}layerBootLogo\(loader\);\s*loader\.classList\.add\('go'\);/,
+  assert.match(ui, /function startBootLogo\(\) \{[\s\S]{0,200}layerBootLogo\(loader\);[\s\S]{0,260}startBootSoundThen\(\(\) => \{ loader\.classList\.add\('go'\);/,
     'the mark is split into layers before the build starts');
   assert.match(ui, /function layerBootLogo\(loader\) \{[\s\S]+part\.removeAttribute\('class'\);[\s\S]+\} catch \{\}\s*\}/,
     'parts lose their old in-SVG (main-thread) animation; any failure keeps the old single-SVG build');
@@ -11824,12 +11824,18 @@ test('Boot sound plays with the logo build, once, never on phones (3.5.1, owner 
   assert.ok(mp3.length > 10000 && mp3.length < 40000, 'short clip, small page cost');
   assert.ok(mp3.slice(0, 3).toString() === 'ID3' || (mp3[0] === 0xff && (mp3[1] & 0xe0) === 0xe0), 'a real MP3');
   assert.ok(ui.indexOf('id="bootSound"') > ui.indexOf('<div class="bootLaneTrack">'), 'outside the logo markup');
-  assert.match(ui, /loader\.classList\.add\('go'\);\s*playBootSound\(\);/, 'starts with the build (t=0 of the sound)');
-  const fn = ui.slice(ui.indexOf('function playBootSound()'), ui.indexOf('function playBootSound()') + 900);
+  // Owner (Shield): "the logo loads first and then the sound plays". The sound is decoded before the
+  // build, started first, and the build (.go) follows by the reported audio output lag (capped).
+  assert.match(ui, /startBootSoundThen\(\(\) => \{ loader\.classList\.add\('go'\);/, 'the build starts from the sound, not before it');
+  assert.match(ui, /primeBootSound\(\); \/\/ decode the intro sound while the screen is still blank\s*requestAnimationFrame\(\(\) => requestAnimationFrame\(startBootLogo\)\)/, 'decoded before the build');
+  assert.match(ui, /const lag = \(Number\(A\.ctx\.outputLatency\) \|\| 0\) \+ \(Number\(A\.ctx\.baseLatency\) \|\| 0\);\s*const ms = Math\.max\(0, Math\.min\(400, Math\.round\(lag \* 1000\)\)\);/, 'waits by the output lag, at most 400 ms');
+  assert.match(ui, /a\.addEventListener\('playing', once, \{ once: true \}\);\s*setTimeout\(once, 300\);/, 'fallback: waits for the element to really play, at most 300 ms');
+  assert.match(ui, /Promise\.race\(\[A\.ready, new Promise\(\(r\) => setTimeout\(r, 350\)\)\]\)/, 'decoding never holds the logo more than 350 ms');
+  const fn = ui.slice(ui.indexOf('function bootSoundAllowed()'), ui.indexOf('function bootSoundAllowed()') + 600);
   assert.match(fn, /mobileShell/, 'skipped on phones');
   assert.match(fn, /prefers-reduced-motion/, 'skipped under reduced motion');
   assert.match(fn, /triboon\.introSound/, 'can be turned off');
-  assert.match(fn, /p\.catch\(\(\) => \{\}\)/, 'a blocked autoplay stays silent, no error');
+  assert.match(ui, /if \(p && p\.catch\) p\.catch\(\(\) => once\(\)\);/, 'a blocked autoplay never blocks the logo');
 });
 
 test('Sign-in card matches the site: 6px corners, no edge line, straight 6px poster wall (3.5.1, owner)', () => {

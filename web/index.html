@@ -34054,10 +34054,9 @@ function startBootLogo() {
   const loader = $('appLoader');
   if (loader._logoDone) return loader._logoDone;
   layerBootLogo(loader);
-  loader.classList.add('go');
-  playBootSound();
   loader._logoDone = new Promise((resolve) => {
-    requestAnimationFrame(() => {
+    // The sound starts first; the build (.go) follows by the audio output lag so both land together.
+    startBootSoundThen(() => { loader.classList.add('go'); requestAnimationFrame(() => {
       let finite = [];
       try {
         finite = loader.getAnimations({ subtree: true }).filter((a) => {
@@ -34067,7 +34066,7 @@ function startBootLogo() {
       } catch {}
       Promise.race([Promise.all(finite.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 2500))])
         .then(() => { loader._logoDoneAt = performance.now(); resolve(); });
-    });
+    }); });
   });
   return loader._logoDone;
 }
@@ -34233,24 +34232,71 @@ async function enterAppShell() {
 // phone set to silent still plays media sound), not under reduced motion, not when turned off
 // (localStorage triboon.introSound = 'off'). A desktop browser blocks sound before the first click,
 // so there it simply stays silent.
-function playBootSound() {
+function bootSoundAllowed() {
+  const b = document.body.classList;
+  if (b.contains('mobileShell') || (!b.contains('tv') && window.innerWidth <= 600)) return false;
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+  try { if (localStorage.getItem('triboon.introSound') === 'off') return false; } catch {}
+  return !!$('bootSound');
+}
+function bootSoundBytes() {
+  const a = $('bootSound');
+  if (!a || !a.dataset.mp3) return null;
+  const bin = atob(a.dataset.mp3), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+// 3.5.1 (owner, Shield: "the logo loads first and then the sound plays"). Sound reaches the room
+// later than the picture: the audio path (decoder start, Android mixer, HDMI, sound bar) adds
+// latency. So the sound is decoded BEFORE the build (the screen is still blank ink), started first,
+// and the picture waits by the output latency the audio system reports (Web Audio), capped. Where
+// Web Audio is not running, the <audio> element plays and the picture waits for its 'playing' event.
+let bootAudio = null;
+function primeBootSound() {
+  if (bootAudio || !bootSoundAllowed()) return;
+  bootAudio = { ctx: null, buf: null, ready: Promise.resolve() };
   try {
-    const a = $('bootSound');
-    if (!a) return;
-    const b = document.body.classList;
-    if (b.contains('mobileShell') || (!b.contains('tv') && window.innerWidth <= 600)) return;
-    if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    try { if (localStorage.getItem('triboon.introSound') === 'off') return; } catch {}
-    if (!a.src && a.dataset.mp3) {
-      const bin = atob(a.dataset.mp3), bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      a.src = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
-    }
-    a.volume = 0.8;
-    a.currentTime = 0;
-    const p = a.play();
-    if (p && p.catch) p.catch(() => {});
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const bytes = bootSoundBytes();
+    if (!Ctx || !bytes) return;
+    const ctx = new Ctx({ latencyHint: 'interactive' });
+    bootAudio.ctx = ctx;
+    try { if (ctx.state !== 'running' && ctx.resume) ctx.resume().catch(() => {}); } catch {}
+    bootAudio.ready = new Promise((res) => {
+      ctx.decodeAudioData(bytes.buffer, (buf) => { bootAudio.buf = buf; res(); }, () => res());
+    });
   } catch {}
+}
+// Starts the sound; calls go() when the picture should start so both land together.
+function startBootSoundThen(go) {
+  let started = false;
+  const once = () => { if (!started) { started = true; go(); } };
+  if (!bootSoundAllowed()) return once();
+  primeBootSound();
+  const A = bootAudio;
+  Promise.race([A.ready, new Promise((r) => setTimeout(r, 350))]).then(() => {
+    try {
+      if (A.ctx && A.buf && A.ctx.state === 'running') {
+        const src = A.ctx.createBufferSource(), gain = A.ctx.createGain();
+        gain.gain.value = 0.8;
+        src.buffer = A.buf; src.connect(gain); gain.connect(A.ctx.destination);
+        src.start();
+        const lag = (Number(A.ctx.outputLatency) || 0) + (Number(A.ctx.baseLatency) || 0);
+        const ms = Math.max(0, Math.min(400, Math.round(lag * 1000)));
+        bootAudio.leadMs = ms; bootAudio.path = 'webaudio';
+        return ms ? setTimeout(once, ms) : once();
+      }
+      const a = $('bootSound');
+      if (!a.src) { const bytes = bootSoundBytes(); if (bytes) a.src = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' })); }
+      a.volume = 0.8;
+      a.currentTime = 0;
+      bootAudio.path = 'element';
+      a.addEventListener('playing', once, { once: true });
+      setTimeout(once, 300); // never hold the logo longer than this
+      const p = a.play();
+      if (p && p.catch) p.catch(() => once());
+    } catch { once(); }
+  });
 }
 // Prefetch (network only, no DOM) while the boot logo builds, then wait for the build to finish.
 // Only on the first splash: a re-armed splash whose logo already finished does not wait. Capped
@@ -34381,6 +34427,7 @@ function startServerVersionWatch(loadedVersion) {
   }
 }
 (async function boot() {
+  primeBootSound(); // decode the intro sound while the screen is still blank
   requestAnimationFrame(() => requestAnimationFrame(startBootLogo)); // the code has loaded: build the logo now
   const invite = new URLSearchParams(location.search).get('invite');
   let info;
