@@ -6429,7 +6429,7 @@ public class MainActivity extends Activity {
     // when it is the only track in that language (brief 121).
     private void maybeLeaveNativeAudioDescription(Tracks tracks) {
         if (nativeAudioDescriptionChecked || nativePlayer == null || !"video".equals(nativeMode)) return;
-        if (!nativeManualAudioLang.isEmpty() && nativeManualAudioIsDescription) {
+        if (nativeManualAudioIsDescription) { // the viewer chose an AD track, with or without a language
             nativeAudioDescriptionChecked = true;
             return;
         }
