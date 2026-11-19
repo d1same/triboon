@@ -210,3 +210,21 @@ test('web: track prefs after the probe use that choice, and the native app gets 
   assert.deepStrictEqual(nativeAudioDescriptionRels(), [0]);
   assert.match(ui, /audioDescriptionRels: nativeAudioDescriptionRels\(\),/, 'the native payload carries them');
 });
+
+test('android: the native player leaves an Audio Description start once, and a viewer pick wins', () => {
+  const dir = path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv');
+  const main = fs.readFileSync(path.join(dir, 'MainActivity.java'), 'utf8');
+  const helper = fs.readFileSync(path.join(dir, 'NativeAudioDescription.java'), 'utf8');
+  assert.match(main, /maybeLeaveNativeAudioDescription\(tracks\);\s+if \(NativeAudioRescue\.noPlayableAudio\(tracks\)\)/, 'checked on every track list until it ran');
+  assert.match(main, /j\.optJSONArray\("audioDescriptionRels"\)/, 'reads the server-probed AD tracks');
+  assert.match(main, /nativeAudioDescriptionChecked = true;\s+nativeManualAudioIsDescription = NativeAudioDescription\.isAudioDescription\(picked, false\);/, 'a manual pick is never moved');
+  assert.match(main, /setOverrideForType\(new TrackSelectionOverride\(group\.getMediaTrackGroup\(\), pick\[1\]\)\)/);
+  assert.match(helper, /C\.ROLE_FLAG_DESCRIBES_VIDEO/);
+  // The Java title rule is the server's rule.
+  const javaRe = /Pattern\.compile\(\s*"([^"]+)"\s*\+\s*"([^"]+)",/.exec(helper);
+  assert.ok(javaRe, 'the title pattern is readable');
+  const re = new RegExp(javaRe[1] + javaRe[2], 'i');
+  for (const title of ['English - Audio Description', 'English (AD)', 'Descriptive', 'English', 'Ad-free mix', 'Headphone Mix']) {
+    assert.strictEqual(re.test(title), isAudioDescriptionTrack({ title }), title);
+  }
+});

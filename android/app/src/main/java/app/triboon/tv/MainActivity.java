@@ -327,6 +327,12 @@ public class MainActivity extends Activity {
     // quiet-seek player rebuilds that used to silently reset audio to the hardcoded "en".
     private String nativePreferredAudioLang = "";
     private String nativeManualAudioLang = "";
+    // Audio Description is never the start track (brief 121). The server-probed AD tracks of this file
+    // (direct play: Media3 cannot read the Matroska flag), whether the check ran for this player, and
+    // whether the viewer's own pick was an AD track (then it is kept).
+    private final java.util.HashSet<Integer> nativeAudioDescriptionRels = new java.util.HashSet<>();
+    private boolean nativeAudioDescriptionChecked = false;
+    private boolean nativeManualAudioIsDescription = false;
     private final java.util.ArrayList<NativeCue> nativeSubtitleCues = new java.util.ArrayList<>();
     // Path of the file whose cues are on screen. A refresh of that same file
     // keeps the line up until the new copy arrives.
@@ -4704,8 +4710,16 @@ public class MainActivity extends Activity {
             // A fresh playback adopts the saved preference; a quiet-seek respawn of the SAME
             // playback keeps the manual in-player pick (it used to silently reset to English).
             if (!quietSeek) nativeManualAudioLang = "";
+            if (!quietSeek) nativeManualAudioIsDescription = false;
             if (!quietSeek) nativeAudioRescueUrl = "";
             applyNativeAudioChoices(audioChoices);
+            nativeAudioDescriptionRels.clear();
+            org.json.JSONArray adRels = j.optJSONArray("audioDescriptionRels");
+            if (adRels != null) for (int i = 0; i < adRels.length(); i++) {
+                int rel = adRels.optInt(i, -1);
+                if (rel >= 0) nativeAudioDescriptionRels.add(rel);
+            }
+            nativeAudioDescriptionChecked = false;
             String previousSubtitleUrl = nativeSubtitleUrl == null ? "" : nativeSubtitleUrl;
             boolean keepSubtitleCues = reuseQuietVideo && !nativeSubtitleCues.isEmpty();
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
@@ -4953,6 +4967,7 @@ public class MainActivity extends Activity {
                 @Override public void onTracksChanged(Tracks tracks) {
                     if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
                     updateNativeChrome();
+                    maybeLeaveNativeAudioDescription(tracks);
                     if (NativeAudioRescue.noPlayableAudio(tracks)) {
                         onNativeNoPlayableAudio(listenerPlayer, listenerPlaybackToken, NativeAudioRescue.unplayableAudioNames(tracks));
                     }
@@ -6407,6 +6422,26 @@ public class MainActivity extends Activity {
                 .setInitialBitrateEstimate(estimate)
                 .build();
         return nativeBandwidthMeter;
+    }
+
+    // ExoPlayer started on an Audio Description track (often flagged default in the file): play the
+    // normal track of the same language instead, once per player. A viewer's pick wins, and AD stays
+    // when it is the only track in that language (brief 121).
+    private void maybeLeaveNativeAudioDescription(Tracks tracks) {
+        if (nativeAudioDescriptionChecked || nativePlayer == null || !"video".equals(nativeMode)) return;
+        if (!nativeManualAudioLang.isEmpty() && nativeManualAudioIsDescription) {
+            nativeAudioDescriptionChecked = true;
+            return;
+        }
+        if (!NativeAudioDescription.hasSelectedAudio(tracks)) return; // ask again on the next track list
+        nativeAudioDescriptionChecked = true;
+        int[] pick = NativeAudioDescription.normalInstead(tracks, nativeAudioDescriptionRels);
+        if (pick == null) return;
+        Tracks.Group group = tracks.getGroups().get(pick[0]);
+        nativePlayer.setTrackSelectionParameters(nativePlayer.getTrackSelectionParameters().buildUpon()
+                .setOverrideForType(new TrackSelectionOverride(group.getMediaTrackGroup(), pick[1]))
+                .build());
+        reportNativePlaybackIssue("trace", "audio: started on Audio Description, playing the normal track", 0L);
     }
 
     private void applyNativeTrackSelectionDefaults(boolean isLiveMode) {
@@ -8100,6 +8135,9 @@ public class MainActivity extends Activity {
             // respawns cause — remember its language so the rebuilt selector re-prefers it.
             if (trackType == C.TRACK_TYPE_AUDIO) {
                 Format picked = choice.group.getTrackFormat(choice.index);
+                // The viewer chose: the start check never moves it, and an AD pick stays AD after rebuilds.
+                nativeAudioDescriptionChecked = true;
+                nativeManualAudioIsDescription = NativeAudioDescription.isAudioDescription(picked, false);
                 if (picked != null && picked.language != null && !picked.language.isEmpty()) {
                     nativeManualAudioLang = picked.language;
                 }
@@ -9051,6 +9089,8 @@ public class MainActivity extends Activity {
         nativeAudioChoiceSelected = -1;
         nativePreferredAudioLang = "";
         nativeManualAudioLang = "";
+        nativeManualAudioIsDescription = false;
+        nativeAudioDescriptionRels.clear();
         nativeSubtitleUrl = "";
         nativeSubtitleHostHeader = "";
         nativeSubtitleLang = "";
