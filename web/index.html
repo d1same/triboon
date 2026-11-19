@@ -4254,15 +4254,33 @@ body[data-theme="graphite"] .guideTimeline .gProg.empty .gpT{font:500 14px "Albe
 body[data-theme="graphite"] .guideTimeline .gProg .gpS{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
 body[data-theme="graphite"] .guideTimeline .gNow{width:2px;background:#C13BD6;box-shadow:none}
 body[data-theme="graphite"] .guideTimeline .gTick{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
+/* 3.5.1 (owner, Shield): logos sit on a dark 6px tile that stays dark on focus (white logos stay visible on the
+   white focus), with a faint light edge so dark logos read on the dark guide. */
+body[data-theme="graphite"] .gCh img{width:44px;height:44px;flex:none;object-fit:contain;padding:4px;border-radius:6px;background:#26272D;box-sizing:border-box;filter:drop-shadow(0 0 1px rgba(237,239,243,.55))}
+body[data-theme="graphite"] :is(.gRow.focus,.pgRow.focus,.pgRow:focus) .gCh img{background:#26272D}
+/* the now-line runs behind the show tiles, never through their text; narrow tiles drop the time */
+body[data-theme="graphite"] .guideTimeline .gProg{z-index:2}
+body[data-theme="graphite"] .guideTimeline .gNow{z-index:1}
+body[data-theme="graphite"] .guideTimeline .gProg:is(.short,.tiny,.micro) .gpS{display:none}
+/* solid tiles so the now-line passes behind them; finished shows dim by their text, not by transparency */
+body[data-theme="graphite"] .guideTimeline .gProg{background-color:#1C1C22}
+body[data-theme="graphite"] .guideTimeline .gProg.live{background-color:#2C2D33}
+body[data-theme="graphite"] .guideTimeline .gProg.past{opacity:1;background-color:#16161B}
+body[data-theme="graphite"] .guideTimeline .gProg.past :is(.gpT,.gpS){color:rgba(237,239,243,.4)}
+body[data-theme="graphite"] .guideTimeline .gProg.empty{background-color:transparent}
+/* the Live TV top bar stops before the clock (TV) */
+body[data-theme="graphite"].tv #chBar{padding-right:150px;flex-wrap:nowrap}
+body[data-theme="graphite"].tv #chBar #chSearch{width:auto;max-width:none;flex:1 1 380px;min-width:240px}
 /* Guide C colours as in the mock-up: neutral dark greys (no purple tint), no outline, a wider channel column. */
 body[data-theme="graphite"] :is(#chBody.liveGuideShell,.pgGuideShell.liveGuideShell){background:#0F0F14;border:0;border-radius:6px}
-@media (min-width:900px){body[data-theme="graphite"] :is(#chBody.liveGuideShell,.pgGuideShell.liveGuideShell){grid-template-columns:minmax(230px,300px) minmax(0,1fr)}}
+@media (min-width:1200px){body[data-theme="graphite"] :is(#chBody.liveGuideShell,.pgGuideShell.liveGuideShell){grid-template-columns:minmax(230px,300px) minmax(0,1fr)}}
 body[data-theme="graphite"].tv #chBody.liveGuideShell{border-radius:6px 0 0 0}
 body[data-theme="graphite"] :is(.liveCatPane,.pgCatPane){background:#121218!important}
 body[data-theme="graphite"] :is(.guideTimeline,.pgTimeline,.liveGuidePane){background:#0F0F14}
 body[data-theme="graphite"] .guideTimeline .gRow.gHead{background:#0F0F14}
 body[data-theme="graphite"] .guideTimeline .gRow:not(.gHead) .gTl{background:transparent}
-@media (min-width:900px){body[data-theme="graphite"] .guideTimeline .gCh{width:300px}}
+@media (min-width:1200px){body[data-theme="graphite"] .guideTimeline .gCh{width:300px}}
+body[data-theme="graphite"].tv .guideTimeline .gCh{width:236px}
 body[data-theme="graphite"] .guideTimeline :is(.gRow.focus,.pgRow.focus,.pgRow:focus) .gTl{background:rgba(237,239,243,.04)}
 /* 3.5.1 (owner: "Channels / Multiview look squished"): the site's button, not a compact chip: roomy,
    sentence-case Sora, light see-through fill, and the same for the player guide's Multiview button. */
