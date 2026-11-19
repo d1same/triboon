@@ -448,6 +448,19 @@ function subtitleDriftPer30s(shiftA, originA, shiftB, originB) {
   }
   return bestErr <= 0.15 ? Math.round(best) : 0;
 }
+// The subtitle second of a slice's middle line (the slice's lines are timed from originMs).
+function syncMedianLineSec(windowed) {
+  const starts = [];
+  const re = /(\d{2,}):(\d{2}):(\d{2}),(\d{3})\s*-->/g;
+  let m;
+  while ((m = re.exec(String((windowed && windowed.srt) || '')))) starts.push(((+m[1] * 60 + +m[2]) * 60 + +m[3]) * 1000 + +m[4]);
+  const origin = Number(windowed && windowed.originMs) || 0;
+  if (!starts.length) return origin / 1000;
+  starts.sort((x, y) => x - y);
+  const mid = Math.floor(starts.length / 2);
+  const med = starts.length % 2 ? starts[mid] : (starts[mid - 1] + starts[mid]) / 2;
+  return (origin + med) / 1000;
+}
 async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
   const os2 = require('os');
   const fsp = fs.promises;
@@ -510,7 +523,11 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
     // A sub-400ms move is within what one slice can mis-measure. Keep it only when both slices
     // agree within 200ms; otherwise leave the words where they were.
     if (Math.abs(shiftMs) < 400 && !(pairedShift != null && Math.abs(pairedShift - shiftMs) <= 200)) shiftMs = 0;
-    return { vtt: shiftVtt(vtt, shiftMs / 1000, driftMsPer30s, origin), shiftMs, originSec: origin, cues: spoken.count, agreed, driftMsPer30s };
+    // The stretch pivots on the line the gap was measured at: alass reports the median gap of the
+    // slice's lines, which belongs to its middle line, not to the slice's first second. Pivoting
+    // 15-20s early left every line of a stretched file about 0.6-0.8s off (result 126).
+    const anchor = driftMsPer30s ? syncMedianLineSec(spoken) : origin;
+    return { vtt: shiftVtt(vtt, shiftMs / 1000, driftMsPer30s, anchor), shiftMs, originSec: origin, cues: spoken.count, agreed, driftMsPer30s };
   } finally {
     fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
