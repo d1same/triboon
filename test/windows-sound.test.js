@@ -51,3 +51,64 @@ test('F1: AAC (or unnamed audio) MP4s stay direct in a browser, and Dolby-capabl
   assert.equal(decidePlayback('Some.Film.2020.2160p.BluRay.TrueHD.Atmos.mp4',
     { ...WEB, native: true, passthrough: true, truehd: true, ac3: true, eac3: true }).method, 'direct');
 });
+
+function silentCheck() {
+  const S = {};
+  const calls = { start: [], issues: [] };
+  const src = `const SILENT_AUDIO_CHECK_SEC = 3;\n${extractFunction('checkWebSilentAudio')}\nreturn checkWebSilentAudio;`;
+  const fn = new Function('S', 'fetchPlayerTracks', 'notePlaybackIssue', 'startSource', 'currentTime', src)(
+    S, async () => null, (kind, msg, at) => calls.issues.push({ kind, msg, at }),
+    (kind, at, opts) => { calls.start.push({ kind, at, quiet: !!(opts && opts.quietSeek) }); return true; },
+    () => S._now || 0);
+  return { S, fn, calls };
+}
+function video(over = {}) {
+  return { currentSrc: '/api/stream/x', currentTime: 0, muted: false, volume: 1, webkitAudioDecodedByteCount: 0, ...over };
+}
+const tick = () => new Promise((r) => setImmediate(r));
+const AUDIO = { audio: [{ rel: 0, codec: 'eac3', channels: 6 }] };
+
+test('F2: picture with zero decoded audio after 3 s switches once to the AAC remux at the same second', async () => {
+  const t = silentCheck();
+  const p = { item: { type: 'movie' }, remuxUrl: '/api/remux/x?t=1', tracks: AUDIO, audioTrack: 0 };
+  t.S.playing = p;
+  const v = video({ currentTime: 10 });
+  t.fn(p, v);                       // first sight of this source
+  v.currentTime = 12; t.fn(p, v); await tick();
+  assert.equal(t.calls.start.length, 0, 'not before 3 s of play');
+  v.currentTime = 13.4; t.S._now = 13.4; t.fn(p, v); await tick();
+  assert.deepEqual(t.calls.start, [{ kind: 'remux', at: 13.4, quiet: true }]);
+  assert.equal(p.forceAacRemux, true, 'remux asks for browser-safe AAC');
+  assert.match(t.calls.issues[0].msg, /no sound is decoded \(eac3\)/);
+  v.currentSrc = '/api/remux/x?t=1&audioSafe=1'; v.currentTime = 20; t.fn(p, v); v.currentTime = 25; t.fn(p, v); await tick();
+  assert.equal(t.calls.start.length, 1, 'never switches twice (no loop)');
+});
+
+test('F2: no switch when audio decodes, the user muted, the counter is missing, or the file has no audio', async () => {
+  const cases = [
+    [video({ webkitAudioDecodedByteCount: 81920 }), AUDIO],
+    [video({ muted: true }), AUDIO],
+    [video({ volume: 0 }), AUDIO],
+    [(() => { const v = video(); delete v.webkitAudioDecodedByteCount; return v; })(), AUDIO],
+    [video(), { audio: [] }],
+  ];
+  for (const [v, tracks] of cases) {
+    const t = silentCheck();
+    const p = { item: { type: 'movie' }, remuxUrl: '/api/remux/x?t=1', tracks };
+    t.S.playing = p;
+    t.fn(p, v); v.currentTime = 4; t.fn(p, v); await tick();
+    assert.equal(t.calls.start.length, 0, JSON.stringify({ muted: v.muted, volume: v.volume, tracks }));
+  }
+});
+
+test('F2: already on the AAC remux and still silent → logs once, does not switch again', async () => {
+  const t = silentCheck();
+  const p = { item: { type: 'movie' }, remuxUrl: '/r', usingRemux: true, forceAacRemux: true, tracks: AUDIO };
+  t.S.playing = p;
+  const v = video();
+  t.fn(p, v); v.currentTime = 4; t.fn(p, v); await tick();
+  assert.equal(t.calls.start.length, 0);
+  assert.equal(t.calls.issues.length, 1);
+  assert.match(html, /if \(!\(playingRef\.item && playingRef\.item\.type === 'live'\)\) checkWebSilentAudio\(playingRef, v\);/,
+    'the web player runs the check from its timeupdate handler');
+});

@@ -15096,6 +15096,7 @@ async function openPlayer(it, mount, opts = {}) {
     if (v.currentTime === lastTu) return;
     if (!(playingRef.item && playingRef.item.type === 'live')) notePictureHop(playingRef, lastTu, v.currentTime);
     lastTu = v.currentTime;
+    if (!(playingRef.item && playingRef.item.type === 'live')) checkWebSilentAudio(playingRef, v);
     const rebufferWatch = S._webRebufferWatch;
     if (rebufferWatch && rebufferWatch.playing === playingRef
         && Math.abs(v.currentTime - rebufferWatch.position) >= 0.5) clearWebRebufferRecovery();
@@ -17200,6 +17201,47 @@ async function reMountAndResume(reason = '', attempt = 0) {
       showPlaybackInterrupted(reason);
     }
   }
+}
+// Picture with no sound and no error: a browser engine (Edge, the Windows app's WebView2) plays
+// AC3/E-AC3/DTS video as a moving picture while decoding zero audio, so failover() never runs.
+// After about 3 s of play on one source, a zero audio byte count on a file that HAS an audio track
+// switches once to the server remux with browser-safe AAC, at the same second. Only where the
+// browser exposes the counter; never when the user muted; never twice for one play (no loop).
+const SILENT_AUDIO_CHECK_SEC = 3;
+function checkWebSilentAudio(p, v) {
+  if (!p || !v || p._silentAudioDone || p.usingNative) return;
+  if (typeof v.webkitAudioDecodedByteCount !== 'number') { p._silentAudioDone = true; return; }
+  const src = v.currentSrc || v.src || '';
+  if (!p._silentProbe || p._silentProbe.src !== src) { p._silentProbe = { src, from: v.currentTime }; return; }
+  if (v.currentTime - p._silentProbe.from < SILENT_AUDIO_CHECK_SEC || p._silentProbe.checking) return;
+  if (v.muted || v.volume === 0) return; // user muted: the counter can stay 0 by design; check later
+  if (v.webkitAudioDecodedByteCount > 0) { p._silentAudioDone = true; return; }
+  p._silentProbe.checking = true;
+  Promise.resolve(p.tracks || fetchPlayerTracks(p, 1500)).catch(() => null).then((t) => {
+    if (S.playing !== p || p._silentAudioDone) return;
+    p._silentProbe.checking = false;
+    if (v.webkitAudioDecodedByteCount > 0) { p._silentAudioDone = true; return; }
+    const hasAudio = !!(t && Array.isArray(t.audio) && t.audio.length);
+    if (!hasAudio) { p._silentAudioDone = true; return; }
+    p._silentAudioDone = true;
+    const at = currentTime();
+    const codec = (t.audio[p.audioTrack || 0] || t.audio[0] || {}).codec || 'this audio';
+    if (p.usingRemux && p.forceAacRemux) {
+      notePlaybackIssue('audio', `picture plays but no sound is decoded (${codec}) even on the AAC remux — not switching again`, at);
+      return;
+    }
+    if (p.remuxUrl) {
+      p.forceAacRemux = true;
+      notePlaybackIssue('audio', `picture plays but no sound is decoded (${codec}) — switching to server remux with AAC audio at the same second`, at);
+      startSource('remux', at, { quietSeek: true });
+    } else if (p.transcodeUrl && !p.usingTranscode) {
+      p.forceAacRemux = true;
+      notePlaybackIssue('audio', `picture plays but no sound is decoded (${codec}) — switching to server transcode at the same second`, at);
+      startSource('transcode', at, { quietSeek: true });
+    } else {
+      notePlaybackIssue('audio', `picture plays but no sound is decoded (${codec}) and the server has no remux here`, at);
+    }
+  });
 }
 function failover() {
   const p = S.playing; if (!p) return;
