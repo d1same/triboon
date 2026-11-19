@@ -188,7 +188,10 @@ body.controls-hidden .controls { opacity: 0; transform: translateY(18px); pointe
 .menu-item { width: 100%; min-height: 49px; display: flex; align-items: center; gap: 11px; padding: 9px 12px; border: 0; border-radius: 6px; background: transparent; text-align: left; cursor: pointer; }
 .menu-item:hover, .menu-item:focus-visible { background: #edeff3; color: #14161a; outline: 0; box-shadow: none; }
 .menu-item:hover small, .menu-item:focus-visible small { color: rgba(20,22,26,.65); }
-.menu-item.selected::before { content: ""; width: 8px; height: 8px; flex: 0 0 auto; border-radius: 2px; background: #c13bd6; box-shadow: none; }
+/* 3.5.1 (owner pick option A, same as web and Android): a check on the chosen row, on the right. */
+.menu-item.selected::after { content: "\2713"; margin-left: auto; flex: 0 0 auto; font-weight: 700; font-size: 17px; }
+.menu-item { min-height: 52px; font-size: 16px; }
+.menu-item small { font-size: 13px; }
 .menu-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-item small { display: block; color: var(--muted); }
 .menu-item[disabled] { opacity: .48; cursor: default; }
@@ -197,9 +200,9 @@ body.controls-hidden .controls { opacity: 0; transform: translateY(18px); pointe
 .episode-watched { position: absolute; top: 4px; right: 4px; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; background: #2bbb6a; color: #fff; font: 800 10px/1 sans-serif; }
 .stats dl, .stats dl div { margin: 0; }
 .stats dl { overflow: auto; display: grid; gap: 0; }
-.stats dl div { display: grid; grid-template-columns: minmax(115px,.8fr) minmax(0,1.4fr); gap: 14px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
+.stats dl div { display: grid; grid-template-columns: minmax(115px,.8fr) minmax(0,1.4fr); gap: 14px; padding: 10px 2px; border-bottom: 0; } /* 3.5.1 option A: no lines, like web and Android */
 .stats dt { color: var(--muted); }
-.stats dd { overflow-wrap: anywhere; margin: 0; text-align: right; font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px; }
+.stats dd { overflow-wrap: anywhere; margin: 0; text-align: left; font-size: 14px; }
 .stats-note { margin: auto 0 0; padding-top: 14px; color: var(--muted); font-size: 12px; }
 .toast { position: fixed; z-index: 50; left: 50%; bottom: 114px; max-width: min(560px,calc(100vw - 40px)); padding: 10px 15px; border: 1px solid var(--line); border-radius: 999px; background: rgba(15,10,22,.92); opacity: 0; transform: translate(-50%,12px); pointer-events: none; transition: .2s ease; box-shadow: 0 9px 35px rgba(0,0,0,.4); }
 .toast.show { opacity: 1; transform: translate(-50%,0); }
