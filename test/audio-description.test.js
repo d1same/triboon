@@ -1,6 +1,7 @@
 'use strict';
 // Audio Description (a narrator describing the picture) is never picked by default (brief 121).
-// Part 1: release scoring. Every title, group and file here is made up.
+// Part 1: release scoring. The titles and files being played are made up; a few real film titles and
+// release-group names appear only as names that must NOT be flagged.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -11,7 +12,7 @@ const rel = (name, extra = {}) => ({ name, sizeBytes: 4 * GB, ...extra });
 
 test('scoring: an Audio Description release loses to a normal release of the same quality', () => {
   const ad = rel('Prairie.Days.2026.with.Audio.Description.1080p.NF.WEB-DL.DDP5.1.H.264-Kettle');
-  const plain = rel('Prairie.Days.2026.1080p.NF.WEB-DL.DDP5.1.H.264-SPWEB');
+  const plain = rel('Prairie.Days.2026.1080p.NF.WEB-DL.DDP5.1.H.264-Kiln');
   const ranked = rankReleases([ad, plain], { maxResolutionRank: 4 });
   assert.strictEqual(ranked[0].name, plain.name);
   assert.ok(ranked.find((c) => c.name === ad.name).reasons.some((r) => /audio-description/.test(r)));
@@ -22,6 +23,25 @@ test('scoring: a normal release wins even against a higher-resolution or preferr
   const plain720 = rel('Winter.Paws.2026.720p.AMZN.WEB-DL.DDP5.1.H.264-NTb', { sizeBytes: 2 * GB });
   const ranked = rankReleases([ad4k, plain720], { maxResolutionRank: 4, preferResolutionRank: 4 });
   assert.strictEqual(ranked[0].name, plain720.name);
+});
+
+test('scoring: a healthy Audio Description copy plays before a copy known to be bad', () => {
+  const ad = rel('Prairie.Days.2026.with.Audio.Description.1080p.NF.WEB-DL.DDP5.1.H.264-Kettle', { health: 'verified' });
+  for (const health of ['playback-failed', 'probe-timeout', 'mount-failed']) {
+    const bad = rel('Prairie.Days.2026.1080p.NF.WEB-DL.DDP5.1.H.264-Kiln', { health });
+    assert.strictEqual(rankReleases([bad, ad], { maxResolutionRank: 4 })[0].name, ad.name, health);
+  }
+  // A merely slower or unproven normal copy still wins.
+  for (const health of ['unverified', 'degraded', 'fetch-failed']) {
+    const plain = rel('Prairie.Days.2026.1080p.NF.WEB-DL.DDP5.1.H.264-Kiln', { health });
+    assert.strictEqual(rankReleases([ad, plain], { maxResolutionRank: 4 })[0].name, plain.name, health);
+  }
+});
+
+test('scoring: an English viewer gets English with narration before a foreign dub', () => {
+  const ad = rel('Prairie.Days.2026.with.Audio.Description.1080p.NF.WEB-DL.DDP5.1.H.264-Kettle');
+  const dub = rel('Prairie.Days.2026.FRENCH.1080p.NF.WEB-DL.DDP5.1.H.264-Kiln');
+  assert.strictEqual(rankReleases([dub, ad], { maxResolutionRank: 4, preferredAudioLanguage: 'en' })[0].name, ad.name);
 });
 
 test('scoring: an Audio Description release still plays when it is the only one', () => {
@@ -221,6 +241,8 @@ test('web: track prefs after the probe use that choice, and the native app gets 
   const { nativeAudioDescriptionRels } = webLoad(['isAudioDescriptionTrack', 'nativeAudioDescriptionRels'], { S });
   assert.deepStrictEqual(nativeAudioDescriptionRels(), [0]);
   assert.match(ui, /audioDescriptionRels: nativeAudioDescriptionRels\(\),/, 'the native payload carries them');
+  // Older Safari and TV browsers cannot parse a lookbehind; one such regex literal stops the whole page.
+  assert.doesNotMatch(ui, /\(\?<[!=]/, 'the page uses no regex lookbehind');
 });
 
 test('android: the native player leaves an Audio Description start once, and a viewer pick wins', () => {

@@ -353,9 +353,11 @@ function scoreRelease(candidate, policy = {}) {
     if (f.re.test(candidate.name)) add(f.key, f.score);
   }
   for (const b of BAD_FLAGS) if (b.re.test(candidate.name)) add(b.key, b.score);
-  // Stronger than a foreign dub (−800) and any resolution or preference bonus, so every healthy
-  // normal release wins; above the −5000 playability line, so an AD-only title still plays.
-  if (isAudioDescriptionRelease(candidate.name)) add('audio-description', -1500);
+  // More than any same-quality difference and the preferred-4K bonus (+400), so every healthy normal
+  // release wins, even a lower resolution. Less than the −800 class (a copy that failed in playback, a
+  // probe timeout, a foreign dub): a healthy AD copy plays before a copy known to be bad, and an
+  // English narration track is still English, unlike a French dub. Far above the −5000 line.
+  if (isAudioDescriptionRelease(candidate.name)) add('audio-description', -600);
   const hasTrueHd = a.features.includes('truehd');
   const hasDtsHd = a.features.includes('dts-hd');
   const hasAtmos = a.features.includes('atmos');
