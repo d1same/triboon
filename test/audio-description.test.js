@@ -154,3 +154,59 @@ test('server: remux, transcode and HLS without audio= play the default track; a 
   assert.ok(!src.includes("const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;"),
     'no endpoint falls back to track 0 on its own');
 });
+
+// Web player: the page's own functions, run as written in web/index.html.
+const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+const webFn = (name) => {
+  const start = ui.indexOf(`function ${name}(`);
+  const end = ui.indexOf('\nfunction ', start + 1);
+  assert.ok(start >= 0 && end > start, `${name} should be extractable`);
+  return ui.slice(start, end);
+};
+const webLoad = (names, deps = {}) => {
+  const keys = Object.keys(deps);
+  return new Function(...keys, `${names.map(webFn).join('\n')}\nreturn { ${names.join(', ')} };`)(...keys.map((k) => deps[k]));
+};
+const langKey = (c) => ({ eng: 'en', en: 'en', fre: 'fr', fra: 'fr', fr: 'fr', ger: 'de', de: 'de' })[String(c || '').toLowerCase()] || '';
+
+test('web: the page tells Audio Description tracks the same way as the server', () => {
+  const web = webLoad(['isAudioDescriptionTrack']).isAudioDescriptionTrack;
+  for (const t of [
+    { title: 'English - Audio Description' }, { title: 'English (AD)' }, { title: 'Descriptive Audio' }, { title: 'DVS' },
+    { title: '', visualImpaired: true }, { title: 'English' }, { title: 'Ad-free mix' }, { title: 'Headphone Mix' },
+    { title: 'Director Commentary' }, {},
+  ]) assert.strictEqual(web(t), isAudioDescriptionTrack(t), JSON.stringify(t));
+});
+
+test('web: playback starts on a normal track, never on Audio Description, unless it is the only one in the language', () => {
+  let pref = '';
+  const { preferredAudioTrackForPlayer } = webLoad(['isAudioDescriptionTrack', 'selectedPlayerAudioTrack', 'preferredAudioTrackForPlayer'],
+    { prefAudioLang: () => pref, audioLangKey: langKey });
+  const p = (audioTrack, ...rows) => ({ audioTrack, tracks: { audio: tracks(...rows) } });
+  const adFirst = [{ lang: 'eng', title: 'English - Audio Description', visualImpaired: true }, { lang: 'eng', title: 'English' }];
+  pref = '';
+  assert.strictEqual(preferredAudioTrackForPlayer(p(0, ...adFirst)).rel, 1, 'no language wish: move off the AD track');
+  assert.strictEqual(preferredAudioTrackForPlayer(p(1, ...adFirst)), null, 'already on the normal track');
+  pref = 'en';
+  assert.strictEqual(preferredAudioTrackForPlayer(p(0, ...adFirst)).rel, 1, 'English wish: the normal English track');
+  assert.strictEqual(preferredAudioTrackForPlayer(p(1, ...adFirst)), null);
+  const flagOnly = [{ lang: 'eng', title: 'English', visualImpaired: true }, { lang: 'eng', title: 'English' }];
+  assert.strictEqual(preferredAudioTrackForPlayer(p(0, ...flagOnly)).rel, 1, 'the flag alone is enough');
+  const onlyAdEnglish = [{ lang: 'fre', title: 'Francais' }, { lang: 'eng', title: 'English - Audio Description' }];
+  assert.strictEqual(preferredAudioTrackForPlayer(p(0, ...onlyAdEnglish)).rel, 1, 'the only English track still plays for English');
+  pref = '';
+  assert.strictEqual(preferredAudioTrackForPlayer(p(0, { lang: 'eng', title: 'English' }, { lang: 'eng', title: 'Audio Description' })), null,
+    'a normal start is left alone');
+  pref = 'fr';
+  assert.strictEqual(preferredAudioTrackForPlayer(p(0, { lang: 'eng', title: 'AD' }, { lang: 'fre', title: 'AD' }, { lang: 'fre', title: 'Francais' })).rel, 2);
+});
+
+test('web: track prefs after the probe use that choice, and the native app gets the Audio Description tracks', () => {
+  const apply = webFn('applyTrackPrefs');
+  assert.match(apply, /const best = preferredAudioTrackForPlayer\(p\);\s+if \(best && best\.rel !== p\.audioTrack\) setAudio\(best\.rel\);/);
+  assert.match(apply, /if \(p\._userPickedAudio\) \{ updateSrndBtn\(\); return; \}/, 'a manual pick still wins');
+  const S = { playing: { tracks: { audio: tracks({ lang: 'eng', title: 'English - Audio Description', visualImpaired: true }, { lang: 'eng', title: 'English' }) } } };
+  const { nativeAudioDescriptionRels } = webLoad(['isAudioDescriptionTrack', 'nativeAudioDescriptionRels'], { S });
+  assert.deepStrictEqual(nativeAudioDescriptionRels(), [0]);
+  assert.match(ui, /audioDescriptionRels: nativeAudioDescriptionRels\(\),/, 'the native payload carries them');
+});

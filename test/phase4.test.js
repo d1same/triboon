@@ -293,14 +293,14 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
     'nativeVideoSubtitleRel', 'nativeSubtitlePayload', 'updatePlayerMeta', 'episodePlayerMeta',
     'absoluteArtworkUrl', 'nativeMimeForKind', 'nativeQualityLabel', 'applySubSize',
     'nativeSubtitleChoices', 'nativeEpisodeChoices', 'loadSubShift', 'traktResumeFractionForItem',
-    'prefLang', 'nativeAudioChoices', 'prefAudioLang', 'audioLangKey', 'applyInitialAudioPreference',
+    'prefLang', 'nativeAudioChoices', 'nativeAudioDescriptionRels', 'prefAudioLang', 'audioLangKey', 'applyInitialAudioPreference',
     'remuxKeyframeStart', 'startSource',
     'window', 'location', `${ui.slice(overlayStart, overlayEnd)}\n${ui.slice(nativeStart, nativeEnd)}\nreturn tryNativeVideoPlayer;`)(
       state, () => true, (_p, at) => `/api/remux/one?start=${at}`, () => ({ blocked: false, rel: '' }),
       () => ({ rel: '', url: '', lang: '', label: '', shift: 0 }), () => {},
       (it) => ({ title: it.title, subline: '' }), () => '', () => '', () => '4K', () => 'M',
       () => [], () => [], () => 0, traktResumeFractionForItem,
-      () => '', () => [], () => 'eng', () => 'en', () => {},
+      () => '', () => [], () => [], () => 'eng', () => 'en', () => {},
       remuxKeyframeStart, () => { throw new Error('web fallback must not run'); },
       window, { origin: 'http://triboon.test' });
   const tryNativeVideoPlayer = buildTryNative((_p, at) => at); // already-known start: today's synchronous shape
