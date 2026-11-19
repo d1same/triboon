@@ -4505,6 +4505,16 @@ body[data-theme="graphite"] .profCard .lock{border-radius:6px}
   body[data-theme="graphite"] .profCard .av{width:120px;height:120px;border-radius:10px}
   body[data-theme="graphite"] .profCard .pn{font-size:16px;margin-top:12px}
 }
+/* 3.5.1 (owner): Settings on a phone. Tab names stay on one line, no stray frame round the panel, help notes in the
+   body font with whole words, and form fields one per line instead of cut-off placeholders. */
+@media (max-width:760px){
+  body[data-theme="graphite"] #prefTabs button{white-space:nowrap;min-width:0;flex:none}
+  body[data-theme="graphite"] #prefs .setGrid{border:0;padding:6px 0 0}
+  body[data-theme="graphite"] #prefs .hint{font:400 13px/1.45 "Albert Sans",system-ui,sans-serif;letter-spacing:0;word-break:normal;overflow-wrap:break-word;color:rgba(237,239,243,.6)}
+  body[data-theme="graphite"] #prefs .field{flex-wrap:wrap}
+  body[data-theme="graphite"] #prefs .field>:is(input:not([type=checkbox]):not([type=radio]),select){flex:1 1 100%!important;min-width:0;width:100%;max-width:none!important}
+  body[data-theme="graphite"] #prefs .field label{white-space:normal}
+}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
