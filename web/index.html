@@ -4210,10 +4210,16 @@ body[data-theme="graphite"] .lcat .lTags + .catCount{margin-left:10px}
 body[data-theme="graphite"] .gCh .pgInit{width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:6px;background:rgba(237,239,243,.08);color:rgba(237,239,243,.75);font:700 15px "Sora",system-ui,sans-serif;-webkit-line-clamp:unset}
 body[data-theme="graphite"] :is(.gRow.focus,.pgRow.focus,.pgRow:focus) .gCh .pgInit{background:rgba(20,22,26,.1)}
 body[data-theme="graphite"] .guideTimeline .gRow:not(.gHead){border:0;box-shadow:none}
-body[data-theme="graphite"] .guideTimeline .gProg{border:0;border-radius:6px;background:rgba(237,239,243,.05);box-shadow:none}
-body[data-theme="graphite"] .guideTimeline .gProg.live{background:rgba(237,239,243,.14)}
+/* Mock-up C spacing: each show is its own soft tile (gaps between and above/below), larger type. */
+body[data-theme="graphite"] .guideTimeline .gProg{top:7px;bottom:7px;border:0;border-right:6px solid transparent;background-clip:padding-box;border-radius:6px;background-color:rgba(237,239,243,.06);box-shadow:none;padding:0 12px;display:flex;flex-direction:column;justify-content:center;gap:3px}
+body[data-theme="graphite"] .guideTimeline .gProg .gpT{font:600 15px "Albert Sans",system-ui,sans-serif;color:var(--text)}
+body[data-theme="graphite"] .guideTimeline .gProg .gpS{font:500 12.5px "Albert Sans",system-ui,sans-serif;color:rgba(237,239,243,.55)}
+body[data-theme="graphite"] .guideTimeline .gProg.tiny .gpT{font-size:12px}
+body[data-theme="graphite"] .guideTimeline .gRow:not(.gHead){min-height:72px}
+body[data-theme="graphite"] .guideTimeline .gProg{background-image:none}
+body[data-theme="graphite"] .guideTimeline .gProg.live{background-color:rgba(237,239,243,.13)}
 body[data-theme="graphite"] .guideTimeline .gProg.past{opacity:.42}
-body[data-theme="graphite"] .guideTimeline .gProg.empty{background:transparent;opacity:1}
+body[data-theme="graphite"] .guideTimeline .gProg.empty{background-color:transparent;opacity:1}
 body[data-theme="graphite"] .guideTimeline .gProg.empty .gpT{font:500 14px "Albert Sans",system-ui,sans-serif;color:rgba(237,239,243,.35)}
 body[data-theme="graphite"] .guideTimeline .gProg .gpS{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
 body[data-theme="graphite"] .guideTimeline .gNow{width:2px;background:#C13BD6;box-shadow:none}
@@ -22403,6 +22409,7 @@ function appendGrid(items) {
     const topRow = root.scrollTop > 0 ? Math.floor((root.scrollTop || 0) / Math.max(1, pitch)) : (S.gridTopRow || 0);
     renderVirtualGridWindow(S.gridIdx || 0, { topRow, fromScroll: root.scrollTop > 0 });
     adaptRowWindows();
+    restoreVirtualGridFocus(); // 3.5.1 D-pad check: the re-render dropped the focus ring when the next page arrived
     return;
   }
   const start = S.gridItems.length - (items || []).length;
