@@ -5911,6 +5911,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       </div>
     </div>
     <div class="field"><input id="epgUrl" placeholder="XMLTV guide URL (optional — Xtream brings its own guide)"></div>
+    <div class="field"><input id="iptvMaxConn" type="number" min="1" max="10" inputmode="numeric" placeholder="Max connections the provider allows (1-10, empty = no limit)"></div>
     <p style="margin:10px 0 6px">Share with <span style="color:var(--muted)">(nobody ticked = everyone)</span></p>
     <div id="iptvUsers" style="max-height:130px;overflow-y:auto;margin-bottom:12px"></div>
     <div class="iptvAddActions">
@@ -13052,6 +13053,18 @@ function requestLiveMsePlay(v, opts = {}) {
   const r = v.play();
   return r && typeof r.then === 'function' ? r : Promise.resolve();
 }
+// Asks the server once why a live stream was cut. Only a stop for the source's "Max connections"
+// is answered with a reason (HTTP 429, no new provider stream); anything else returns ''.
+async function liveStopReason(url) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 4000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    const reason = r.ok ? '' : (r.headers.get('x-triboon-iptv-error') || '');
+    ctl.abort();
+    return /provider allows/i.test(reason) ? reason : '';
+  } catch { return ''; } finally { clearTimeout(timer); }
+}
 function startLiveMseSource(url, opts = {}) {
   const slot = opts.slot || 'main';
   const split = slot === 'split';
@@ -13088,6 +13101,18 @@ function startLiveMseSource(url, opts = {}) {
     return S.playing === p;
   };
   const failLiveMse = (e = new Error('stream failed')) => {
+    // A stream cut mid-play may have been stopped by the source's "Max connections": the server
+    // answers this screen's next request with the reason (HTTP 429) without stopping the other
+    // stream. Ask once so the viewer sees why instead of a bare "network error".
+    if (!split && e.liveStreamCut && !e.liveProviderReason && !e.liveStopChecked) {
+      e.liveStopChecked = true;
+      cleanupLiveMse(slot);
+      liveStopReason(url).then((reason) => {
+        if (reason) { e.liveProviderReason = reason; e.message = reason; }
+        if ((multi && S.multiView && S.multiView.open && S.multiView.slots[opts.multiSlot] === p) || (!multi && S.playing === p)) failLiveMse(e);
+      });
+      return;
+    }
     cleanupLiveMse(slot);
     if (split) {
       const handled = p && typeof p.onLiveMseError === 'function' && p.onLiveMseError(e);
@@ -13185,6 +13210,8 @@ function startLiveMseSource(url, opts = {}) {
       }
     } catch (e) {
       if (active() && e.name !== 'AbortError') {
+        // A response that started and then broke: the stream was cut mid-play (not a refusal).
+        if (!e.liveProviderReason && appended > 0) e.liveStreamCut = true;
         failLiveMse(e);
       }
     }
@@ -31001,7 +31028,7 @@ function setIptvAdding(open, opts = {}) {
   S.iptvAdding = !!open;
   if (!open) {
     S.iptvEditing = null;
-    ['iptvName', 'iptvUrl', 'xtHost', 'xtUser', 'xtPass', 'epgUrl'].forEach((id) => { $(id).value = ''; });
+    ['iptvName', 'iptvUrl', 'xtHost', 'xtUser', 'xtPass', 'epgUrl', 'iptvMaxConn'].forEach((id) => { $(id).value = ''; });
     $('iptvUrl').placeholder = 'https://provider.example/playlist.m3u';
     $('xtHost').placeholder = 'http://provider.example:8080';
     $('xtUser').placeholder = 'username';
@@ -31020,7 +31047,7 @@ function editIptvSourceFromSettings(src = {}) {
   const mode = src.iptvMode === 'm3u' ? 'm3u' : 'xtream';
   S.iptvEditing = src;
   S.iptvAdding = true;
-  ['iptvName', 'iptvUrl', 'xtHost', 'xtUser', 'xtPass', 'epgUrl'].forEach((id) => { $(id).value = ''; });
+  ['iptvName', 'iptvUrl', 'xtHost', 'xtUser', 'xtPass', 'epgUrl', 'iptvMaxConn'].forEach((id) => { $(id).value = ''; });
   $('iptvName').value = src.name || '';
   $('iptvMode').value = mode;
   if (mode === 'xtream') {
@@ -31031,6 +31058,7 @@ function editIptvSourceFromSettings(src = {}) {
     $('iptvUrl').placeholder = src.iptvUrl ? `saved playlist (${src.iptvUrl}) - type to replace` : 'saved playlist - type to replace';
   }
   $('epgUrl').placeholder = src.epgUrl ? `saved EPG (${src.epgUrl}) - type to replace` : 'XMLTV EPG URL (blank keeps saved)';
+  $('iptvMaxConn').value = src.maxConnections ? String(src.maxConnections) : '';
   const allowed = new Set(src.users || []);
   document.querySelectorAll('#iptvUsers input').forEach((i) => { i.checked = allowed.has(i.dataset.uid); });
   updateIptvAddFormState();
@@ -31047,7 +31075,10 @@ $('iptvSave').addEventListener('click', async () => {
     name: $('iptvName').value.trim(),
     iptvMode: xt ? 'xtream' : 'm3u',
     users: [...document.querySelectorAll('#iptvUsers input:checked')].map((i) => i.dataset.uid),
+    // Empty = no limit; the server keeps 1 to 10 and treats anything else as no limit.
+    maxConnections: $('iptvMaxConn').value.trim() ? parseInt($('iptvMaxConn').value, 10) : null,
   };
+  if (body.maxConnections !== null && !(body.maxConnections >= 1 && body.maxConnections <= 10)) return toast('Max connections is 1 to 10, or empty for no limit');
   if ($('epgUrl').value.trim()) body.epgUrl = $('epgUrl').value.trim();
   if (xt) {
     if (!edit || wasMode !== 'xtream') {
@@ -31062,7 +31093,7 @@ $('iptvSave').addEventListener('click', async () => {
   }
   if (edit) await api(`/api/iptv/sources/${edit.id}`, { method: 'PATCH', body });
   else await api('/api/iptv/sources', { method: 'POST', body });
-  ['iptvName', 'iptvUrl', 'xtHost', 'xtUser', 'xtPass', 'epgUrl'].forEach((id) => { $(id).value = ''; });
+  ['iptvName', 'iptvUrl', 'xtHost', 'xtUser', 'xtPass', 'epgUrl', 'iptvMaxConn'].forEach((id) => { $(id).value = ''; });
   S.iptvAdding = false;
   S.iptvEditing = null;
   clearLiveClientCaches({ channels: true }); // new provider/EPG invalidates browser-side UI caches

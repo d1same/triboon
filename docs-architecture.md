@@ -422,6 +422,24 @@ Playback contract:
 
 - Browser Live TV uses the server fMP4 remux path and must close the previous
   fetch/reader/remux before opening the next channel.
+- Provider connections (3.5.1): a source may set `maxConnections` (1 to 10;
+  empty means no limit). Every provider stream the server holds for the source
+  counts: shared hubs from TV apps and browsers (a lingering one too) and a
+  legacy browser remux whose ffmpeg opens the URL. Joining a channel that is
+  already flowing costs nothing. A new stream over the limit stops lingering
+  streams of the source first, then the oldest, and opens at once with the usual
+  short retune grace; the stopped player gets "This channel was stopped because
+  the provider allows N connections" when it asks again (the page asks once when
+  a stream is cut mid-play), and a retry from that stopped screen within 20 s of
+  its last try gets that answer (and renews the 20 s) instead of stopping the
+  other stream; any other screen stops the oldest stream as usual. An HLS
+  playlist request (not counted) is held back the same way but never stops
+  another stream. A new stream also
+  ends every lingering hub the same user left on the same source on a different
+  channel (any screen or app), not only the one on its own slot. A hub whose
+  opener left before the provider answered is failed and removed, so the channel
+  plays for the next viewer. A browser TS pipe that fails runs the URL remux
+  fallback on the same request, and the hub it leaves closes at once.
 - Channel hydration is last-intent-wins. Main, split, and Multiview surfaces own
   independent monotonic tune epochs; a slow response from an older selection
   must not retune after a newer zap or revive a closed pane.

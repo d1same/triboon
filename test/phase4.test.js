@@ -3875,10 +3875,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'browser ts-pipe joins an already-live shared hub instead of opening a second provider connection');
   assert.match(idxSrc, /const tsPipeTarget = \[ch\.nativeUrl, ch\.url\]\.find\(\(u\) => u && iptvNativeMime\(u\) === 'video\/mp2t'\) \|\| '';/,
     'ts-pipe uses Xtream nativeUrl or an M3U .ts url so both source types share the hub');
-  assert.match(idxSrc, /if \(\/retuned\|shutdown\/i\.test\(String\(reason \|\| ''\)\)\) return this\.close\(reason\);/,
-    'a last-viewer RETUNE closes the shared upstream immediately (the 1-connection zap contract), only non-retune leaves linger');
-  assert.match(idxSrc, /function closeIptvViewerLingerIfDifferentChannel\(slotKey, shareKey\) \{[\s\S]+lingering\.close\('retuned'\)/,
-    'a drop-then-open zap (ExoPlayer) still kills a lingering different-channel hub so one surface stays at one connection');
+  assert.match(idxSrc, /if \(\/retuned\|shutdown\|remux fallback\/i\.test\(String\(reason \|\| ''\)\)\) return this\.close\(reason\);/,
+    'a last-viewer RETUNE (or a browser pipe leaving for the URL remux fallback) closes the shared upstream immediately (the 1-connection zap contract), only other leaves linger');
+  assert.match(idxSrc, /function closeIptvViewerLingers\(slotKey, shareKey, userId = '', sourceId = ''\) \{[\s\S]+lingering\.close\('retuned'\)/,
+    'a drop-then-open zap (ExoPlayer) still kills a lingering different-channel hub so one surface stays at one connection (and, since brief 113, every one the same user left on the same source)');
   // NNTP failover batch (owner-approved, touches the streaming-perf contract): circuit-breaker
   // half-open probe + hedged multi-provider failover for active-player BODY work.
   const nntpSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'nntp.js'), 'utf8');
