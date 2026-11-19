@@ -274,6 +274,9 @@
     $('loadingTitle').textContent = state.title ? `Opening ${state.title}` : 'Opening video';
     setArtwork(state.backdropUrl);
     $('volume').value = state.muted ? 0 : Math.max(0, Math.min(100, state.volume));
+    // 3.5.1: the mute button shows the crossed speaker when muted, same as the web player.
+    const muteUse = document.querySelector('#mute use');
+    if (muteUse) muteUse.setAttribute('href', state.muted || state.volume === 0 ? '#i-muted' : '#i-volume');
     updateTimeline();
     updateClock();
     updateQualityPill();

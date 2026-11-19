@@ -4489,7 +4489,7 @@ public class MainActivity extends Activity {
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 focused
                         ? new int[]{0xFFEDEFF3, 0xFFEDEFF3}
-                        : new int[]{0x59000000, 0x59000000}); // 3.5.0 owner: see-through black, a touch darker than the player shade
+                        : new int[]{0x1FEDEFF3, 0x1FEDEFF3}); // 3.5.1 owner pick "cut-out": a lighter window in the player shade (same tint as web/Windows)
         d.setShape(GradientDrawable.RECTANGLE);
         d.setCornerRadius(dp(6)); // crisp corner, same as every site button
         d.setStroke(0, 0x00000000);

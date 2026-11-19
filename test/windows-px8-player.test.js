@@ -421,8 +421,10 @@ test('Windows client: native chrome matches the web player loader and transport'
     'the solid loader only covers startup');
   assert.doesNotMatch(css, /data-state="buffering"\] \.loading/,
     'mid-play cache pauses must not flash the full-page loader');
-  assert.match(css, /\.control\.primary \{ width: 58px; height: 58px; background: rgba\(5,3,9,\.4\)/,
-    'play is a dark web-style circle, not a white Windows button');
+  assert.match(css, /\.control\.primary \{ width: 58px; height: 58px; background: rgba\(237,239,243,\.12\)/,
+    'play is the web-style see-through square (3.5.1 cut-out), not a solid white Windows button');
+  assert.match(css, /\.control \{[^}]*border-radius: 6px; background: rgba\(237,239,243,\.12\)/,
+    'Windows buttons are the same 6px light see-through squares as web and Android (3.5.1)');
   assert.match(js, /PLAYER_LOADING_STAGES = \['Preparing', 'Finding source', 'Mounting', 'Checking health\.\.\.', 'Starting stream'\]/,
     'Windows startup stages match the web player');
   assert.match(js, /if \(hot\) \{[\s\S]+setLoadingStage\(2\);[\s\S]+\[500, 1100\][\s\S]+\[650, 1400, 2200, 3000\]/,

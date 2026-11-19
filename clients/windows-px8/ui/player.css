@@ -162,12 +162,14 @@ body.controls-hidden .controls { opacity: 0; transform: translateY(18px); pointe
 .ctlLeft { justify-content: flex-start; }
 .transport { justify-content: center; }
 .secondary { justify-content: flex-end; }
-.control { width: 46px; height: 46px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(5,3,9,.4); color: var(--text); cursor: pointer; box-shadow: 0 10px 28px rgba(0,0,0,.14); }
-.control svg { width: 20px; height: 20px; fill: none; stroke: currentColor; }
+/* 3.5.1 (owner pick "cut-out"): crisp 6px squares, each a lighter window in the player shade; same tint as web #osd .cbtn and Android nativeButtonBg. */
+.control { width: 46px; height: 46px; display: grid; place-items: center; border: 0; border-radius: 6px; background: rgba(237,239,243,.12); color: var(--text); cursor: pointer; box-shadow: none; }
+.control svg { width: 22px; height: 22px; fill: none; stroke: currentColor; filter: drop-shadow(0 1px 2px rgba(0,0,0,.45)); }
 .control svg.filled { fill: currentColor; stroke: none; }
-.control.primary { width: 58px; height: 58px; background: rgba(5,3,9,.4); color: var(--text); }
-.control:hover, .control:focus-visible, .control.active { background: rgba(5,3,9,.56); outline: 0; box-shadow: var(--focus); }
-.control.primary:hover, .control.primary:focus-visible { background: rgba(5,3,9,.56); }
+.control.primary { width: 58px; height: 58px; background: rgba(237,239,243,.12); color: var(--text); }
+.control:hover, .control:focus-visible { background: #edeff3; color: #14161a; outline: 0; box-shadow: none; }
+.control:hover svg, .control:focus-visible svg { filter: none; }
+.control.primary:hover, .control.primary:focus-visible { background: #edeff3; }
 .control.optional[hidden] { display: none; }
 .favorite-on { color: var(--amber); }
 .volume-wrap { display: flex; align-items: center; }
