@@ -92,9 +92,10 @@ body.live .eyebrow { display: flex; }
 .osdClock #endsAt { color: var(--amber); }
 .live-epg { display: none; gap: 6px; max-width: min(72vw, 900px); margin-top: 9px; }
 body.live .live-epg:not(:empty) { display: flex; }
-.live-epg span { min-width: 0; max-width: 260px; overflow: hidden; padding: 5px 9px; border: 0; border-radius: 6px; background: rgba(237,239,243,.08); color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+/* 3.5.1 (owner): the Now / Next strip matches the web and Android players: readable 13px, a quiet sentence-case time label. */
+.live-epg span { min-width: 0; max-width: 280px; overflow: hidden; padding: 7px 12px; border: 0; border-radius: 6px; background: rgba(237,239,243,.08); color: rgba(237,239,243,.75); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .live-epg span.now { background: rgba(237,239,243,.18); color: #fff; }
-.live-epg b { margin-right: 6px; color: var(--coral); font-size: 9px; letter-spacing: .08em; }
+.live-epg b { margin-right: 8px; color: rgba(237,239,243,.55); font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
 .live-badge { display: none; padding: 2px 7px; border-radius: 5px; background: #e63852; color: #fff; font-size: 10px; letter-spacing: .13em; }
 body.live .live-badge { display: inline-flex; }
 body.live .seekLine,
