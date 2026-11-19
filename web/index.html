@@ -4157,6 +4157,9 @@ body[data-theme="graphite"] :is(.pgRow,.gRow):is(.focus,:focus){background:rgba(
 /* 3.5.1 (owner, Shield): player-guide rows are buttons, so the generic white focused-button rule painted the whole row
    white around the dark show tiles (a hollow frame). The id wins: only the channel cell turns white, like the Live TV page. */
 body[data-theme="graphite"] #pgList .pgRow:is(.focus,:focus){background:rgba(237,239,243,.07)!important}
+/* the guide header title carries the same small tags as the rows, beside the short name */
+body[data-theme="graphite"] #pgInfo .t .lTags{display:inline-flex;gap:6px;margin-left:14px;vertical-align:middle;position:relative;top:-4px}
+body[data-theme="graphite"] #pgInfo .t .lTags .lTag{font:600 13px "Albert Sans",system-ui,sans-serif;padding:3px 7px}
 /* 3.5.1 (owner, Shield: guide felt heavy): no per-row background animation on TV; the focus moves instantly */
 body[data-theme="graphite"].tv .pgTimeline .pgRow .gCh,body[data-theme="graphite"].tv .pgTimeline .pgRow .gTl{transition:none}
 /* Live TV header buttons (Multiview / Channels): the site button, no edge line, white on focus. */
@@ -25471,17 +25474,21 @@ async function renderPlayerGuideTimeline(pg, list) {
   const selectedList = S.pgLiveCat === favName ? favs : (groups.get(S.pgLiveCat) || []);
   const playingTitle = (S.playing && S.playing.item && S.playing.item.title) || $('pTitle').textContent || 'Now playing';
   const sourceText = $('pSrc').textContent || (currentCh && currentCh.genre) || '';
+  // 3.5.1 (owner): the header uses the same short channel name and tags as the rows ("BBC 1  UK HD",
+  // not "UK: BBC 1 [720p]"), and the category reads like the category list ("UK: General · HD").
+  const pgHeadTitle = () => { const p = liveNameParts(currentCh.title); return `${esc(p.name)}${liveTagsHtml(p.tags)}`; };
+  const pgShortCat = (raw) => { const p = liveNameParts(raw, true); return [p.name, ...p.tags].filter(Boolean).join(' · '); };
   $('pgInfo').innerHTML = `<div class="ey">${isLive ? 'Live channel' : 'Now playing'}</div>
-    <div class="t">${esc(currentCh ? currentCh.title : playingTitle)}</div>
-    <div class="m">${esc(sourceText || (currentCh ? currentCh.genre || '' : ''))}</div>
+    <div class="t">${currentCh ? pgHeadTitle() : esc(playingTitle)}</div>
+    <div class="m">${esc(currentCh && (!sourceText || sourceText === currentCh.genre) ? pgShortCat(currentCh.genre || '') : sourceText)}</div>
     <div class="n">${esc(isLive ? 'Pick a category, then a channel' : 'Pick Live TV, or go back to the video')}</div>`;
   if (currentCh && S.liveEpg) {
     fetchEpg(currentCh._channel).then((nn) => {
       if (renderToken !== S._playerGuideRenderToken || !nn || !nn.now || !$('pGuide').classList.contains('open')) return;
       $('pgInfo').innerHTML = `<div class="ey">Live channel</div>
-        <div class="t">${esc(currentCh.title)}</div>
+        <div class="t">${pgHeadTitle()}</div>
         <div class="m">Now · ${esc(nn.now.title || '')}${nn.now.stop ? ` · until ${fmtT(nn.now.stop)}` : ''}</div>
-        <div class="n">${nn.next && nn.next.title ? `Next · ${esc(nn.next.title)}${nn.next.start ? ` · ${fmtT(nn.next.start)}` : ''}` : esc(currentCh.genre || '')}</div>`;
+        <div class="n">${nn.next && nn.next.title ? `Next · ${esc(nn.next.title)}${nn.next.start ? ` · ${fmtT(nn.next.start)}` : ''}` : esc(pgShortCat(currentCh.genre || ''))}</div>`;
     }).catch(() => {});
   }
 

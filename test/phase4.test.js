@@ -12010,3 +12010,12 @@ test('3.5.1 player guide stays light on TV: category Up/Down debounces the rebui
   assert.match(ui, /body\[data-theme="graphite"\]\.tv \.pgTimeline \.pgRow \.gCh,body\[data-theme="graphite"\]\.tv \.pgTimeline \.pgRow \.gTl\{transition:none\}/,
     'row focus does not animate backgrounds on TV');
 });
+
+test('3.5.1 player guide header uses the short channel name and tags like the rows', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /const pgHeadTitle = \(\) => \{ const p = liveNameParts\(currentCh\.title\); return `\$\{esc\(p\.name\)\}\$\{liveTagsHtml\(p\.tags\)\}`; \};/,
+    'header title is the short name plus tags ("BBC 1" UK HD), not the raw "UK: BBC 1 [720p]"');
+  assert.match(ui, /<div class="t">\$\{currentCh \? pgHeadTitle\(\) : esc\(playingTitle\)\}<\/div>/, 'first paint uses the short name');
+  assert.match(ui, /<div class="t">\$\{pgHeadTitle\(\)\}<\/div>/, 'the repaint after the guide data arrives uses it too');
+  assert.doesNotMatch(ui, /<div class="t">\$\{esc\(currentCh\.title\)\}<\/div>/, 'no raw channel title left in the header');
+});
