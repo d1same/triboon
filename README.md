@@ -52,13 +52,17 @@ optional.
 
 ## Screenshots
 
-Captured on the Android TV build against a demo library (TMDB artwork).
+The Quiet Graphite look (3.5) on a 1920x1080 screen, from a demo server with a
+made-up account, test video, and made-up Live TV channels. Posters and cast
+photos come from TMDB.
 
-| Home | Detail |
+| Home | Title page |
 |---|---|
-| ![Home — hero with title logo art and trending row](screenshots/home.jpg) | ![Detail — logo, storyline, and episode stills](screenshots/detail.jpg) |
-
-![Movies — browse grid with focused-title backdrop and logo art](screenshots/movies.jpg)
+| ![Home: Trending today and Kids rows of posters](screenshots/home.webp) | ![Title page: logo art, storyline, Play, cast, and More like this](screenshots/title.webp) |
+| **Player** | **Live TV guide** |
+| ![Player: title, clock, seek bar, and the control bar over a test pattern](screenshots/player.webp) | ![Live TV guide: categories, channels, and a timeline with the now-line](screenshots/live-tv.webp) |
+| **Settings** | **Phone** |
+| ![Settings: Display tab with size, text size, and screensaver choices](screenshots/settings.webp) | <img src="screenshots/phone-home.webp" alt="Home on a phone" width="260"> |
 
 ## What It Does
 
