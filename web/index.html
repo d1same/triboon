@@ -22271,6 +22271,12 @@ function measureBrowseGridCols(root = $('grid')) {
       if (n > 0) return n;
     }
   }
+  // 3.5.1 (D-pad check): trust the laid-out columns when the grid has them. At 1920 CSS px the width maths
+  // said 6 while the grid drew 5, so Down landed one column off on a wide desktop.
+  if (cs.display === 'grid') {
+    const laid = (cs.gridTemplateColumns || '').trim().split(/\s+/).filter((t) => /px$/.test(t)).length;
+    if (laid > 0) return laid;
+  }
   const poster = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--poster')) || 170;
   const gap = parseFloat(cs.columnGap) || parseFloat(cs.gap) || 22;
   const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
