@@ -169,7 +169,10 @@ Flow (`/api/ossubs/:mount`):
   in the background; the server runs alass against the localhost tokened stream URL, caches the
   corrected VTT, and the player hot-swaps it in. The unsynced track plays meanwhile.
 - The measurement uses two 30s slices: the spoken stretch just before the playhead, then a
-  witness slice (the 30s before it, else the 30s after). Both must agree within 1.5s or the
+  witness slice (the 30s before it, else the 30s after). Both must agree within 1.5s, else a tie
+  slice is heard (the two witnesses a minute apart must agree within 0.6s), and if that cannot
+  settle it the slices are heard again with 10s of audio past both ends (result 126: words several
+  seconds early sat outside the 30s clip); two padded slices that agree win. Otherwise the
   correction is rejected and the raw track stays (offline proof: one slice alone read a 3.0s-late
   caption as +3.0s when the gap matched the line spacing). The server logs
   `[subsync <mount>] measuring at m:ss on audio track N` and
