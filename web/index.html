@@ -1794,6 +1794,9 @@ body[data-spotlight] .userNameBtn.focusable.focus,body[data-spotlight] .userName
 /* TV rows/grids align deterministically — nothing stray ever peeks above, and the fade
    was erasing the focused row's own TITLE. No mask there. */
 body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-mask:none;mask:none}
+/* 3.5.1 (owner): a phone on its side is only ~360-400px tall; the 72px top fade read as a black hollow
+   eating a quarter of the screen once you scroll. Short screens clip cleanly under the bar instead. */
+@media (max-height:500px){body.mobileShell:not(.tv) :is(#rows,#discoverRows,#grid,#personGrid){-webkit-mask:none;mask:none}}
 
 /* ---------- detail redesign ---------- */
 /* `left` MUST carry --overscan, exactly like the shared #home/#browse/#person rule it overrides.
@@ -4275,6 +4278,9 @@ body[data-theme="graphite"] .guideTimeline .gProg.past :is(.gpT,.gpS){color:rgba
 body[data-theme="graphite"] .guideTimeline .gProg.empty{background-color:#141419} /* 3.5.1: a quiet solid tile, so the now-line runs behind "No guide info", not through it */
 /* the Live TV top bar stops before the clock (TV) */
 body[data-theme="graphite"].tv #chBar{padding-right:150px;flex-wrap:nowrap}
+/* phone on its side: the Live TV bar stops before the clock too (owner, 3.5.1) */
+@media (orientation:landscape){body[data-theme="graphite"].mobileShell:not(.tv) #chBar{padding-right:118px;flex-wrap:nowrap}
+  body[data-theme="graphite"].mobileShell:not(.tv) #chBar #chSearch{width:auto!important;max-width:none!important;flex:1 1 200px!important;min-width:0}}
 body[data-theme="graphite"].tv #chBar #chSearch{width:auto;max-width:none;flex:1 1 380px;min-width:240px}
 /* Guide C colours as in the mock-up: neutral dark greys (no purple tint), no outline, a wider channel column. */
 body[data-theme="graphite"] :is(#chBody.liveGuideShell,.pgGuideShell.liveGuideShell){background:#0F0F14;border:0;border-radius:6px}
@@ -4515,6 +4521,10 @@ body[data-theme="graphite"] .profCard .lock{border-radius:6px}
   body[data-theme="graphite"] #prefs .field>:is(input:not([type=checkbox]):not([type=radio]),select){flex:1 1 100%!important;min-width:0;width:100%;max-width:none!important}
   body[data-theme="graphite"] #prefs .field label{white-space:normal}
 }
+/* the same Settings fixes for a phone on its side (wider than 760px, so the block above misses it) */
+body[data-theme="graphite"].mobileShell:not(.tv) #prefTabs button{white-space:nowrap;min-width:0;flex:none}
+body[data-theme="graphite"].mobileShell:not(.tv) #prefs .setGrid{border:0;padding:6px 0 0}
+body[data-theme="graphite"].mobileShell:not(.tv) #prefs .hint{font:400 13px/1.45 "Albert Sans",system-ui,sans-serif;letter-spacing:0;word-break:normal;overflow-wrap:break-word;color:rgba(237,239,243,.6)}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
