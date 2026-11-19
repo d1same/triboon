@@ -2686,6 +2686,30 @@ fn probe_playback_health(mpv: &libmpv2::Mpv) -> Option<String> {
     )
 }
 
+/// One line per play, 3 s after ready: how mpv set up the picture and sound. Names and numbers
+/// only (no file name, no URL), so a "no picture" or "no sound" report can be read from mpv.log.
+#[cfg(all(feature = "player", target_os = "windows"))]
+fn playback_setup_line(mpv: &libmpv2::Mpv) -> String {
+    let s = |name: &str| property::<String>(mpv, name).unwrap_or_else(|| "-".into());
+    format!(
+        "[play] vo={} configured={} hwdec={} video={} {}x{} primaries={} gamma={} ao={} aid={} audio={} channels={} mute={} volume={}",
+        s("current-vo"),
+        s("vo-configured"),
+        s("hwdec-current"),
+        s("video-codec"),
+        s("video-params/w"),
+        s("video-params/h"),
+        s("video-params/primaries"),
+        s("video-params/gamma"),
+        s("current-ao"),
+        s("aid"),
+        s("audio-codec-name"),
+        s("audio-params/channel-count"),
+        s("mute"),
+        s("volume"),
+    )
+}
+
 // libmpv2 7.0 has no wrapper for this; the symbol is in the linked libmpv (mpv.lib).
 #[cfg(all(feature = "player", target_os = "windows"))]
 extern "C" {
@@ -2881,6 +2905,7 @@ fn tick_session(
         && session.ready_at.is_some_and(|at| now.duration_since(at) >= PLAYBACK_HEALTH_DELAY)
     {
         session.health_checked = true;
+        mpv_log_line(&playback_setup_line(mpv));
         if let Some(issue) = probe_playback_health(mpv) {
             // The web page logs this as a playback issue (server log + Activity), like Android's.
             eval_callback(
