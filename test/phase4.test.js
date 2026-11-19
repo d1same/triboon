@@ -6284,7 +6284,7 @@ test('Android native player: direct source and native chrome stay out of the web
   const tbIds = [...ui.matchAll(/ id="(tb[A-Za-z0-9]+)"/g)].map((m) => m[1]);
   assert.ok(tbIds.length >= 6 && new Set(tbIds).size === tbIds.length,
     `the two inline wordmarks need unique mask/clip ids (${tbIds.join(', ')})`);
-  for (const rel of ['web/T-Logo.svg', 'logo/T-Logo.svg', 'web/triboon.svg', 'logo/triboon.svg']) {
+  for (const rel of ['web/T-Logo.svg', 'logo/T-Logo.svg', 'web/triboon.svg', 'logo/triboon.svg', 'logo/triboon-dark.svg']) {
     const svgText = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
     assert.ok(/<svg[\s>]/.test(svgText) && !/<image|base64/.test(svgText) && svgText.length < 8000,
       `${rel} should be a small real vector, not an embedded raster`);
@@ -6294,12 +6294,19 @@ test('Android native player: direct source and native chrome stay out of the web
     assert.match(svgText, /viewBox="0 0 512 512"[\s\S]*?<rect width="512" height="512" rx="\d+" fill="#161020"\/>/,
       `${rel} favicon keeps its dark tile (a rect without width/height draws nothing, leaving a pale T on light tab strips)`);
   }
-  // The wordmark PNG is near-white on transparent (made for the dark app). Places outside the app
-  // that sit on LIGHT backgrounds (GitHub README, the Unraid Docker page) use the square T icon on
-  // its own dark tile instead, so the logo reads on light and dark.
+  // The wordmark is near-white on transparent (made for the dark app). The GitHub README shows the
+  // full wordmark (owner, 2026-11-19): the white one for GitHub's dark theme and the same vector with
+  // dark letters for the light theme, so it reads on both. The Unraid Docker page keeps the square
+  // T icon on its own dark tile.
   const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
   const unraid = fs.readFileSync(path.join(__dirname, '..', 'unraid', 'triboon.xml'), 'utf8');
-  assert.match(readme, /<img src="logo\/triboon-icon\.png" alt="Triboon"/, 'README shows the dark-tile T icon, not the near-white wordmark');
+  assert.match(readme, /<picture>\s*<source media="\(prefers-color-scheme: dark\)" srcset="logo\/triboon\.svg">\s*<img src="logo\/triboon-dark\.svg" alt="Triboon"/,
+    'README header shows the full wordmark: white on the dark theme, dark letters on the light theme');
+  assert.doesNotMatch(readme.slice(0, 600), /triboon-icon\.png/, 'README header uses the full wordmark, not the T icon');
+  const darkMark = fs.readFileSync(path.join(__dirname, '..', 'logo', 'triboon-dark.svg'), 'utf8').replace(/\r\n/g, '\n');
+  const whiteMark = fs.readFileSync(path.join(__dirname, '..', 'logo', 'triboon.svg'), 'utf8').replace(/\r\n/g, '\n');
+  assert.strictEqual(darkMark, whiteMark.replace(/#F3EFF7/g, '#161020'),
+    'logo/triboon-dark.svg is the same wordmark vector with only the letter colour changed');
   assert.match(unraid, /<Icon>https:\/\/raw\.githubusercontent\.com\/d1same\/triboon\/main\/logo\/triboon-icon\.png<\/Icon>/,
     'the Unraid template icon is the square dark-tile T icon');
   const iconPng = fs.readFileSync(path.join(__dirname, '..', 'logo', 'triboon-icon.png'));

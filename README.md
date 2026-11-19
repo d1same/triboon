@@ -1,8 +1,9 @@
 <p align="center">
-  <img src="logo/triboon-icon.png" alt="Triboon" width="120">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logo/triboon.svg">
+    <img src="logo/triboon-dark.svg" alt="Triboon" width="420">
+  </picture>
 </p>
-
-<h1 align="center">Triboon</h1>
 
 <p align="center">
   <strong>Press Play.</strong> Triboon finds a healthy source, mounts it, and starts streaming.<br>
