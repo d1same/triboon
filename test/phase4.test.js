@@ -11984,3 +11984,29 @@ test('Player boxes use crisp corners with no edge lines on web and Windows (3.5.
   assert.match(css, /\.menu-item:hover, \.menu-item:focus-visible \{ background: #edeff3; color: #14161a;/);
   assert.match(css, /\.live-epg span \{[^}]*border: 0; border-radius: 6px;/);
 });
+
+test('3.5.1 player guide stays light on TV: category Up/Down debounces the rebuild, no re-fade, no repeat PiP resize', () => {
+  // Owner, Shield: moving through the in-player guide (mostly the category list) felt heavy. Each
+  // category Up/Down rebuilt the whole guide, re-ran the full-screen fade, resized the native video
+  // three times and woke the player controls behind the guide.
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function focusPlayerGuideCategory(idx, select = false, opts = {})');
+  const end = ui.indexOf('function playerGuideBackToCategory()');
+  const fn = ui.slice(start, end);
+  assert.match(fn, /classList\.toggle\('sel', c === cat\)[\s\S]{0,120}clearTimeout\(S\._pgCatRenderT\)[\s\S]{0,80}S\._pgCatRenderT = setTimeout\(/,
+    'category Up/Down moves the highlight at once and schedules one rebuild');
+  assert.match(fn, /if \(S\.pgLiveCat === name[^\n]*renderPlayerGuideTimeline\(\$\('pGuide'\), S\.liveList \|\| \[\]\);\s*\}, 1\d\d\);/,
+    'the rebuild runs once the remote rests, only for the category still highlighted');
+  assert.match(ui, /if \(S\._pgCatRenderT && k !== 'ArrowUp' && k !== 'ArrowDown'\) \{[\s\S]{0,600}renderPlayerGuideTimeline[\s\S]{0,200}dispatchEvent\(new KeyboardEvent\('keydown', \{ key: replay/,
+    'Right/OK/Back during a pending rebuild draw the new category first, then replay the key');
+  assert.match(ui, /if \(!\(pg\.classList\.contains\('open'\) && pg\.classList\.contains\('ready'\)\)\) \{ pg\.classList\.remove\('ready'\);/,
+    'the guide fades in on open only, not on every rebuild');
+  assert.match(ui, /function syncNativeGuidePipRect\(\) \{[\s\S]{0,900}if \(key === S\._pipRectSent\) return;[\s\S]{0,120}TriboonTV\.setGuidePipRect\(JSON\.stringify\(box\)\)/,
+    'an unchanged video-window rect is not sent to the native player again');
+  assert.match(ui, /function closePlayerGuide\(opts = \{\}\) \{[\s\S]{0,200}clearTimeout\(S\._pgCatRenderT\)[\s\S]{0,60}S\._pipRectSent = '';/,
+    'closing the guide cancels a pending rebuild and forgets the last rect');
+  assert.match(ui, /if \(!\$\('pGuide'\)\.classList\.contains\('open'\)\) showOsd\(\);/,
+    'guide keys do not wake the player controls hidden behind the guide');
+  assert.match(ui, /body\[data-theme="graphite"\]\.tv \.pgTimeline \.pgRow \.gCh,body\[data-theme="graphite"\]\.tv \.pgTimeline \.pgRow \.gTl\{transition:none\}/,
+    'row focus does not animate backgrounds on TV');
+});
