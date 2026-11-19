@@ -4151,6 +4151,9 @@ body[data-theme="graphite"] :is(.lcat,.pgCat,.chGroupHead){border-radius:6px}
    and the white programme titles vanished (owner, Shield in-player guide). The row keeps a soft
    wash; only its channel cell (above) turns white. */
 body[data-theme="graphite"] :is(.pgRow,.gRow):is(.focus,:focus){background:rgba(237,239,243,.07)!important;color:var(--text)!important}
+/* 3.5.1 (owner, Shield): player-guide rows are buttons, so the generic white focused-button rule painted the whole row
+   white around the dark show tiles (a hollow frame). The id wins: only the channel cell turns white, like the Live TV page. */
+body[data-theme="graphite"] #pgList .pgRow:is(.focus,:focus){background:rgba(237,239,243,.07)!important}
 /* Live TV header buttons (Multiview / Channels): the site button, no edge line, white on focus. */
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn){border:0!important;border-radius:6px!important}
 /* 3.5.1 (owner pick option A): every player menu (Subtitles, Audio, Sound, Quality) and the Stats panel share one
