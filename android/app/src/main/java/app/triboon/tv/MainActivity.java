@@ -3516,7 +3516,7 @@ public class MainActivity extends Activity {
         leftControls.addView(nativeAboutBtn);
 
         nativeRewBtn = nativeButton(R.drawable.ic_player_rewind, "Back 10 seconds", false);
-        nativeRewBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(-30000); });
+        nativeRewBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(-10000); }); // 3.5.1: the button says 10 s and matches web/Windows (it jumped back 30 s)
         centerControls.addView(nativeRewBtn);
 
         nativePlayBtn = nativeButton(R.drawable.ic_player_pause, "Pause", true);

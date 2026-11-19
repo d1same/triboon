@@ -4215,7 +4215,14 @@ body[data-theme="graphite"] .guideTimeline .gProg{top:7px;bottom:7px;border:0;bo
 body[data-theme="graphite"] .guideTimeline .gProg .gpT{font:600 15px "Albert Sans",system-ui,sans-serif;color:var(--text)}
 body[data-theme="graphite"] .guideTimeline .gProg .gpS{font:500 12.5px "Albert Sans",system-ui,sans-serif;color:rgba(237,239,243,.55)}
 body[data-theme="graphite"] .guideTimeline .gProg.tiny .gpT{font-size:12px}
-body[data-theme="graphite"] .guideTimeline .gRow:not(.gHead){min-height:72px}
+@media (min-width:900px){body[data-theme="graphite"] .guideTimeline .gRow:not(.gHead){min-height:72px}}
+@media (max-width:760px){body[data-theme="graphite"] .lcat .lTags{display:none}
+body[data-theme="graphite"] .guideTimeline .gProg{top:5px;bottom:5px;border-right-width:3px;padding:0 7px}
+body[data-theme="graphite"] .guideTimeline .gProg .gpT{font-size:12.5px}
+body[data-theme="graphite"] .guideTimeline .gProg .gpS{font-size:11px}
+body[data-theme="graphite"] .guideTimeline .gProg.empty .gpT{font-size:12px}
+body[data-theme="graphite"] .gCh .gChName{font-size:13px}
+body[data-theme="graphite"] .lTags .lTag{font-size:10px;padding:2px 5px}}
 body[data-theme="graphite"] .guideTimeline .gProg{background-image:none}
 body[data-theme="graphite"] .guideTimeline .gProg.live{background-color:rgba(237,239,243,.13)}
 body[data-theme="graphite"] .guideTimeline .gProg.past{opacity:.42}
@@ -4225,13 +4232,14 @@ body[data-theme="graphite"] .guideTimeline .gProg .gpS{font-family:"Albert Sans"
 body[data-theme="graphite"] .guideTimeline .gNow{width:2px;background:#C13BD6;box-shadow:none}
 body[data-theme="graphite"] .guideTimeline .gTick{font-family:"Albert Sans",system-ui,sans-serif;letter-spacing:0}
 /* Guide C colours as in the mock-up: neutral dark greys (no purple tint), no outline, a wider channel column. */
-body[data-theme="graphite"] :is(#chBody.liveGuideShell,.pgGuideShell.liveGuideShell){background:#0F0F14;border:0;border-radius:6px;grid-template-columns:minmax(230px,300px) minmax(0,1fr)}
+body[data-theme="graphite"] :is(#chBody.liveGuideShell,.pgGuideShell.liveGuideShell){background:#0F0F14;border:0;border-radius:6px}
+@media (min-width:900px){body[data-theme="graphite"] :is(#chBody.liveGuideShell,.pgGuideShell.liveGuideShell){grid-template-columns:minmax(230px,300px) minmax(0,1fr)}}
 body[data-theme="graphite"].tv #chBody.liveGuideShell{border-radius:6px 0 0 0}
 body[data-theme="graphite"] :is(.liveCatPane,.pgCatPane){background:#121218!important}
 body[data-theme="graphite"] :is(.guideTimeline,.pgTimeline,.liveGuidePane){background:#0F0F14}
 body[data-theme="graphite"] .guideTimeline .gRow.gHead{background:#0F0F14}
 body[data-theme="graphite"] .guideTimeline .gRow:not(.gHead) .gTl{background:transparent}
-body[data-theme="graphite"] .guideTimeline .gCh{width:300px}
+@media (min-width:900px){body[data-theme="graphite"] .guideTimeline .gCh{width:300px}}
 body[data-theme="graphite"] .guideTimeline :is(.gRow.focus,.pgRow.focus,.pgRow:focus) .gTl{background:rgba(237,239,243,.04)}
 /* 3.5.1 (owner: "Channels / Multiview look squished"): the site's button, not a compact chip: roomy,
    sentence-case Sora, light see-through fill, and the same for the player guide's Multiview button. */
@@ -33601,7 +33609,8 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowLeft') return focusChipDir(k) || enterRail();
       if (k === 'ArrowRight') return focusChipDir(k) || focusChip(Math.min(chips.length - 1, i + 1));
       if (k === 'ArrowUp') return focusChipDir(k) || focusMusicSearch();
-      if (k === 'ArrowDown') return focusChipDir(k) || (musicRows().length ? focusMusic(0) : (focusMusicBar() || focusMusicSearch()));
+      // 3.5.1 (D-pad check): Down from the last shelf with nothing below stays put (it used to jump up to the mic).
+      if (k === 'ArrowDown') return focusChipDir(k) || (musicRows().length ? focusMusic(0) : (focusMusicBar() || true));
       if (k === 'Enter' && !e.repeat) { chips[i] && chips[i].click(); return; }
       return;
     }

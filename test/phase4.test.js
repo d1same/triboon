@@ -11903,6 +11903,17 @@ test('Multiview matches the guide: short names, site type, 6px, white focus (3.5
   assert.match(ui, /body\[data-theme="graphite"\] :is\(\.mvCat,\.mvChannel\):is\(\.focus,:focus,:hover\)\{background:#EDEFF3!important;color:#14161A!important/, 'white focus, dark text');
 });
 
+test('D-pad and remote fixes from the 3.5.1 check: rewind 10 s, Music last shelf stays (owner)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(android, /nativeRewBtn = nativeButton\(R\.drawable\.ic_player_rewind, "Back 10 seconds", false\);\s*nativeRewBtn\.setOnClickListener\(v -> \{ if \(consumeNativeControlClick\(v\)\) nativeSeekBy\(-10000\); \}\);/,
+    'the Android rewind button goes back 10 s, as it says (it jumped 30 s)');
+  assert.match(ui, /if \(k === 'ArrowDown'\) return focusChipDir\(k\) \|\| \(musicRows\(\)\.length \? focusMusic\(0\) : \(focusMusicBar\(\) \|\| true\)\);/,
+    'Down from the last Music shelf stays put instead of jumping up to the mic');
+  assert.match(ui, /restoreVirtualGridFocus\(\); \/\/ 3\.5\.1 D-pad check/, 'the grid keeps its focus ring when the next page loads');
+  assert.match(ui, /function liveTopDown\(\) \{/, 'Down from the Live TV top bar returns to the channel you came from');
+});
+
 test('QR sign-in: the page QR encoder makes a valid, scannable code (3.5.1, owner)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const a = ui.indexOf('function qrMatrix(text) {'), b = ui.indexOf('// ---- 3.5.1 (owner): QR sign-in ----');
