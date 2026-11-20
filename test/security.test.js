@@ -107,7 +107,7 @@ const tmdbMock = http.createServer((req, res) => {
   const epExt = u.pathname.match(/^\/3\/tv\/(\d+)\/season\/(\d+)\/episode\/(\d+)\/external_ids$/);
   if (epExt) {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ id: 1, imdb_id: epExt[1] === '700700' ? 'tt70070001' : null }));
+    return res.end(JSON.stringify({ id: 1, imdb_id: epExt[1] === '700700' ? 'tt70070001' : (epExt[1] === '4343' ? 'tt43430003' : null) }));
   }
   // Age-gate fixtures: an R-rated movie (blocked below Adult) and a G-rated movie (kids OK).
   if (u.pathname === '/3/movie/990001') {
@@ -2559,6 +2559,10 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
       }
       // Brief 131: a show whose card (TMDB) numbers differ from the files. Each episode has the same
       // group's subtitle, named with the file numbering.
+      if (u.searchParams.get('id') === 'tt43430003') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify([{ id: 43, url: `http://127.0.0.1:${osPort}/file.srt`, format: 'srt', language: 'en', display: 'Paper.Street.S01E03.1080p.WEB-DL.H.264-NTb' }]));
+      }
       if (u.searchParams.get('id') === '4343') {
         const ep = Number(u.searchParams.get('episode'));
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -2735,14 +2739,15 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
   // the subtitle search, the list and the release match use the number of the file that plays.
   mounted._releaseName = 'Paper.Street.S01E04.1080p.WEB-DL.H.264-NTb';
   mounted._subQuery = 'Paper Street S01E03';
-  const asked = () => subtitleSearches.filter((s) => s.id === '4343').map((s) => `${s.season}:${s.episode}`);
+  // A TMDB key is set (an earlier test) and the request has no show imdb: the TV app's path.
+  const asked = () => subtitleSearches.filter((s) => /^(4343|tt43430003)$/.test(s.id)).map((s) => `${s.id}:${s.season}:${s.episode}`);
   const plain = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=4343&season=1&episode=3&list=1&t=${play.streamToken}`, null, admin);
   assert.strictEqual(plain.status, 200, JSON.stringify(plain.json));
-  assert.deepStrictEqual(asked(), ['1:3'], 'no translation on the mount: the card number is searched, as before');
+  assert.deepStrictEqual(asked(), ['tt43430003:null:null'], 'no translation on the mount: the card episode is searched by its IMDb id, as before');
   mounted._subEpisode = { season: 1, tmdbEp: 3, ep: 4 };
   const shifted = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=4343&season=1&episode=3&list=1&t=${play.streamToken}`, null, admin);
   assert.strictEqual(shifted.status, 200, JSON.stringify(shifted.json));
-  assert.deepStrictEqual(asked(), ['1:3', '1:4'], 'the subtitle site is asked for the file number');
+  assert.deepStrictEqual(asked(), ['tt43430003:null:null', '4343:1:4'], 'the subtitle site is asked for the show and the file number');
   const shiftedLabels = (shifted.json.variants || []).map((v) => v.label);
   assert.ok(/S01E04/.test(shiftedLabels[0] || ''), `the file's episode is offered first: ${shiftedLabels}`);
   assert.ok(!shiftedLabels.some((l) => /S01E03/.test(l)), `the card-numbered (other) episode is not offered: ${shiftedLabels}`);
@@ -2756,8 +2761,8 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
   assert.ok(logs.some((l) => /\[subs\] pick auto s1e4 \(card e3\) S01E04 .*release match, so audio sync is skipped/.test(l)),
     `the same release's subtitle for the file that plays is a release match: ${logs.filter((l) => /\[subs\]/.test(l))}`);
   // Another episode on the same mount (the card's next episode) is not translated.
-  await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=4343&season=1&episode=5&list=1&t=${play.streamToken}`, null, admin);
-  assert.deepStrictEqual(asked(), ['1:3', '1:4', '1:5']);
+  await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=de&tmdb=4343&season=1&episode=5&list=1&t=${play.streamToken}`, null, admin);
+  assert.deepStrictEqual(asked(), ['tt43430003:null:null', '4343:1:4', 'tt43430003:null:null'], 'another card episode keeps today\'s path');
   delete mounted._subEpisode;
   delete mounted._releaseName;
 
@@ -2774,6 +2779,7 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
     'Wyzie is searched by the resolved EPISODE imdb id, not the tmdb-tv id that dead-ends');
   assert.ok(!subtitleSearches.some((s) => s.id === '700700'),
     'the dead-ending tmdb-tv id is never what Wyzie is searched by once the episode imdb resolves');
+
 
   } finally {
     delete process.env.WYZIE_BASE;

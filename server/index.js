@@ -5072,8 +5072,8 @@ function playSearchParams(src = {}) {
     tvdbid: src.tvdbid || undefined,
     season: src.season,
     // TMDB and release numbering differ for this show (catalogFactsFor): the indexer and the
-    // verifier get the release number; a TMDB two-parter spans two (epTo). The card, watch keys and
-    // subtitles keep the TMDB number from the request body.
+    // verifier get the release number; a TMDB two-parter spans two (epTo). The card and watch keys
+    // keep the TMDB number from the request body; subtitles use the file's (subtitleEpisodeFor).
     ep: releaseEpisodeOf(src) || src.ep,
     epTo: releaseEpisodeToOf(src),
     aliases: aliases.length ? aliases : undefined,
@@ -11701,7 +11701,10 @@ Object.assign(H, {
     }
     let clientGone = false;
     ctx.req.once('close', () => { if (!ctx.req.complete) clientGone = true; });
-    if (hasEpisode && !imdbId && /^\d+$/.test(String(tmdbId || '')) && settings.get().tmdbKey) {
+    // A translated episode (brief 131) is asked for by the show and the file's number. The episode
+    // IMDb id TMDB links to its own (merged) numbering can sit at another number on the subtitle
+    // sites, and that search carries no number the list could be checked against.
+    if (hasEpisode && !translatedEpisode && !imdbId && /^\d+$/.test(String(tmdbId || '')) && settings.get().tmdbKey) {
       // This resolution is the ONLY way a no-show-imdb TV show gets subtitles from Wyzie (which is
       // id-only — no title search — and dead-ends on the tmdb-tv id), so it is a single point of
       // failure. Cached per episode so pause/seek remounts do not re-log or re-hit TMDB.
