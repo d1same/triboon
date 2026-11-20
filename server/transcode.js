@@ -273,6 +273,12 @@ function probeDisposition(s, name) {
 }
 function parseProbeStreams(j) {
   const streams = (j && j.streams) || [];
+  // A probe that ffprobe never finished (killed at 30 s, a stalled read) prints nothing. That is no
+  // answer, not a file with no tracks: an empty result used to be cached for 6 h and hid the audio
+  // menu and every subtitle in the file. Fail it so the next ask probes again.
+  if (!streams.some((x) => x && (x.codec_type === 'video' || x.codec_type === 'audio'))) {
+    throw new Error('ffprobe found no audio or video stream');
+  }
   const rel = { video: 0, audio: 0, subtitle: 0 };
   const fmt = (j && j.format) || {};
   const result = {

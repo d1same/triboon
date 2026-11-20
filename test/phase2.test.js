@@ -8295,3 +8295,14 @@ test('the Windows app plays an obfuscated release with no file extension direct,
   const lowPower4k = { ...win, lowPower: true, hevc: false };
   assert.notStrictEqual(decidePlayback('Film.2160p.mkv', lowPower4k).method, 'direct', 'the 4K help rule still wins');
 });
+
+test('a probe that never finished is a failure, not an empty file that gets cached (brief 137)', () => {
+  const { parseProbeStreams } = require('../server/transcode');
+  assert.throws(() => parseProbeStreams({}), /no audio or video stream/, 'ffprobe killed with no output');
+  assert.throws(() => parseProbeStreams({ streams: [], format: { duration: '10' } }), /no audio or video stream/);
+  assert.throws(() => parseProbeStreams({ streams: [{ codec_type: 'subtitle', codec_name: 'subrip' }] }), /no audio or video stream/);
+  assert.strictEqual(parseProbeStreams({ streams: [{ codec_type: 'audio', codec_name: 'aac', channels: 2 }] }).audio.length, 1, 'an audio-only file is a real answer');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /probeTracks\(selfUrl\)\.then\(\(t\) => \{[\s\S]{0,120}rememberProbe\(probeCacheKey\(vf\.name, vf\.size\), t\);[\s\S]{0,200}\}\)\.catch\(/,
+    'only a probe that resolved is remembered');
+});
