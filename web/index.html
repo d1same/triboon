@@ -11616,7 +11616,12 @@ async function openDetail(it, push = true, opts = {}) {
         // A ONE-SEASON show goes straight to its episodes (owner call): a grid holding a single
         // season cover is a pointless extra press. Multi-season shows keep the season chooser, and
         // a show that later gains a season gets it back automatically — this is data-driven.
-        if (seasons.length === 1) openSeasonEpisodes(it, seasons[0].season_number, { auto: true });
+        const playerReturn = playerReturnFocusFor(it);
+        if (playerReturn && seasons.some((s) => s.season_number === playerReturn.season)) {
+          // Back from the player (Continue Watching, end of a show): straight to the episode just
+          // played, never the season covers first.
+          focusDetailAfterPlayer(it, playerReturn).catch(() => {});
+        } else if (seasons.length === 1) openSeasonEpisodes(it, seasons[0].season_number, { auto: true });
         else renderSeasonGrid(it, seasons);
         pickNextUp(it, seasons);
         queueDetailPlayEpisodeFocus(it, reqId);
@@ -12851,6 +12856,87 @@ function closingEpisodeFocus(item) {
   if (!Number.isFinite(season) || !Number.isFinite(episode) || episode <= 0) return null;
   return { season, episode };
 }
+// Leaving the player onto a show's title page returns to the episode just played (owner report:
+// it landed at the top or on another section). closePlayer leaves this record; whichever path
+// paints the title page (already open beneath the player, Continue Watching, end of a show)
+// opens THAT season's episodes and focuses THAT card — the next card when it is now finished,
+// like a watched mark. It expires so a later, unrelated visit to the show is not steered.
+const PLAYER_RETURN_FOCUS_MS = 30000;
+function rememberPlayerReturnFocus(item, finished) {
+  const parts = closingEpisodeFocus(item);
+  if (!item || !parts || item.type === 'live' || item.type === 'movie') { S._playerReturnFocus = null; return null; }
+  const w = (S.watchMap || {})[item.key];
+  const local = /^local:/i.test(String(item.key || ''));
+  const rec = {
+    ...parts,
+    key: item.key || '',
+    finished: !!finished || !!(w && (w.watched || watchLooksFinished(w))),
+    tmdbId: local ? null : (Number(item.tmdbId) || (episodeKeyParts(item) || {}).tmdbId || null),
+    libId: local && item._lib ? item._lib.id : null,
+    showIdx: local ? (item._showOpen != null ? item._showOpen : item._showIdx) : null,
+    at: Date.now(),
+  };
+  S._playerReturnFocus = rec;
+  return rec;
+}
+function playerReturnFocusFor(show) {
+  const rec = S._playerReturnFocus;
+  if (!rec || !show || Date.now() - rec.at > PLAYER_RETURN_FOCUS_MS) return null;
+  if (show._localShow) {
+    if (rec.libId && show._lib && rec.libId === show._lib.id
+      && rec.showIdx != null && String(rec.showIdx) === String(show._showOpen != null ? show._showOpen : show._showIdx)) return rec;
+    // A Continue Watching item carries only its watch key (local:<lib>:<show>:sXeY): match it
+    // against this show's own episode keys.
+    return rec.key && (S.localDetailEpisodes || []).some((ep) => localEpisodeItemOf(show, ep).key === rec.key) ? rec : null;
+  }
+  return show.type === 'tv' && rec.tmdbId && Number(show.tmdbId) === Number(rec.tmdbId) ? rec : null;
+}
+function playerReturnCard(rec) {
+  const grid = $('epGrid');
+  if (!rec || !grid || grid.style.display === 'none') return null;
+  let card = grid.querySelector(`.epCard[data-season="${rec.season}"][data-episode="${rec.episode}"]`);
+  if (!card && rec.key) card = [...grid.querySelectorAll('.epCard')].find((c) => c.dataset.epKey === rec.key) || null;
+  if (card && rec.finished) {
+    let next = card.nextElementSibling;
+    while (next && !(next.classList && next.classList.contains('epCard'))) next = next.nextElementSibling;
+    if (next) card = next;
+  }
+  return card;
+}
+// Show the played episode's season and focus its card. Returns false when the show has no such
+// season (the caller keeps its own fallback). No network wait of its own: a catalog season comes
+// from the page cache when the title page was already open.
+async function focusDetailAfterPlayer(show, rec) {
+  if (!show || !rec || !(S.detailSeasons || []).some((s) => +s.season_number === +rec.season)) return false;
+  if (show._localShow) openLocalShowSeasonEpisodes(show, rec.season, { focusEpisode: rec.episode });
+  // A one-season show keeps its tab-free episode row (same as opening it fresh).
+  else await openSeasonEpisodes(show, rec.season, { focusEpisode: rec.episode, auto: (S.detailSeasons || []).length <= 1 });
+  if (S.view !== 'detail' || S.detailItem !== show) return false;
+  const card = playerReturnCard(rec);
+  if (!card) return false;
+  S.zone = '';
+  S.detailEpisodeAutoFocusDone = true;
+  applyFocus(card, !S.pointer);
+  retargetDetailFromEpisodeCard(card);
+  if (!S.pointer) scrollDetailFocusIntoView(card);
+  return true;
+}
+// After the watch-state refetch: re-render the open season for fresh ticks without moving the
+// viewer. The focused card (by season/episode) is focused again; a focus elsewhere stays put.
+async function refreshDetailEpisodesKeepingFocus(show, rec) {
+  if (!show || S.detailSeason == null || $('epGrid').style.display === 'none') return;
+  const cur = document.querySelector('.focus');
+  const inRow = !cur || !cur.isConnected || !!(cur.closest && cur.closest('#epGrid'));
+  const target = cur && cur.isConnected && cur.classList && cur.classList.contains('epCard')
+    ? { season: +cur.dataset.season, episode: +cur.dataset.episode } : null;
+  if (show._localShow) openLocalShowSeasonEpisodes(show, S.detailSeason);
+  else await openSeasonEpisodes(show, S.detailSeason);
+  if (!inRow || S.view !== 'detail' || S.detailItem !== show) return;
+  const card = target
+    ? $('epGrid').querySelector(`.epCard[data-season="${target.season}"][data-episode="${target.episode}"]`)
+    : playerReturnCard(rec);
+  if (card) { applyFocus(card, false); retargetDetailFromEpisodeCard(card); }
+}
 async function focusDetailPlayEpisode(show, opts = {}) {
   const parts = detailPlayEpisodeParts();
   if (!parts || !detailPlayShouldFocusEpisode()) return false;
@@ -12865,6 +12951,7 @@ async function focusDetailPlayEpisode(show, opts = {}) {
 function queueDetailPlayEpisodeFocus(show, reqId) {
   // Back to a title restores where the user left it; the next-up auto-focus must not race it.
   if (S.detailEpisodeAutoFocusDone || S._detailRestore) return;
+  if (playerReturnFocusFor(show)) return; // back from the player: the played episode wins
   const parts = detailPlayEpisodeParts();
   if (!parts || !detailPlayShouldFocusEpisode()) return;
   requestAnimationFrame(() => {
@@ -18940,6 +19027,7 @@ async function closePlayer(opts = {}) {
   // without ended, and must keep the episode watched so Home/Details jump to the next one.
   const finished = !!(opts && opts.ended) || !!(S.playing && S.playing._ended);
   const finalWatch = saveWatch(true, finished ? { watched: true } : {});
+  rememberPlayerReturnFocus(closingItem, finished); // the title page beneath returns to this episode
   const finalActivity = stopActivityHeartbeat();
   if (canUseNativeVideoPlayer() && window.TriboonTV.closeVideo) {
     try { window.TriboonTV.closeVideo(); } catch {}
@@ -18986,24 +19074,29 @@ async function closePlayer(opts = {}) {
     S.playerReturn = null;
     // Back to the detail page: refresh watch marks and the open season's episode list.
     S.view = 'detail';
+    // The player owns S.zone while open, so testing for a fictional "detail" zone stranded the
+    // focus ring on the now-hidden player. An episode returns to THAT card in its season row
+    // (library, catalog and Persian shows alike) at once, before the watch save and refetch, so
+    // the page never shows the top or another section first. Play stays the fallback for a film
+    // or when the episode is not on this page.
+    S.zone = '';
+    const show = S.detailItem;
+    const rec = playerReturnFocusFor(show);
+    const landed = rec ? await focusDetailAfterPlayer(show, rec) : false;
+    if (!landed) {
+      requestAnimationFrame(() => {
+        if (!(S.view === 'detail' && $('detail').classList.contains('open'))) return;
+        applyFocus($('dPlay'));
+      });
+    }
     try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
+    if (S.view !== 'detail' || S.detailItem !== show) return;
     if (S.detailItem) syncDetailButtons(S.detailItem);
     applyPendingDetailNext();
-    const playedEp = closingEpisodeFocus(closingItem);
-    if (S.detailItem && S.detailItem._localShow && playedEp) {
-      openLocalShowSeasonEpisodes(S.detailItem, playedEp.season, { focusEpisode: playedEp.episode });
-    } else if (S.detailItem && S.detailItem.type === 'tv' && S.detailSeason != null) {
-      openSeasonEpisodes(S.detailItem, S.detailSeason);
-    }
-    // The player owns S.zone while open, so testing for a fictional "detail" zone stranded the
-    // focus ring on the now-hidden player. A local episode returns to THAT card. Play is the
-    // fallback when the episode row is not on screen.
-    S.zone = '';
-    requestAnimationFrame(() => {
-      if (!(S.view === 'detail' && $('detail').classList.contains('open'))) return;
-      if (S.detailItem && S.detailItem._localShow && playedEp && focusRenderedDetailEpisode(playedEp)) return;
-      applyFocus($('dPlay'));
-    });
+    // Refresh the watched ticks. Keep the card the viewer is on now (the returned one, or one
+    // they moved to during the save); a focus outside the row is left alone.
+    if (landed) refreshDetailEpisodesKeepingFocus(show, rec);
+    else if (show && show.type === 'tv' && S.detailSeason != null) openSeasonEpisodes(show, S.detailSeason);
   } else if (finishedTarget) {
     S.playerReturn = null;
     try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
@@ -19039,7 +19132,9 @@ async function closePlayer(opts = {}) {
         if (S.detailItem && S.detailItem.tmdbId === cwDetailTarget.tmdbId) {
           syncDetailButtons(S.detailItem);
           applyPendingDetailNext();
-          if (S.detailItem.type === 'tv' && S.detailSeason != null) openSeasonEpisodes(S.detailItem, S.detailSeason);
+          const rec = playerReturnFocusFor(S.detailItem);
+          if (rec) refreshDetailEpisodesKeepingFocus(S.detailItem, rec);
+          else if (S.detailItem.type === 'tv' && S.detailSeason != null) openSeasonEpisodes(S.detailItem, S.detailSeason);
         }
       })();
       return;
@@ -23485,7 +23580,9 @@ async function openLocalShowDetail(it) {
       return;
     }
     $('dPlay').disabled = false; $('dPlay').classList.remove('unavail');
-    renderLocalShowSeasonGrid(show, S.detailSeasons);
+    const playerReturn = playerReturnFocusFor(show);
+    // Back from the player onto this library show: the episode just played, not the season covers.
+    if (!(playerReturn && await focusDetailAfterPlayer(show, playerReturn))) renderLocalShowSeasonGrid(show, S.detailSeasons);
     $('dPlayed').classList.toggle('on', localEpisodeGroupWatched(episodes));
     pickLocalShowPlayTarget(show, episodes);
     queueDetailPlayEpisodeFocus(show, reqId);
