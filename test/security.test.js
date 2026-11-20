@@ -2777,6 +2777,14 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
   delete mounted._subEpisode;
   delete mounted._releaseName;
 
+  // Brief 134 S1: the list says whether any row may start on its own (the auto pick's own rule).
+  const otherOnly = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=it&tmdb=4343&season=1&episode=9&list=1&t=${play.streamToken}`, null, admin);
+  assert.strictEqual(otherOnly.status, 200, JSON.stringify(otherOnly.json));
+  assert.ok((otherOnly.json.variants || []).length >= 1, 'the menu still lists the rows for a hand pick');
+  assert.strictEqual(otherOnly.json.confident, false, 'every row names another episode: not confident');
+  const rightRow = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=pt&tmdb=4343&season=1&episode=3&list=1&t=${play.streamToken}`, null, admin);
+  assert.strictEqual(rightRow.json.confident, true, 'a row for this episode: confident');
+
   // Brief 134 S3: a sync answer that takes longer than the server's 30 s idle cut still arrives,
   // and a replaced or cut ask stops its sync job (no parallel audio pulls on one mount).
   {

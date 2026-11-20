@@ -344,6 +344,38 @@ test('subtitle sync that gives up at two minutes says so in plain words (brief 1
   assert.match(server, /syncHdr === 'failed' && \(_sf\.disagree \|\| 0\) >= 2 \? \{ 'x-triboon-subsync-reason': 'misfit' \}/);
 });
 
+test('every automatic subtitle start uses the confident-pick guard; a hand pick does not (brief 134 S1)', async () => {
+  // A list where every row names another episode used to start its top row on the browser, and an
+  // app remount sent that row as if the viewer had picked it.
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (sig) => { const a = ui.indexOf(sig); assert.ok(a >= 0, sig); return ui.slice(a, ui.indexOf('\n}', a) + 2); };
+  const make = (confident) => {
+    const S = { playing: { mountId: 'm', _osVariants: { en: [{ id: 'X', label: 'S01E03 - WEB-DL', selected: true }] }, _osConfident: { en: confident } } };
+    const loads = [];
+    const api = new Function('S', 'osLang', 'osTrackInfo', 'osTrackRel', 'loadSubtitleVersions', 'subtitleNoResultsMessage', 'bestReleaseSubtitleRel', 'OS_LANG_NAMES', 'subtitleRecommendedLabel', 'savedSubtitleDetail',
+      `${grab('function subtitleListConfident(')}\n${grab('async function guardAutomaticOnlineStart(')}\n${grab('function bestSubtitleVariant(')}\n${grab('function bestSubtitleVariantRel(')}\n${grab('function concreteSubtitleRel(')}\n${grab('function subtitleDefaultChoice(')}\nreturn { guardAutomaticOnlineStart, concreteSubtitleRel, subtitleDefaultChoice };`)(
+      S, (l) => l, (rel) => { const [, lang, variant] = rel.split(':'); return { lang, variant }; }, (l, id) => (id ? `os:${l}:${id}` : `os:${l}`),
+      async (l) => { loads.push(l); return S.playing._osVariants[l]; }, () => 'No English subtitles found for this title', () => '', { en: 'English' },
+      (name, v) => `${name} (${v.label})`, () => '');
+    return { api, loads };
+  };
+  const bad = make(false);
+  await assert.rejects(bad.api.guardAutomaticOnlineStart('os:en'), (e) => e.status === 404 && e.notConfident && !e.noSubtitles,
+    'an automatic start stops quietly, and is not remembered as a miss (a hand pick still works)');
+  await bad.api.guardAutomaticOnlineStart('os:en:X'); // a saved hand pick (a row id) is a hand pick
+  assert.strictEqual(bad.api.concreteSubtitleRel('os:en'), 'os:en', 'an app remount keeps the plain pick: the server guard decides');
+  assert.match(bad.api.subtitleDefaultChoice('en').label, /only other episodes found/, 'the top row is not offered as the recommended one');
+  const good = make(true);
+  await good.api.guardAutomaticOnlineStart('os:en');
+  assert.strictEqual(good.api.concreteSubtitleRel('os:en'), 'os:en:X', 'a confident list: as before');
+  assert.strictEqual(good.api.subtitleDefaultChoice('en').label, 'English (S01E03 - WEB-DL)');
+  const old = make(undefined); // an older server sends no field
+  assert.strictEqual(old.api.concreteSubtitleRel('os:en'), 'os:en:X');
+  // Every automatic start goes through it, before the row is resolved; a hand pick skips it.
+  assert.match(ui, /const manualChoice = !opts\.startup && !opts\.builtInRetry && !opts\.autoFallback;[\s\S]+if \(!manualChoice\) await guardAutomaticOnlineStart\(rel\);[^\n]*\n\s+rel = await resolveOnlineSubtitleRel\(rel\);/);
+  assert.match(ui, /p\._osConfident\[l\] = j\.confident !== false;/);
+});
+
 test('web subtitle sync on a slow mount measures again at most twice, then applies the late answer (brief 134 L16)', async () => {
   // Each measurement takes longer than 20 s of playback, so every answer comes back "moved". The
   // browser used to ask again for ever, each time pulling audio on the mount.

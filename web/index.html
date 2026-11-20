@@ -15565,6 +15565,21 @@ function bestSubtitleVariant(lang) {
   if (!variants || !variants.length) return null;
   return variants.find((v) => v.selected) || variants[0] || null;
 }
+// Brief 134 S1: false only when the server said no row is this episode (or a generic file). An
+// automatic start then picks nothing; a hand pick, and a saved hand pick (a row id), are unchanged.
+function subtitleListConfident(lang) {
+  const p = S.playing;
+  const l = osLang(lang);
+  return !(p && p._osConfident && p._osConfident[l] === false);
+}
+async function guardAutomaticOnlineStart(rel) {
+  if (!(typeof rel === 'string' && rel.startsWith('os:'))) return;
+  const info = osTrackInfo(rel);
+  if (info.variant) return;
+  await loadSubtitleVersions(info.lang);
+  // A quiet stop (status 404), not a remembered miss: the menu and a hand pick still offer the rows.
+  if (!subtitleListConfident(info.lang)) throw Object.assign(new Error(`${subtitleNoResultsMessage(info.lang)} (only other episodes)`), { status: 404, notConfident: true });
+}
 function bestSubtitleVariantRel(lang) {
   const v = bestSubtitleVariant(lang);
   return v ? osTrackRel(lang, v.id) : '';
@@ -15660,6 +15675,7 @@ function subtitleDefaultChoice(lang) {
   const l = osLang(lang);
   const name = OS_LANG_NAMES[l] || l.toUpperCase();
   const best = bestSubtitleVariant(l);
+  if (best && best.id && !subtitleListConfident(l)) return { rel: osTrackRel(l, best.id), label: `${name} (only other episodes found)`, best };
   if (best && best.id) return { rel: osTrackRel(l, best.id), label: subtitleRecommendedLabel(name, best), best };
   const cur = p && typeof p.subTrack === 'string' && p.subTrack.startsWith('os:') ? osTrackInfo(p.subTrack) : null;
   if (cur && cur.lang === l && cur.variant) {
@@ -20094,7 +20110,9 @@ function concreteSubtitleRel(rel) {
   if (rel === 'release:auto') return bestReleaseSubtitleRel();
   if (!(typeof rel === 'string' && rel.startsWith('os:'))) return rel || '';
   const info = osTrackInfo(rel);
-  return info && !info.variant ? (bestSubtitleVariantRel(info.lang) || rel) : rel;
+  // Not confident: keep the plain automatic pick, so the server's own guard decides (an app
+  // remount used to send the other episode's row as if the viewer had picked it).
+  return info && !info.variant ? ((subtitleListConfident(info.lang) && bestSubtitleVariantRel(info.lang)) || rel) : rel;
 }
 function startupSubtitleRelFor(p, saved = loadSubChoice()) {
   if (!p || p._subtitleDisabledThisSession) return '';
@@ -20233,6 +20251,8 @@ async function loadSubtitleVersions(lang) {
       }
       const j = await r.json();
       p._osVariants[l] = j.variants || [];
+      p._osConfident = p._osConfident || {};
+      p._osConfident[l] = j.confident !== false; // an older server sends no field: as before
       if (!p._osVariants[l].length) throw subtitleNoResultsError(l);
       clearSubtitleMiss(l);
       return p._osVariants[l];
@@ -20861,6 +20881,7 @@ async function setSubtitle(rel, opts = {}) {
   }
   p._subtitleDisabledThisSession = false;
   try {
+    if (!manualChoice) await guardAutomaticOnlineStart(rel); // every automatic start (brief 134 S1)
     rel = await resolveOnlineSubtitleRel(rel);
   } catch (e) {
     if (subtitleFetchAborted(e)) {
