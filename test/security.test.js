@@ -2543,6 +2543,8 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
         origin: u.searchParams.get('origin'),
         fileName: u.searchParams.get('fileName'),
         file: u.searchParams.get('file'),
+        season: u.searchParams.get('season'),
+        episode: u.searchParams.get('episode'),
       });
       // Mirrors the real API: key required as a query param, id = TMDB id.
       if (u.searchParams.get('key') !== 'test-key') { res.writeHead(401); return res.end('{}'); }
@@ -2554,6 +2556,16 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
         assert.strictEqual(u.searchParams.get('episode'), null, 'episode-imdb Wyzie search must not carry an episode');
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify([{ id: 9, url: `http://127.0.0.1:${osPort}/file.srt`, format: 'srt', display: 'Goosebumps.S01E01.WEB', language: 'en' }]));
+      }
+      // Brief 131: a show whose card (TMDB) numbers differ from the files. Each episode has the same
+      // group's subtitle, named with the file numbering.
+      if (u.searchParams.get('id') === '4343') {
+        const ep = Number(u.searchParams.get('episode'));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify([3, 4].map((n) => ({
+          id: 40 + n, url: `http://127.0.0.1:${osPort}/file.srt`, format: 'srt', language: 'en',
+          display: `Paper.Street.S01E0${n}.1080p.WEB-DL.H.264-NTb`,
+        })).sort((a, b) => (a.id === 40 + ep ? -1 : 0) - (b.id === 40 + ep ? -1 : 0))));
       }
       if (u.searchParams.get('id') !== '4242') { res.writeHead(200); return res.end('[]'); }
       assert.strictEqual(u.searchParams.get('season'), '1',
@@ -2718,6 +2730,36 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
   mounted._subQuery = 'Sec Test 2024 S01E07';
   const episodeOverride = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&season=1&episode=3&t=${play.streamToken}`);
   assert.strictEqual(episodeOverride.status, 200, episodeOverride.body.toString());
+
+  // Brief 131 (The Office TMDB S07E21 plays file S07E22): when Play translated the card's number,
+  // the subtitle search, the list and the release match use the number of the file that plays.
+  mounted._releaseName = 'Paper.Street.S01E04.1080p.WEB-DL.H.264-NTb';
+  mounted._subQuery = 'Paper Street S01E03';
+  const asked = () => subtitleSearches.filter((s) => s.id === '4343').map((s) => `${s.season}:${s.episode}`);
+  const plain = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=4343&season=1&episode=3&list=1&t=${play.streamToken}`, null, admin);
+  assert.strictEqual(plain.status, 200, JSON.stringify(plain.json));
+  assert.deepStrictEqual(asked(), ['1:3'], 'no translation on the mount: the card number is searched, as before');
+  mounted._subEpisode = { season: 1, tmdbEp: 3, ep: 4 };
+  const shifted = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=4343&season=1&episode=3&list=1&t=${play.streamToken}`, null, admin);
+  assert.strictEqual(shifted.status, 200, JSON.stringify(shifted.json));
+  assert.deepStrictEqual(asked(), ['1:3', '1:4'], 'the subtitle site is asked for the file number');
+  const shiftedLabels = (shifted.json.variants || []).map((v) => v.label);
+  assert.ok(/S01E04/.test(shiftedLabels[0] || ''), `the file's episode is offered first: ${shiftedLabels}`);
+  assert.ok(!shiftedLabels.some((l) => /S01E03/.test(l)), `the card-numbered (other) episode is not offered: ${shiftedLabels}`);
+  const logs = [];
+  const origLog = console.log;
+  console.log = (...a) => { logs.push(a.join(' ')); };
+  let pickedFileSub;
+  try { pickedFileSub = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4343&season=1&episode=3&t=${play.streamToken}`); }
+  finally { console.log = origLog; }
+  assert.strictEqual(pickedFileSub.status, 200, pickedFileSub.body.toString());
+  assert.ok(logs.some((l) => /\[subs\] pick auto s1e4 \(card e3\) S01E04 .*release match, so audio sync is skipped/.test(l)),
+    `the same release's subtitle for the file that plays is a release match: ${logs.filter((l) => /\[subs\]/.test(l))}`);
+  // Another episode on the same mount (the card's next episode) is not translated.
+  await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=4343&season=1&episode=5&list=1&t=${play.streamToken}`, null, admin);
+  assert.deepStrictEqual(asked(), ['1:3', '1:4', '1:5']);
+  delete mounted._subEpisode;
+  delete mounted._releaseName;
 
   // Episode-imdb resolution — the "Goosebumps: The Vanishing" fix. A TV show whose SHOW has no imdb
   // id (only tmdb) dead-ends in Wyzie because Wyzie resolves a tmdb-tv id to the (null) SHOW imdb.

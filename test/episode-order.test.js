@@ -287,3 +287,39 @@ test('server: Play and Sources search the release numbers, while the card keeps 
   // The release order loads beside the season list, not in front of it.
   assert.match(src, /await Promise\.all\(\[\s+tmdb\.get\(`\/tv\/\$\{id\}\/season\/\$\{s\}`\)\.catch\(\(\) => null\),\s+tmdb\.get\(`\/tv\/\$\{id\}\/episode_groups`\)\.catch\(\(\) => null\),/);
 });
+
+test('subtitles: the episode number of the file that plays (brief 131, The Office TMDB S07E21 = file S07E22)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const grab = (name) => {
+    const s = src.indexOf(`function ${name}(`);
+    return src.slice(s, src.indexOf('\n}', s) + 2);
+  };
+  const { subtitleEpisodeFor, subtitleEpisodeNumber } = new Function(`${grab('releaseEpisodeOf')}\n${grab('subtitleEpisodeFor')}\n${grab('subtitleEpisodeNumber')}\nreturn { subtitleEpisodeFor, subtitleEpisodeNumber };`)();
+  const card = { q: 'Paper Street S07E21', season: 7, ep: 21 };
+  // Air-order translation (releaseEpisodes from catalogFactsFor).
+  assert.deepEqual(subtitleEpisodeFor({ ...card, releaseEpisodes: [22] }, null, 'Paper.Street.S07E22.Goodbye.1080p.WEB-DL-GRP.mkv'), { season: 7, tmdbEp: 21, ep: 22 });
+  // Release-title hop (candidate.releaseEpisode from pipeline.search).
+  assert.deepEqual(subtitleEpisodeFor(card, { releaseEpisode: { s: 7, e: 22 } }, 'Paper.Street.S07E22.mkv'), { season: 7, tmdbEp: 21, ep: 22 });
+  // A two-part file holds the release number.
+  assert.deepEqual(subtitleEpisodeFor({ q: 'P', season: 6, ep: 16, releaseEpisodes: [17, 18] }, null, 'Paper.Street.S06E17E18.720p.BluRay-GRP'), { season: 6, tmdbEp: 16, ep: 17 });
+  assert.deepEqual(subtitleEpisodeFor({ q: 'P', season: 6, ep: 16, releaseEpisodes: [17, 18] }, null, 'Paper.Street.S06E17-E18.Delivery'), { season: 6, tmdbEp: 16, ep: 17 });
+  // An opaque or pack name still follows Play's number.
+  assert.deepEqual(subtitleEpisodeFor({ ...card, releaseEpisodes: [22] }, null, 'Feature.mkv'), { season: 7, tmdbEp: 21, ep: 22 });
+  // The file's own name has the last word: a file numbered like the card keeps the card's number.
+  assert.equal(subtitleEpisodeFor({ ...card, releaseEpisodes: [22] }, null, 'Paper.Street.S07E21.Goodbye.mkv'), null);
+  // Normal shows, films and no translation: null, so the subtitle path is today's.
+  assert.equal(subtitleEpisodeFor(card, null, 'Paper.Street.S07E21.mkv'), null);
+  assert.equal(subtitleEpisodeFor({ ...card, releaseEpisodes: [21] }, null, 'Paper.Street.S07E21.mkv'), null);
+  assert.equal(subtitleEpisodeFor({ q: 'Film 2024' }, null, 'Film.2024.mkv'), null);
+  assert.equal(subtitleEpisodeFor(card, { releaseEpisode: { s: 6, e: 22 } }, 'x'), null, 'another season is not this translation');
+  // The handler translates only the card episode the mount was played for.
+  const vf = { _subEpisode: { season: 7, tmdbEp: 21, ep: 22 } };
+  assert.equal(subtitleEpisodeNumber(vf, '7', '21'), 22);
+  assert.equal(subtitleEpisodeNumber(vf, 7, 22), 22);
+  assert.equal(subtitleEpisodeNumber(vf, 7, 23), 23);
+  assert.equal(subtitleEpisodeNumber(vf, 6, 21), 21);
+  assert.equal(subtitleEpisodeNumber({}, 7, 21), 21);
+  // Every usenet play route records it; a backup copy keeps it.
+  assert.match(src, /vf\._subEpisode = session\.subEpisode = subtitleEpisodeFor\(body, candidate, subtitleReleaseName\(vf\)\);[\s\S]{0,200}vf\._caps = parseCaps\(body\.caps\); session\.caps = vf\._caps;/);
+  assert.match(src, /const subEp = session\.subEpisode;\s+vf\._subEpisode = subEp \? subtitleEpisodeFor\(/);
+});

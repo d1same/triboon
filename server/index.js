@@ -5022,6 +5022,38 @@ function releaseEpisodeToOf(src) {
   const r = src && Array.isArray(src.releaseEpisodes) ? src.releaseEpisodes : null;
   return r && r.length > 1 && Number.isInteger(Number(r[r.length - 1])) ? Number(r[r.length - 1]) : undefined;
 }
+// Subtitle sites number episodes like the files, not like TMDB (brief 131): The Office TMDB S07E21
+// "Goodbye, Michael" plays the file S07E22, and the subtitles named S07E21 are "Michael's Last
+// Dundies". When Play searched another number than the card's (the air-order translation, or the
+// release-title hop that sets candidate.releaseEpisode), the mount remembers the number of the file
+// that plays, so the subtitle search, ranking and release match use it. Null for every other play,
+// which keeps today's subtitle path exactly. The file's own name has the last word: a file numbered
+// like the card keeps the card's number.
+function subtitleEpisodeFor(src, candidate, fileName) {
+  const s = parseInt(src && src.season, 10);
+  const tmdbEp = parseInt(src && src.ep, 10);
+  if (!Number.isInteger(s) || s < 0 || !Number.isInteger(tmdbEp) || tmdbEp <= 0) return null;
+  const found = candidate && candidate.releaseEpisode;
+  const ep = found && Number(found.s) === s && Number.isInteger(Number(found.e)) && Number(found.e) > 0
+    ? Number(found.e) : releaseEpisodeOf(src);
+  if (!Number.isInteger(ep) || ep <= 0 || ep === tmdbEp) return null;
+  const covered = new Set();
+  const re = /\bs(\d{1,2})[ ._-]?e(\d{1,3})((?:[ ._-]?-?[ ._-]?e\d{1,3})*)/gi;
+  let m;
+  while ((m = re.exec(String(fileName || '')))) {
+    if (Number(m[1]) !== s) continue;
+    const nums = [Number(m[2]), ...(m[3].match(/\d{1,3}/g) || []).map(Number)];
+    const lo = Math.min(...nums), hi = Math.max(...nums);
+    for (let n = lo; n <= hi && n - lo < 10; n++) covered.add(n);
+  }
+  if (covered.size && !covered.has(ep)) return null;
+  return { season: s, tmdbEp, ep };
+}
+// The subtitle episode number for a request about the card's (TMDB) season/episode on this mount.
+function subtitleEpisodeNumber(vf, season, ep) {
+  const t = vf && vf._subEpisode;
+  return t && t.season === parseInt(season, 10) && t.tmdbEp === parseInt(ep, 10) ? t.ep : ep;
+}
 function playSearchParams(src = {}) {
   const aliases = [];
   const addAlias = (v) => {
@@ -7302,6 +7334,7 @@ const H = {
       releaseUserPlaySessions(ctx.user.id, session.id);
       vf._q = body.q; // remembered for online subtitle search (release names match poorly)
       vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
+      vf._subEpisode = session.subEpisode = subtitleEpisodeFor(body, candidate, subtitleReleaseName(vf));
       vf._caps = parseCaps(body.caps); session.caps = vf._caps; // hardware claims ride the session
       armRuntimeCheck(vf, policy, candidate, body);
       rememberMountOwner(vf, ctx.user.id);
@@ -7448,6 +7481,7 @@ const H = {
       if (vf) {
         vf._q = body.q;
         vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
+        vf._subEpisode = subtitleEpisodeFor(body, candidate, subtitleReleaseName(vf));
         vf._caps = parseCaps(body.caps);
         armRuntimeCheck(vf, policy, candidate, body);
         rememberMountOwner(vf, ctx.user.id);
@@ -7506,6 +7540,9 @@ const H = {
       });
       vf._q = session.query && session.query.q;
       vf._subQuery = episodeSubtitleQuery(vf._q, session.query && session.query.season, session.query && session.query.ep);
+      // The next copy is the same episode: keep the subtitle number of the file that plays.
+      const subEp = session.subEpisode;
+      vf._subEpisode = subEp ? subtitleEpisodeFor({ season: subEp.season, ep: subEp.tmdbEp, releaseEpisodes: [subEp.ep] }, null, subtitleReleaseName(vf)) : null;
       vf._caps = session.caps || {}; // same client, same hardware claims
       rememberMountOwner(vf, ctx.user.id);
       trimUserMounts(ctx.user.id, vf.id);
@@ -11645,7 +11682,10 @@ Object.assign(H, {
     // case); tmdb.get is cached, so it is one bounded lookup per episode.
     let searchImdbId = imdbId;
     let searchSeason = hasEpisode ? seasonParam : null;
-    let searchEpisode = hasEpisode ? episodeParam : null;
+    // Play translated the card's number (brief 131): search, rank and match the file that plays.
+    const subEpisode = hasEpisode ? subtitleEpisodeNumber(vf, seasonParam, episodeParam) : null;
+    const translatedEpisode = hasEpisode && subEpisode !== episodeParam;
+    let searchEpisode = hasEpisode ? subEpisode : null;
     // Ranking keeps the episode the player is watching. The search below may
     // drop season/episode once an episode-level IMDb id is known (Wyzie returns
     // nothing if those ride along). Dropping them from the rank too let a
@@ -11653,6 +11693,12 @@ Object.assign(H, {
     const rankSeason = searchSeason;
     const rankEpisode = searchEpisode;
     let subQuery = vf._subQuery || vf._q || releaseName || vf.name;
+    if (translatedEpisode) {
+      // The card's q carries its own number ("The Office S07E21"): give the query the file's number.
+      const tok = `S${String(seasonParam).padStart(2, '0')}E${String(subEpisode).padStart(2, '0')}`;
+      subQuery = /\bs\d{1,2}\s?e\d{1,3}\b/i.test(String(subQuery))
+        ? String(subQuery).replace(/\bs\d{1,2}\s?e\d{1,3}\b/i, tok) : `${subQuery} ${tok}`.trim();
+    }
     let clientGone = false;
     ctx.req.once('close', () => { if (!ctx.req.complete) clientGone = true; });
     if (hasEpisode && !imdbId && /^\d+$/.test(String(tmdbId || '')) && settings.get().tmdbKey) {
@@ -11839,8 +11885,9 @@ Object.assign(H, {
             const lab = String(chosen.label || chosen.display || '').replace(/\s+/g, ' ').slice(0, 90);
             const synced = subtitleLooksSynced(chosen.raw, releaseName);
             const why = synced ? 'release match, so audio sync is skipped' : 'name did not match this file, so audio sync will try';
-            console.log(`[subs] pick ${variant ? 'menu' : 'auto'} s${rankSeason == null ? '-' : rankSeason}e${rankEpisode == null ? '-' : rankEpisode} ${lab} — ${why}`);
-            story.noteMount(vf.id, `subtitle pick ${variant ? 'menu' : 'auto'} s${rankSeason == null ? '-' : rankSeason}e${rankEpisode == null ? '-' : rankEpisode} ${lab} — ${why}`);
+            const card = translatedEpisode ? ` (card e${episodeParam})` : '';
+            console.log(`[subs] pick ${variant ? 'menu' : 'auto'} s${rankSeason == null ? '-' : rankSeason}e${rankEpisode == null ? '-' : rankEpisode}${card} ${lab} — ${why}`);
+            story.noteMount(vf.id, `subtitle pick ${variant ? 'menu' : 'auto'} s${rankSeason == null ? '-' : rankSeason}e${rankEpisode == null ? '-' : rankEpisode}${card} ${lab} — ${why}`);
           } catch {}
           if (chosen.raw._provider === 'opensubtitles') {
             try {
@@ -12765,6 +12812,7 @@ async function jellyfinPlay(ctx, body) {
     releaseUserPlaySessions(ctx.user.id, session.id);
     vf._q = body.q;
     vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
+    vf._subEpisode = session.subEpisode = subtitleEpisodeFor(body, candidate, subtitleReleaseName(vf));
     vf._jellyfinSubAt = Math.round((Number(body.resumeFrac) || 0) * (Number(body.runtime) || 0) * 60);
     vf._caps = parseCaps(body.caps);
     session.caps = vf._caps;
@@ -12808,6 +12856,7 @@ function jellyfinPrepare(ctx, body) {
     if (!vf) return;
     vf._q = spec.q;
     vf._subQuery = episodeSubtitleQuery(spec.q, spec.season, spec.ep);
+    vf._subEpisode = subtitleEpisodeFor(spec, prepared.candidate, subtitleReleaseName(vf));
     vf._jellyfinSubAt = Math.round((Number(spec.resumeFrac) || 0) * (Number(spec.runtime) || 0) * 60);
     rememberMountOwner(vf, ctx.user.id);
     trimUserMounts(ctx.user.id, vf.id);
@@ -12866,7 +12915,8 @@ function kickJellyfinOnlineSub(vf, spec) {
       query: spec.q || vf._subQuery || vf._q || '',
       lang: 'en',
       season: spec.season,
-      episode: spec.ep,
+      // The number of the file that plays when Play translated the card's (brief 131).
+      episode: subtitleEpisodeNumber(vf, spec.season, spec.ep),
       attempts: 1,
       retryDelayMs: 200,
     }).then((vtt) => (vtt && String(vtt).includes('WEBVTT') ? vtt : '')).catch(() => ''),
