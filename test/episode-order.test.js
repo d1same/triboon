@@ -88,8 +88,21 @@ test('order: the air-order episode group gives the release numbers, with merged 
   assert.equal(episodeOrder.releaseNumbering(TMDB_S3, shuffled, 3), null);
   // A merged episode at the end of the season takes two slots by its runtime.
   const tail = TMDB_S3.slice(0, 3).concat([{ episode_number: 4, name: 'Harbor Lights', runtime: 44 }]);
-  const tailGroup = { groups: [{ episodes: [1, 2, 3].map((e) => ({ season_number: 3, episode_number: e, order: e })) }] };
-  assert.deepEqual(episodeOrder.releaseNumbering(tail, tailGroup, 3).get(4), [5, 6]);
+  const tailGroup = { groups: [{ episodes: [1, 2, 3].map((e) => ({ season_number: 3, episode_number: e, order: e - 1 })) }] };
+  assert.deepEqual(episodeOrder.releaseNumbering(tail, tailGroup, 3).get(4), [4, 5]);
+});
+
+test('order: a group whose numbers jump for another reason is not trusted at all', () => {
+  // A flat whole-show numbering: season 3 starts at slot 41.
+  const flat = { groups: [{ episodes: AIR_GROUP.groups[0].episodes.map((x) => ({ ...x, order: x.order + 40 })) }] };
+  assert.equal(episodeOrder.releaseNumbering(TMDB_S3, flat, 3), null);
+  // A special sits between two episodes: its slot would shift every later number by one.
+  const withSpecial = { groups: [{ episodes: AIR_GROUP.groups[0].episodes.map((x) => ({ ...x, order: x.order >= 6 ? x.order + 1 : x.order }))
+    .concat([{ season_number: 0, episode_number: 9, order: 6 }]) }] };
+  assert.equal(episodeOrder.releaseNumbering(TMDB_S3, withSpecial, 3), null);
+  // A jump with no left-out TMDB episode to fill it (an extra slot after E06).
+  const unexplained = { groups: [{ episodes: AIR_GROUP.groups[0].episodes.map((x) => ({ ...x, order: x.episode_number >= 7 ? x.order + 1 : x.order })) }] };
+  assert.equal(episodeOrder.releaseNumbering(TMDB_S3, unexplained, 3), null);
 });
 
 test('order: a release title is read right after the episode number, part markers dropped', () => {

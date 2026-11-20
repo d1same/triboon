@@ -5084,7 +5084,8 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
     // for a different episode (Office S04E03 "Dunder Mifflin Infinity" is not Launch Party).
     const seasonKey = `${key}:season-names:${s}`;
     const orderKey = `${key}:release-order:${s}`;
-    if (!catalogFactsCache.has(seasonKey) || !catalogFactsCache.has(orderKey)) {
+    const orderMissKey = `${orderKey}:retry-at`;
+    if (!catalogFactsCache.has(seasonKey) || (!catalogFactsCache.has(orderKey) && !(catalogFactsCache.get(orderMissKey) > Date.now()))) {
       // The season list and the show's episode groups load side by side (both cached per show), so
       // the release-order check adds no wait in front of Play.
       const [seasonDoc, groupList] = await Promise.all([
@@ -5096,7 +5097,10 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
         name: String(row && row.name || '').trim(),
       })).filter((row) => Number.isInteger(row.n) && row.n > 0 && row.name);
       catalogFactsCache.set(seasonKey, names);
-      catalogFactsCache.set(orderKey, await releaseOrderFor(id, s, seasonDoc, groupList));
+      const order = await releaseOrderFor(id, s, seasonDoc, groupList);
+      // A TMDB miss is asked again, but not on every Play while TMDB is down (10 minutes).
+      if (order !== undefined) catalogFactsCache.set(orderKey, order);
+      else catalogFactsCache.set(orderMissKey, Date.now() + 10 * 60 * 1000);
     }
     const names = catalogFactsCache.get(seasonKey) || [];
     const mine = names.find((row) => row.n === e);
@@ -5117,18 +5121,19 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
 }
 // TMDB S/E → release S/E for one season, from the show's "Original air date" episode group
 // (episode-order.js). Returns { [tmdbEpisode]: [releaseEpisode, ...] } or null when the show has no
-// such group or it shows no difference (then Play searches TMDB numbers as before).
+// such group or it shows no difference (then Play searches TMDB numbers as before). undefined when
+// TMDB did not answer: that is not remembered, so the next Play asks again.
 async function releaseOrderFor(id, s, seasonDoc, groupList) {
-  try {
-    const groupId = episodeOrder.pickAirOrderGroup(groupList);
-    if (!groupId || !seasonDoc || !Array.isArray(seasonDoc.episodes)) return null;
-    const group = await tmdb.get(`/tv/episode_group/${groupId}`);
-    const map = episodeOrder.releaseNumbering(seasonDoc.episodes, group, s);
-    if (!map) return null;
-    const out = {};
-    for (const [e, slots] of map) out[e] = slots;
-    return out;
-  } catch { return null; }
+  if (!groupList || !seasonDoc || !Array.isArray(seasonDoc.episodes)) return undefined;
+  const groupId = episodeOrder.pickAirOrderGroup(groupList);
+  if (!groupId) return null;
+  let group;
+  try { group = await tmdb.get(`/tv/episode_group/${groupId}`); } catch { return undefined; }
+  const map = episodeOrder.releaseNumbering(seasonDoc.episodes, group, s);
+  if (!map) return null;
+  const out = {};
+  for (const [e, slots] of map) out[e] = slots;
+  return out;
 }
 
 // After the track probe lands: does the file's duration fit the catalog film? Three "The Odyssey"

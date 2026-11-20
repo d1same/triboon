@@ -66,11 +66,15 @@ function releaseNumbering(tmdbEpisodes, group, season) {
   if (eps.length < 2 || !group || !Array.isArray(group.groups)) return null;
   // The group's part for this season: the one whose episodes are (mostly) this TMDB season.
   let best = null;
+  let bestMixed = false;
   for (const g of group.groups) {
-    const rows = (g && Array.isArray(g.episodes) ? g.episodes : []).filter((x) => Number(x.season_number) === s);
-    if (rows.length && (!best || rows.length > best.length)) best = rows;
+    const all = g && Array.isArray(g.episodes) ? g.episodes : [];
+    const rows = all.filter((x) => Number(x.season_number) === s);
+    if (rows.length && (!best || rows.length > best.length)) { best = rows; bestMixed = rows.length !== all.length; }
   }
-  if (!best || best.length < 2) return null;
+  // A part that mixes in other seasons' episodes (specials between episodes, a moved episode) does
+  // not give this season's release numbers: its slots count the others too.
+  if (!best || best.length < 2 || bestMixed) return null;
   const known = new Map();
   for (const row of best) {
     const e = Number(row.episode_number), slot = Number(row.order) + 1;
@@ -86,9 +90,16 @@ function releaseNumbering(tmdbEpisodes, group, season) {
   const map = new Map();
   let prevSlot = 0;
   let i = 0;
+  // Every jump in the slots must be explained by TMDB episodes the group left out (a merged
+  // two-parter fills two). An unexplained jump — a flat whole-show numbering (S06E01 at slot 101),
+  // a special or an extra in between — means the group is not this season's release order: no
+  // translation at all for the season, never a guess.
   while (i < eps.length) {
     const x = eps[i];
-    if (known.has(x.e)) { map.set(x.e, [known.get(x.e)]); prevSlot = known.get(x.e); i++; continue; }
+    if (known.has(x.e)) {
+      if (known.get(x.e) !== prevSlot + 1) return null;
+      map.set(x.e, [known.get(x.e)]); prevSlot = known.get(x.e); i++; continue;
+    }
     // A run of TMDB episodes the group left out: they fill the slots up to the next listed one.
     const run = [];
     while (i < eps.length && !known.has(eps[i].e)) run.push(eps[i++]);
@@ -104,7 +115,7 @@ function releaseNumbering(tmdbEpisodes, group, season) {
         if (counts.reduce((a, b) => a + b, 0) !== gap) counts = null; // cannot place them: no guess
       }
     }
-    if (!counts) { prevSlot = nextSlot; continue; }
+    if (!counts) return null; // the left-out episodes cannot be placed: no guess
     let slot = prevSlot;
     run.forEach((r, k) => {
       const n = counts[k];
