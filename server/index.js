@@ -12035,6 +12035,17 @@ Object.assign(H, {
       // buffering must not answer the real minute.
       const syncKey = `${cacheKey}:synced:a${audioIndex}`;
       const sampledAt = vf._subSyncAt.get(syncKey);
+      // Brief 135 Step 2b: a rebuilt native player (a remux skip, a reconnect) reloads the synced link
+      // it was handed, often for a minute the viewer has left (&hold=1). It gets the newest correction
+      // for this subtitle and track at once, and never moves, stops or starts a measurement: that
+      // reload used to stop the new minute's job and wait on a fresh one at the old minute, past
+      // Android's 20 s subtitle read timeout.
+      if (ctx.url.searchParams.get('hold') === '1') {
+        const last = vf._subSyncLast && vf._subSyncLast.get(syncKey);
+        if (last) return send(ctx.res, 200, shift ? shiftVtt(last.vtt, shift) : last.vtt,
+          { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'corrected', 'x-triboon-subsync-shift': String(last.shiftMs) });
+        return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt, { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'pending' });
+      }
       // A correction belongs to the minute it was heard. The opening can match
       // while a later minute does not, and a skip must not keep the other minute's words.
       vf._subSyncWant = vf._subSyncWant || new Map();
@@ -12091,6 +12102,9 @@ Object.assign(H, {
               vf._osCache.set(syncKey, synced); capMap(vf._osCache, 12);
               vf._subSyncAt.set(syncKey, atSec);
               vf._subSyncShift.set(syncKey, res.shiftMs); capMap(vf._subSyncShift, 24);
+              // The newest correction outlives a move to another minute, for a rebuilt player's reload.
+              vf._subSyncLast = vf._subSyncLast || new Map();
+              vf._subSyncLast.set(syncKey, { vtt: synced, shiftMs: res.shiftMs }); capMap(vf._subSyncLast, 12);
               vf._subSyncFail.delete(syncKey);
               console.log(`[subsync ${vf.id}] moved the words ${secs}s ${dir} (heard ${mmss(res.originSec)} to ${mmss(res.originSec + 30)}, ${res.cues} lines, ${res.agreed === 2 ? 'two slices agree' : 'one slice'}; ${costLine()})`);
               story.noteMount(vf.id, `subtitle sync moved the words ${secs}s ${dir} (${costLine()})`);

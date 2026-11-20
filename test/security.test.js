@@ -2869,6 +2869,72 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
     }
   }
 
+  // Brief 135 Step 2b: skips, pause, Continue Watching and a native remount must not break the sync.
+  {
+    const jobs = [];
+    let running = 0;
+    let maxRunning = 0;
+    const restoreSync = srv.subSyncForTest({
+      detect: () => ({ path: 'stand-in' }),
+      run: (_vf, vtt, _uid, at, _audio, signal) => new Promise((resolve, reject) => {
+        const job = { at, stopped: false };
+        jobs.push(job);
+        running += 1; maxRunning = Math.max(maxRunning, running);
+        let open = true;
+        const end = () => { if (open) { open = false; running -= 1; } };
+        signal.addEventListener('abort', () => { job.stopped = true; end(); reject(Object.assign(new Error('subtitle sync stopped'), { stopped: true })); }, { once: true });
+        job.finish = (shiftMs) => { end(); resolve({ vtt: `${String(vtt).trimEnd()}\n\nNOTE Hello synced ${shiftMs}\n`, shiftMs, originSec: Math.max(0, at - 30), cues: 5, agreed: 2, driftMsPer30s: 0 }); };
+      }),
+    });
+    const until = async (cond, ms = 5000) => { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > ms) throw new Error('timed out waiting'); await new Promise((r) => setTimeout(r, 20)); } };
+    // A new subtitle row (variant 2), so nothing measured above is reused.
+    const syncPath = (at, extra = '') => `/api/ossubs/${play.id}?lang=en&tmdb=4242&variant=2&audio=0&sync=1&at=${at}${extra}&t=${play.streamToken}`;
+    const ask = async (at, extra) => { const r = await httpRaw(srv.port, syncPath(at, extra)); return { verdict: r.headers['x-triboon-subsync'], shift: r.headers['x-triboon-subsync-shift'], body: r.body.toString('utf8') }; };
+    try {
+      // The first measurement, at 1:40.
+      const first = ask(100);
+      await until(() => jobs.length === 1);
+      jobs[0].finish(-2000);
+      assert.strictEqual((await first).verdict, 'corrected');
+      // Skips of 10 s forward, 30 s forward and 10 s back, and a resume after a pause, keep that answer.
+      for (const at of [110, 130, 90, 100]) {
+        const r = await ask(at);
+        assert.strictEqual(r.verdict, 'corrected', `at ${at}`);
+        assert.strictEqual(r.shift, '-2000', `at ${at}: the same offset, no jump`);
+      }
+      assert.strictEqual(jobs.length, 1, 'no second measurement for a short skip, a skip back or a resume');
+      // A 10-minute skip measures the new minute.
+      const far = ask(700);
+      await until(() => jobs.length === 2);
+      assert.strictEqual(jobs[1].at, 700);
+      // Meanwhile the native player is rebuilt (a remux skip) and reloads the link it was given
+      // for the old minute. It must get the last correction at once and leave the new job alone.
+      const t0 = Date.now();
+      const remount = await ask(100, '&hold=1');
+      assert.ok(Date.now() - t0 < 2000, 'answered at once, not after a new measurement');
+      assert.strictEqual(remount.verdict, 'corrected', 'the rebuilt player keeps synced words');
+      assert.strictEqual(remount.shift, '-2000');
+      assert.match(remount.body, /Hello synced -2000/);
+      assert.strictEqual(jobs[1].stopped, false, 'the remount does not stop the new minute');
+      assert.strictEqual(jobs.length, 2, 'and starts no job of its own');
+      jobs[1].finish(1000);
+      const farRes = await far;
+      assert.strictEqual(farRes.verdict, 'corrected');
+      assert.strictEqual(farRes.shift, '1000', 'the new minute gets its own offset');
+      assert.match((await ask(100, '&hold=1')).body, /Hello synced 1000/, 'a later remount gets the newest correction');
+      assert.strictEqual(jobs.length, 2);
+      // Continue Watching at 20:00 measures 20:00, not the opening.
+      const cw = ask(1200);
+      await until(() => jobs.length === 3);
+      assert.strictEqual(jobs[2].at, 1200);
+      jobs[2].finish(-500);
+      assert.strictEqual((await cw).shift, '-500');
+      assert.strictEqual(maxRunning, 1, 'never two sync jobs at once');
+    } finally {
+      restoreSync();
+    }
+  }
+
   // Episode-imdb resolution — the "Goosebumps: The Vanishing" fix. A TV show whose SHOW has no imdb
   // id (only tmdb) dead-ends in Wyzie because Wyzie resolves a tmdb-tv id to the (null) SHOW imdb.
   // The route must resolve the EPISODE-level imdb from TMDB (700700 S1E1 -> tt70070001) and search

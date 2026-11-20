@@ -16185,7 +16185,7 @@ function nativeSubtitleOnPlayer(p, payload) {
   const synced = payload.rel && p && p._nativeSyncedUrl;
   if (synced && synced.rel === payload.rel && synced.mountId === p.mountId
       && synced.audio === Math.max(0, parseInt(p.audioTrack, 10) || 0)) {
-    payload.url = synced.url;
+    payload.url = synced.url + '&hold=1';
   }
   const skew = Number(p && p._nativeStartSkew) || 0;
   if (payload.rel && skew) payload.shift = Math.round(((payload.shift || 0) + skew) * 1000) / 1000;
@@ -20685,6 +20685,7 @@ function autoSyncSubtitle(p, rel, baseUrl) {
   // The subtitle response already said "pending". That is the live answer. A page opened
   // before the sync tool was on must not keep the words on the wrong timing.
   if (!p || !baseUrl) return;
+  cutStaleSubtitleSync(p, rel);
   if (S.serverInfo) S.serverInfo.subSync = true;
   p._pendingWebSync = { rel, baseUrl };
   p._webSyncTries = 0;
@@ -20719,7 +20720,7 @@ async function runPendingWebSync() {
     u.searchParams.set('at', String(at));
     u.searchParams.set('audio', String(audio));
     if (p._webSyncTries === 1) notePlaybackIssue('subs', `subtitle sync asked at ${at}s on audio ${audio}`, 0);
-    const r = await fetch(u.href);
+    const r = await fetch(u.href, { signal: subtitleSyncAskSignal(p, rel, audio, at) });
     if (!mine()) return;
     if (!S.playing || S.playing !== p || p.subTrack !== rel) { p._pendingWebSync = null; return; }
     if ((parseInt(p.audioTrack, 10) || 0) !== audio) return;
@@ -20754,6 +20755,28 @@ async function runPendingWebSync() {
     if (!mine() && p._pendingWebSync && S.playing === p) runPendingWebSync();
   }
 }
+// Brief 135 Step 2b: one sync ask is in flight at a time. When the viewer moves to another subtitle,
+// audio track or episode, or more than 45 s away, the server would throw that answer away (it keeps
+// one only within 45 s of its minute), yet the page waited for it, up to 180 s of audio pulls,
+// before asking for the one they need. Cutting the ask stops the server's job (brief 134 S3). A
+// shorter skip keeps it, so repeated short skips still end with an answer.
+function subtitleSyncAskSignal(p, rel, audio, at) {
+  const ctl = new AbortController();
+  S._subSyncAsk = { p, rel, audio, at, ctl };
+  return ctl.signal;
+}
+function subtitleSyncPosition(p) {
+  // Where the viewer is now, even while a skip is still landing (the measuring playhead waits).
+  const raw = p.usingNative ? Number(p.nativePos) : (typeof currentTime === 'function' ? Number(currentTime()) : NaN);
+  return Number.isFinite(raw) && raw > 0 ? raw : subtitleSyncPlayhead(p);
+}
+function cutStaleSubtitleSync(p, rel) {
+  const ask = S._subSyncAsk;
+  if (!ask || ask.ctl.signal.aborted) return;
+  const audio = Math.max(0, parseInt(p && p.audioTrack, 10) || 0);
+  const at = p ? subtitleSyncPosition(p) : null;
+  if (ask.p !== p || ask.rel !== rel || ask.audio !== audio || (at != null && Number.isFinite(Number(ask.at)) && Math.abs(at - ask.at) > 45)) ask.ctl.abort();
+}
 // Brief 131: the server gave up because two minutes disagree (x-triboon-subsync-reason: misfit).
 // That is not proof of another episode (the real check: a right subtitle 4 s late failed at two
 // minutes, while another episode's "agreed" at 0.00 s), so the notice says only what is known.
@@ -20769,6 +20792,7 @@ function subtitleMisfitNotice(r) {
 function autoSyncNative(p, rel) {
   if (!p || !p.usingNative) return;
   if (!(typeof rel === 'string' && rel.startsWith('os:'))) return;
+  cutStaleSubtitleSync(p, rel);
   if (!(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) return;
   // The native player hides the WebView (View.GONE), so Android throttles — and often outright
   // stalls — setTimeout/setInterval. The old timer-driven sync frequently never fired on Android
@@ -20824,7 +20848,7 @@ async function runPendingNativeSync() {
     const audio = Math.max(0, parseInt(p.audioTrack, 10) || 0);
     const syncUrl = base + (base.includes('?') ? '&' : '?') + 'sync=1&at=' + at + '&audio=' + audio;
     if (p._nativeSyncTries === 1) notePlaybackIssue('subs', `subtitle sync asked at ${at}s on audio ${audio}`, 0);
-    const r = await fetch(syncUrl); // triggers/awaits the alass correction, then caches it
+    const r = await fetch(syncUrl, { signal: subtitleSyncAskSignal(p, rel, audio, at) }); // triggers/awaits the alass correction, then caches it
     if (!mine()) return;
     if (!r.ok) return; // transient — leave queued
     const syncVerdict = r.headers.get('x-triboon-subsync');

@@ -191,6 +191,13 @@ Flow (`/api/ossubs/:mount`):
   file's number (`vf._subEpisode`) and the search, list, auto pick and release match use it. Such
   an episode is asked for by show and file number; the episode IMDb id is only the fallback when
   that finds nothing. Every other play keeps the card's number and today's path.
+- **Skips, track changes and remounts (brief 135 Step 2b):** a correction is reused within 45 s of
+  the minute it was heard (10 s and 30 s skips, a skip back, a resume after a pause); further away
+  the new minute is measured. One sync ask is in flight at a time. When the viewer moves to another
+  subtitle, audio track or episode, or more than 45 s away, the page cuts that ask, which stops the
+  server's job; a shorter skip keeps it. A rebuilt native player reloads its synced link with
+  `&hold=1`: the server answers at once with the newest correction for that subtitle and track
+  (`vf._subSyncLast`) and never starts, stops or moves a measurement for it.
 - **Skip rule (the "don't pull audio when you don't need to"):** `?sync=1` returns the sub as-is
   without running alass when `subtitleLooksSynced` is true. alass (which reads audio) only runs for
   non-matched subs. Any failure falls back to the unsynced track — auto-sync can never regress.

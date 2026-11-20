@@ -273,7 +273,11 @@ function subtitleSyncQueueHarness(playhead = () => 1559) {
   assert.ok(a > 0 && b > a, 'the sync queue code is one block');
   const fetches = [];
   const S = { playing: null, serverInfo: {} };
-  const fetch = (url) => new Promise((resolve) => fetches.push({ url, resolve }));
+  const fetch = (url, opts) => new Promise((resolve, reject) => {
+    fetches.push({ url, opts, resolve });
+    const signal = opts && opts.signal;
+    if (signal) signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+  });
   const answer = (k, verdict, body = 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n', reason = null) => fetches[k].resolve({
     ok: true, headers: { get: (h) => (h === 'x-triboon-subsync' ? verdict : (h === 'x-triboon-subsync-shift' ? '2000' : (h === 'x-triboon-subsync-reason' ? reason : null))) }, text: async () => body,
   });
@@ -288,6 +292,79 @@ function subtitleSyncQueueHarness(playhead = () => 1559) {
   return { api, S, fetches, answer, toasts };
 }
 const subSyncFlush = () => new Promise((r) => setTimeout(r, 0));
+
+test('a sync ask whose answer the server would throw away is cut at once; a short skip keeps it (brief 135 Step 2b)', async () => {
+  // The server drops a measurement for another subtitle, audio track or mount, or for a minute
+  // more than 45 s away. The page used to wait for that measurement to finish (up to 180 s of
+  // audio pulls) before it asked for the one the viewer needs. Inside 45 s the old answer is still
+  // used, so a 30 s skip must not cut it (repeated short skips would never finish).
+  for (const native of [false, true]) {
+    let now = 600;
+    const relUrl = (rel) => `/api/ossub/m?rel=${encodeURIComponent(rel)}`;
+    const start = (h, p, rel) => (native ? h.api.autoSyncNative(p, rel) : h.api.autoSyncSubtitle(p, rel, relUrl(rel)));
+    const syncAsks = (h) => h.fetches.filter((f) => /sync=1/.test(f.url));
+    const settle = async (h) => {
+      for (let k = 0; k < 4; k++) {
+        await subSyncFlush();
+        // The native queue reads the plain link first; answer it so the measurement is asked.
+        if (native) h.fetches.forEach((f, i) => { if (!/sync=1/.test(f.url) && !f.done) { f.done = true; h.answer(i, 'pending'); } });
+        if (native) h.api.runPendingNativeSync();
+      }
+      await subSyncFlush();
+    };
+    const begin = async () => {
+      now = 600;
+      const h = subtitleSyncQueueHarness(() => now);
+      const p = { usingNative: native, subTrack: 'os:en:a', audioTrack: 0, mountId: 'm' };
+      h.S.playing = p;
+      start(h, p, 'os:en:a');
+      await settle(h);
+      assert.strictEqual(syncAsks(h).length, 1, `measuring (native=${native})`);
+      return { h, p, first: syncAsks(h)[0] };
+    };
+    const cut = (f) => !!(f.opts && f.opts.signal && f.opts.signal.aborted);
+    { // Another subtitle while the first is measured.
+      const { h, p, first } = await begin();
+      p.subTrack = 'os:en:b';
+      start(h, p, 'os:en:b');
+      await settle(h);
+      assert.ok(cut(first), `another subtitle cuts the old measurement (native=${native})`);
+      assert.ok(syncAsks(h).some((f) => /rel=os%3Aen%3Ab/.test(f.url)), `and the new pick is measured at once (native=${native})`);
+    }
+    { // Another audio track.
+      const { h, p, first } = await begin();
+      p.audioTrack = 1;
+      start(h, p, 'os:en:a');
+      await settle(h);
+      assert.ok(cut(first), `another audio track cuts it (native=${native})`);
+      assert.match(syncAsks(h).slice(-1)[0].url, /audio=1/);
+    }
+    { // A 30 s skip keeps it: the server will still use that answer.
+      const { h, p, first } = await begin();
+      now += 30;
+      start(h, p, 'os:en:a');
+      await settle(h);
+      assert.ok(!cut(first), `a 30 s skip keeps the measurement (native=${native})`);
+      assert.strictEqual(syncAsks(h).length, 1, 'no second ask while it runs');
+    }
+    { // A 10-minute skip cuts it and asks for the new minute.
+      const { h, p, first } = await begin();
+      now += 600;
+      start(h, p, 'os:en:a');
+      await settle(h);
+      assert.ok(cut(first), `a 10-minute skip cuts it (native=${native})`);
+      assert.match(syncAsks(h).slice(-1)[0].url, /at=1200/);
+    }
+    { // Up next: the next episode's subtitle cuts the last episode's measurement.
+      const { h, first } = await begin();
+      const next = { usingNative: native, subTrack: 'os:en:a', audioTrack: 0, mountId: 'm2' };
+      h.S.playing = next;
+      start(h, next, 'os:en:a');
+      await settle(h);
+      assert.ok(cut(first), `Up next cuts the old episode's measurement (native=${native})`);
+    }
+  }
+});
 
 test('native subtitle sync: a pick made while the last pick is still measuring is synced too (result 126)', async () => {
   const h = subtitleSyncQueueHarness();
