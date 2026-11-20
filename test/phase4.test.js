@@ -12633,3 +12633,18 @@ test('file subtitles: only a shell that draws them, only on direct play, and the
   assert.match(rust, /if let Some\(file\) = &subtitle\.file \{[\s\S]{0,300}mpv\.set_property\("sid", id\)/);
   assert.match(rust, /session\.subtitle_attached = session\.subtitle\.is_off\(\) && !session\.file_subtitles_active;/);
 });
+
+test('the admin switch set to off keeps today\'s subtitle choices exactly (brief 137 step 5)', () => {
+  // The table was captured from the code before step 5 (1280 scenarios: subtitle mode, movie or
+  // episode, saved pick, browser / old APK / new APK / Windows, direct or remux, probed or not,
+  // profile language off, Off for this session, SDH style). With built-in subtitles switched off
+  // every scenario must give the same startup pick, built-in pick, online pick, built-in rows and
+  // file-subtitle flag as then.
+  const { switchOffTable } = require('./support/subtitle-choice-harness');
+  const want = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'subtitle-choice', 'switch-off-table.json'), 'utf8'));
+  const rows = switchOffTable(path.join(__dirname, '..', 'web', 'index.html'));
+  assert.strictEqual(rows.length, Object.keys(want).length);
+  const got = (r) => [r.start, r.builtIn, r.auto, r.emRows, r.fileOn].join(' / ');
+  const diffs = rows.filter((r) => got(r) !== want[r.k]).map((r) => r.k + ': ' + got(r) + ' (was ' + want[r.k] + ')');
+  assert.deepStrictEqual(diffs.slice(0, 10), [], diffs.length + ' scenarios changed');
+});
