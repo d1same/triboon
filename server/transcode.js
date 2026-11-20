@@ -303,7 +303,7 @@ function probeTracks(url) {
           else if (t === 'subtitle') result.subs.push({ ...base, text: TEXT_SUB_CODECS.has(s.codec_name) });
         }
         resolve(result);
-      } catch (e) { reject(new Error(`ffprobe parse: ${e.message} ${err.slice(0, 200)}`)); }
+      } catch (e) { reject(new Error(`ffprobe parse: ${e.message} ${require('./debug').redact(err).slice(0, 200)}`)); }
     });
     p.on('error', (e) => { clearTimeout(killer); reject(e); });
   });
@@ -342,7 +342,7 @@ function probeChapters(url, { timeoutMs = 30000 } = {}) {
     p.on('close', () => {
       clearTimeout(killer);
       try { resolve(parseFfprobeChapters(JSON.parse(out || '{}'))); }
-      catch (e) { reject(new Error(`ffprobe chapters parse: ${e.message} ${err.slice(0, 200)}`)); }
+      catch (e) { reject(new Error(`ffprobe chapters parse: ${e.message} ${require('./debug').redact(err).slice(0, 200)}`)); }
     });
     p.on('error', (e) => { clearTimeout(killer); reject(e); });
   });

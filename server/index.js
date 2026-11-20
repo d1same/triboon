@@ -389,6 +389,13 @@ function killOnStop(p, signal, reject) {
   signal.addEventListener('abort', onStop, { once: true });
   return () => signal.removeEventListener('abort', onStop);
 }
+// ffmpeg echoes its input URL in its errors, and the sync reads /api/stream/<mount>?t=<token>. Mask
+// every token or key query value BEFORE the text is cut short: keeping only the tail used to drop
+// "t=" and leave the token's end in the server log and the play story (brief 135). Kept inside this
+// block, which tests and bench rigs slice out on its own.
+function redactSyncError(text) {
+  return String(text == null ? '' : text).replace(/([?&](?:t|token|access_token|api_?key|key|sig|signature)=)[^&\s'"]+/gi, '$1***');
+}
 function extractSyncSample(streamUrl, wavPath, atSec = 0, audioIndex = 0, durSec = 30) {
   const job = subSyncStop.getStore() || null;
   const signal = job && job.signal;
@@ -417,7 +424,7 @@ function extractSyncSample(streamUrl, wavPath, atSec = 0, audioIndex = 0, durSec
     p.on('error', (e) => finish(() => reject(e)));
     p.on('close', (code) => finish(() => {
       if (code === 0) resolve();
-      else reject(new Error(`subtitle sync audio sample failed: ${err.slice(-160)}`));
+      else reject(new Error(`subtitle sync audio sample failed: ${redactSyncError(err).slice(-160)}`));
     }));
   });
 }
@@ -441,7 +448,7 @@ async function measureSubSyncWindow(dir, tag, streamUrl, windowed, audioIndex) {
     const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('subtitle sync took too long')); }, 60000);
     p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
     p.on('error', (e) => { clearTimeout(killer); unhook(); reject(e); });
-    p.on('close', (code) => { clearTimeout(killer); unhook(); code === 0 ? resolve() : reject(new Error(`alass exited ${code}: ${err.slice(-200)}`)); });
+    p.on('close', (code) => { clearTimeout(killer); unhook(); code === 0 ? resolve() : reject(new Error(`alass exited ${code}: ${redactSyncError(err).slice(-200)}`)); });
   });
   const out = await fsp.readFile(outSrt, 'utf8');
   // alass only re-times existing cues; a changed cue count (or empty output) means a corrupt
@@ -487,7 +494,7 @@ async function measurePaddedSyncWindow(dir, tag, streamUrl, windowed, audioIndex
     const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('subtitle sync took too long')); }, 60000);
     p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
     p.on('error', (e) => { clearTimeout(killer); unhook(); reject(e); });
-    p.on('close', (code) => { clearTimeout(killer); unhook(); code === 0 ? resolve() : reject(new Error(`alass exited ${code}: ${err.slice(-200)}`)); });
+    p.on('close', (code) => { clearTimeout(killer); unhook(); code === 0 ? resolve() : reject(new Error(`alass exited ${code}: ${redactSyncError(err).slice(-200)}`)); });
   });
   const out = await fsp.readFile(outSrt, 'utf8');
   if (!subSyncResultOk(lines, out)) throw new Error('alass output failed the cue-count sanity check');
@@ -4324,7 +4331,7 @@ function ffmpegErrorTail(stderrTail, max = 320) {
     .map((l) => l.trim())
     .filter((l) => l && !/^(frame|size|fps|bitrate|speed|out_time|progress|total_size|drop_frames|dup_frames|stream_\d|Press \[q\])/i.test(l)
       && !/^\s*(ffmpeg version|built with|configuration:|lib(av|sw|post)\w*\s+\d)/i.test(l));
-  return lines.slice(-3).join(' | ').slice(-max);
+  return debug.redact(lines.slice(-3).join(' | ')).slice(-max);
 }
 // Live TV needs both ends of stderr: the HEAD carries the HTTP status ffmpeg got when it
 // opened the provider url (401/403/429 decide the retry), the TAIL carries the death line

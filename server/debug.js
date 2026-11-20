@@ -18,7 +18,7 @@ function enabled() {
 
 function redact(msg) {
   return String(msg == null ? '' : msg)
-    .replace(/([?&](?:t|token|access_token|api_key)=)[^&\s]+/gi, '$1***')
+    .replace(/([?&](?:t|token|access_token|api_?key|key|sig|signature)=)[^&\s]+/gi, '$1***')
     .replace(/(Token=")[^"]+/gi, '$1***')
     .replace(/((?:pass|password|apikey|api[_-]?key|secret|osApiKey)\s*[:=]\s*)[^\s,]+/gi, '$1***')
     // Path-style Newznab NZB links: `.../getnzb/<id>.nzb&i=<uid>&r=<key>` (no "?") (14-P1).

@@ -7261,6 +7261,44 @@ function subSyncIdealHear(truthOf) {
   };
 }
 
+test('subtitles: a failed sync audio pull never logs the stream token, even cut short (brief 135)', async () => {
+  // ffmpeg echoes its input URL, and the sync reads /api/stream/<mount>?t=<token>. The error kept
+  // only its last 160 characters, which cut off "t=" and left the token's tail in the server log
+  // and the play story (seen on a 7790 copy after Up next released the mount).
+  const { EventEmitter } = require('events');
+  const token = 'eyJ1aWQiOiJ1MSIsIm1vdW50IjoiYWJjIn0' + 'Q'.repeat(90) + '.Zx9SIGNATUREpart42';
+  const url = `http://127.0.0.1:7941/api/stream/abc123?t=${token}&priority=background`;
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const a = src.indexOf('function vttToSrt(');
+  const b = src.indexOf('function clampInt(', a);
+  const spawnResumePad = () => {
+    const p = new EventEmitter();
+    p.stderr = new EventEmitter();
+    p.kill = () => {};
+    setImmediate(() => {
+      p.stderr.emit('data', Buffer.from(`[http @ 0x7f] HTTP error 404 Not Found\n[in#0 @ 0x7f] Error opening input: Server returned 404 Not Found\nError opening input file ${url}.\n`));
+      p.emit('close', 1);
+    });
+    return p;
+  };
+  const { extractSyncSample } = new Function('fs', 'path', 'require', 'detectFfmpeg', 'spawnResumePad',
+    `${src.slice(a, b)}\nreturn { extractSyncSample };`)(fs, path, require, () => ({ path: 'ffmpeg' }), spawnResumePad);
+  const err = await extractSyncSample(url, '/tmp/x.wav', 300, 0).then(() => null, (e) => e);
+  assert.ok(err, 'the pull fails');
+  assert.match(err.message, /subtitle sync audio sample failed/);
+  for (let i = 0; i + 8 <= token.length; i += 4) {
+    assert.ok(!err.message.includes(token.slice(i, i + 8)), `no piece of the token in "${err.message}"`);
+  }
+  // ffmpeg's last words for a dead remux or transcode go to the failure log and the story too.
+  const debug = require('../server/debug');
+  const t0 = src.indexOf('function ffmpegErrorTail(');
+  const t1 = src.indexOf('\n}', t0) + 2;
+  const ffmpegErrorTail = new Function('debug', `${src.slice(t0, t1)}\nreturn ffmpegErrorTail;`)(debug);
+  const tail = ffmpegErrorTail(`Error opening input file ${url}\nhttp://x/sub.srt?key=WYZIEKEY123&lang=en: 403 Forbidden`, 120);
+  for (let i = 0; i + 8 <= token.length; i += 4) assert.ok(!tail.includes(token.slice(i, i + 8)), tail);
+  assert.doesNotMatch(tail, /WYZIEKEY123/, 'a key= query value is masked too');
+});
+
 test('subtitles: a framerate stretch pivots on the line it was measured at, so every line lands (result 126)', async () => {
   // A PAL caption on a 23.976 file: line n is spoken at truth(n) but the file says truth(n) * 25/23.976.
   const ratio = 25 / 23.976;
