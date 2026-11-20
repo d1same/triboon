@@ -1006,10 +1006,12 @@ function distinctVariants(variants, { max = 8 } = {}) {
 // file) qualifies; a confirmed DIFFERENT episode does not. When this is false for a TV target we
 // would rather report "no subtitles" than silently feed the viewer the wrong episode's dialogue
 // (which reads as "CC is broken"). Explicit user picks bypass this — only the automatic path uses it.
-function hasConfidentAutoPick(variants, { releaseName = '', season = null, episode = null } = {}) {
+// convertsAss (the list's flag for the page): a picked row is served through the variant path,
+// which converts ASS/SSA, so such a row of this episode may start on its own, as it did in 3.5.4.
+function hasConfidentAutoPick(variants, { releaseName = '', season = null, episode = null, convertsAss = false } = {}) {
   const list = Array.isArray(variants) ? variants.filter(Boolean) : [];
   if (!list.length) return false;
-  const isText = (v) => /^(srt|vtt|)$/i.test(String(v.format || ''));
+  const isText = (v) => (convertsAss ? /^(srt|vtt|ass|ssa|)$/i : /^(srt|vtt|)$/i).test(String(v.format || ''));
   const myEpisode = requestedEpisodeKey(releaseName, { season, episode });
   if (!myEpisode) return list.some((v) => isText(v) && !episodeKey(subtitleMatchText(v.raw || v)));
   return list.some((v) => {

@@ -1470,6 +1470,24 @@ test('subs: OpenSubtitles adds a title text-query fallback for old/obscure title
   assert.throws(() => _osSearchUrl({ lang: 'en' }), /moviehash, catalog id, or title/);
 });
 
+test('subs: the subtitle list counts a converted ASS row of this episode as confident (second check 3.5.5)', () => {
+  const { rankSubs, hasConfidentAutoPick } = require('../server/opensubs');
+  const release = 'Some.Anime.S01E05.1080p.WEB-DL-GRP.mkv';
+  const assOnly = rankSubs([
+    { id: 'a', url: 'http://x/a.ass', format: 'ass', display: 'Some.Anime.S01E05.1080p.WEB-DL-GRP' },
+  ], release);
+  // 3.5.4 started this row on its own (the page asked for its id). The list's flag keeps that.
+  assert.ok(hasConfidentAutoPick(assOnly, { releaseName: release, convertsAss: true }), 'an ASS row of this episode may start on its own');
+  // The server's own no-row auto pick is unchanged.
+  assert.ok(!hasConfidentAutoPick(assOnly, { releaseName: release }), 'the plain auto pick rule stays text-only');
+  const assWrong = rankSubs([
+    { id: 'w', url: 'http://x/w.ass', format: 'ass', display: 'Some.Anime.S01E04.1080p.WEB-DL-GRP' },
+  ], release);
+  assert.ok(!hasConfidentAutoPick(assWrong, { releaseName: release, convertsAss: true }), 'another episode is still refused');
+  const image = rankSubs([{ id: 'i', url: 'http://x/i.sub', format: 'sub', display: 'Some.Anime.S01E05.1080p.WEB-DL-GRP' }], release);
+  assert.ok(!hasConfidentAutoPick(image, { releaseName: release, convertsAss: true }), 'an image subtitle never counts');
+});
+
 test('subs: hasConfidentAutoPick guards the automatic pick against wrong-episode-only results', () => {
   const { rankSubs, hasConfidentAutoPick } = require('../server/opensubs');
   const release = 'House.S02E05.1080p.WEB-DL-GRP.mkv';

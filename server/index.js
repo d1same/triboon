@@ -11875,7 +11875,7 @@ Object.assign(H, {
           lang,
           // Brief 134 S1: the same rule the automatic pick obeys. False when every row names another
           // episode; the page then starts nothing on its own and does not call the top row recommended.
-          confident: hasConfidentAutoPick(variants, { releaseName, season: rankSeason, episode: rankEpisode }),
+          confident: hasConfidentAutoPick(variants, { releaseName, season: rankSeason, episode: rankEpisode, convertsAss: true }),
           selectedId: (menu.find((v) => v.selected) || menu[0] || {}).id || null,
           variants: menu.map((v) => ({
             id: v.id, label: v.label, display: v.display, language: v.language,
