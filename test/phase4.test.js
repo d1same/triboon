@@ -266,7 +266,7 @@ test('final watch checkpoints coalesce duplicate lifecycle beacons without hidin
 // result 126 (House S05E10 on Android): BluRay, HDTV and an untagged subtitle picked in a row while the
 // first sync was still measuring. The finishing run for the OLD pick cleared the queue that already
 // held the NEW pick (and its "wait a minute" landed on the new pick), so the third pick never synced.
-function subtitleSyncQueueHarness() {
+function subtitleSyncQueueHarness(playhead = () => 1559) {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const a = ui.indexOf('function autoSyncSubtitle(p, rel, baseUrl)');
   const b = ui.indexOf('async function setSubtitle(', a);
@@ -284,7 +284,7 @@ function subtitleSyncQueueHarness() {
     `${ui.slice(a, b)}\nreturn { autoSyncSubtitle, runPendingWebSync, autoSyncNative, runPendingNativeSync };`)(
     S, fetch, window, { origin: 'http://triboon.test' },
     (_p, rel) => ({ rel, url: `http://triboon.test/api/ossub/m?rel=${encodeURIComponent(rel)}`, lang: 'en', label: rel }),
-    () => 1559, () => {}, (msg) => toasts.push(msg), () => {}, () => 'moved', () => {});
+    () => playhead(), () => {}, (msg) => toasts.push(msg), () => {}, () => 'moved', () => {});
   return { api, S, fetches, answer, toasts };
 }
 const subSyncFlush = () => new Promise((r) => setTimeout(r, 0));
@@ -342,6 +342,36 @@ test('subtitle sync that gives up at two minutes says so in plain words (brief 1
   assert.match(server, /'x-triboon-subsync': 'failed',\s+\.\.\.\(f && \(f\.disagree \|\| 0\) >= 2 \? \{ 'x-triboon-subsync-reason': 'misfit' \} : \{\}\)/);
   assert.strictEqual((server.match(/shift \? shiftVtt\(vtt, shift\) : vtt, failedHeaders\(\)\)/g) || []).length, 2);
   assert.match(server, /syncHdr === 'failed' && \(_sf\.disagree \|\| 0\) >= 2 \? \{ 'x-triboon-subsync-reason': 'misfit' \}/);
+});
+
+test('web subtitle sync on a slow mount measures again at most twice, then applies the late answer (brief 134 L16)', async () => {
+  // Each measurement takes longer than 20 s of playback, so every answer comes back "moved". The
+  // browser used to ask again for ever, each time pulling audio on the mount.
+  let now = 600;
+  const h = subtitleSyncQueueHarness(() => now);
+  const p = { usingNative: false, subTrack: 'os:en:web', audioTrack: 0 };
+  h.S.playing = p;
+  h.api.autoSyncSubtitle(p, 'os:en:web', '/api/ossub/m?rel=os%3Aen%3Aweb');
+  for (let k = 0; k < 6 && h.fetches.length > k; k++) {
+    now += 45; // the viewer watched on while the server measured
+    h.answer(k, 'corrected');
+    await subSyncFlush();
+    await subSyncFlush();
+    h.api.runPendingWebSync(); // the next player tick
+    await subSyncFlush();
+  }
+  assert.strictEqual(h.fetches.length, 3, `three measurements, not one per answer for ever (${h.fetches.length})`);
+  assert.ok(p._subVttText, 'the third, late correction is applied, as the apps do');
+  assert.strictEqual(p._pendingWebSync, null);
+  // A quick mount is unchanged: one ask, applied at once.
+  const q = subtitleSyncQueueHarness(() => 1559);
+  const p2 = { usingNative: false, subTrack: 'os:en:web', audioTrack: 0 };
+  q.S.playing = p2;
+  q.api.autoSyncSubtitle(p2, 'os:en:web', '/api/ossub/m?rel=os%3Aen%3Aweb');
+  q.answer(0, 'corrected');
+  await subSyncFlush(); await subSyncFlush();
+  assert.strictEqual(q.fetches.length, 1);
+  assert.ok(p2._subVttText);
 });
 
 test('web subtitle sync: a pick made while the last pick is still measuring is synced too (result 126)', async () => {

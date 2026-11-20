@@ -20708,7 +20708,11 @@ async function runPendingWebSync() {
     if (verdict === 'failed') { p._pendingWebSync = null; notePlaybackIssue('subs', 'subtitle sync gave up', 0); subtitleMisfitNotice(r); return; }
     if (verdict === 'synced' || verdict === 'unavailable') { p._pendingWebSync = null; return; }
     const heardNow = subtitleSyncPlayhead(p);
-    if (heardNow != null && Math.abs(heardNow - at) > 20) {
+    // The playhead moved while the server measured: ask again at the new minute, free, twice.
+    // A slow mount could otherwise re-measure for ever, each try pulling audio again (brief 134
+    // L16, result 126 fault B). After that a correction is applied late, as the apps do, and any
+    // other answer waits a minute and counts as a try.
+    if (heardNow != null && Math.abs(heardNow - at) > 20 && (job.moved = (job.moved || 0) + 1) <= 2) {
       p._webSyncTries = Math.max(0, (p._webSyncTries || 1) - 1);
       p._webSyncNextAt = 0;
       return;
