@@ -12005,9 +12005,15 @@ Object.assign(H, {
       // Slices that disagree at two different minutes mean this subtitle does not fit this cut; more
       // tries only pull more audio beside the viewers (Kill Jackie S01E08 measured 6 times in 6 min).
       const syncTerminal = () => { const f = vf._subSyncFail.get(syncKey); return !!(f && (f.timedOut || f.tries >= 3 || (f.total || 0) >= 6 || (f.disagree || 0) >= 2)); };
+      // Brief 131: two minutes whose slices disagree mean the words do not fit this sound at all,
+      // the mark of another episode's or another cut's subtitle. The player says so in plain words.
+      const failedHeaders = () => {
+        const f = vf._subSyncFail.get(syncKey);
+        return { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'failed',
+          ...(f && (f.disagree || 0) >= 2 ? { 'x-triboon-subsync-reason': 'misfit' } : {}) };
+      };
       if (syncTerminal()) {
-        return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
-          { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'failed' });
+        return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt, failedHeaders());
       }
       if (!vf._osCache.has(syncKey)) {
         vf._subSyncInflightAt = vf._subSyncInflightAt || new Map();
@@ -12051,6 +12057,9 @@ Object.assign(H, {
             capMap(vf._subSyncFail, 24);
             console.error(`[subsync ${vf.id}] ${msg.slice(0, 160)}`);
             story.noteMount(vf.id, `subtitle sync failed — ${msg.slice(0, 160)}`);
+            if ((vf._subSyncFail.get(syncKey).disagree || 0) === 2) {
+              console.log(`[subsync ${vf.id}] two minutes disagree: this subtitle may be for another episode or cut, so it is left as it was`);
+            }
           }
         }
       }
@@ -12059,8 +12068,7 @@ Object.assign(H, {
         { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'corrected',
           'x-triboon-subsync-shift': String(vf._subSyncShift.get(syncKey) ?? 0) });
       if (syncTerminal()) {
-        return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
-          { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'failed' });
+        return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt, failedHeaders());
       }
     }
     // Tell the player whether an automatic background sync is worth requesting: 'pending' = not a
@@ -12072,7 +12080,8 @@ Object.assign(H, {
       : (_sf && (_sf.timedOut || _sf.tries >= 3 || (_sf.total || 0) >= 6 || (_sf.disagree || 0) >= 2)) ? 'failed'
       : (detectSubSync() && vf._subSyncState.has(cacheKey) ? 'pending' : 'unavailable');
     send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
-      { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': syncHdr });
+      { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': syncHdr,
+        ...(syncHdr === 'failed' && (_sf.disagree || 0) >= 2 ? { 'x-triboon-subsync-reason': 'misfit' } : {}) });
   },
 
   // Embedded subtitle track → WebVTT. ffmpeg must read the whole stream (subs are interleaved),

@@ -274,17 +274,18 @@ function subtitleSyncQueueHarness() {
   const fetches = [];
   const S = { playing: null, serverInfo: {} };
   const fetch = (url) => new Promise((resolve) => fetches.push({ url, resolve }));
-  const answer = (k, verdict, body = 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n') => fetches[k].resolve({
-    ok: true, headers: { get: (h) => (h === 'x-triboon-subsync' ? verdict : (h === 'x-triboon-subsync-shift' ? '2000' : null)) }, text: async () => body,
+  const answer = (k, verdict, body = 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n', reason = null) => fetches[k].resolve({
+    ok: true, headers: { get: (h) => (h === 'x-triboon-subsync' ? verdict : (h === 'x-triboon-subsync-shift' ? '2000' : (h === 'x-triboon-subsync-reason' ? reason : null))) }, text: async () => body,
   });
+  const toasts = [];
   const window = { TriboonTV: { updateActiveSubtitle: () => {} } };
   const api = new Function('S', 'fetch', 'window', 'location', 'nativeSubtitlePayload', 'subtitleSyncPlayhead', 'notePlaybackIssue',
     'toast', 'saveSubShift', 'subtitleSyncToast', 'applySubtitleTrack',
     `${ui.slice(a, b)}\nreturn { autoSyncSubtitle, runPendingWebSync, autoSyncNative, runPendingNativeSync };`)(
     S, fetch, window, { origin: 'http://triboon.test' },
     (_p, rel) => ({ rel, url: `http://triboon.test/api/ossub/m?rel=${encodeURIComponent(rel)}`, lang: 'en', label: rel }),
-    () => 1559, () => {}, () => {}, () => {}, () => 'moved', () => {});
-  return { api, S, fetches, answer };
+    () => 1559, () => {}, (msg) => toasts.push(msg), () => {}, () => 'moved', () => {});
+  return { api, S, fetches, answer, toasts };
 }
 const subSyncFlush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -306,6 +307,41 @@ test('native subtitle sync: a pick made while the last pick is still measuring i
   await subSyncFlush();
   const hdtv = h.fetches.filter((f) => /hdtv/.test(f.url));
   assert.ok(hdtv.length >= 1, 'the HDTV pick is still queued and runs at once, not a minute later');
+});
+
+test('subtitle sync that fits the sound nowhere says the subtitle may be for another episode (brief 131)', async () => {
+  // The Office TMDB S07E21: the wrong episode's subtitle got "witnesses disagree" at two minutes and
+  // the player said nothing. The server now marks that give-up as a misfit, and both players say so.
+  for (const native of [false, true]) {
+    const h = subtitleSyncQueueHarness();
+    const p = { usingNative: native, subTrack: 'os:en:hdtv', audioTrack: 0, mountId: 'm' };
+    h.S.playing = p;
+    if (native) {
+      h.api.autoSyncNative(p, 'os:en:hdtv');
+      h.answer(0, 'pending');
+      await subSyncFlush();
+      h.answer(1, 'failed', 'WEBVTT\n', 'misfit');
+    } else {
+      h.api.autoSyncSubtitle(p, 'os:en:hdtv', '/api/ossub/m?rel=os%3Aen%3Ahdtv');
+      h.answer(0, 'failed', 'WEBVTT\n', 'misfit');
+    }
+    await subSyncFlush();
+    assert.strictEqual(h.toasts.length, 1, `one plain notice (native=${native})`);
+    assert.match(h.toasts[0], /may be for another episode or cut/);
+    // A give-up for another reason (timeout, three failed pulls) stays quiet, as before.
+    const q = subtitleSyncQueueHarness();
+    const p2 = { usingNative: native, subTrack: 'os:en:hdtv', audioTrack: 0, mountId: 'm' };
+    q.S.playing = p2;
+    if (native) { q.api.autoSyncNative(p2, 'os:en:hdtv'); q.answer(0, 'pending'); await subSyncFlush(); q.answer(1, 'failed'); }
+    else { q.api.autoSyncSubtitle(p2, 'os:en:hdtv', '/api/ossub/m?rel=os%3Aen%3Ahdtv'); q.answer(0, 'failed'); }
+    await subSyncFlush();
+    assert.deepStrictEqual(q.toasts, [], `no notice for a plain give-up (native=${native})`);
+  }
+  // The server marks only the two-minute disagreement as a misfit, on every 'failed' answer.
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /'x-triboon-subsync': 'failed',\s+\.\.\.\(f && \(f\.disagree \|\| 0\) >= 2 \? \{ 'x-triboon-subsync-reason': 'misfit' \} : \{\}\)/);
+  assert.strictEqual((server.match(/shift \? shiftVtt\(vtt, shift\) : vtt, failedHeaders\(\)\)/g) || []).length, 2);
+  assert.match(server, /syncHdr === 'failed' && \(_sf\.disagree \|\| 0\) >= 2 \? \{ 'x-triboon-subsync-reason': 'misfit' \}/);
 });
 
 test('web subtitle sync: a pick made while the last pick is still measuring is synced too (result 126)', async () => {
