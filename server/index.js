@@ -661,7 +661,10 @@ const subSyncEngine = { detect: () => detectSubSync(), run: onDemandSubSync };
 // reload plays the same file on a new mount; near the measured minute it keeps the synced words at
 // once instead of the raw ones while it measures again.
 const subSyncByFile = new Map();
-function subSyncFileKey(vf, syncKey) { return `${subtitleReleaseName(vf) || vf.name}|${syncKey}`; }
+// The file inside the release is part of the key: a season pack is one release name for every
+// episode, and an episode card asks with the show's IMDb id, so without it episode 2 took episode 1's
+// synced words (second check 3.5.5).
+function subSyncFileKey(vf, syncKey) { return `${subtitleReleaseName(vf) || vf.name}|${vf.name || ''}|${syncKey}`; }
 
 function clampInt(value, fallback, min, max) {
   const n = parseInt(value, 10);

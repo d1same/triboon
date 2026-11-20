@@ -2986,6 +2986,33 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
       await until(() => jobs.length === 1);
       jobs[0].finish(700);
       assert.strictEqual((await farAfterReload).headers['x-triboon-subsync-shift'], '700');
+
+      // Second check 3.5.5: one season pack is one release name for every episode, and an episode
+      // card asks with the show's IMDb id. Episode 2 of the pack, asked within 45 s of the minute
+      // episode 1 was measured at, must measure its own sound, never get episode 1's synced words.
+      const packName = 'Sec.Test.S01.1080p.WEB-DL.Pack';
+      remounted._releaseName = packName;
+      remounted.name = 'Sec.Test.S01E01.1080p.WEB-DL.mkv';
+      const ep1 = httpRaw(srv.port, reloadPath(300));
+      await until(() => jobs.length === 2);
+      jobs[1].finish(900);
+      assert.strictEqual((await ep1).headers['x-triboon-subsync-shift'], '900', 'episode 1 measured its own minute');
+      await httpJson(srv.port, 'POST', '/api/play/stop', { sessionId: again.sessionId }, admin);
+      const next = (await httpJson(srv.port, 'POST', '/api/play', { q: 'Sec Test 2024' }, admin)).json;
+      const ep2Mount = srv.mounts.get(next.id);
+      assert.notStrictEqual(next.id, again.id, 'episode 2 is its own mount');
+      ep2Mount._releaseName = packName;
+      ep2Mount.name = 'Sec.Test.S01E02.1080p.WEB-DL.mkv';
+      ep2Mount._subQuery = mounted._subQuery;
+      let ep2Early = null;
+      const ep2 = httpRaw(srv.port, `/api/ossubs/${next.id}?lang=en&tmdb=4242&variant=2&audio=0&sync=1&at=310&t=${next.streamToken}`);
+      ep2.then((r) => { ep2Early = r; }, () => {});
+      await until(() => jobs.length === 3 || ep2Early);
+      assert.strictEqual(jobs.length, 3, `episode 2 measures; it was answered ${ep2Early && ep2Early.headers['x-triboon-subsync']} ${ep2Early && ep2Early.headers['x-triboon-subsync-shift']}`);
+      jobs[2].finish(-200);
+      const ep2Res = await ep2;
+      assert.strictEqual(ep2Res.headers['x-triboon-subsync-shift'], '-200', 'episode 2 used its own measurement');
+      assert.doesNotMatch(ep2Res.body.toString('utf8'), /Hello synced 900/, 'episode 1 words never reach episode 2');
     } finally {
       restoreSync();
     }
