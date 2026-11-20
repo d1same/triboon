@@ -344,6 +344,21 @@ test('subtitle sync that gives up at two minutes says so in plain words (brief 1
   assert.match(server, /syncHdr === 'failed' && \(_sf\.disagree \|\| 0\) >= 2 \? \{ 'x-triboon-subsync-reason': 'misfit' \}/);
 });
 
+test('browser subtitle lines find their own direction, so Persian punctuation sits right (brief 134 S5)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const a = ui.indexOf('function renderSubCues() {');
+  const fn = ui.slice(a, ui.indexOf('\n}', a) + 2);
+  const made = [];
+  const box = { innerHTML: '', children: [], appendChild(n) { this.children.push(n); }, scrollHeight: 0, clientHeight: 100, firstElementChild: null };
+  const document = { createElement: () => { const n = { dir: '', kids: [], appendChild(k) { this.kids.push(k); } }; made.push(n); return n; } };
+  const render = new Function('$', 'S', 'activeSubtitleCues', 'document', `${fn}\nreturn renderSubCues;`)(
+    () => box, { playing: { _textTrack: {} } },
+    () => [{ getCueAsHTML: () => ({ text: 'سلام، خوبی؟' }) }, { getCueAsHTML: () => ({ text: 'Hello.' }) }], document);
+  render();
+  assert.strictEqual(box.children.length, 2);
+  assert.deepStrictEqual(made.map((n) => n.dir), ['auto', 'auto'], 'every drawn line carries dir="auto"');
+});
+
 test('every automatic subtitle start uses the confident-pick guard; a hand pick does not (brief 134 S1)', async () => {
   // A list where every row names another episode used to start its top row on the browser, and an
   // app remount sent that row as if the viewer had picked it.

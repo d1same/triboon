@@ -21169,6 +21169,9 @@ function renderSubCues() {
   // At most the LAST 5 active cues — matches the native overlay. 3 used to clip a 4-line SDH cue.
   for (const c of active.slice(-5)) {
     const line = document.createElement('div');
+    // Each line finds its own direction: Persian and Arabic punctuation lands on the right side
+    // (brief 134 S5). text-align stays centred.
+    line.dir = 'auto';
     try { line.appendChild(c.getCueAsHTML()); }            // keeps <i>/<b> styling, XSS-safe
     catch { line.textContent = String(c.text || ''); }
     box.appendChild(line);
