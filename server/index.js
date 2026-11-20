@@ -378,6 +378,9 @@ function vttToSrt(vtt) {
 // against the opening, is what shoved the words to the wrong scene.
 // A sync job that nobody waits for any more is stopped (brief 134 S3): its ffmpeg and alass
 // children are killed, so a replaced or cut ask does not keep pulling audio beside the viewers.
+// The job's stop signal, set around it by the subtitle route (subSyncStop.run), so the slice
+// functions keep their shape (phase4 pins them).
+const subSyncStop = new (require('async_hooks').AsyncLocalStorage)();
 function subSyncStopped() { return Object.assign(new Error('subtitle sync stopped'), { stopped: true }); }
 function killOnStop(p, signal, reject) {
   if (!signal) return () => {};
@@ -386,7 +389,8 @@ function killOnStop(p, signal, reject) {
   signal.addEventListener('abort', onStop, { once: true });
   return () => signal.removeEventListener('abort', onStop);
 }
-function extractSyncSample(streamUrl, wavPath, atSec = 0, audioIndex = 0, durSec = 30, signal = null) {
+function extractSyncSample(streamUrl, wavPath, atSec = 0, audioIndex = 0, durSec = 30) {
+  const signal = subSyncStop.getStore() || null;
   const ff = detectFfmpeg();
   if (!ff) return Promise.reject(new Error('ffmpeg not available'));
   if (signal && signal.aborted) return Promise.reject(subSyncStopped());
@@ -417,13 +421,13 @@ function extractSyncSample(streamUrl, wavPath, atSec = 0, audioIndex = 0, durSec
 }
 // Measure the gap for one 30-second slice: pull that audio, hand alass only the lines
 // from the same slice, and demand one clean shift back. Throws when the slice is unusable.
-async function measureSubSyncWindow(dir, tag, streamUrl, windowed, audioIndex, signal = null) {
+async function measureSubSyncWindow(dir, tag, streamUrl, windowed, audioIndex) {
   const fsp = fs.promises;
   const inSrt = path.join(dir, `in-${tag}.srt`);
   const outSrt = path.join(dir, `out-${tag}.srt`);
   const wav = path.join(dir, `ref-${tag}.wav`);
   await fsp.writeFile(inSrt, windowed.srt, 'utf8');
-  await extractSyncSample(streamUrl, wav, windowed.originMs / 1000, audioIndex, 30, signal);
+  await extractSyncSample(streamUrl, wav, windowed.originMs / 1000, audioIndex);
   await new Promise((resolve, reject) => {
     // --no-split keeps one offset for the whole movie. Framerate guessing
     // stretches that slice so the lines no longer share one gap, and we then
@@ -431,7 +435,7 @@ async function measureSubSyncWindow(dir, tag, streamUrl, windowed, audioIndex, s
     // guessing turned that into a scatter and the words stayed late.
     const p = spawnSubSync(wav, inSrt, outSrt, ['--no-split', '--disable-fps-guessing']);
     let err = '';
-    const unhook = killOnStop(p, signal, reject);
+    const unhook = killOnStop(p, subSyncStop.getStore() || null, reject);
     const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('subtitle sync took too long')); }, 60000);
     p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
     p.on('error', (e) => { clearTimeout(killer); unhook(); reject(e); });
@@ -463,7 +467,7 @@ function moveSrtTimes(srt, ms) {
     return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')},${String(n).padStart(3, '0')}`;
   });
 }
-async function measurePaddedSyncWindow(dir, tag, streamUrl, windowed, audioIndex, signal = null) {
+async function measurePaddedSyncWindow(dir, tag, streamUrl, windowed, audioIndex) {
   const fsp = fs.promises;
   // The clip starts at 0 or at least 1s in (extractSyncSample does not seek under 1s).
   const origin = Math.max(0, Number(windowed.originMs) || 0);
@@ -473,11 +477,11 @@ async function measurePaddedSyncWindow(dir, tag, streamUrl, windowed, audioIndex
   const outSrt = path.join(dir, `out-${tag}.srt`);
   const wav = path.join(dir, `ref-${tag}.wav`);
   await fsp.writeFile(inSrt, lines, 'utf8');
-  await extractSyncSample(streamUrl, wav, (windowed.originMs - pad) / 1000, audioIndex, (30000 + pad + SUBSYNC_PAD_MS) / 1000, signal);
+  await extractSyncSample(streamUrl, wav, (windowed.originMs - pad) / 1000, audioIndex, (30000 + pad + SUBSYNC_PAD_MS) / 1000);
   await new Promise((resolve, reject) => {
     const p = spawnSubSync(wav, inSrt, outSrt, ['--no-split', '--disable-fps-guessing']);
     let err = '';
-    const unhook = killOnStop(p, signal, reject);
+    const unhook = killOnStop(p, subSyncStop.getStore() || null, reject);
     const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('subtitle sync took too long')); }, 60000);
     p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
     p.on('error', (e) => { clearTimeout(killer); unhook(); reject(e); });
@@ -521,7 +525,7 @@ function syncMedianLineSec(windowed) {
   const med = starts.length % 2 ? starts[mid] : (starts[mid - 1] + starts[mid]) / 2;
   return (origin + med) / 1000;
 }
-async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0, signal = null) {
+async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
   const os2 = require('os');
   const fsp = fs.promises;
   const dir = await fsp.mkdtemp(path.join(os2.tmpdir(), 'triboon-subsync-'));
@@ -560,7 +564,7 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0, signal =
       const xs = [];
       let pick = null;
       for (let k = 0; k < wins.length && !pick; k++) {
-        xs.push(await measurePaddedSyncWindow(dir, `p${k}`, selfUrl, wins[k], audioIndex, signal).catch(unalignedSlice));
+        xs.push(await measurePaddedSyncWindow(dir, `p${k}`, selfUrl, wins[k], audioIndex).catch(unalignedSlice));
         if (k >= 1) pick = pickAgreedSyncShift(xs.map((x) => (x == null ? NaN : x)));
       }
       if (!pick || pick.agreed < 2) throw new Error(why);
@@ -570,7 +574,7 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0, signal =
       return pick.shiftMs;
     };
     let firstErr = null;
-    let shiftMs = await measureSubSyncWindow(dir, 'a', selfUrl, spoken, audioIndex, signal).catch((e) => {
+    let shiftMs = await measureSubSyncWindow(dir, 'a', selfUrl, spoken, audioIndex).catch((e) => {
       if (!/not a single gap|cue-count/i.test(String(e && e.message))) throw e;
       firstErr = e;
       return null;
@@ -591,7 +595,7 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0, signal =
       // The playhead slice gave no single gap: the padded clip hears it again.
       await paddedRetry(String(firstErr && firstErr.message), witness);
     } else if (witness) {
-      const second = await measureSubSyncWindow(dir, 'b', selfUrl, witness, audioIndex, signal);
+      const second = await measureSubSyncWindow(dir, 'b', selfUrl, witness, audioIndex);
       let paired = second;
       let pairedOrigin = witness.originMs;
       if (Math.abs(second - shiftMs) > 1500) {
@@ -603,7 +607,7 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0, signal =
         // the correction is thrown away, so a real multi-second gap is not replaced by noise.
         const tieAt = tieAtFor(!!before);
         const tie = windowSrt(srt, tieAt, 30000);
-        const third = tie ? await measureSubSyncWindow(dir, 'c', selfUrl, { ...tie, originMs: tieAt }, audioIndex, signal).catch(unalignedSlice) : null;
+        const third = tie ? await measureSubSyncWindow(dir, 'c', selfUrl, { ...tie, originMs: tieAt }, audioIndex).catch(unalignedSlice) : null;
         if (third != null && Math.abs(third - shiftMs) <= 1500) { paired = third; pairedOrigin = tieAt; }
         else if (third != null && Math.abs(third - second) <= 600) shiftMs = second;
         else await paddedRetry(`subtitle sync witnesses disagree (${shiftMs}ms vs ${second}ms)`, witness);
@@ -618,7 +622,7 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0, signal =
         // a slice two minutes away lands where that slide predicts.
         const farAt = spoken.originMs >= 150000 ? spoken.originMs - 120000 : spoken.originMs + 120000;
         const far = windowSrt(srt, farAt, 30000);
-        const farShift = far ? await measureSubSyncWindow(dir, 'd', selfUrl, { ...far, originMs: farAt }, audioIndex, signal).catch(() => null) : null;
+        const farShift = far ? await measureSubSyncWindow(dir, 'd', selfUrl, { ...far, originMs: farAt }, audioIndex).catch(() => null) : null;
         const predicted = shiftMs + (driftMsPer30s * (farAt - spoken.originMs)) / 30000;
         if (farShift == null || Math.abs(farShift - predicted) > 700) driftMsPer30s = 0;
       }
@@ -12069,7 +12073,7 @@ Object.assign(H, {
           console.log(`[subsync ${vf.id}] measuring at ${mmss(atSec)} on audio track ${audioIndex}`);
           vf._subSyncInflightAt.set(syncKey, atSec);
           const stopper = new AbortController();
-          const work = subSyncEngine.run(vf, vtt, ctx.claims.uid, atSec, audioIndex, stopper.signal)
+          const work = subSyncStop.run(stopper.signal, () => subSyncEngine.run(vf, vtt, ctx.claims.uid, atSec, audioIndex, stopper.signal))
             .then((res) => {
               if (Math.abs((vf._subSyncWant.get(syncKey) ?? atSec) - atSec) > 20) return null;
               const synced = res.vtt;
