@@ -11759,7 +11759,7 @@ Object.assign(H, {
     // subMode is part of the cache key: an admin flipping the provider policy mid-mount must not
     // be served the previous mix from the per-mount variants cache. catalogId already carries the
     // resolved episode imdb (unique per episode), so drop the s/e suffix when we searched by it.
-    const searchBase = `${subMode}:${lang}:${catalogId}${hasSearchEpisode ? `:s${searchSeason}e${searchEpisode}` : ''}`;
+    const searchBase = `${subMode}:${lang}:${catalogId}${hasSearchEpisode ? `:s${searchSeason}e${searchEpisode}` : ''}:${sdhPref}`; // style ranks the list (brief 134 S8)
     const subtitleFailure = (e) => {
       const noSubs = isNoSubtitleError(e);
       return {
@@ -11875,7 +11875,7 @@ Object.assign(H, {
       ]);
       if (clientGone) return;
     }
-    const cacheKey = variant ? `${lang}:${catalogId}:${variant}` : `${lang}:${catalogId}:auto:${vf._moviehash || 'nohash'}`;
+    const cacheKey = variant ? `${lang}:${catalogId}:${variant}` : `${lang}:${catalogId}:auto:${sdhPref}:${vf._moviehash || 'nohash'}`;
     if (!vf._osCache.has(cacheKey)) {
       if (!vf._osInflight.has(cacheKey)) {
         const work = (async () => {

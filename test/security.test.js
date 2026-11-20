@@ -2559,6 +2559,13 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
       }
       // Brief 131: a show whose card (TMDB) numbers differ from the files. Each episode has the same
       // group's subtitle, named with the file numbering.
+      if (u.searchParams.get('id') === '4545') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify([
+          { id: 51, url: `http://127.0.0.1:${osPort}/file.srt`, format: 'srt', language: 'en', display: 'Caption.Style.2024.1080p.WEB-DL', isHearingImpaired: false },
+          { id: 52, url: `http://127.0.0.1:${osPort}/file.srt`, format: 'srt', language: 'en', display: 'Caption.Style.2024.1080p.WEB-DL', isHearingImpaired: true },
+        ]));
+      }
       if (u.searchParams.get('id') === 'tt43440003') {
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify([{ id: 44, url: `http://127.0.0.1:${osPort}/file.srt`, format: 'srt', language: 'en', display: 'Paper.Lane.S01E04.1080p.WEB-DL.H.264-NTb' }]));
@@ -2784,6 +2791,16 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
   assert.strictEqual(otherOnly.json.confident, false, 'every row names another episode: not confident');
   const rightRow = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=pt&tmdb=4343&season=1&episode=3&list=1&t=${play.streamToken}`, null, admin);
   assert.strictEqual(rightRow.json.confident, true, 'a row for this episode: confident');
+
+  // Brief 134 S8: the caption style is part of the cache keys, so a change takes effect at once.
+  const styleList = async (sdh) => (await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=4545&sdh=${sdh}&list=1&t=${play.streamToken}`, null, admin)).json;
+  const plainFirst = await styleList('avoid');
+  const sdhFirst = await styleList('prefer');
+  assert.strictEqual(plainFirst.variants[0].hearingImpaired, false, 'dialogue-only first');
+  assert.strictEqual(sdhFirst.variants[0].hearingImpaired, true, 'SDH first once the viewer prefers it, on the same mount');
+  assert.strictEqual(subtitleSearches.filter((x) => x.id === '4545').length, 2, 'one search per style');
+  assert.strictEqual((await styleList('avoid')).variants[0].hearingImpaired, false, 'back to the first style: from its own cache');
+  assert.strictEqual(subtitleSearches.filter((x) => x.id === '4545').length, 2);
 
   // Brief 134 S3: a sync answer that takes longer than the server's 30 s idle cut still arrives,
   // and a replaced or cut ask stops its sync job (no parallel audio pulls on one mount).
