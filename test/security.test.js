@@ -2769,6 +2769,8 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
   try { pickedFileSub = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4343&season=1&episode=3&t=${play.streamToken}`); }
   finally { console.log = origLog; }
   assert.strictEqual(pickedFileSub.status, 200, pickedFileSub.body.toString());
+  assert.ok(logs.some((l) => /^\[subs\] subtitle ready en auto in \d+ ms, sync synced$/.test(l)),
+    `brief 134 S6: the play story says when the subtitle was ready and what sync was told: ${logs.filter((l) => /\[subs\]/.test(l))}`);
   assert.ok(logs.some((l) => /\[subs\] pick auto s1e4 \(card e3\) S01E04 .*release match, so audio sync is skipped/.test(l)),
     `the same release's subtitle for the file that plays is a release match: ${logs.filter((l) => /\[subs\]/.test(l))}`);
   // Another episode on the same mount (the card's next episode) is not translated.
@@ -2848,8 +2850,13 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
       const slow = httpRaw(srv.port, syncPath(400));
       await until(() => jobs.length === 4);
       await new Promise((r) => setTimeout(r, 31000));
-      jobs[3].finish(-2000);
-      const slowRes = await slow;
+      const syncLogs = [];
+      const keepLog = console.log;
+      console.log = (...a) => { syncLogs.push(a.join(' ')); };
+      let slowRes;
+      try { jobs[3].finish(-2000); slowRes = await slow; } finally { console.log = keepLog; }
+      // Brief 134 S6: the cost of each measurement is in the line (the stand-in reads no audio).
+      assert.ok(syncLogs.some((l) => /moved the words 2\.00s earlier \(.*two slices agree; 0 slices, 0s of audio, 3\d\.\ds\)$/.test(l)), syncLogs.join(' | '));
       assert.ok(Date.now() - t0 >= 31000);
       assert.strictEqual(slowRes.status, 200);
       assert.strictEqual(slowRes.headers['x-triboon-subsync'], 'corrected', 'the slow answer arrives');

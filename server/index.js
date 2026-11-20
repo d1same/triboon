@@ -378,8 +378,8 @@ function vttToSrt(vtt) {
 // against the opening, is what shoved the words to the wrong scene.
 // A sync job that nobody waits for any more is stopped (brief 134 S3): its ffmpeg and alass
 // children are killed, so a replaced or cut ask does not keep pulling audio beside the viewers.
-// The job's stop signal, set around it by the subtitle route (subSyncStop.run), so the slice
-// functions keep their shape (phase4 pins them).
+// The job's stop signal and counters ({ signal, slices, audioSec }), set around it by the subtitle
+// route (subSyncStop.run), so the slice functions keep their shape (phase4 pins them).
 const subSyncStop = new (require('async_hooks').AsyncLocalStorage)();
 function subSyncStopped() { return Object.assign(new Error('subtitle sync stopped'), { stopped: true }); }
 function killOnStop(p, signal, reject) {
@@ -390,13 +390,15 @@ function killOnStop(p, signal, reject) {
   return () => signal.removeEventListener('abort', onStop);
 }
 function extractSyncSample(streamUrl, wavPath, atSec = 0, audioIndex = 0, durSec = 30) {
-  const signal = subSyncStop.getStore() || null;
+  const job = subSyncStop.getStore() || null;
+  const signal = job && job.signal;
   const ff = detectFfmpeg();
   if (!ff) return Promise.reject(new Error('ffmpeg not available'));
   if (signal && signal.aborted) return Promise.reject(subSyncStopped());
   const at = Math.max(0, Number(atSec) || 0);
   const audio = Math.max(0, Math.min(15, parseInt(audioIndex, 10) || 0));
   const span = Math.max(1, Math.min(60, Number(durSec) || 30));
+  if (job) { job.slices = (job.slices || 0) + 1; job.audioSec = (job.audioSec || 0) + span; }
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
   if (at >= 1) args.push('-ss', at.toFixed(3));
   args.push('-i', streamUrl, '-t', String(span), '-map', `0:a:${audio}`, '-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', wavPath);
@@ -435,7 +437,7 @@ async function measureSubSyncWindow(dir, tag, streamUrl, windowed, audioIndex) {
     // guessing turned that into a scatter and the words stayed late.
     const p = spawnSubSync(wav, inSrt, outSrt, ['--no-split', '--disable-fps-guessing']);
     let err = '';
-    const unhook = killOnStop(p, subSyncStop.getStore() || null, reject);
+    const unhook = killOnStop(p, (subSyncStop.getStore() || {}).signal || null, reject);
     const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('subtitle sync took too long')); }, 60000);
     p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
     p.on('error', (e) => { clearTimeout(killer); unhook(); reject(e); });
@@ -481,7 +483,7 @@ async function measurePaddedSyncWindow(dir, tag, streamUrl, windowed, audioIndex
   await new Promise((resolve, reject) => {
     const p = spawnSubSync(wav, inSrt, outSrt, ['--no-split', '--disable-fps-guessing']);
     let err = '';
-    const unhook = killOnStop(p, subSyncStop.getStore() || null, reject);
+    const unhook = killOnStop(p, (subSyncStop.getStore() || {}).signal || null, reject);
     const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('subtitle sync took too long')); }, 60000);
     p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
     p.on('error', (e) => { clearTimeout(killer); unhook(); reject(e); });
@@ -11666,6 +11668,7 @@ Object.assign(H, {
         code: 'no_subtitles',
       });
     }
+    const subT0 = Date.now(); // the 'subtitle ready in N ms' line (brief 134 S6)
     const preferProvider = subMode.startsWith('opensubtitles') ? 'opensubtitles' : 'wyzie';
     vf._touched = Date.now();
     const lang = String(ctx.url.searchParams.get('lang') || 'en').slice(0, 5).replace(/[^a-z-]/gi, '');
@@ -12076,7 +12079,10 @@ Object.assign(H, {
           console.log(`[subsync ${vf.id}] measuring at ${mmss(atSec)} on audio track ${audioIndex}`);
           vf._subSyncInflightAt.set(syncKey, atSec);
           const stopper = new AbortController();
-          const work = subSyncStop.run(stopper.signal, () => subSyncEngine.run(vf, vtt, ctx.claims.uid, atSec, audioIndex, stopper.signal))
+          const jobInfo = { signal: stopper.signal, slices: 0, audioSec: 0, t0: Date.now() };
+          // Brief 134 S6: what each measurement cost, for the owner's own plays.
+          const costLine = () => `${jobInfo.slices} slice${jobInfo.slices === 1 ? '' : 's'}, ${Math.round(jobInfo.audioSec)}s of audio, ${((Date.now() - jobInfo.t0) / 1000).toFixed(1)}s`;
+          const work = subSyncStop.run(jobInfo, () => subSyncEngine.run(vf, vtt, ctx.claims.uid, atSec, audioIndex, stopper.signal))
             .then((res) => {
               if (Math.abs((vf._subSyncWant.get(syncKey) ?? atSec) - atSec) > 20) return null;
               const synced = res.vtt;
@@ -12086,8 +12092,8 @@ Object.assign(H, {
               vf._subSyncAt.set(syncKey, atSec);
               vf._subSyncShift.set(syncKey, res.shiftMs); capMap(vf._subSyncShift, 24);
               vf._subSyncFail.delete(syncKey);
-              console.log(`[subsync ${vf.id}] moved the words ${secs}s ${dir} (heard ${mmss(res.originSec)} to ${mmss(res.originSec + 30)}, ${res.cues} lines, ${res.agreed === 2 ? 'two slices agree' : 'one slice'})`);
-              story.noteMount(vf.id, `subtitle sync moved the words ${secs}s ${dir}`);
+              console.log(`[subsync ${vf.id}] moved the words ${secs}s ${dir} (heard ${mmss(res.originSec)} to ${mmss(res.originSec + 30)}, ${res.cues} lines, ${res.agreed === 2 ? 'two slices agree' : 'one slice'}; ${costLine()})`);
+              story.noteMount(vf.id, `subtitle sync moved the words ${secs}s ${dir} (${costLine()})`);
               if (res.driftMsPer30s) {
                 const line = `subtitle drifts ${Math.abs(res.driftMsPer30s)}ms every 30s (framerate mismatch) — stretched the whole file to match, anchored at ${mmss(atSec)}`;
                 console.log(`[subsync ${vf.id}] ${line}`);
@@ -12096,6 +12102,11 @@ Object.assign(H, {
               return synced;
             })
             // Only this job's own entry: a replaced job finishing late must not drop its successor.
+            .catch((e) => {
+              if (e && !e.stopped) story.noteMount(vf.id, `subtitle sync verdict: gave up (${costLine()})`);
+              else if (e && e.stopped) story.noteMount(vf.id, `subtitle sync stopped (${costLine()})`);
+              throw e;
+            })
             .finally(() => { if (vf._osInflight.get(syncKey) === work) vf._osInflight.delete(syncKey); });
           work.waiters = 0;
           work.stop = () => stopper.abort();
@@ -12146,6 +12157,13 @@ Object.assign(H, {
     const syncHdr = looksSynced ? 'synced'
       : (_sf && (_sf.timedOut || _sf.tries >= 3 || (_sf.total || 0) >= 6 || (_sf.disagree || 0) >= 2)) ? 'failed'
       : (subSyncEngine.detect() && vf._subSyncState.has(cacheKey) ? 'pending' : 'unavailable');
+    vf._subReadyNoted = vf._subReadyNoted || new Set();
+    if (!vf._subReadyNoted.has(cacheKey)) {
+      vf._subReadyNoted.add(cacheKey);
+      const line = `subtitle ready ${lang} ${variant ? 'menu' : 'auto'} in ${Date.now() - subT0} ms, sync ${syncHdr}`;
+      console.log(`[subs] ${line}`);
+      story.noteMount(vf.id, line);
+    }
     send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
       { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': syncHdr,
         ...(syncHdr === 'failed' && (_sf.disagree || 0) >= 2 ? { 'x-triboon-subsync-reason': 'misfit' } : {}) });
