@@ -33,6 +33,7 @@ const {
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
 } = require('./scoring');
 const { TmdbProxy } = require('./tmdb');
+const episodeOrder = require('./episode-order');
 const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInWorker, shutdownXmltvWorkers } = require('./xmltv');
 const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
@@ -5013,6 +5014,14 @@ function parseCatalogYear(raw) {
 
 // Play/Sources identity: catalog q stays the verifier. originalTitle/aka names are extra
 // indexer queries only — they cannot make Mutiny on the Bounty play for Mutiny 2026.
+function releaseEpisodeOf(src) {
+  const r = src && Array.isArray(src.releaseEpisodes) ? src.releaseEpisodes : null;
+  return r && r.length && Number.isInteger(Number(r[0])) ? Number(r[0]) : undefined;
+}
+function releaseEpisodeToOf(src) {
+  const r = src && Array.isArray(src.releaseEpisodes) ? src.releaseEpisodes : null;
+  return r && r.length > 1 && Number.isInteger(Number(r[r.length - 1])) ? Number(r[r.length - 1]) : undefined;
+}
 function playSearchParams(src = {}) {
   const aliases = [];
   const addAlias = (v) => {
@@ -5030,7 +5039,11 @@ function playSearchParams(src = {}) {
     imdbid: src.imdbid || undefined,
     tvdbid: src.tvdbid || undefined,
     season: src.season,
-    ep: src.ep,
+    // TMDB and release numbering differ for this show (catalogFactsFor): the indexer and the
+    // verifier get the release number; a TMDB two-parter spans two (epTo). The card, watch keys and
+    // subtitles keep the TMDB number from the request body.
+    ep: releaseEpisodeOf(src) || src.ep,
+    epTo: releaseEpisodeToOf(src),
     aliases: aliases.length ? aliases : undefined,
   };
 }
@@ -5180,22 +5193,56 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
     // The whole season's episode names, so Play can skip a file that uses the right number
     // for a different episode (Office S04E03 "Dunder Mifflin Infinity" is not Launch Party).
     const seasonKey = `${key}:season-names:${s}`;
-    if (!catalogFactsCache.has(seasonKey)) {
-      let names = [];
-      try {
-        const seasonDoc = await tmdb.get(`/tv/${id}/season/${s}`);
-        names = (seasonDoc && seasonDoc.episodes || []).map((row) => ({
-          n: Number(row && row.episode_number),
-          name: String(row && row.name || '').trim(),
-        })).filter((row) => Number.isInteger(row.n) && row.n > 0 && row.name);
-      } catch { names = []; }
+    const orderKey = `${key}:release-order:${s}`;
+    const orderMissKey = `${orderKey}:retry-at`;
+    if (!catalogFactsCache.has(seasonKey) || (!catalogFactsCache.has(orderKey) && !(catalogFactsCache.get(orderMissKey) > Date.now()))) {
+      // The season list and the show's episode groups load side by side (both cached per show), so
+      // the release-order check adds no wait in front of Play.
+      const [seasonDoc, groupList] = await Promise.all([
+        tmdb.get(`/tv/${id}/season/${s}`).catch(() => null),
+        tmdb.get(`/tv/${id}/episode_groups`).catch(() => null),
+      ]);
+      const names = (seasonDoc && seasonDoc.episodes || []).map((row) => ({
+        n: Number(row && row.episode_number),
+        name: String(row && row.name || '').trim(),
+      })).filter((row) => Number.isInteger(row.n) && row.n > 0 && row.name);
       catalogFactsCache.set(seasonKey, names);
+      const order = await releaseOrderFor(id, s, seasonDoc, groupList);
+      // A TMDB miss is asked again, but not on every Play while TMDB is down (10 minutes).
+      if (order !== undefined) catalogFactsCache.set(orderKey, order);
+      else catalogFactsCache.set(orderMissKey, Date.now() + 10 * 60 * 1000);
     }
     const names = catalogFactsCache.get(seasonKey) || [];
     const mine = names.find((row) => row.n === e);
     out.episodeTitle = mine ? mine.name : '';
     out.otherEpisodeTitles = names.filter((row) => row.n !== e).map((row) => row.name).slice(0, 40);
+    out.seasonEpisodes = names.slice(0, 80);
+    // TMDB and release numbering differ for this show (brief 127): search the release number(s).
+    // A TMDB episode that merges a two-part hour-long maps to two release numbers; its runtime is the
+    // whole hour, so a Part 1 file would wrongly fail the runtime check — that check is skipped then.
+    const order = catalogFactsCache.get(orderKey);
+    const slots = order && order[e];
+    if (Array.isArray(slots) && slots.length && (slots.length !== 1 || slots[0] !== e)) {
+      out.releaseEpisodes = slots.slice();
+      if (slots.length > 1) out.runtimeMin = 0;
+    }
   }
+  return out;
+}
+// TMDB S/E → release S/E for one season, from the show's "Original air date" episode group
+// (episode-order.js). Returns { [tmdbEpisode]: [releaseEpisode, ...] } or null when the show has no
+// such group or it shows no difference (then Play searches TMDB numbers as before). undefined when
+// TMDB did not answer: that is not remembered, so the next Play asks again.
+async function releaseOrderFor(id, s, seasonDoc, groupList) {
+  if (!groupList || !seasonDoc || !Array.isArray(seasonDoc.episodes)) return undefined;
+  const groupId = episodeOrder.pickAirOrderGroup(groupList);
+  if (!groupId) return null;
+  let group;
+  try { group = await tmdb.get(`/tv/episode_group/${groupId}`); } catch { return undefined; }
+  const map = episodeOrder.releaseNumbering(seasonDoc.episodes, group, s);
+  if (!map) return null;
+  const out = {};
+  for (const [e, slots] of map) out[e] = slots;
   return out;
 }
 
@@ -5229,7 +5276,7 @@ function armRuntimeCheck(vf, policy, candidate, body) {
   vf._runtimeCheck = { runtimeMin, tmdbId, title: String((body && body.q) || '').replace(/\s+(19|20)\d{2}$/, ''), candidate: { nzbUrl: candidate.nzbUrl, name: candidate.name }, done: false };
   if (vf._tracks) noteRuntimeCheck(vf); // probe already landed (prepared mount reused)
 }
-function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, originCountry, articleSiblings, episodeTitle, otherEpisodeTitles, runtimeMin, tmdbId, caps: rawCaps } = {}) {
+function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, originCountry, articleSiblings, episodeTitle, otherEpisodeTitles, runtimeMin, tmdbId, season, ep, seasonEpisodes, releaseEpisodes, caps: rawCaps } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
   // The admin's cap, kept apart from the per-play and per-device limits that narrow maxResolutionRank.
   // Those can be widened or overridden by a tap. This one cannot.
@@ -5245,6 +5292,16 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
   if (episodeTitle) policy.episodeTitle = String(episodeTitle).slice(0, 120);
   if (Array.isArray(otherEpisodeTitles) && otherEpisodeTitles.length) {
     policy.otherEpisodeTitles = otherEpisodeTitles.map((t) => String(t || '')).filter(Boolean).slice(0, 40);
+  }
+  // The TMDB episode the viewer chose and its season list, so a release that names a different
+  // episode is told apart even when TMDB and release numbering differ (brief 127).
+  const tmdbS = parseInt(season, 10), tmdbE = parseInt(ep, 10);
+  if (mediaType === 'tv' && Number.isInteger(tmdbS) && tmdbS >= 0 && Number.isInteger(tmdbE) && tmdbE > 0) {
+    policy.tmdbEpisode = { s: tmdbS, e: tmdbE };
+    if (Array.isArray(seasonEpisodes) && seasonEpisodes.length) {
+      policy.seasonEpisodes = seasonEpisodes.filter((r) => r && Number.isInteger(Number(r.n)) && r.name).map((r) => ({ n: Number(r.n), name: String(r.name).slice(0, 120) })).slice(0, 80);
+    }
+    if (Array.isArray(releaseEpisodes) && releaseEpisodes.length) policy.releaseEpisodes = releaseEpisodes.map(Number).filter(Number.isInteger);
   }
   // Catalog identity for title-scoped verdicts (wrong-runtime) and the film runtime for the probe check.
   if (parseInt(tmdbId, 10) > 0) policy.catalogTmdbId = parseInt(tmdbId, 10);
@@ -5309,6 +5366,11 @@ function showCamSources() {
 }
 function visibleSourceDrawerCandidates(candidates) {
   return sourceDrawerCandidates(candidates, { hideCam: !showCamSources() });
+}
+function playEpisodePart(body, playParams, candidate) {
+  if (!body || body.mediaType !== 'tv' || !candidate) return undefined;
+  const e = (candidate.releaseEpisode && candidate.releaseEpisode.e) || Number(playParams && playParams.ep);
+  return episodeOrder.episodePartOf(candidate.name, playParams && playParams.season, e) || undefined;
 }
 function mountPayload(vf, uid, extra = {}) {
   const st = auth.streamToken(uid, vf.id);
@@ -7156,9 +7218,12 @@ const H = {
       ctx.url.searchParams.get('tmdbId'),
       ctx.url.searchParams.get('mediaType')
     ))) return maturityBlockedResponse(ctx);
+    // Facts first: the search must use the same release numbers Play would (brief 127).
+    const facts = await catalogFactsFor(ctx.url.searchParams.get('year'), ctx.url.searchParams.get('tmdbId'), ctx.url.searchParams.get('mediaType'), ctx.url.searchParams.get('season'), ctx.url.searchParams.get('ep'));
     const { candidates, errors } = await pipeline.search(
       playSearchParams({
         q,
+        releaseEpisodes: facts.releaseEpisodes,
         imdbid: ctx.url.searchParams.get('imdbid') || undefined,
         tvdbid: ctx.url.searchParams.get('tvdbid') || undefined,
         season: ctx.url.searchParams.get('season') || undefined,
@@ -7171,7 +7236,9 @@ const H = {
         preferResolutionRank: ctx.url.searchParams.get('preferResolutionRank'),
         originalLanguage: ctx.url.searchParams.get('originalLanguage'),
         preferredAudioLanguage: ctx.url.searchParams.get('preferredAudioLanguage'),
-        ...(await catalogFactsFor(ctx.url.searchParams.get('year'), ctx.url.searchParams.get('tmdbId'), ctx.url.searchParams.get('mediaType'), ctx.url.searchParams.get('season'), ctx.url.searchParams.get('ep'))),
+        ...facts,
+        season: ctx.url.searchParams.get('season'),
+        ep: ctx.url.searchParams.get('ep'),
         mediaType: ctx.url.searchParams.get('mediaType'),
         tmdbId: ctx.url.searchParams.get('tmdbId'),
         caps: parseCapsQuery(ctx.url.searchParams.get('caps')),
@@ -7274,6 +7341,9 @@ const H = {
         attempts,
         relaxedResolution: relaxedResolution || undefined,
         bufferGoalSec,
+        // One file holds this episode and the one(s) before it (S05E14E15 for E15): the player starts
+        // at this part (brief 127).
+        episodePart: playEpisodePart(body, playParams, candidate),
       }));
     } catch (e) {
       // A maturity denial outranks a pipeline failure: a restricted profile must see "restricted",

@@ -16,6 +16,7 @@ const { CAP_HIT_COOLDOWN_MS } = require('./nntp');
 const { getNzbStore } = require('./nzb-store');
 const { getSegmentDisk } = require('./segment-cache');
 const { runByteCheck } = require('./byte-check');
+const episodeOrder = require('./episode-order');
 
 // ---- title verification ----
 // Catalog titles carry accents (Shōgun, Amélie, Léon); scene names never do (Shogun, Amelie). The
@@ -131,7 +132,10 @@ function wantedEpisodeOf(params) {
   const s = Number(params && params.season), e = Number(params && params.ep);
   // TMDB uses season 0 for specials. It is still an episode selection contract: dropping it here
   // makes a specials pack mount its largest member and lets its prepared mount alias a movie.
-  return (Number.isInteger(s) && Number.isInteger(e) && s >= 0 && e > 0) ? { s, e } : null;
+  if (!(Number.isInteger(s) && Number.isInteger(e) && s >= 0 && e > 0)) return null;
+  // A TMDB two-parter maps to two release numbers (brief 127): epTo is the last one.
+  const eTo = Number(params && params.epTo);
+  return Number.isInteger(eTo) && eTo > e ? { s, e, eTo } : { s, e };
 }
 
 // Only collection-shaped releases need request-scoped negative verdicts. A normal exact
@@ -530,9 +534,18 @@ function untaggedEditionOk(norm, wanted) {
   }
   return false;
 }
-function episodeTitleConflicts(norm, wanted) {
+function episodeTitleConflicts(norm, wanted, rawName) {
   const others = Array.isArray(wanted && wanted.otherEpisodeTitles) ? wanted.otherEpisodeTitles : [];
   if (!others.length) return false;
+  // The words right after SxxEyy are the release's own episode title (brief 127). There even a short
+  // one-word title counts: "S06E15.Sabre" is TMDB's "Sabre", not "The Manager and the Salesman".
+  if (rawName) {
+    const pos = episodeOrder.positionalTitle(rawName);
+    if (pos.length) {
+      if (wanted.episodeTitle && episodeOrder.titleNames(pos, wanted.episodeTitle)) return false;
+      if (others.some((title) => episodeOrder.titleNames(pos, title))) return true;
+    }
+  }
   const mine = episodeTitlePhrase(wanted.episodeTitle);
   if (mine && norm.includes(` ${mine.join(' ')} `)) return false;
   return others.some((title) => {
@@ -681,7 +694,7 @@ function releaseMatches(name, wanted) {
       && !/\b(?:2160p|1080p|720p|576p|480p|4k|uhd|x26[45]|h\.?26[45]|hevc|avc|av1|xvid|web-?dl|webrip|web|bluray|blu-ray|bdrip|brrip|remux|hdtv|dvdrip|mkv|mp4)\b/i.test(String(name || ''))) {
     return false;
   }
-  if (wanted.s !== null && episodeTitleConflicts(norm, wanted)) return false;
+  if (wanted.s !== null && episodeTitleConflicts(norm, wanted, name)) return false;
   return true;
 }
 
@@ -708,6 +721,39 @@ function catalogIdentityMatches(result, params) {
   if (wantTvdb && gotTvdb && wantTvdb !== gotTvdb) return false;
   return true;
 }
+// Brief 127: which TMDB episodes the results for the searched release number name by title.
+// Counts only names that carry exactly this one episode number (not packs or ranges).
+function tallyNamedEpisodes(list, wanted, params, into) {
+  const seasonEpisodes = wanted && wanted.seasonEpisodes;
+  const s = Number(params && params.season), e = Number(params && params.ep);
+  if (!Array.isArray(seasonEpisodes) || !seasonEpisodes.length || !Number.isInteger(s) || !Number.isInteger(e)) return into;
+  const exact = new RegExp(`(?:^|[^a-z0-9])s0?${s}e0?${e}(?![0-9]|e\\d)`, 'i');
+  const plain = { ...wanted, episodeTitle: '', otherEpisodeTitles: [] };
+  for (const r of list || []) {
+    const name = r && r.name;
+    if (!name || !exact.test(String(name).replace(/[._]/g, ' '))) continue;
+    if (!releaseMatches(name, plain)) continue; // another show
+    const pos = episodeOrder.positionalTitle(name);
+    if (!pos.length) continue;
+    for (const row of seasonEpisodes) {
+      if (row && row.name && episodeOrder.titleNames(pos, row.name)) into[row.n] = (into[row.n] || 0) + 1;
+    }
+  }
+  return into;
+}
+// The names say this release number is a different TMDB episode: { named, delta, strong } or null.
+// Null when any name confirms the chosen episode, or nothing is named.
+function episodeNumberEvidence(named, tmdbE) {
+  if (!named || named[tmdbE]) return null;
+  const rows = Object.entries(named).map(([n, c]) => ({ n: Number(n), c })).filter((x) => x.n !== tmdbE && x.c > 0);
+  if (!rows.length) return null;
+  rows.sort((a, b) => b.c - a.c);
+  const top = rows[0];
+  const delta = tmdbE - top.n;
+  if (!delta || Math.abs(delta) > 3) return null;
+  return { named: top.n, delta, strong: top.c >= 2 };
+}
+
 function releaseQualifies(result, wanted, params) {
   return catalogIdentityMatches(result, params) && releaseMatches(result && result.name, wanted);
 }
@@ -2752,6 +2798,16 @@ class Pipeline {
       return { ...hit, silentErrors: !!job.silentErrors };
     });
     let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });
+    const namedEpisodes = {};
+    // Each release name counts once: the widened queries return the same rows again.
+    const seenNamed = new Set();
+    const noteNamed = (list) => tallyNamedEpisodes((list || []).filter((r) => {
+      const n = r && r.name && String(r.name).toLowerCase();
+      if (!n || seenNamed.has(n)) return false;
+      seenNamed.add(n);
+      return true;
+    }), wanted, params, namedEpisodes);
+    noteNamed(results);
     // TITLE VERIFICATION — indexers return loosely-related releases; a release only
     // qualifies if its name actually contains the wanted title (and episode/year) AND
     // any indexer IMDb/TVDB tag matches the catalog title. Wrong remake = trust-killer.
@@ -2759,6 +2815,7 @@ class Pipeline {
     results = results.filter(qualifies);
     if (aliasP) {
       const retry = await aliasP;
+      noteNamed(retry.results);
       results = mergeQualifiedResults(results, retry.results, qualifies);
       if (retry.errors && retry.errors.length) errors = errors.concat(retry.errors);
     }
@@ -2774,6 +2831,7 @@ class Pipeline {
       };
       await Promise.all(Array.from({ length: extraLimit }, () => extraWorker()));
       for (const extra of extras) {
+        noteNamed(extra.results);
         results = mergeQualifiedResults(results, extra.results, qualifies);
         if (extra.errors && extra.errors.length && !extra.silentErrors) errors = errors.concat(extra.errors);
       }
@@ -2810,7 +2868,7 @@ class Pipeline {
     const extraFailed = extras.length
       && extras.every((e) => !(e.results && e.results.length) && (e.errors && e.errors.length));
     const skipCache = extraFailed && results.length < 4;
-    return { at: Date.now(), results, errors, skipCache, partial: !!(errors && errors.some(isTransientSearchError)) };
+    return { at: Date.now(), results, errors, skipCache, namedEpisodes, partial: !!(errors && errors.some(isTransientSearchError)) };
   }
 
   // Search + rank only (powers the Sources drawer). Applies cached verdict adjustments.
@@ -2827,6 +2885,8 @@ class Pipeline {
     // releases spelled His.and.Hers still pass releaseMatches — parseWantedTitle does that on the
     // ORIGINAL query. Parsing the SANITIZED query instead dropped the "&" before the conversion
     // could run, so every "and"-spelled release was rejected and only one loose source survived.
+    const origParams = params;
+    const origPolicy = policy;
     const rawQ = String(params.q || '');
     params = { ...params, q: sanitize(rawQ) };
     const season = Number(params.season);
@@ -2873,6 +2933,7 @@ class Pipeline {
     if (wanted && Array.isArray(policy.otherEpisodeTitles) && policy.otherEpisodeTitles.length) {
       wanted.otherEpisodeTitles = policy.otherEpisodeTitles.map((t) => String(t || '')).filter(Boolean).slice(0, 40);
     }
+    if (wanted && Array.isArray(policy.seasonEpisodes) && policy.seasonEpisodes.length) wanted.seasonEpisodes = policy.seasonEpisodes;
     // TV episode context for scoring: a whole-season PACK must not be size-cap-disqualified — only ONE
     // episode streams from it (it's still size-SHAPED, so it stays a low-ranked fallback below singles).
     // Scoped to episode requests; movies/season-less searches never get wantedEpisode → unaffected.
@@ -2959,7 +3020,44 @@ class Pipeline {
         ...(v && v.verdict === 'wrong-runtime' && v.detail ? { runtimeMismatch: { fileMin: v.detail.fileMin, titleMin: v.detail.titleMin } } : {}),
       };
     });
-    return { candidates: rankReleases(enriched, policy).map((c) => ({ ...c, pickKey: candidateKey(c) })), errors };
+    let candidates = rankReleases(enriched, policy).map((c) => ({ ...c, pickKey: candidateKey(c) }));
+    // TMDB and release numbering differ (brief 127): the results for this number name a different
+    // TMDB episode ("S06E15.Sabre" for TMDB S06E15 "The Manager and the Salesman"). Follow the names:
+    // search the number they point to, up to 4 hops (two merged two-parters before the episode need
+    // more than one: E05 names TMDB E03, E07 names E04, E08 names E04 again, E09 is the one). Keep a
+    // number only when its own names confirm the chosen episode.
+    const tmdbE = policy.tmdbEpisode && Number(policy.tmdbEpisode.e);
+    const named = hit.namedEpisodes || {};
+    const confirmed = !!(tmdbE && named[tmdbE]);
+    const evidence = tmdbE && !policy._episodeEvidenceRetry ? episodeNumberEvidence(named, tmdbE) : null;
+    if (evidence) {
+      const tried = new Set([Number(origParams.ep)]);
+      let at = Number(origParams.ep);
+      let step = evidence;
+      for (let hop = 0; hop < 4 && step; hop++) {
+        const next = at + step.delta;
+        if (!Number.isInteger(next) || next < 1 || tried.has(next)) break;
+        tried.add(next);
+        const retry = await this.search({ ...origParams, ep: next, epTo: undefined },
+          { ...origPolicy, _episodeEvidenceRetry: true }, { timeoutMs, allowStale, widenSearch });
+        if (retry.confirmed && retry.candidates.length) {
+          const releaseEpisode = { s: Number(origParams.season), e: next };
+          debug.log('search', `episode numbering: release S${releaseEpisode.s}E${Number(origParams.ep)} names TMDB E${evidence.named}, release E${next} is TMDB E${tmdbE}`);
+          return {
+            candidates: retry.candidates.map((c) => ({ ...c, releaseEpisode })),
+            errors: retry.errors, confirmed: true, named,
+            episodeNumbering: { from: Number(origParams.ep), to: next, evidence: evidence.named },
+          };
+        }
+        at = next;
+        step = episodeNumberEvidence(retry.named, tmdbE);
+      }
+      // No number confirmed the chosen episode, but the names clearly say this number is another one.
+      // Its untitled copies are that same other episode: they stay listed in Sources with the reason,
+      // and Play does not start them for this episode (it reports no source instead of a wrong one).
+      if (evidence.strong) candidates = candidates.map((c) => ({ ...c, score: Math.min(c.score, -9000), reasons: [...(c.reasons || []), `episode-number names TMDB E${evidence.named}`] }));
+    }
+    return { candidates, errors, confirmed, named };
   }
 
   // The mounted file's probed duration does not fit this catalog title's runtime: remember it
@@ -3103,6 +3201,8 @@ class Pipeline {
 
   // Try one candidate: fetch NZB → mount → gate. Returns { vf } or { fail: reason }.
   async _tryCandidate(candidate, mountOpts = {}) {
+    // Found at a different release number than TMDB's (brief 127): a pack must open that file.
+    if (candidate && candidate.releaseEpisode) mountOpts = { ...mountOpts, wantedEpisode: candidate.releaseEpisode };
     const identity = mountIdentity(candidate, mountOpts);
     const consumerSignal = mountOpts && mountOpts.signal;
     if (consumerSignal && consumerSignal.aborted) return { fail: 'cancelled: source race loser' };
