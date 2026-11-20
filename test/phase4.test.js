@@ -12323,3 +12323,32 @@ test('3.5.1 player guide header uses the short channel name and tags like the ro
   assert.match(ui, /<div class="t">\$\{pgHeadTitle\(\)\}<\/div>/, 'the repaint after the guide data arrives uses it too');
   assert.doesNotMatch(ui, /<div class="t">\$\{esc\(currentCh\.title\)\}<\/div>/, 'no raw channel title left in the header');
 });
+
+test('the built-in subtitle pick never takes a forced track and follows the caption style for SDH (brief 137 step 1)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (name, next) => {
+    const i = ui.indexOf(`function ${name}(`);
+    const j = ui.indexOf(`function ${next}(`, i);
+    assert.ok(i >= 0 && j > i, name);
+    return ui.slice(i, j);
+  };
+  const src = grab('embeddedSubLabel', 'scheduleEmbeddedSubtitlePrewarm')
+    + grab('bestEmbeddedSubtitleRel', 'bestBuiltInSubtitleRel');
+  const helpers = ui.indexOf('function embeddedSubIsForced(') >= 0
+    ? grab('embeddedSubIsForced', 'bestEmbeddedSubtitleRel') : '';
+  const make = (subs, style) => new Function('visibleEmbeddedSubChoices', 'prefLang', 'langCode', 'embeddedSubRel',
+    'prefCcStyle', 'langName', 'sourceSubtitleLabel',
+    `${helpers}\n${src}\nreturn { bestEmbeddedSubtitleRel, embeddedSubLabel };`)(
+    () => subs, () => 'en', (l) => (l === 'en' ? 'eng' : String(l || '')), (r) => 'em:' + r,
+    () => style, () => 'English', (k, v) => `${v} · ${k}`);
+  const subs = [
+    { rel: 0, lang: 'eng', title: '', text: true, forced: true, sdh: false },
+    { rel: 1, lang: 'eng', title: '', text: true, forced: false, sdh: true },
+    { rel: 2, lang: 'eng', title: '', text: true, forced: false, sdh: false },
+  ];
+  assert.strictEqual(make(subs, 'dialogue').bestEmbeddedSubtitleRel(), 'em:2', 'dialogue style: the full, non-SDH track');
+  assert.strictEqual(make(subs, 'sdh').bestEmbeddedSubtitleRel(), 'em:1', 'SDH style: the flagged SDH track');
+  assert.strictEqual(make([subs[0]], 'dialogue').bestEmbeddedSubtitleRel(), '', 'a forced-only file has no auto-pick yet');
+  assert.strictEqual(make(subs, 'dialogue').embeddedSubLabel(subs[0]), 'English (forced) · Built-in');
+  assert.strictEqual(make(subs, 'dialogue').embeddedSubLabel(subs[1]), 'English (SDH) · Built-in');
+});

@@ -8194,3 +8194,37 @@ test('pipeline walk: the ran-out-of-time message promises nothing the server may
   assert.match(text, /Press Play again/);
   assert.doesNotMatch(text, /kept|usually starts at once/i, text);
 });
+
+test('probe facts: forced, SDH, default, commentary and the channel layout reach every track (brief 137 step 1)', () => {
+  const { parseProbeStreams, probeCacheKey } = require('../server/transcode');
+  // A saved ffprobe -show_streams shape like a WEB-DL whose FIRST English text track is the forced one.
+  const probe = parseProbeStreams({
+    format: { duration: '9000.5', format_name: 'matroska,webm', bit_rate: '8000000' },
+    streams: [
+      { codec_type: 'video', codec_name: 'h264', height: 1080, width: 1920, disposition: { default: 1 } },
+      { codec_type: 'audio', codec_name: 'eac3', profile: 'Dolby Digital Plus + Dolby Atmos', channels: 6,
+        channel_layout: '5.1(side)', tags: { language: 'eng' }, disposition: { default: 1, comment: 0, visual_impaired: 0 } },
+      { codec_type: 'audio', codec_name: 'ac3', channels: 2, channel_layout: 'stereo',
+        tags: { language: 'eng', title: 'Director Commentary' }, disposition: { default: 0, comment: 0 } },
+      { codec_type: 'audio', codec_name: 'aac', channels: 2, channel_layout: 'stereo',
+        tags: { language: 'eng' }, disposition: { default: 0, comment: 1 } },
+      { codec_type: 'subtitle', codec_name: 'subrip', tags: { language: 'eng' }, disposition: { default: 1, forced: 1 } },
+      { codec_type: 'subtitle', codec_name: 'subrip', tags: { language: 'eng' }, disposition: { default: 0, forced: 0 } },
+      { codec_type: 'subtitle', codec_name: 'subrip', tags: { language: 'eng' }, disposition: { hearing_impaired: 1 } },
+      { codec_type: 'subtitle', codec_name: 'subrip', tags: { language: 'eng', title: 'English [SDH]' }, disposition: {} },
+      { codec_type: 'subtitle', codec_name: 'hdmv_pgs_subtitle', tags: { language: 'eng', title: 'English Forced' } },
+    ],
+  });
+  assert.strictEqual(probe.duration, 9000.5);
+  assert.deepStrictEqual(probe.audio.map((t) => [t.rel, t.channelLayout, t.default, t.comment]), [
+    [0, '5.1(side)', true, false], [1, 'stereo', false, true], [2, 'stereo', false, true],
+  ], 'audio rows keep layout, default and commentary (flag or title)');
+  assert.strictEqual(probe.audio[0].profile, 'Dolby Digital Plus + Dolby Atmos');
+  assert.deepStrictEqual(probe.subs.map((t) => [t.rel, t.text, t.forced, t.sdh, t.default]), [
+    [0, true, true, false, true], [1, true, false, false, false], [2, true, false, true, false],
+    [3, true, false, true, false], [4, false, true, false, false],
+  ], 'subtitle rows keep forced and SDH from the flag, with the title as the fallback');
+  // The probe memo key changes shape so a probe saved before these fields existed is never reused.
+  assert.notStrictEqual(probeCacheKey('Probe.Key.Movie.mkv', 1234), 'Probe.Key.Movie.mkv|1234');
+  assert.strictEqual(probeCacheKey('', 1), '');
+});

@@ -20017,8 +20017,7 @@ function embeddedSubUrl(p, rel, opts = {}) {
 }
 function embeddedSubLabel(sub) {
   const lang = sub && sub.lang ? (langName(sub.lang) || sub.lang.toUpperCase()) : '';
-  const detail = String((sub && sub.title) || '').trim();
-  const flags = /\bsdh\b/i.test(detail) ? ' (SDH)' : '';
+  const flags = embeddedSubIsForced(sub) ? ' (forced)' : embeddedSubIsSdh(sub) ? ' (SDH)' : '';
   return sourceSubtitleLabel('Built-in', `${lang || 'Unknown'}${flags}`);
 }
 function scheduleEmbeddedSubtitlePrewarm(p = S.playing) {
@@ -20035,8 +20034,16 @@ function scheduleEmbeddedSubtitlePrewarm(p = S.playing) {
     });
   }, 1200);
 }
+// Brief 137 step 1: the probe now carries the disposition flags. A forced track holds only the
+// foreign-language lines, so it is never "the" subtitle; SDH comes from the flag (or the title).
+function embeddedSubIsForced(sub) {
+  return !!(sub && (sub.forced === true || /\bforced\b/i.test(String(sub.title || ''))));
+}
+function embeddedSubIsSdh(sub) {
+  return !!(sub && (sub.sdh === true || /\bsdh\b/i.test(String(sub.title || ''))));
+}
 function bestEmbeddedSubtitleRel() {
-  const subs = visibleEmbeddedSubChoices();
+  const subs = visibleEmbeddedSubChoices().filter((sub) => !embeddedSubIsForced(sub));
   if (!subs.length) return '';
   const want = prefLang('slang');
   const wanted = want && want !== 'off' ? langCode(want) : '';
@@ -20045,8 +20052,9 @@ function bestEmbeddedSubtitleRel() {
     const bl = langCode(b.lang);
     const langScoreA = wanted && al === wanted ? 1000 : (!wanted && al === 'eng' ? 100 : 0);
     const langScoreB = wanted && bl === wanted ? 1000 : (!wanted && bl === 'eng' ? 100 : 0);
-    const sdhA = /\bsdh\b/i.test(String(a.title || '')) ? -10 : 0;
-    const sdhB = /\bsdh\b/i.test(String(b.title || '')) ? -10 : 0;
+    const sdhWeight = prefCcStyle() === 'sdh' ? 10 : -10;
+    const sdhA = embeddedSubIsSdh(a) ? sdhWeight : 0;
+    const sdhB = embeddedSubIsSdh(b) ? sdhWeight : 0;
     return (langScoreB + sdhB) - (langScoreA + sdhA);
   });
   return sorted[0] ? embeddedSubRel(sorted[0].rel) : '';

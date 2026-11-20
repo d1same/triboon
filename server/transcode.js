@@ -253,6 +253,57 @@ function defaultAudioTrack(audio, preferredLang = '') {
   const plain = pool.find((a) => !isAudioDescriptionTrack(a));
   return (plain || pool[0] || list[0]).rel;
 }
+// Pure parse of ffprobe -show_streams -show_format JSON (exported so a saved probe can be tested
+// without ffprobe). Brief 137 step 1: keep the disposition flags and the channel layout, so a forced
+// track is never taken for the subtitle, SDH comes from the flag, and audio rows can say "7.1".
+function probeDisposition(s, name) {
+  return !!(s && s.disposition && Number(s.disposition[name]) === 1);
+}
+function parseProbeStreams(j) {
+  const streams = (j && j.streams) || [];
+  const rel = { video: 0, audio: 0, subtitle: 0 };
+  const fmt = (j && j.format) || {};
+  const result = {
+    duration: parseFloat(fmt.duration) || null,
+    format: String(fmt.format_name || ''),
+    bitRate: parseInt(fmt.bit_rate, 10) || null,
+    video: [], audio: [], subs: [],
+  };
+  for (const s of streams) {
+    const t = s.codec_type;
+    if (!(t in rel) && t !== 'subtitle') continue;
+    const base = {
+      rel: rel[t === 'subtitle' ? 'subtitle' : t]++,
+      codec: s.codec_name,
+      profile: s.profile || '',
+      lang: (s.tags && (s.tags.language || s.tags.LANGUAGE)) || '',
+      title: (s.tags && (s.tags.title || s.tags.TITLE)) || '',
+    };
+    if (t === 'video') result.video.push({ ...base, height: s.height || null,
+      width: s.width || null,
+      bitDepth: videoBitDepth(s),
+      level: Number(s.level) > 0 ? Number(s.level) : null,
+      rangeType: videoRangeType(s),
+      hdr: ['smpte2084', 'arib-std-b67'].includes(s.color_transfer) });
+    else if (t === 'audio') {
+      const visualImpaired = probeDisposition(s, 'visual_impaired');
+      const track = { ...base, channels: s.channels || 2, visualImpaired,
+        channelLayout: String(s.channel_layout || ''),
+        default: probeDisposition(s, 'default'),
+        comment: probeDisposition(s, 'comment') || /\bcommentary\b/i.test(base.title) };
+      track.audioDescription = isAudioDescriptionTrack(track);
+      result.audio.push(track);
+    }
+    else if (t === 'subtitle') {
+      result.subs.push({ ...base, text: TEXT_SUB_CODECS.has(s.codec_name),
+        forced: probeDisposition(s, 'forced') || /\bforced\b/i.test(base.title),
+        sdh: probeDisposition(s, 'hearing_impaired') || /\bsdh\b/i.test(base.title),
+        default: probeDisposition(s, 'default') });
+    }
+  }
+  return result;
+}
+
 function probeTracks(url) {
   return new Promise((resolve, reject) => {
     const fp = detectFfprobe();
@@ -268,40 +319,7 @@ function probeTracks(url) {
     p.on('close', () => {
       clearTimeout(killer);
       try {
-        const j = JSON.parse(out || '{}');
-        const streams = j.streams || [];
-        const rel = { video: 0, audio: 0, subtitle: 0 };
-        const fmt = j.format || {};
-        const result = {
-          duration: parseFloat(fmt.duration) || null,
-          format: String(fmt.format_name || ''),
-          bitRate: parseInt(fmt.bit_rate, 10) || null,
-          video: [], audio: [], subs: [],
-        };
-        for (const s of streams) {
-          const t = s.codec_type;
-          if (!(t in rel) && t !== 'subtitle') continue;
-          const base = {
-            rel: rel[t === 'subtitle' ? 'subtitle' : t]++,
-            codec: s.codec_name,
-            profile: s.profile || '',
-            lang: (s.tags && (s.tags.language || s.tags.LANGUAGE)) || '',
-            title: (s.tags && (s.tags.title || s.tags.TITLE)) || '',
-          };
-          if (t === 'video') result.video.push({ ...base, height: s.height || null,
-            width: s.width || null,
-            bitDepth: videoBitDepth(s),
-            level: Number(s.level) > 0 ? Number(s.level) : null,
-            rangeType: videoRangeType(s),
-            hdr: ['smpte2084', 'arib-std-b67'].includes(s.color_transfer) });
-          else if (t === 'audio') {
-            const visualImpaired = !!(s.disposition && Number(s.disposition.visual_impaired) === 1);
-            const track = { ...base, channels: s.channels || 2, visualImpaired };
-            track.audioDescription = isAudioDescriptionTrack(track);
-            result.audio.push(track);
-          }
-          else if (t === 'subtitle') result.subs.push({ ...base, text: TEXT_SUB_CODECS.has(s.codec_name) });
-        }
+        const result = parseProbeStreams(JSON.parse(out || '{}'));
         resolve(result);
       } catch (e) { reject(new Error(`ffprobe parse: ${e.message} ${require('./debug').redact(err).slice(0, 200)}`)); }
     });
@@ -856,7 +874,8 @@ function probeCacheKey(name, size) {
   const label = String(name || '').slice(0, 180);
   const bytes = Number(size) || 0;
   if (!label || !(bytes > 0)) return '';
-  return `${label}|${bytes}`;
+  // p2: brief 137 added disposition and layout fields, so entries from before refill.
+  return `p2|${label}|${bytes}`;
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, isAudioDescriptionTrack, defaultAudioTrack, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, LIVE_AUDIO_LAYOUTS };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, parseProbeStreams, isAudioDescriptionTrack, defaultAudioTrack, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, LIVE_AUDIO_LAYOUTS };
