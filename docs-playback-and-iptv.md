@@ -179,9 +179,11 @@ Flow (`/api/ossubs/:mount`):
   `moved the words X.XXs earlier|later (... two slices agree|one slice)`; the response carries
   `x-triboon-subsync-shift` (ms) and the player toasts "Subtitles moved X.Xs earlier/later". A
   rejected measurement makes the player wait 60s before asking again from a different minute.
-- **Gave up because the words fit the sound nowhere (brief 131):** when slices disagree at two
-  different minutes, the `failed` answer also carries `x-triboon-subsync-reason: misfit`, and the
-  player says "This subtitle does not match the sound. It may be for another episode or cut." This
+- **Gave up at two minutes (brief 131):** when slices disagree at two different minutes, the
+  `failed` answer also carries `x-triboon-subsync-reason: misfit`, and the player says "Subtitles
+  could not be lined up with the sound. Use Earlier or Later, or try another subtitle." It does not
+  claim another episode: on a real episode a right subtitle 4 s late failed this way, while another
+  episode's subtitle "agreed" at 0.00 s (result 131). This
   is a web toast; the native TV and Windows players hide the WebView, so there it reaches only the
   playback log. A give-up for any other reason stays quiet.
 - **Episode number (brief 131):** when Play searched another number than the card's (TMDB and

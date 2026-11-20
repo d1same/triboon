@@ -20731,11 +20731,12 @@ async function runPendingWebSync() {
   }
 }
 // Brief 131: the server gave up because two minutes disagree (x-triboon-subsync-reason: misfit).
-// Words that fit the sound nowhere are most often another episode's or another cut's subtitle.
+// That is not proof of another episode (the real check: a right subtitle 4 s late failed at two
+// minutes, while another episode's "agreed" at 0.00 s), so the notice says only what is known.
 function subtitleMisfitNotice(r) {
   if (!r || !r.headers || r.headers.get('x-triboon-subsync-reason') !== 'misfit') return;
-  toast('This subtitle does not match the sound. It may be for another episode or cut. Try another one in Subtitles.', 8000);
-  notePlaybackIssue('subs', 'subtitle sync gave up: the words fit the sound nowhere (another episode or cut?)', 0);
+  toast('Subtitles could not be lined up with the sound. Use Earlier or Later, or try another subtitle.', 8000);
+  notePlaybackIssue('subs', 'subtitle sync gave up: two minutes disagree, the words were left as they were', 0);
 }
 // Native (ExoPlayer) equivalent of autoSyncSubtitle: the native side loaded the subtitle URL we
 // gave it; if the server flags it 'pending', warm the alass-corrected version and re-hand the

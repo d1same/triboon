@@ -309,7 +309,7 @@ test('native subtitle sync: a pick made while the last pick is still measuring i
   assert.ok(hdtv.length >= 1, 'the HDTV pick is still queued and runs at once, not a minute later');
 });
 
-test('subtitle sync that fits the sound nowhere says the subtitle may be for another episode (brief 131)', async () => {
+test('subtitle sync that gives up at two minutes says so in plain words (brief 131)', async () => {
   // The Office TMDB S07E21: the wrong episode's subtitle got "witnesses disagree" at two minutes and
   // the player said nothing. The server now marks that give-up as a misfit, and both players say so.
   for (const native of [false, true]) {
@@ -327,7 +327,7 @@ test('subtitle sync that fits the sound nowhere says the subtitle may be for ano
     }
     await subSyncFlush();
     assert.strictEqual(h.toasts.length, 1, `one plain notice (native=${native})`);
-    assert.match(h.toasts[0], /may be for another episode or cut/);
+    assert.match(h.toasts[0], /could not be lined up with the sound/);
     // A give-up for another reason (timeout, three failed pulls) stays quiet, as before.
     const q = subtitleSyncQueueHarness();
     const p2 = { usingNative: native, subTrack: 'os:en:hdtv', audioTrack: 0, mountId: 'm' };

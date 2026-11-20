@@ -12023,8 +12023,8 @@ Object.assign(H, {
       // Slices that disagree at two different minutes mean this subtitle does not fit this cut; more
       // tries only pull more audio beside the viewers (Kill Jackie S01E08 measured 6 times in 6 min).
       const syncTerminal = () => { const f = vf._subSyncFail.get(syncKey); return !!(f && (f.timedOut || f.tries >= 3 || (f.total || 0) >= 6 || (f.disagree || 0) >= 2)); };
-      // Brief 131: two minutes whose slices disagree mean the words do not fit this sound at all,
-      // the mark of another episode's or another cut's subtitle. The player says so in plain words.
+      // Brief 131: two minutes whose slices disagree: the words could not be lined up with this sound.
+      // The player says so in plain words. It is not proof of another episode (real check, result 131).
       const failedHeaders = () => {
         const f = vf._subSyncFail.get(syncKey);
         return { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'failed',
@@ -12076,7 +12076,7 @@ Object.assign(H, {
             console.error(`[subsync ${vf.id}] ${msg.slice(0, 160)}`);
             story.noteMount(vf.id, `subtitle sync failed — ${msg.slice(0, 160)}`);
             if ((vf._subSyncFail.get(syncKey).disagree || 0) === 2) {
-              console.log(`[subsync ${vf.id}] two minutes disagree: this subtitle may be for another episode or cut, so it is left as it was`);
+              console.log(`[subsync ${vf.id}] two minutes disagree: the words could not be lined up with the sound, so they are left as they were`);
             }
           }
         }
