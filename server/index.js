@@ -11767,6 +11767,21 @@ Object.assign(H, {
             const wyData = Array.isArray(wySettled.d) ? wySettled.d : [];
             const wyErr = wySettled.e || null;
             let combined = [...wyData, ...osData];
+            // A translated episode of a show with no IMDb id (brief 131): the show-and-number search
+            // can dead-end like the tmdb-tv id does. Then ask by the episode's own IMDb id, as before;
+            // the list is still ranked by the file's number.
+            if (!combined.length && translatedEpisode && !imdbId && /^\d+$/.test(String(tmdbId || '')) && settings.get().tmdbKey) {
+              const epImdb = await resolveEpisodeImdb(tmdbId, seasonParam, episodeParam);
+              if (epImdb) {
+                const altQuery = String(subQuery).replace(/\bs\d{1,2}\s?e\d{1,3}\b/i, '').replace(/\s+/g, ' ').trim();
+                const { season: _s, episode: _e, ...altOpts } = subOpts;
+                const [w2, o2] = await Promise.all([
+                  wyzieActive ? searchOnlineSubs({ ...altOpts, imdbId: epImdb, query: altQuery }).catch(() => []) : Promise.resolve([]),
+                  osActive ? openSubtitlesVariantsForMount(vf, { imdbId: epImdb, tmdbId, lang, query: altQuery, hashWaitMs }) : Promise.resolve([]),
+                ]);
+                combined = [...(Array.isArray(w2) ? w2 : []), ...(Array.isArray(o2) ? o2 : [])];
+              }
+            }
             // OpenSubtitles-only can still hand back another show (Mario got Forensic Files
             // S13E10). A configured Wyzie key is the rescue when nothing left is this title.
             const rankOpts = {

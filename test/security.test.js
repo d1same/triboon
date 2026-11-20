@@ -107,7 +107,7 @@ const tmdbMock = http.createServer((req, res) => {
   const epExt = u.pathname.match(/^\/3\/tv\/(\d+)\/season\/(\d+)\/episode\/(\d+)\/external_ids$/);
   if (epExt) {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ id: 1, imdb_id: epExt[1] === '700700' ? 'tt70070001' : (epExt[1] === '4343' ? 'tt43430003' : null) }));
+    return res.end(JSON.stringify({ id: 1, imdb_id: epExt[1] === '700700' ? 'tt70070001' : (epExt[1] === '4343' ? 'tt43430003' : (epExt[1] === '4344' ? 'tt43440003' : null)) }));
   }
   // Age-gate fixtures: an R-rated movie (blocked below Adult) and a G-rated movie (kids OK).
   if (u.pathname === '/3/movie/990001') {
@@ -2559,6 +2559,10 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
       }
       // Brief 131: a show whose card (TMDB) numbers differ from the files. Each episode has the same
       // group's subtitle, named with the file numbering.
+      if (u.searchParams.get('id') === 'tt43440003') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify([{ id: 44, url: `http://127.0.0.1:${osPort}/file.srt`, format: 'srt', language: 'en', display: 'Paper.Lane.S01E04.1080p.WEB-DL.H.264-NTb' }]));
+      }
       if (u.searchParams.get('id') === 'tt43430003') {
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify([{ id: 43, url: `http://127.0.0.1:${osPort}/file.srt`, format: 'srt', language: 'en', display: 'Paper.Street.S01E03.1080p.WEB-DL.H.264-NTb' }]));
@@ -2763,6 +2767,13 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
   // Another episode on the same mount (the card's next episode) is not translated.
   await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=de&tmdb=4343&season=1&episode=5&list=1&t=${play.streamToken}`, null, admin);
   assert.deepStrictEqual(asked(), ['tt43430003:null:null', '4343:1:4', 'tt43430003:null:null'], 'another card episode keeps today\'s path');
+  // A show with no IMDb id whose show-and-number search finds nothing (tmdb 4344): the episode's
+  // own IMDb id is still asked, as in 3.5.4, and the list is ranked by the file's number.
+  const asked44 = () => subtitleSearches.filter((s) => /^(4344|tt43440003)$/.test(s.id)).map((s) => `${s.id}:${s.season}:${s.episode}`);
+  const fallback = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=4344&season=1&episode=3&list=1&t=${play.streamToken}`, null, admin);
+  assert.strictEqual(fallback.status, 200, JSON.stringify(fallback.json));
+  assert.deepStrictEqual(asked44(), ['4344:1:4', '4344:1:4', 'tt43440003:null:null'], 'an empty show-and-number search (and its one refresh) falls back to the episode IMDb id');
+  assert.ok(/S01E04/.test(((fallback.json.variants || [])[0] || {}).label || ''));
   delete mounted._subEpisode;
   delete mounted._releaseName;
 
