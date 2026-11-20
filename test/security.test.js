@@ -2777,6 +2777,66 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
   delete mounted._subEpisode;
   delete mounted._releaseName;
 
+  // Brief 134 S3: a sync answer that takes longer than the server's 30 s idle cut still arrives,
+  // and a replaced or cut ask stops its sync job (no parallel audio pulls on one mount).
+  {
+    const jobs = [];
+    let running = 0;
+    let maxRunning = 0;
+    const restoreSync = srv.subSyncForTest({
+      detect: () => ({ path: 'stand-in' }),
+      run: (_vf, vtt, _uid, at, _audio, signal) => new Promise((resolve, reject) => {
+        const job = { at, stopped: false };
+        jobs.push(job);
+        running += 1; maxRunning = Math.max(maxRunning, running);
+        let open = true;
+        const end = () => { if (open) { open = false; running -= 1; } };
+        signal.addEventListener('abort', () => { job.stopped = true; end(); reject(Object.assign(new Error('subtitle sync stopped'), { stopped: true })); }, { once: true });
+        job.finish = (shiftMs) => { end(); resolve({ vtt: String(vtt).replace('Hello usenet', 'Hello synced'), shiftMs, originSec: Math.max(0, at - 30), cues: 5, agreed: 2, driftMsPer30s: 0 }); };
+      }),
+    });
+    const until = async (cond, ms = 5000) => { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > ms) throw new Error('timed out waiting'); await new Promise((r) => setTimeout(r, 20)); } };
+    const syncPath = (at) => `/api/ossubs/${play.id}?lang=en&tmdb=4242&variant=1&audio=0&sync=1&at=${at}&t=${play.streamToken}`;
+    try {
+      const first = httpRaw(srv.port, syncPath(100));
+      await until(() => jobs.length === 1);
+      // The viewer skipped: the ask for a minute later replaces the job.
+      const second = httpRaw(srv.port, syncPath(200));
+      await until(() => jobs.length === 2);
+      assert.strictEqual(jobs[0].stopped, true, 'the replaced job is stopped');
+      assert.strictEqual(maxRunning, 1, 'never two sync jobs at once on this mount');
+      const firstRes = await first;
+      assert.strictEqual(firstRes.headers['x-triboon-subsync'], 'pending', 'the replaced ask is told to ask again');
+      // A cut ask (the player went away): its job stops too.
+      const cut = await new Promise((resolve) => {
+        const req = http.get({ host: '127.0.0.1', port: srv.port, path: syncPath(300) });
+        req.on('error', () => {});
+        resolve(req);
+      });
+      await until(() => jobs.length === 3);
+      assert.strictEqual(jobs[1].stopped, true, 'moving on again stopped the second job');
+      cut.destroy();
+      await until(() => jobs[2].stopped);
+      await second.catch(() => {});
+      // A slow answer (31 s) still reaches the player instead of dying at the 30 s cut.
+      const t0 = Date.now();
+      const slow = httpRaw(srv.port, syncPath(400));
+      await until(() => jobs.length === 4);
+      await new Promise((r) => setTimeout(r, 31000));
+      jobs[3].finish(-2000);
+      const slowRes = await slow;
+      assert.ok(Date.now() - t0 >= 31000);
+      assert.strictEqual(slowRes.status, 200);
+      assert.strictEqual(slowRes.headers['x-triboon-subsync'], 'corrected', 'the slow answer arrives');
+      assert.strictEqual(slowRes.headers['x-triboon-subsync-shift'], '-2000');
+      assert.match(slowRes.body.toString('utf8'), /Hello synced/);
+      assert.strictEqual(maxRunning, 1, 'one job at a time from first ask to last');
+      assert.strictEqual(running, 0);
+    } finally {
+      restoreSync();
+    }
+  }
+
   // Episode-imdb resolution — the "Goosebumps: The Vanishing" fix. A TV show whose SHOW has no imdb
   // id (only tmdb) dead-ends in Wyzie because Wyzie resolves a tmdb-tv id to the (null) SHOW imdb.
   // The route must resolve the EPISODE-level imdb from TMDB (700700 S1E1 -> tt70070001) and search
