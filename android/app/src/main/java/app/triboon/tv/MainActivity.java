@@ -322,6 +322,9 @@ public class MainActivity extends Activity {
     private final java.util.ArrayList<String> nativeAudioChoiceLabels = new java.util.ArrayList<>();
     private final java.util.ArrayList<Integer> nativeAudioChoiceIndexes = new java.util.ArrayList<>();
     private int nativeAudioChoiceSelected = -1;
+    // Brief 137: probe rows that RELABEL ExoPlayer's own audio list on direct play (one row shape on
+    // every app). Paired by file order + language + channels; any mismatch keeps Exo's labels.
+    private final java.util.ArrayList<NativeAudioRows.Row> nativeAudioRows = new java.util.ArrayList<>();
     // Audio-language selection state: the payload carries the user's saved preference (web
     // Preferences → Audio language); a manual in-player pick is stickier and survives the
     // quiet-seek player rebuilds that used to silently reset audio to the hardcoded "en".
@@ -4712,6 +4715,7 @@ public class MainActivity extends Activity {
             if (!quietSeek) nativeManualAudioLang = "";
             if (!quietSeek) nativeManualAudioIsDescription = false;
             if (!quietSeek) nativeAudioRescueUrl = "";
+            applyNativeAudioRows(j.optJSONArray("audioTrackRows"));
             applyNativeAudioChoices(audioChoices);
             nativeAudioDescriptionRels.clear();
             org.json.JSONArray adRels = j.optJSONArray("audioDescriptionRels");
@@ -6291,6 +6295,8 @@ public class MainActivity extends Activity {
 
     private boolean nativeAudioHasOptions() {
         // Server-muxed streams expose one ExoPlayer track; the web-probed source list is the menu.
+        // Brief 137: direct-play probe rows also list a track this box plays only through the remux.
+        if (nativeAudioRowChoiceCount() > 1) return true;
         return nativeSupportedTrackCount(C.TRACK_TYPE_AUDIO) > 1 || nativeAudioChoiceLabels.size() > 1;
     }
 
@@ -7310,9 +7316,38 @@ public class MainActivity extends Activity {
 
     private void updateNativeAudioChoices(String json) {
         try {
-            applyNativeAudioChoices(new org.json.JSONObject(json).optJSONArray("choices"));
+            org.json.JSONObject o = new org.json.JSONObject(json);
+            applyNativeAudioRows(o.optJSONArray("rows"));
+            applyNativeAudioChoices(o.optJSONArray("choices"));
         } catch (Exception ignored) {
         }
+    }
+
+    private void applyNativeAudioRows(org.json.JSONArray rows) {
+        nativeAudioRows.clear();
+        if (rows == null) return;
+        for (int i = 0; i < rows.length(); i++) {
+            org.json.JSONObject r = rows.optJSONObject(i);
+            if (r == null) continue;
+            int index = r.optInt("index", -1);
+            String label = r.optString("label", "");
+            if (index < 0 || label.isEmpty()) { nativeAudioRows.clear(); return; }
+            nativeAudioRows.add(new NativeAudioRows.Row(index, r.optString("lang", ""),
+                    r.optInt("channels", 0), label, r.optBoolean("needsRemux", false)));
+        }
+    }
+
+    private java.util.List<NativeAudioRows.Entry> nativeAudioRowEntries() {
+        if (nativePlayer == null || nativeAudioChoiceLabels.size() > 1) return null;
+        return NativeAudioRows.pair(nativePlayer.getCurrentTracks().getGroups(), nativeAudioRows);
+    }
+
+    private int nativeAudioRowChoiceCount() {
+        java.util.List<NativeAudioRows.Entry> entries = nativeAudioRowEntries();
+        if (entries == null) return 0;
+        int n = 0;
+        for (NativeAudioRows.Entry e : entries) if (e.supported || e.row.needsRemux) n++;
+        return n;
     }
 
     private void applyNativeAudioChoices(org.json.JSONArray audioChoices) {
@@ -7975,8 +8010,20 @@ public class MainActivity extends Activity {
             }
         }
 
+        // Direct play with probe rows: Exo's own tracks under the shared row labels. A track this box
+        // cannot play as it is stays listed ("plays as 5.1 AAC") and round-trips to the web remux.
+        java.util.List<NativeAudioRows.Entry> rowEntries =
+                trackType == C.TRACK_TYPE_AUDIO ? nativeAudioRowEntries() : null;
+        if (rowEntries != null) {
+            for (NativeAudioRows.Entry e : rowEntries) {
+                if (e.supported) choices.add(new NativeTrackChoice(e.group, e.track, e.row.label, false, e.selected));
+                else if (e.row.needsRemux) choices.add(new NativeTrackChoice(null, e.row.index, e.row.label, false, false));
+            }
+        }
+
         for (Tracks.Group group : nativePlayer.getCurrentTracks().getGroups()) {
             if (group.getType() != trackType) continue;
+            if (rowEntries != null) continue;
             if (trackType == C.TRACK_TYPE_TEXT && nativeSubtitleChoiceRels.size() > 0) continue;
             if (trackType == C.TRACK_TYPE_AUDIO && nativeAudioChoiceLabels.size() > 1) continue;
             for (int i = 0; i < group.length; i++) {

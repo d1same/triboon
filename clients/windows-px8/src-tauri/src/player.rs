@@ -142,6 +142,8 @@ pub struct VodPayload {
     #[serde(default)]
     preferred_audio_language: String,
     #[serde(default)]
+    audio_track_rows: Vec<Value>,
+    #[serde(default)]
     remux_url: String,
     #[serde(default)]
     transcode_url: String,
@@ -679,6 +681,7 @@ struct VodRequest {
     quiet_seek: bool,
     percent_resume: bool,
     preferred_audio_language: String,
+    audio_track_rows: Vec<Value>,
     remux_url: String,
     transcode_url: String,
 }
@@ -763,6 +766,7 @@ fn validate_vod(payload: VodPayload, server: &str) -> Result<VodRequest, String>
         quiet_seek: payload.quiet_seek,
         percent_resume: payload.percent_resume,
         preferred_audio_language: payload.preferred_audio_language.chars().take(16).collect(),
+        audio_track_rows: payload.audio_track_rows.into_iter().take(64).collect(),
         remux_url: optional_vod_url(&payload.remux_url, server, "remux")?,
         transcode_url: optional_vod_url(&payload.transcode_url, server, "transcode")?,
     })
@@ -1185,6 +1189,10 @@ struct PlayerUiState {
     subtitle_rel: String,
     subtitle_label: String,
     audio_tracks: Vec<Value>,
+    // Brief 137: the web's probe rows for this file ("English · TrueHD 7.1 · Atmos"). They only
+    // relabel mpv's own audio list, paired by order + language + channels; never sent to the UI.
+    #[serde(skip)]
+    audio_rows: Vec<Value>,
     audio_id: String,
     audio_label: String,
     hwdec: String,
@@ -1232,6 +1240,7 @@ impl Default for PlayerUiState {
             subtitle_rel: String::new(),
             subtitle_label: String::new(),
             audio_tracks: Vec::new(),
+            audio_rows: Vec::new(),
             audio_id: String::new(),
             audio_label: String::new(),
             hwdec: String::new(),
@@ -2083,6 +2092,7 @@ impl NativeSession {
             episode_focus_index,
             has_next: request.has_next,
             has_quality_choices: request.quality_choices,
+            audio_rows: request.audio_track_rows.clone(),
             message: if request.percent_resume {
                 "Resuming".into()
             } else {
@@ -3192,6 +3202,52 @@ fn maybe_leave_audio_description(mpv: &libmpv2::Mpv, session: &mut NativeSession
     }
 }
 
+// Matroska keeps ISO 639-2 codes (some bibliographic); compare both forms, unknown matches anything.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn audio_row_lang_key(lang: &str) -> String {
+    let l = lang.trim().to_ascii_lowercase();
+    let l = l.split('-').next().unwrap_or("").to_string();
+    let mapped = match l.as_str() {
+        "" | "und" | "mul" | "zxx" => "",
+        "en" => "eng", "fr" | "fre" => "fra", "de" | "ger" => "deu", "es" => "spa", "it" => "ita",
+        "ja" => "jpn", "ko" => "kor", "zh" | "chi" => "zho", "ru" => "rus", "pt" => "por",
+        "nl" | "dut" => "nld", "sv" => "swe", "no" => "nor", "da" => "dan", "fi" => "fin",
+        "pl" => "pol", "tr" => "tur", "ar" => "ara", "he" => "heb", "hi" => "hin",
+        "fa" | "per" => "fas", "cs" | "cze" => "ces", "el" | "gre" => "ell", "hu" => "hun",
+        "th" => "tha", "ro" | "rum" => "ron", "sk" | "slo" => "slk",
+        other => other,
+    };
+    mapped.to_string()
+}
+
+// Brief 137 step 3: pair the web's probe rows with mpv's audio tracks in file order. Every track
+// must line up on language and channel count, or none is relabelled and mpv's own labels stay.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn paired_audio_row_labels(rows: &[Value], tracks: &[Value]) -> Option<Vec<String>> {
+    if rows.len() < 2 || rows.len() != tracks.len() {
+        return None;
+    }
+    let mut labels = Vec::with_capacity(rows.len());
+    for (row, track) in rows.iter().zip(tracks) {
+        let label = row.get("label").and_then(Value::as_str).unwrap_or("").trim();
+        if label.is_empty() || label.chars().count() > 160 {
+            return None;
+        }
+        let row_lang = audio_row_lang_key(row.get("lang").and_then(Value::as_str).unwrap_or(""));
+        let track_lang = audio_row_lang_key(track.get("lang").and_then(Value::as_str).unwrap_or(""));
+        if !row_lang.is_empty() && !track_lang.is_empty() && row_lang != track_lang {
+            return None;
+        }
+        let row_ch = row.get("channels").and_then(Value::as_i64).unwrap_or(0);
+        let track_ch = track.get("channels").and_then(Value::as_i64).unwrap_or(0);
+        if row_ch > 0 && track_ch > 0 && row_ch != track_ch {
+            return None;
+        }
+        labels.push(label.to_string());
+    }
+    Some(labels)
+}
+
 #[cfg(all(feature = "player", target_os = "windows"))]
 fn update_audio_tracks(mpv: &libmpv2::Mpv, ui: &mut PlayerUiState) {
     let previous = ui.audio_id.clone();
@@ -3211,6 +3267,7 @@ fn update_audio_tracks(mpv: &libmpv2::Mpv, ui: &mut PlayerUiState) {
         let lang = property::<String>(mpv, &format!("{prefix}/lang")).unwrap_or_default();
         let title = property::<String>(mpv, &format!("{prefix}/title")).unwrap_or_default();
         let codec = property::<String>(mpv, &format!("{prefix}/codec")).unwrap_or_default();
+        let channels = property::<i64>(mpv, &format!("{prefix}/demux-channel-count")).unwrap_or(0);
         let selected = property::<bool>(mpv, &format!("{prefix}/selected")).unwrap_or(false);
         if selected {
             active = id.clone();
@@ -3235,8 +3292,17 @@ fn update_audio_tracks(mpv: &libmpv2::Mpv, ui: &mut PlayerUiState) {
             },
             "lang": lang,
             "codec": codec,
+            "channels": channels,
             "selected": selected
         }));
+    }
+    if let Some(labels) = paired_audio_row_labels(&ui.audio_rows, &tracks) {
+        for (track, label) in tracks.iter_mut().zip(labels) {
+            track["label"] = Value::String(label.clone());
+            if track.get("id").and_then(Value::as_str) == Some(active.as_str()) && !active.is_empty() {
+                ui.audio_label = label;
+            }
+        }
     }
     let mut resolved = if active.is_empty() {
         property::<String>(mpv, "aid")
@@ -3810,6 +3876,32 @@ fn close_session(
 mod tests {
     use super::*;
 
+    #[test]
+    fn audio_rows_relabel_mpv_tracks_only_when_every_track_lines_up() {
+        let rows = vec![
+            json!({"index": 0, "lang": "eng", "channels": 8, "label": "English · TrueHD 7.1 · Atmos"}),
+            json!({"index": 1, "lang": "eng", "channels": 6, "label": "English · Dolby Digital 5.1"}),
+        ];
+        let tracks = vec![
+            json!({"id": "1", "lang": "eng", "channels": 8, "codec": "truehd"}),
+            json!({"id": "2", "lang": "eng", "channels": 6, "codec": "ac3"}),
+        ];
+        assert_eq!(
+            paired_audio_row_labels(&rows, &tracks),
+            Some(vec!["English · TrueHD 7.1 · Atmos".to_string(), "English · Dolby Digital 5.1".to_string()])
+        );
+        let swapped = vec![tracks[1].clone(), tracks[0].clone()];
+        assert_eq!(paired_audio_row_labels(&rows, &swapped), None, "channel mismatch keeps mpv labels");
+        let french = vec![json!({"id": "1", "lang": "fre", "channels": 8}), tracks[1].clone()];
+        assert_eq!(paired_audio_row_labels(&rows, &french), None, "language mismatch keeps mpv labels");
+        assert_eq!(paired_audio_row_labels(&rows[..1], &tracks[..1]), None, "one track needs no relabel");
+        assert_eq!(paired_audio_row_labels(&rows, &tracks[..1]), None, "count mismatch");
+        let unknown = vec![json!({"id": "1", "lang": "", "channels": 0}), json!({"id": "2", "lang": "und"})];
+        assert!(paired_audio_row_labels(&rows, &unknown).is_some(), "unknown facts never block");
+        assert_eq!(audio_row_lang_key("ger"), audio_row_lang_key("de"));
+        assert_eq!(audio_row_lang_key("en"), "eng");
+    }
+
     fn track(id: &str, lang: &str, title: &str, visual_impaired: bool, selected: bool, channels: i64) -> AudioTrackPick {
         AudioTrackPick {
             id: id.into(),
@@ -4253,6 +4345,7 @@ mod tests {
             quiet_seek: false,
             percent_resume: false,
             preferred_audio_language: String::new(),
+            audio_track_rows: Vec::new(),
             remux_url: String::new(),
             transcode_url: String::new(),
         };

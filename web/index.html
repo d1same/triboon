@@ -15798,17 +15798,84 @@ function refreshNativeSubtitleChoices() {
 // native Audio menu lists the PROBED source tracks instead and round-trips a selection through
 // __tvNativeVideoAudio, which respawns the stream with the chosen &audio= index. Direct play
 // returns [] — ExoPlayer sees the real tracks there and switches natively with full fidelity.
+// Brief 137 step 3: ONE audio row shape on web, Android and Windows, built from the server probe:
+// "English · TrueHD 7.1 · Atmos". A track this device cannot play as it is says what it becomes
+// ("plays as 5.1 AAC") instead of vanishing. AD rows go last, commentary says so.
+function audioCodecName(a) {
+  const c = String((a && a.codec) || '').toLowerCase();
+  const prof = String((a && a.profile) || '');
+  if (c === 'truehd' || c === 'mlp') return 'TrueHD';
+  if (c === 'eac3') return 'Dolby Digital Plus';
+  if (c === 'ac3') return 'Dolby Digital';
+  if (c === 'dts') {
+    if (/dts[ :-]?x\b/i.test(prof)) return 'DTS:X';
+    if (/\bma\b/i.test(prof)) return 'DTS-HD MA';
+    if (/\bhra\b/i.test(prof)) return 'DTS-HD HRA';
+    return 'DTS';
+  }
+  const names = { aac: 'AAC', flac: 'FLAC', opus: 'Opus', mp3: 'MP3', mp2: 'MP2', vorbis: 'Vorbis', alac: 'ALAC' };
+  if (names[c]) return names[c];
+  if (c.startsWith('pcm')) return 'PCM';
+  return c ? c.toUpperCase() : '';
+}
+function audioTrackIsAtmos(a) {
+  return !!a && /\batmos\b/i.test(`${a.profile || ''} ${a.title || ''}`);
+}
+function audioLayoutName(n) {
+  return { 1: 'Mono', 2: 'Stereo', 3: '2.1', 6: '5.1', 7: '6.1', 8: '7.1' }[n] || (n ? n + 'ch' : '');
+}
+// Mirrors the server's audioCopyOk (transcode.js): may the remux COPY this track for these caps?
+// The server stays the authority; this only words the row.
+function remuxCopiesAudio(a, caps) {
+  const c = audioDescriptorForClient(a);
+  const primary = c.split(/\s+/)[0] || c;
+  const pass = !!(caps && caps.native && caps.passthrough);
+  if (!c) return !!(caps && caps.ac3 && caps.eac3);
+  if (['aac', 'mp3', 'opus', 'vorbis', 'flac'].includes(primary)) return true;
+  if (/\b(true[ ._-]?hd|mlp)\b/.test(c)) return false;
+  if (/\b(dts[ ._-]?hd|dts[ ._-]?x|dtsma|dts[ ._-]?ma)\b/.test(c)) return pass && !!(caps && caps.dtsHd);
+  if (primary === 'ac3') return !!(caps && caps.ac3);
+  if (primary === 'eac3' || primary === 'eac3-joc' || c.includes('e-ac-3')) return !!(caps && (caps.eac3 || caps.eac3Joc));
+  if (primary.startsWith('dts')) return !!(caps && caps.dts);
+  return false;
+}
+// What the listener gets when the track cannot play as it is. '' when it plays as it is.
+// opts.remux: the stream is already the server remux (no direct check). opts.safeStereo: the
+// remux makes stereo AAC (iPhone, the multiview panes, the silent-audio rescue).
+function audioTrackPlaysAs(a, caps, opts = {}) {
+  if (!a) return '';
+  if (caps && caps.native && !opts.remux && !nativeDirectAudioNeedsSafeRemux(a, caps)) return '';
+  if (remuxCopiesAudio(a, caps)) return '';
+  if (opts.safeStereo || (Number(a.channels) || 2) <= 2) return 'plays as stereo AAC';
+  return 'plays as 5.1 AAC';
+}
+function audioTrackRowLabel(a, opts = {}) {
+  if (!a) return '';
+  const code = langCode(a.lang);
+  const lang = (code && code !== 'und' ? langName(a.lang) : '') || String(a.title || '').trim() || `Track ${(Number(a.rel) || 0) + 1}`;
+  const bits = [];
+  if (isAudioDescriptionTrack(a)) bits.push('Audio description');
+  if (a.comment) bits.push('Commentary');
+  else bits.push([audioCodecName(a), audioLayoutName(Number(a.channels) || 0)].filter(Boolean).join(' '));
+  if (!a.comment && audioTrackIsAtmos(a)) bits.push('Atmos');
+  if (opts.playsAs) bits.push(opts.playsAs);
+  return [lang, ...bits.filter(Boolean)].join(' · ');
+}
+// File order, Audio Description last.
+function audioMenuTracks(audio) {
+  const list = Array.isArray(audio) ? audio.filter((a) => a && Number.isInteger(a.rel)) : [];
+  return list.filter((a) => !isAudioDescriptionTrack(a)).concat(list.filter((a) => isAudioDescriptionTrack(a)));
+}
 function nativeAudioChoices() {
   const p = S.playing;
   if (!p || currentPlayerKind(p) === 'direct') return [];
   const audio = p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
   if (audio.length <= 1) return [];
   const cur = Number.isFinite(Number(p.audioTrack)) ? Number(p.audioTrack) : 0;
-  return audio.map((a) => ({
+  const caps = clientCaps();
+  return audioMenuTracks(audio).map((a) => ({
     index: a.rel,
-    label: [langName(a.lang) || a.title || `Track ${a.rel + 1}`,
-      a.codec ? String(a.codec).toUpperCase() : '', a.channels ? `${a.channels}ch` : '']
-      .filter(Boolean).join(' · '),
+    label: audioTrackRowLabel(a, { playsAs: p.nativeAacAudio ? '' : audioTrackPlaysAs(a, caps, { remux: true }) }),
     lang: langCode(a.lang) || '',
     selected: a.rel === cur,
   }));
@@ -15823,7 +15890,7 @@ function refreshNativeAudioChoices() {
   if (!p || !p.usingNative || !canUseNativeVideoPlayer()) return;
   if (!(window.TriboonTV && window.TriboonTV.updateAudioChoices)) return; // older shells: no-op
   try {
-    window.TriboonTV.updateAudioChoices(JSON.stringify({ choices: nativeAudioChoices() }));
+    window.TriboonTV.updateAudioChoices(JSON.stringify({ choices: nativeAudioChoices(), rows: nativeAudioTrackRows() }));
   } catch {}
 }
 // The browser <video> track applies the saved sync offset on its own cues; the server must
@@ -16142,6 +16209,7 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
     // Empty preference means English. A French/German MULTI file otherwise starts on track 0.
     preferredAudioLanguage: audioLangKey(prefAudioLang()),
     audioChoices: nativeAudioChoices(),
+    audioTrackRows: nativeAudioTrackRows(),
     // Direct play: ExoPlayer cannot read the Matroska visual-impaired flag, so it gets the probed
     // Audio Description tracks and moves off one at start (brief 121).
     audioDescriptionRels: nativeAudioDescriptionRels(),
@@ -16197,6 +16265,24 @@ function nativeSubtitleOnPlayer(p, payload) {
   const skew = Number(p && p._nativeStartSkew) || 0;
   if (payload.rel && skew) payload.shift = Math.round(((payload.shift || 0) + skew) * 1000) / 1000;
   return payload;
+}
+// Direct play keeps the player's own track list (Exo groups, mpv ids). These rows only RELABEL it:
+// a new shell matches them by order, language and channels, and keeps its own label on any
+// mismatch. Old shells never read this field, so their menus stay exactly as they were.
+function nativeAudioTrackRows() {
+  const p = S.playing;
+  const audio = p && p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
+  if (audio.length <= 1) return [];
+  const caps = clientCaps();
+  return audio.filter((a) => a && Number.isInteger(a.rel)).map((a) => ({
+    index: a.rel,
+    lang: String(a.lang || ''),
+    channels: Number(a.channels) || 0,
+    codec: String(a.codec || ''),
+    label: audioTrackRowLabel(a, { playsAs: audioTrackPlaysAs(a, caps) }),
+    needsRemux: !!(caps && caps.native) && nativeDirectAudioNeedsSafeRemux(a, caps),
+    audioDescription: isAudioDescriptionTrack(a),
+  }));
 }
 function tryNativePlaybackLadder(atSeconds, preferredKind, opts = {}) {
   const p = S.playing;
@@ -16717,11 +16803,38 @@ window.__tvNativeVideoQuality = (quality, pos, dur, token) => {
 // the stream respawns at the same position with the chosen &audio= index — the same dance
 // __tvNativeVideoQuality does for transcode rungs. Direct play never calls this (the native menu
 // lists ExoPlayer's real tracks there and switches in-place).
+// Brief 137: a direct-play row this device cannot play as it is ("plays as 5.1 AAC") moves to the
+// server remux on that track at the same second. Rows it plays switch inside the player itself.
+function nativeDirectPickNeedsRemux(p, index) {
+  const audio = p && p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
+  const pick = audio.find((a) => a && a.rel === +index);
+  return !!(pick && p.remuxUrl && pick.rel !== p.audioTrack && nativeDirectAudioNeedsSafeRemux(pick));
+}
+function switchNativeDirectAudioToRemux(p, index) {
+  const pick = p.tracks.audio.find((a) => a && a.rel === +index);
+  const at = currentTime();
+  const before = { audioTrack: p.audioTrack, forceAacRemux: p.forceAacRemux, nativeStartKind: p.nativeStartKind };
+  p._userPickedAudio = true;
+  p.usingNative = false;
+  p.audioTrack = pick.rel;
+  p.forceAacRemux = true;
+  p.nativeStartKind = 'remux';
+  if (!tryNativeVideoPlayer('remux', at, { quietSeek: true })) {
+    p.usingNative = true;
+    Object.assign(p, before);
+    p._userPickedAudio = false;
+    toast('Could not switch the audio track');
+    return;
+  }
+  refreshNativeAudioChoices();
+  if (typeof p.subTrack === 'string' && p.subTrack.startsWith('os:')) autoSyncNative(p, p.subTrack);
+}
 window.__tvNativeVideoAudio = (index, pos, dur, token) => {
   const p = S.playing;
   if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   window.__tvNativeVideoProgress(pos, dur, token);
   const kind = currentPlayerKind(p);
+  if (kind === 'direct' && nativeDirectPickNeedsRemux(p, index)) return switchNativeDirectAudioToRemux(p, index);
   if (kind === 'direct') return;
   const audio = p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
   const want = audio.find((a) => a && a.rel === +index);
@@ -20379,10 +20492,10 @@ function surroundVariants() {
   if (!cur) return [];
   return p.tracks.audio.filter((a) => langCode(a.lang) === langCode(cur.lang));
 }
+// Brief 137: the Audio menu lists every track with its layout, so the separate Sound button stays hidden.
 function updateSrndBtn() {
-  const variants = surroundVariants();
-  $('srndBtn').style.display = new Set(variants.map((a) => a.channels || 0)).size > 1 ? '' : 'none';
-  setPlayerControlEnabled('srndBtn', $('srndBtn').style.display !== 'none');
+  $('srndBtn').style.display = 'none';
+  setPlayerControlEnabled('srndBtn', false);
 }
 function setPlayerControlEnabled(id, enabled) {
   const b = $(id); if (!b) return;
@@ -20394,8 +20507,7 @@ function setPlayerControlEnabled(id, enabled) {
 }
 function playerAudioHasOptions() {
   const p = S.playing; if (!p || !p.tracks) return false;
-  const langs = new Set((p.tracks.audio || []).map((a) => langCode(a.lang) || 'und' + a.rel));
-  return langs.size > 1;
+  return audioMenuTracks(p.tracks.audio).length > 1;
 }
 function playerCcCanOpen() {
   const p = S.playing;
@@ -20473,7 +20585,7 @@ function openTrackMenu(kind, restore = {}) {
   m.innerHTML = '';
   S.trackMenuKind = kind;
   const head = document.createElement('div'); head.className = 'tmHead';
-  head.textContent = { cc: 'Subtitles', audio: 'Audio language', surround: 'Sound', quality: 'Quality' }[kind] || 'Tracks';
+  head.textContent = { cc: 'Subtitles', audio: 'Audio', surround: 'Sound', quality: 'Quality' }[kind] || 'Tracks';
   m.appendChild(head);
   const mkRow = (label, sel, fn, opts = {}) => {
     const b = document.createElement('button');
@@ -20588,18 +20700,14 @@ function openTrackMenu(kind, restore = {}) {
       if (note.textContent) m.appendChild(note);
     }
   } else if (kind === 'audio') {
-    // LANGUAGES only — the surround menu handles 5.1/7.1 variants of the chosen language.
-    const cur = p.tracks.audio.find((a) => a.rel === p.audioTrack);
-    const seen = new Set();
-    p.tracks.audio.forEach((a) => {
-      const code = langCode(a.lang) || 'und' + a.rel;
-      if (seen.has(code)) return;
-      seen.add(code);
-      const best = p.tracks.audio.filter((x) => (langCode(x.lang) || 'und' + x.rel) === code)
-        .sort((x, y) => (y.channels || 0) - (x.channels || 0))[0];
-      mkRow(langName(a.lang) || a.title || 'Track ' + (a.rel + 1),
-        cur && (langCode(cur.lang) || 'und' + cur.rel) === code,
-        () => { setAudio(best.rel); setTimeout(updateSrndBtn, 50); });
+    // One row per track (brief 137): "English · TrueHD 7.1 · Atmos". The browser gets the server
+    // remux, so a track it cannot decode says what it becomes ("plays as 5.1 AAC").
+    const caps = clientCaps();
+    const safeStereo = !!p.forceAacRemux || iosWebkitVideo();
+    const cur = Number.isFinite(Number(p.audioTrack)) ? Number(p.audioTrack) : 0;
+    audioMenuTracks(p.tracks.audio).forEach((a) => {
+      mkRow(audioTrackRowLabel(a, { playsAs: audioTrackPlaysAs(a, caps, { safeStereo }) }),
+        a.rel === cur, () => setAudio(a.rel), { key: 'audio-' + a.rel });
     });
   } else if (kind === 'surround') {
     surroundVariants().forEach((a) => {

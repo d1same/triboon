@@ -12374,3 +12374,68 @@ test('the Windows app (libmpv) direct-plays TrueHD and DTS-HD; Android keeps its
   assert.strictEqual(fns.nativeDirectAudioNameRisk(p, tv), true, 'TV: TrueHD7.1 is a name risk');
   assert.strictEqual(fns.nativeNameProvesDirectAudio(p, tv), false, 'TV: TrueHD7.1 never proves direct');
 });
+
+test('one audio menu: every app shows "English · TrueHD 7.1 · Atmos" rows, and an unplayable track says what it becomes (brief 137 step 3)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => {
+    const i = ui.indexOf(from);
+    const j = ui.indexOf(to, i);
+    assert.ok(i >= 0 && j > i, from);
+    return ui.slice(i, j);
+  };
+  const helpers = grab('function audioCodecName(', 'function nativeAudioChoices(');
+  const gates = grab('function audioDescriptorForClient(', 'function nativeDirectAudioNameRisk(');
+  const ad = grab('function isAudioDescriptionTrack(', 'function preferredAudioTrackForPlayer(');
+  const names = { eng: 'English', kor: 'Korean', fra: 'French', ita: 'Italian' };
+  const code = (l) => ({ en: 'eng', eng: 'eng', ko: 'kor', kor: 'kor', fr: 'fra', fre: 'fra', it: 'ita', ita: 'ita' })[String(l || '').toLowerCase()] || String(l || '').toLowerCase();
+  const fns = new Function('langCode', 'langName', 'clientCaps',
+    `${ad}\n${gates}\n${helpers}\nreturn { audioTrackRowLabel, audioTrackPlaysAs, audioMenuTracks };`)(
+    code, (l) => names[code(l)] || l, () => ({}));
+  const row = (a, caps, opts) => fns.audioTrackRowLabel(a, { playsAs: fns.audioTrackPlaysAs(a, caps, opts) });
+  const chrome = { ac3: false, eac3: false, dts: false };
+  const edge = { ac3: true, eac3: true, dts: false };
+  const tv = { native: true, source: 'exo-mediacodec', ac3: true, eac3: true, passthrough: false };
+  const win = { native: true, source: 'libmpv', ac3: true, eac3: true, dts: true, truehd: true, passthrough: false };
+  // 1. one track
+  const one = [{ rel: 0, lang: 'eng', codec: 'eac3', profile: 'Dolby Digital Plus + Dolby Atmos', channels: 6 }];
+  assert.strictEqual(row(one[0], edge), 'English · Dolby Digital Plus 5.1 · Atmos');
+  assert.strictEqual(row(one[0], chrome), 'English · Dolby Digital Plus 5.1 · Atmos · plays as 5.1 AAC', 'Chrome gets the AAC remux');
+  // 2. one language, two layouts
+  const two = [
+    { rel: 0, lang: 'eng', codec: 'truehd', profile: 'Dolby TrueHD + Dolby Atmos', channels: 8 },
+    { rel: 1, lang: 'eng', codec: 'ac3', profile: '', channels: 6 },
+  ];
+  assert.strictEqual(row(two[0], win), 'English · TrueHD 7.1 · Atmos', 'Windows plays TrueHD itself');
+  assert.strictEqual(row(two[0], tv), 'English · TrueHD 7.1 · Atmos · plays as 5.1 AAC', 'a TV without TrueHD hears AAC');
+  assert.strictEqual(row(two[1], tv), 'English · Dolby Digital 5.1');
+  assert.strictEqual(row(two[0], edge, { safeStereo: true }), 'English · TrueHD 7.1 · Atmos · plays as stereo AAC');
+  // 3. two languages
+  assert.strictEqual(row({ rel: 0, lang: 'kor', codec: 'aac', channels: 8 }, chrome), 'Korean · AAC 7.1');
+  assert.strictEqual(row({ rel: 1, lang: 'fra', codec: 'dts', profile: 'DTS-HD MA', channels: 6 }, win), 'French · DTS-HD MA 5.1');
+  assert.strictEqual(row({ rel: 1, lang: 'fra', codec: 'dts', profile: 'DTS-HD MA', channels: 6 }, tv), 'French · DTS-HD MA 5.1 · plays as 5.1 AAC');
+  // 4. commentary + AD, AD last
+  const four = [
+    { rel: 0, lang: 'eng', codec: 'ac3', channels: 6, visualImpaired: true, title: 'English - Audio Description' },
+    { rel: 1, lang: 'eng', codec: 'ac3', channels: 6 },
+    { rel: 2, lang: 'eng', codec: 'ac3', channels: 2, comment: true, title: 'Commentary' },
+  ];
+  assert.deepStrictEqual(fns.audioMenuTracks(four).map((a) => a.rel), [1, 2, 0], 'Audio Description sits at the bottom');
+  assert.strictEqual(row(four[2], edge), 'English · Commentary');
+  assert.strictEqual(row(four[0], edge), 'English · Audio description · Dolby Digital 5.1');
+  assert.strictEqual(fns.audioTrackRowLabel({ rel: 3, lang: 'und', codec: 'mp3', channels: 2, title: '' }), 'Track 4 · MP3 Stereo');
+
+  // The browser drops the language-only menu and the Sound button: one Audio menu, one row per track.
+  assert.match(ui, /audioMenuTracks\(p\.tracks\.audio\)\.forEach\(\(a\) => \{\s*mkRow\(audioTrackRowLabel\(a, \{ playsAs: audioTrackPlaysAs\(a, caps, \{ safeStereo \}\) \}\),\s*a\.rel === cur, \(\) => setAudio\(a\.rel\)/);
+  assert.match(ui, /function playerAudioHasOptions\(\) \{[\s\S]{0,80}return audioMenuTracks\(p\.tracks\.audio\)\.length > 1;/);
+  assert.match(ui, /function updateSrndBtn\(\) \{\s*\$\('srndBtn'\)\.style\.display = 'none';/);
+  // Native: direct play gets relabel rows in a NEW field (old shells ignore it); a pick of a row the
+  // box cannot play moves to the remux on that track, everything else stays inside the player.
+  assert.match(ui, /audioChoices: nativeAudioChoices\(\),\s*\n\s*audioTrackRows: nativeAudioTrackRows\(\),/);
+  assert.match(ui, /updateAudioChoices\(JSON\.stringify\(\{ choices: nativeAudioChoices\(\), rows: nativeAudioTrackRows\(\) \}\)\)/);
+  assert.match(ui, /if \(kind === 'direct' && nativeDirectPickNeedsRemux\(p, index\)\) return switchNativeDirectAudioToRemux\(p, index\);\s*\n\s*if \(kind === 'direct'\) return;/);
+  const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(java, /applyNativeAudioRows\(j\.optJSONArray\("audioTrackRows"\)\);/);
+  assert.match(java, /else if \(e\.row\.needsRemux\) choices\.add\(new NativeTrackChoice\(null, e\.row\.index, e\.row\.label, false, false\)\);/);
+  const rust = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'src-tauri', 'src', 'player.rs'), 'utf8');
+  assert.match(rust, /if let Some\(labels\) = paired_audio_row_labels\(&ui\.audio_rows, &tracks\)/);
+});
