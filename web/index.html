@@ -17059,6 +17059,19 @@ function skipPastUnreadable(p, atSec, reason) {
   const at = Math.max(0, Number(atSec) || 0);
   if (at > (p._unreadableAt || 0) + 120) p._unreadableSkips = 0; // a new damaged stretch
   const n = p._unreadableSkips || 0;
+  // Damage at the very end (a file that breaks in its last minutes): a jump that would land at or
+  // past the end, or the last jump used up in the final tenth, finishes the title the normal way
+  // (watched, Up Next). Reopening past the end left the TV on "repairing" and never went on.
+  const dur = Number(streamRuntimeSeconds(p).sec) || 0;
+  const jump = n < UNREADABLE_SKIP_SEC.length ? UNREADABLE_SKIP_SEC[n] : 0;
+  if (dur > 0 && (at + jump >= dur - 2 || (n >= UNREADABLE_SKIP_SEC.length && at >= dur * 0.9))) {
+    notePlaybackIssue('source', `unreadable data at ${Math.floor(at)}s of ${Math.floor(dur)}s on the only release: finishing the title`, 0);
+    try { if (window.TriboonTV && window.TriboonTV.closeVideo) window.TriboonTV.closeVideo(); } catch {}
+    p.usingNative = false;
+    revealWebPlayerShell(p.item);
+    if (!finishEpisodeToNext()) closePlayer({ ended: true });
+    return;
+  }
   if (n >= UNREADABLE_SKIP_SEC.length) {
     try { if (window.TriboonTV && window.TriboonTV.closeVideo) window.TriboonTV.closeVideo(); } catch {}
     p.usingNative = false;
