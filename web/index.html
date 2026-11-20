@@ -15849,10 +15849,23 @@ function audioTrackPlaysAs(a, caps, opts = {}) {
   if (opts.safeStereo || (Number(a.channels) || 2) <= 2) return 'plays as stereo AAC';
   return 'plays as 5.1 AAC';
 }
+// The app's own names first; any other code ("tam", "tel", "mal") through the platform's language
+// names, so a row never shows a bare code.
+function audioTrackLangName(lang) {
+  const code = langCode(lang);
+  if (!code || code === 'und') return '';
+  const own = langName(lang);
+  if (own && own.toLowerCase() !== String(lang).toLowerCase() && own.toLowerCase() !== code) return own;
+  try {
+    const raw = String(lang).trim().toLowerCase();
+    const named = new Intl.DisplayNames(['en'], { type: 'language', fallback: 'none' }).of(raw);
+    if (named && named.toLowerCase() !== raw) return named;
+  } catch {}
+  return String(lang).trim().toUpperCase();
+}
 function audioTrackRowLabel(a, opts = {}) {
   if (!a) return '';
-  const code = langCode(a.lang);
-  const lang = (code && code !== 'und' ? langName(a.lang) : '') || String(a.title || '').trim() || `Track ${(Number(a.rel) || 0) + 1}`;
+  const lang = audioTrackLangName(a.lang) || String(a.title || '').trim() || `Track ${(Number(a.rel) || 0) + 1}`;
   const bits = [];
   if (isAudioDescriptionTrack(a)) bits.push('Audio description');
   if (a.comment) bits.push('Commentary');

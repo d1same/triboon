@@ -8531,7 +8531,12 @@ public class MainActivity extends Activity {
             ((TextView) v).setTextColor(hasFocus ? 0xFF14161A : selected ? 0xFFEDEFF3 : 0xDDEDEFF3);
             ((TextView) v).setText(nativeSheetRowText(label, hasFocus));
             setNativeSheetCheck((TextView) v, selected, hasFocus);
+            // A row longer than the sheet ("Korean · TrueHD 7.1 · Atmos · plays as 5.1 AAC") scrolls
+            // its full text while focused; unfocused rows keep the end cut (brief 137).
+            ((TextView) v).setEllipsize(hasFocus ? TextUtils.TruncateAt.MARQUEE : TextUtils.TruncateAt.END);
+            v.setSelected(hasFocus);
         });
+        row.setMarqueeRepeatLimit(-1);
         return row;
     }
 

@@ -12464,3 +12464,25 @@ test('a TV that cannot play the first track starts on a same-language track it p
   assert.strictEqual(run({ ac3: false, eac3: false }), 0, 'the browser is unchanged');
   assert.strictEqual(run({ native: true, source: 'exo-mediacodec', ac3: true, eac3: true }, { _userPickedAudio: true }), 0, 'a viewer pick wins');
 });
+
+test('a native sheet row longer than the sheet scrolls its full text while focused (brief 137 step 3)', () => {
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(android, /private TextView nativeSheetRow\(String label, boolean selected\) \{[\s\S]+row\.setOnFocusChangeListener\(\(v, hasFocus\) -> \{[\s\S]+setEllipsize\(hasFocus \? TextUtils\.TruncateAt\.MARQUEE : TextUtils\.TruncateAt\.END\);\s*v\.setSelected\(hasFocus\);\s*\}\);\s*row\.setMarqueeRepeatLimit\(-1\);\s*return row;/);
+});
+
+test('audio rows name every language, never a bare code like "tam" (brief 137 step 3)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const fns = new Function('langCode', 'langName', 'clientCaps',
+    grab('function isAudioDescriptionTrack(', 'function preferredAudioTrackForPlayer(') + '\n'
+    + grab('function audioDescriptorForClient(', 'function nativeDirectAudioNameRisk(') + '\n'
+    + grab('function audioCodecName(', 'function nativeAudioChoices(') + '\nreturn { audioTrackRowLabel };')(
+    (l) => String(l || '').toLowerCase(), (l) => ({ hin: 'Hindi', kor: 'Korean' })[String(l).toLowerCase()] || l, () => ({}));
+  const row = (lang) => fns.audioTrackRowLabel({ rel: 0, lang, codec: 'eac3', channels: 6 });
+  assert.strictEqual(row('hin'), 'Hindi · Dolby Digital Plus 5.1', "the app's own name wins");
+  assert.strictEqual(row('tam'), 'Tamil · Dolby Digital Plus 5.1');
+  assert.strictEqual(row('tel'), 'Telugu · Dolby Digital Plus 5.1');
+  assert.strictEqual(row('mal'), 'Malayalam · Dolby Digital Plus 5.1');
+  assert.strictEqual(row('und'), 'Track 1 · Dolby Digital Plus 5.1');
+  assert.strictEqual(row('qaa'), 'QAA · Dolby Digital Plus 5.1', 'an unknown private code is shown upper-case, not lower-case raw');
+});
