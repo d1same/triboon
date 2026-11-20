@@ -3013,6 +3013,16 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
       const ep2Res = await ep2;
       assert.strictEqual(ep2Res.headers['x-triboon-subsync-shift'], '-200', 'episode 2 used its own measurement');
       assert.doesNotMatch(ep2Res.body.toString('utf8'), /Hello synced 900/, 'episode 1 words never reach episode 2');
+
+      // Second check 3.5.5: a failed built-in subtitle extraction reads this mount's own stream URL.
+      // ffmpeg echoes that URL in its error, and the error reaches the 502 answer, the play story
+      // and the server log: its stream token must be masked there too.
+      const builtIn = await httpRaw(srv.port, `/api/subtitle/${next.id}/0?t=${next.streamToken}`);
+      if (builtIn.status !== 503) { // 503 = no ffmpeg on this box
+        assert.strictEqual(builtIn.status, 502, builtIn.body.toString('utf8').slice(0, 300));
+        const detail = String(JSON.parse(builtIn.body.toString('utf8')).detail || '');
+        assert.doesNotMatch(detail, /[?&]t=(?!\*\*\*)/, `the extraction error carries no stream token: ${detail.replace(/t=[^&\s'"]{6}/g, 't=<cut>')}`);
+      }
     } finally {
       restoreSync();
     }

@@ -12748,7 +12748,8 @@ function ensureSubtitleVtt(vf, track, uid, opts = {}) {
       if (done || signal) return fail(new Error(signal ? `ffmpeg killed (${signal})` : 'embedded subtitle extraction aborted'));
       const vtt = Buffer.concat(chunks).toString('utf8');
       // Real ffmpeg errors sit among -progress key=value lines; surface only the error text.
-      const errText = err.split(/\r?\n/).filter((l) => l && !/^[a-z_]+=/.test(l)).join(' ').slice(0, 200);
+      // ffmpeg echoes this mount's own stream URL: mask its token before the cut (second check 3.5.5).
+      const errText = redactSyncError(err.split(/\r?\n/).filter((l) => l && !/^[a-z_]+=/.test(l)).join(' ')).slice(0, 200);
       if (codeNum || !vtt.startsWith('WEBVTT')) return fail(new Error(errText || `ffmpeg exit ${codeNum}`));
       if (!subtitleVttHasCues(vtt)) return fail(new Error('embedded subtitle extraction returned no text cues'));
       vf._subFailures.delete(track);
