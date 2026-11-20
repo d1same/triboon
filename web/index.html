@@ -17062,7 +17062,8 @@ function skipPastUnreadable(p, atSec, reason) {
   // Damage at the very end (a file that breaks in its last minutes): a jump that would land at or
   // past the end, or the last jump used up in the final tenth, finishes the title the normal way
   // (watched, Up Next). Reopening past the end left the TV on "repairing" and never went on.
-  const dur = Number(streamRuntimeSeconds(p).sec) || 0;
+  // (No known length: the old stepping applies unchanged.)
+  const dur = typeof streamRuntimeSeconds === 'function' ? (Number((streamRuntimeSeconds(p) || {}).sec) || 0) : 0;
   const jump = n < UNREADABLE_SKIP_SEC.length ? UNREADABLE_SKIP_SEC[n] : 0;
   if (dur > 0 && (at + jump >= dur - 2 || (n >= UNREADABLE_SKIP_SEC.length && at >= dur * 0.9))) {
     notePlaybackIssue('source', `unreadable data at ${Math.floor(at)}s of ${Math.floor(dur)}s on the only release: finishing the title`, 0);
