@@ -30,12 +30,14 @@ const AIR_GROUP = {
 // Release numbering: E04 + E05 are Harbor Lights Part 1 and 2; Ledger is E06 … Finale Party is E11.
 const RELEASE_TITLE = { 1: 'Cold.Open', 2: 'The.Audit', 3: 'Night.Shift', 4: 'Harbor.Lights.Part.1', 5: 'Harbor.Lights.Part.2', 6: 'Ledger', 7: 'The.Raise', 8: 'Fire.Drill', 9: 'Snow.Day', 10: 'Inventory', 11: 'Finale.Party' };
 const pad = (n) => String(n).padStart(2, '0');
-function releasesFor(ep) {
+function releasesFor(ep, titles = RELEASE_TITLE, season = 3) {
+  const s = pad(season);
   const out = [
-    { name: `Paper.Street.S03E${pad(ep)}.${RELEASE_TITLE[ep]}.720p.WEB-DL.DD5.1.H.264-GRP`, url: `http://x/t${ep}`, size: 7e8 },
-    { name: `Paper.Street.S03E${pad(ep)}.1080p.BluRay.x264-BLU`, url: `http://x/b${ep}`, size: 1.4e9 },
+    { name: `Paper.Street.S${s}E${pad(ep)}.${titles[ep]}.720p.WEB-DL.DD5.1.H.264-GRP`, url: `http://x/${s}t${ep}`, size: 7e8 },
+    { name: `Paper.Street.S${s}E${pad(ep)}.1080p.BluRay.x264-BLU`, url: `http://x/${s}b${ep}`, size: 1.4e9 },
+    { name: `Paper.Street.S${s}E${pad(ep)}.${titles[ep]}.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb`, url: `http://x/${s}n${ep}`, size: 1.1e9 },
   ];
-  if (ep === 4 || ep === 5) out.push({ name: 'Paper.Street.S03E04E05.1080p.BluRay.x264-BLU', url: 'http://x/b45', size: 2.8e9 });
+  if (season === 3 && (ep === 4 || ep === 5)) out.push({ name: 'Paper.Street.S03E04E05.1080p.BluRay.x264-BLU', url: 'http://x/b45', size: 2.8e9 });
   return out;
 }
 function rssFor(items) {
@@ -43,16 +45,16 @@ function rssFor(items) {
 ${items.map((i) => `<item><title>${i.name}</title><link>${i.url}</link><enclosure url="${i.url}" length="${i.size}" type="application/x-nzb"/><newznab:attr name="size" value="${i.size}"/></item>`).join('\n')}
 </channel></rss>`;
 }
-async function withIndexer(fn) {
+async function withIndexer(fn, titles = RELEASE_TITLE, season = 3) {
   const asked = [];
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     let ep = Number(u.searchParams.get('ep'));
-    const m = /S03E(\d{2})/i.exec(u.searchParams.get('q') || '');
+    const m = new RegExp(`S${pad(season)}E(\\d{2})`, 'i').exec(u.searchParams.get('q') || '');
     if (!ep && m) ep = Number(m[1]);
     if (ep) asked.push(ep);
     res.writeHead(200, { 'content-type': 'application/rss+xml' });
-    res.end(rssFor(ep && RELEASE_TITLE[ep] ? releasesFor(ep) : []));
+    res.end(rssFor(ep && titles[ep] ? releasesFor(ep, titles, season) : []));
   });
   const port = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
   const pipeline = new Pipeline({
@@ -63,11 +65,11 @@ async function withIndexer(fn) {
 }
 // What index.js hands the pipeline for TMDB S03E{e}: the TMDB title list and, when the group gives
 // a difference, the release number(s).
-function policyFor(e) {
+function policyFor(e, list = SEASON, s = 3) {
   return {
     maxResolutionRank: 4, mediaType: 'tv',
-    tmdbEpisode: { s: 3, e }, seasonEpisodes: SEASON,
-    episodeTitle: SEASON[e - 1].name, otherEpisodeTitles: SEASON.filter((x) => x.n !== e).map((x) => x.name),
+    tmdbEpisode: { s, e }, seasonEpisodes: list,
+    episodeTitle: list[e - 1].name, otherEpisodeTitles: list.filter((x) => x.n !== e).map((x) => x.name),
   };
 }
 const top = (r) => (r.candidates.find((c) => c.score > -5000) || {}).name || '';
@@ -156,6 +158,35 @@ test('search: without a group, the release titles move the search to the right n
     assert.ok(r.candidates.every((c) => c.releaseEpisode && c.releaseEpisode.e === 9), 'a pack would mount release E09');
     assert.ok(asked.includes(9));
   });
+});
+
+test('search: two merged two-parters before the episode: the names are followed for several hops', async () => {
+  // TMDB season 4: E01 "Kickoff" and E02 "Two Lunches" are merged hour-longs; releases split both.
+  const s4 = ['Kickoff', 'Two Lunches', 'Payday', 'Quiet Week', 'Last Call'].map((name, i) => ({ n: i + 1, name }));
+  const titles = { 1: 'Kickoff.Part.1', 2: 'Kickoff.Part.2', 3: 'Two.Lunches.Part.1', 4: 'Two.Lunches.Part.2', 5: 'Payday', 6: 'Quiet.Week', 7: 'Last.Call' };
+  await withIndexer(async (pipeline, asked) => {
+    // TMDB E04 "Quiet Week" searched as E04: E04 names TMDB E02, E06 names TMDB E04.
+    const r = await pipeline.search({ q: 'Paper Street', season: 4, ep: 4 }, policyFor(4, s4, 4));
+    assert.match(top(r), /S04E06/, `played ${top(r)}`);
+    assert.equal(r.episodeNumbering.to, 6);
+    // TMDB E03 "Payday" searched as E03: E03 names E02, E04 names E02 again, E05 is Payday.
+    const p = await pipeline.search({ q: 'Paper Street', season: 4, ep: 3 }, policyFor(3, s4, 4));
+    assert.match(top(p), /S04E05/, `played ${top(p)}`);
+    assert.deepEqual(p.episodeNumbering, { from: 3, to: 5, evidence: 2 });
+  }, titles, 4);
+});
+
+test('search: when no number confirms the episode, Play does not start a copy of the wrong one', async () => {
+  // TMDB E05 "Last Call" has no release at all; release E05 names TMDB E03 (twice: titled and named).
+  const s4 = ['Kickoff', 'Two Lunches', 'Payday', 'Quiet Week', 'Last Call'].map((name, i) => ({ n: i + 1, name }));
+  const titles = { 1: 'Kickoff.Part.1', 2: 'Kickoff.Part.2', 3: 'Two.Lunches.Part.1', 4: 'Two.Lunches.Part.2', 5: 'Payday', 6: 'Quiet.Week' };
+  await withIndexer(async (pipeline) => {
+    const r = await pipeline.search({ q: 'Paper Street', season: 4, ep: 5 }, policyFor(5, s4, 4));
+    assert.equal(top(r), '', 'nothing auto-plays');
+    const listed = r.candidates.filter((c) => /S04E05/.test(c.name));
+    assert.ok(listed.length >= 1, 'the copies stay listed for Sources');
+    assert.ok(listed.every((c) => c.reasons.includes('episode-number names TMDB E3')));
+  }, titles, 4);
 });
 
 test('search: a normal show (names agree with TMDB) takes one search, no retry', async () => {

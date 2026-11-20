@@ -2799,7 +2799,14 @@ class Pipeline {
     });
     let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });
     const namedEpisodes = {};
-    const noteNamed = (list) => tallyNamedEpisodes(list, wanted, params, namedEpisodes);
+    // Each release name counts once: the widened queries return the same rows again.
+    const seenNamed = new Set();
+    const noteNamed = (list) => tallyNamedEpisodes((list || []).filter((r) => {
+      const n = r && r.name && String(r.name).toLowerCase();
+      if (!n || seenNamed.has(n)) return false;
+      seenNamed.add(n);
+      return true;
+    }), wanted, params, namedEpisodes);
     noteNamed(results);
     // TITLE VERIFICATION — indexers return loosely-related releases; a release only
     // qualifies if its name actually contains the wanted title (and episode/year) AND
@@ -3015,32 +3022,42 @@ class Pipeline {
     });
     let candidates = rankReleases(enriched, policy).map((c) => ({ ...c, pickKey: candidateKey(c) }));
     // TMDB and release numbering differ (brief 127): the results for this number name a different
-    // TMDB episode ("S06E15.Sabre" for TMDB S06E15 "The Manager and the Salesman"). Search once at the
-    // number those names point to; keep it when its own names confirm the chosen episode.
+    // TMDB episode ("S06E15.Sabre" for TMDB S06E15 "The Manager and the Salesman"). Follow the names:
+    // search the number they point to, up to 4 hops (two merged two-parters before the episode need
+    // more than one: E05 names TMDB E03, E07 names E04, E08 names E04 again, E09 is the one). Keep a
+    // number only when its own names confirm the chosen episode.
     const tmdbE = policy.tmdbEpisode && Number(policy.tmdbEpisode.e);
     const named = hit.namedEpisodes || {};
     const confirmed = !!(tmdbE && named[tmdbE]);
     const evidence = tmdbE && !policy._episodeEvidenceRetry ? episodeNumberEvidence(named, tmdbE) : null;
     if (evidence) {
-      const retryEp = Number(origParams.ep) + evidence.delta;
-      if (Number.isInteger(retryEp) && retryEp > 0) {
-        const retry = await this.search({ ...origParams, ep: retryEp, epTo: undefined },
+      const tried = new Set([Number(origParams.ep)]);
+      let at = Number(origParams.ep);
+      let step = evidence;
+      for (let hop = 0; hop < 4 && step; hop++) {
+        const next = at + step.delta;
+        if (!Number.isInteger(next) || next < 1 || tried.has(next)) break;
+        tried.add(next);
+        const retry = await this.search({ ...origParams, ep: next, epTo: undefined },
           { ...origPolicy, _episodeEvidenceRetry: true }, { timeoutMs, allowStale, widenSearch });
         if (retry.confirmed && retry.candidates.length) {
-          const releaseEpisode = { s: Number(origParams.season), e: retryEp };
-          debug.log('search', `episode numbering: release S${releaseEpisode.s}E${Number(origParams.ep)} names TMDB E${evidence.named}, searched E${retryEp} for TMDB E${tmdbE}`);
+          const releaseEpisode = { s: Number(origParams.season), e: next };
+          debug.log('search', `episode numbering: release S${releaseEpisode.s}E${Number(origParams.ep)} names TMDB E${evidence.named}, release E${next} is TMDB E${tmdbE}`);
           return {
             candidates: retry.candidates.map((c) => ({ ...c, releaseEpisode })),
-            errors: retry.errors, confirmed: true,
-            episodeNumbering: { from: Number(origParams.ep), to: retryEp, evidence: evidence.named },
+            errors: retry.errors, confirmed: true, named,
+            episodeNumbering: { from: Number(origParams.ep), to: next, evidence: evidence.named },
           };
         }
+        at = next;
+        step = episodeNumberEvidence(retry.named, tmdbE);
       }
-      // No confirmed number: this number is another episode. Its untitled copies are that same other
-      // episode, so nothing here may auto-play for the chosen one when the names are clear.
-      if (evidence.strong) candidates = candidates.map((c) => ({ ...c, score: Math.min(c.score, -50000), reasons: [...(c.reasons || []), `episode-number names TMDB E${evidence.named}`] }));
+      // No number confirmed the chosen episode, but the names clearly say this number is another one.
+      // Its untitled copies are that same other episode: they stay listed in Sources with the reason,
+      // and Play does not start them for this episode (it reports no source instead of a wrong one).
+      if (evidence.strong) candidates = candidates.map((c) => ({ ...c, score: Math.min(c.score, -9000), reasons: [...(c.reasons || []), `episode-number names TMDB E${evidence.named}`] }));
     }
-    return { candidates, errors, confirmed };
+    return { candidates, errors, confirmed, named };
   }
 
   // The mounted file's probed duration does not fit this catalog title's runtime: remember it
