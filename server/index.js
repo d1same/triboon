@@ -5005,6 +5005,10 @@ function trimUserMounts(uid, keepId = null, limit = USER_MOUNT_CAP) {
 }
 // Client capability claims (canPlayType results sent with the play request). Hardware that
 // decodes the source natively gets TRUE direct play — no server remux/transcode at all.
+// The Windows app plays through libmpv, which decodes every audio codec (TrueHD, DTS-HD, AC3, EAC3).
+function nativeDecodesAllAudio(caps) {
+  return !!(caps && caps.native && caps.source === 'libmpv');
+}
 function parseCaps(raw) {
   const caps = {};
   for (const k of ['mkv', 'mp4', 'h264', 'hevc', 'dovi', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'eac3Joc', 'dts', 'dtsHd', 'truehd', 'passthrough', 'native', 'lowPower']) {
@@ -5407,6 +5411,7 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
     policy.audioEac3Joc = !!caps.eac3Joc;
     policy.audioDts = !!caps.dts;
     policy.audioDtsHd = !!caps.dtsHd;
+    policy.audioDecodesLossless = nativeDecodesAllAudio(caps);
   } else if (rawCaps && typeof rawCaps === 'object' && rawCaps.hevc === false) {
     // A browser that said it cannot decode HEVC can still get one through a video-copy remux
     // and play sound over a black picture. Scoring de-ranks HEVC for it (a penalty, not a

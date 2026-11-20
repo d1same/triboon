@@ -12352,3 +12352,25 @@ test('the built-in subtitle pick never takes a forced track and follows the capt
   assert.strictEqual(make(subs, 'dialogue').embeddedSubLabel(subs[0]), 'English (forced) · Built-in');
   assert.strictEqual(make(subs, 'dialogue').embeddedSubLabel(subs[1]), 'English (SDH) · Built-in');
 });
+
+test('the Windows app (libmpv) direct-plays TrueHD and DTS-HD; Android keeps its remux rules (brief 137 step 2)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const i = ui.indexOf('function audioDescriptorForClient(');
+  const j = ui.indexOf('async function fetchPlayerTracks(', i);
+  assert.ok(i >= 0 && j > i);
+  const fns = new Function('clientCaps', `${ui.slice(i, j)}
+    return { nativeDirectAudioNeedsSafeRemux, nativeDirectAudioNameRisk, nativeNameProvesDirectAudio };`)(() => ({}));
+  const win = { native: true, source: 'libmpv', ac3: true, eac3: true, dts: true, truehd: true, passthrough: false };
+  const tv = { native: true, source: 'exo-mediacodec', ac3: true, eac3: true, passthrough: false };
+  const truehd = { codec: 'truehd', profile: '', title: '', channels: 8 };
+  const dtsma = { codec: 'dts', profile: 'DTS-HD MA', title: '', channels: 6 };
+  assert.strictEqual(fns.nativeDirectAudioNeedsSafeRemux(truehd, win), false, 'libmpv: TrueHD direct');
+  assert.strictEqual(fns.nativeDirectAudioNeedsSafeRemux(dtsma, win), false, 'libmpv: DTS-HD MA direct');
+  assert.strictEqual(fns.nativeDirectAudioNeedsSafeRemux(truehd, tv), true, 'no-passthrough TV: TrueHD still remuxed');
+  assert.strictEqual(fns.nativeDirectAudioNeedsSafeRemux(dtsma, tv), true);
+  const p = { name: 'Movie.2010.2160p.BluRay.TrueHD7.1.x265-GRP' };
+  assert.strictEqual(fns.nativeDirectAudioNameRisk(p, win), false, 'libmpv: no name risk');
+  assert.strictEqual(fns.nativeNameProvesDirectAudio(p, win), true, 'libmpv: no wait for the probe');
+  assert.strictEqual(fns.nativeDirectAudioNameRisk(p, tv), true, 'TV: TrueHD7.1 is a name risk');
+  assert.strictEqual(fns.nativeNameProvesDirectAudio(p, tv), false, 'TV: TrueHD7.1 never proves direct');
+});

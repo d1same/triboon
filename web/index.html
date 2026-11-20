@@ -15940,7 +15940,12 @@ function audioDescriptorForClient(codecOrTrack) {
 function nativeDolbyPlaysDirect(caps) {
   return !!(caps && caps.native && (caps.passthrough || String(caps.source || '').startsWith('exo-mediacodec')));
 }
+// The Windows app plays through libmpv, which decodes TrueHD, DTS-HD and Dolby itself (brief 137).
+function nativeDecodesAllAudio(caps = clientCaps()) {
+  return !!(caps && caps.native && caps.source === 'libmpv');
+}
 function nativeDirectAudioNeedsSafeRemux(track, caps = clientCaps()) {
+  if (nativeDecodesAllAudio(caps)) return false;
   const c = audioDescriptorForClient(track);
   const primary = c.split(/\s+/)[0] || c;
   if (!c) return false;
@@ -15954,20 +15959,22 @@ function nativeDirectAudioNeedsSafeRemux(track, caps = clientCaps()) {
   return true;
 }
 function nativeDirectAudioNameRisk(p, caps = clientCaps()) {
+  if (nativeDecodesAllAudio(caps)) return false;
   const bits = [
     p && p.name,
     p && p.fileName,
     p && p.item && p.item.q,
     p && p.sourceAttributes && p.sourceAttributes.audio,
   ].filter(Boolean).join(' ');
-  if (nativeDolbyPlaysDirect(caps) && caps.ac3 && caps.eac3) return /\b(dts|true[ ._-]?hd)\b/i.test(bits);
-  return /\b(ddp\d?|dd\+|eac3|e-ac-3|ac3|dts|true[ ._-]?hd|atmos|5[ ._-]?1|6ch|7[ ._-]?1|8ch)\b/i.test(bits);
+  if (nativeDolbyPlaysDirect(caps) && caps.ac3 && caps.eac3) return /\b(dts|true[ ._-]?hd)(?=\d|\b)/i.test(bits);
+  return /\b(ddp\d?|dd\+|eac3|e-ac-3|ac3|dts|true[ ._-]?hd|atmos|5[ ._-]?1|6ch|7[ ._-]?1|8ch)(?=\d|\b)/i.test(bits);
 }
 // The release name already says this box plays the audio direct, so the track check need not hold up
 // the start. If the name lies, the v3.4.5 rescue moves it to AAC about a second later.
 function nativeNameProvesDirectAudio(p, caps = clientCaps()) {
+  if (caps && caps.native && caps.source === 'libmpv') return true; // libmpv decodes every codec (nativeDecodesAllAudio)
   const bits = [p && p.name, p && p.fileName, p && p.sourceAttributes && p.sourceAttributes.audio].filter(Boolean).join(' ');
-  if (/\b(dts|true[ ._-]?hd|flac|opus)\b/i.test(bits)) return false;
+  if (/\b(dts|true[ ._-]?hd|flac|opus)(?=\d|\b)/i.test(bits)) return false;
   if (/\baac\d?\b/i.test(bits)) return true;
   return /\b(ddp\d?|dd\+|eac3|e-ac-3|ac3|dd\d)\b/i.test(bits) && nativeDolbyPlaysDirect(caps) && !!caps.ac3 && !!caps.eac3;
 }

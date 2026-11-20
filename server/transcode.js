@@ -117,16 +117,24 @@ function supportsFfmpegHttpOption(option) {
 
 // Decide the playback method for a mount + client capabilities.
 // caps: { mkv, hevc, ac3, eac3, dts } — the client's canPlayType results.
+// Release-name audio tokens. A glued channel count ("TrueHD7.1", "DTS-HDMA7.1") is the same audio.
+const TRUEHD_NAME_RE = /\b(?:true[ ._-]?hd|mlp)(?=\d|\b|atmos)/i;
+const DTSHD_NAME_RE = /\b(?:(?:dts[ ._-]?hd(?:[ ._-]?ma)?|dtsma|dts[ ._-]?ma)(?=\d|\b)|dts[ ._-]?x\b)/i;
+// libmpv (the Windows app) decodes every audio codec itself, so no audio is a reason to leave direct play.
+function capsDecodeAllAudio(caps = {}) {
+  return !!(caps && caps.native && caps.source === 'libmpv');
+}
 function releaseAudioProfile(name) {
   const s = String(name || '');
   return {
-    truehd: /\b(true[ ._-]?hd|mlp)\b/i.test(s),
-    dtsHd: /\b(dts[ ._-]?hd|dts[ ._-]?x|dtsma|dts[ ._-]?ma)\b/i.test(s),
+    truehd: TRUEHD_NAME_RE.test(s),
+    dtsHd: DTSHD_NAME_RE.test(s),
     dts: /\bdts\b/i.test(s),
   };
 }
 
 function releaseLosslessAudioDirectOk(name, caps = {}) {
+  if (capsDecodeAllAudio(caps)) return true;
   const a = releaseAudioProfile(name);
   const passthrough = !!(caps.native && caps.passthrough);
   if (a.truehd && !(passthrough && caps.truehd)) return false;
@@ -514,7 +522,7 @@ function audioDescriptor(codecOrTrack) {
 // Before the probe lands we only have the release name. A name that says TrueHD is (almost
 // always) TrueHD on track 0: guess that instead of the "unknown codec, copy it" default.
 function audioHintFromName(name) {
-  return /\b(true[ ._-]?hd|mlp)\b/i.test(String(name || '')) ? { codec: 'truehd', guessed: true } : undefined;
+  return TRUEHD_NAME_RE.test(String(name || '')) ? { codec: 'truehd', guessed: true } : undefined;
 }
 
 function audioCopyOk(codec, caps = {}) {

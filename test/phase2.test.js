@@ -8228,3 +8228,40 @@ test('probe facts: forced, SDH, default, commentary and the channel layout reach
   assert.notStrictEqual(probeCacheKey('Probe.Key.Movie.mkv', 1234), 'Probe.Key.Movie.mkv|1234');
   assert.strictEqual(probeCacheKey('', 1), '');
 });
+
+test('lossless names with a glued channel count are read, and the Windows app is not marked down for lossless (brief 137 step 2)', () => {
+  const feats = (n) => parseRelease(n).features;
+  assert.ok(feats('Show.S01E10.2022.Bluray.2160p.TrueHD7.1.HDR.x265.10bit-GRP').includes('truehd'), 'TrueHD7.1');
+  assert.ok(feats('Movie.2010.2160p.BluRay.TrueHDAtmos7.1-GRP').includes('truehd'), 'TrueHDAtmos7.1');
+  assert.ok(feats('Movie.2010.2160p.BluRay.TrueHDAtmos7.1-GRP').includes('atmos'), 'TrueHDAtmos7.1 is Atmos');
+  assert.ok(feats('Movie.2010.1080p.BluRay.DTS-HDMA7.1.x264-GRP').includes('dts-hd'), 'DTS-HDMA7.1');
+  assert.ok(feats('Movie.2010.1080p.BluRay.DTSMA7.1-GRP').includes('dts-hd'), 'DTSMA7.1');
+  assert.ok(feats('Movie.2010.1080p.BluRay.DTS-HD.MA7.1.x264-GRP').includes('dts-hd'), 'DTS-HD.MA7.1 still matches');
+  assert.ok(!feats('Movie.2010.1080p.WEB.DTS-x264-GRP').includes('dts-hd'), 'DTS-x264 is not DTS:X');
+  assert.ok(!feats('Movie.2010.1080p.BluRay.Atmospheric-GRP').includes('atmos'), 'a word that starts with atmos is not Atmos');
+  assert.ok(!feats('Movie.2010.1080p.BluRay.TrueHDX-GRP').includes('truehd'));
+
+  const name = 'Show.S01E10.2022.Bluray.2160p.TrueHD7.1.HDR.x265.10bit-GRP';
+  const plain = 'Show.S01E10.2022.Bluray.2160p.DDP5.1.HDR.x265.10bit-GRP';
+  const tv = { audioPassthrough: false, audioTrueHd: false };
+  const tvScore = scoreRelease({ name }, tv);
+  assert.ok(tvScore.reasons.some((r) => /unsupported-truehd/.test(r)), 'a no-passthrough TV gets the TrueHD rule: ' + tvScore.reasons);
+  const win = { audioPassthrough: false, audioTrueHd: true, audioDecodesLossless: true };
+  const winScore = scoreRelease({ name }, win);
+  assert.ok(!winScore.reasons.some((r) => /unsupported-(truehd|atmos|dts-hd)/.test(r)), 'libmpv is not marked down: ' + winScore.reasons);
+  assert.ok(winScore.reasons.some((r) => /decodes-lossless-audio/.test(r)), winScore.reasons);
+  const atmos = 'Movie.2010.2160p.BluRay.TrueHD.7.1.Atmos.x265-GRP';
+  assert.strictEqual(scoreRelease({ name: atmos }, win).score, scoreRelease({ name: atmos }, {}).score + 120 + 45,
+    'on libmpv the TrueHD (-120) and Atmos (-45) penalties are gone, and nothing is added in their place');
+  assert.strictEqual(scoreRelease({ name: plain }, win).score, scoreRelease({ name: plain }, {}).score, 'a lossy name scores the same on libmpv');
+  const { decidePlayback, detectFfmpeg } = require('../server/transcode');
+  const winCaps = { native: true, source: 'libmpv', mkv: true, mp4: true, hevc: true, aac: true, ac3: true, eac3: true, dts: true, truehd: true, passthrough: false };
+  for (const n of ['Movie.2010.2160p.BluRay.TrueHD.7.1.Atmos.x265-GRP.mkv', 'Movie.2010.1080p.BluRay.DTS-HD.MA.5.1.x264-GRP.mkv']) {
+    assert.strictEqual(decidePlayback(n, winCaps).method, 'direct', 'libmpv plays lossless direct: ' + n);
+  }
+  const exoNoPass = { ...winCaps, source: 'exo-mediacodec', truehd: false };
+  if (detectFfmpeg()) assert.strictEqual(decidePlayback('Movie.2010.2160p.BluRay.TrueHD7.1.x265-GRP.mkv', exoNoPass).method, 'remux',
+    'a no-passthrough Android TV still leaves direct play for TrueHD7.1');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(ui, /policy\.audioDecodesLossless = nativeDecodesAllAudio\(caps\);/, 'Play passes the libmpv decode fact to scoring');
+});

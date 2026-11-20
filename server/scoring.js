@@ -65,9 +65,11 @@ const FEATURE = [
   // Plain HDR / HDR10 (the SDR-vs-HDR baseline). HDR10+ and Dolby Vision are their own richer entries
   // above, so the (?!\+|plus) guard keeps "HDR10+" from ALSO scoring here (no double-count).
   { key: 'hdr', score: 10, re: /\bhdr(?:10(?!\+|plus))?\b|\b(pq|bt2020)\b/i },
-  { key: 'atmos', score: 14, re: /\b(atmos)\b/i },
-  { key: 'truehd', score: 10, re: /\b(truehd)\b/i },
-  { key: 'dts-hd', score: 9, re: /\b(dts-?hd|dts-?x|dtsma)\b/i },
+  // A channel count glued on ("TrueHD7.1", "DTS-HDMA7.1", "TrueHDAtmos") is the same audio (brief 137).
+  // DTS:X stays word-bounded so "DTS-x264" is never read as DTS:X.
+  { key: 'atmos', score: 14, re: /(?:\b|(?<=truehd))atmos(?=\d|\b)/i },
+  { key: 'truehd', score: 10, re: /\btruehd(?=\d|\b|atmos)/i },
+  { key: 'dts-hd', score: 9, re: /\b(?:(?:dts-?hd(?:-?ma)?|dtsma)(?=\d|\b)|dts-?x\b)/i },
   { key: 'ddp', score: 6, re: /\b(ddp(?=\d|\b)|eac3|dd\+)/i },
   { key: 'repack', score: 18, re: /\b(repack|rerip)\b/i },
   { key: 'proper', score: 22, re: /\bproper\b/i },
@@ -362,7 +364,12 @@ function scoreRelease(candidate, policy = {}) {
   const hasDtsHd = a.features.includes('dts-hd');
   const hasAtmos = a.features.includes('atmos');
   const hasDdp = a.features.includes('ddp');
-  if (hasTrueHd || hasDtsHd || hasAtmos) {
+  if ((hasTrueHd || hasDtsHd || hasAtmos) && policy.audioDecodesLossless) {
+    // The Windows app (libmpv) decodes TrueHD and DTS-HD itself, so lossless sound is not a reason
+    // to mark a source down there. Not a boost either: a lossless remux is big and often dead, and a
+    // boost would add a failed mount before the fallback (brief 136 B4).
+    reasons.push('decodes-lossless-audio 0'); // add() drops zero; keep the verdict visible in Sources
+  } else if (hasTrueHd || hasDtsHd || hasAtmos) {
     const pass = !!policy.audioPassthrough;
     if (hasTrueHd) add(policy.audioTrueHd && pass ? 'passthrough-truehd' : 'unsupported-truehd', policy.audioTrueHd && pass ? 110 : -120);
     if (hasDtsHd) add(policy.audioDtsHd && pass ? 'passthrough-dts-hd' : 'unsupported-dts-hd', policy.audioDtsHd && pass ? 90 : -110);
