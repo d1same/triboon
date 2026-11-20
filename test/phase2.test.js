@@ -7220,6 +7220,90 @@ test('subtitles: drift is only a framerate ratio, snapped, with the right sign; 
     'a sub-400ms move needs two agreeing slices');
 });
 
+// result 126: the server's real onDemandSubSync, with alass and ffmpeg replaced by a hearing stub.
+// hear(windowed, opts) returns the gap (ms) that alass would report for that slice, or throws.
+function subSyncCoreWith(hear) {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const a = src.indexOf('function vttToSrt(');
+  const b = src.indexOf('function clampInt(', a);
+  assert.ok(a > 0 && b > a, 'the sync code is one block');
+  const code = src.slice(a, b)
+    .replace('async function measureSubSyncWindow(', 'async function realMeasureSubSyncWindow(')
+    .replace(/async function measurePaddedSyncWindow\(/, 'async function realMeasurePaddedSyncWindow(')
+    + '\nasync function measureSubSyncWindow(dir, tag, url, w) { return hear(w, { padded: false, tag }); }'
+    + '\nasync function measurePaddedSyncWindow(dir, tag, url, w) { return hear(w, { padded: true, tag }); }'
+    + '\nreturn onDemandSubSync;';
+  const o = require('../server/opensubs');
+  return new Function('fs', 'path', 'require', 'speechWindow', 'windowSrt', 'shiftVtt', 'subSyncResultOk', 'syncShiftMs',
+    'pickAgreedSyncShift', 'localMediaInput', 'detectFfmpeg', 'spawnSubSync', 'spawnResumePad', 'server', 'auth', 'hear', code)(
+    fs, path, require, o.speechWindow, o.windowSrt, o.shiftVtt, o.subSyncResultOk, o.syncShiftMs, o.pickAgreedSyncShift,
+    () => 'local.mkv', () => null, () => { throw new Error('no alass in this test'); }, () => { throw new Error('no ffmpeg'); },
+    null, null, hear);
+}
+function subSyncTestVtt(cues) {
+  const f = (ms) => {
+    const n = Math.max(0, Math.round(ms));
+    const h = Math.floor(n / 3600000); const m = Math.floor(n / 60000) % 60; const s = Math.floor(n / 1000) % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(n % 1000).padStart(3, '0')}`;
+  };
+  return `WEBVTT\n\n${cues.map((c) => `${f(c.start)} --> ${f(c.start + 1500)}\nline ${c.n}\n`).join('\n')}`;
+}
+function subSyncCueStarts(vtt) {
+  return [...String(vtt).matchAll(/(\d{2}):(\d{2}):(\d{2})\.(\d{3}) -->/g)].map((m) => ((+m[1] * 60 + +m[2]) * 60 + +m[3]) * 1000 + +m[4]);
+}
+// An ideal hearing: the median gap between the slice's lines and where they are truly spoken.
+function subSyncIdealHear(truthOf) {
+  return (w) => {
+    const rel = [...String(w.srt).matchAll(/(\d{2}):(\d{2}):(\d{2}),(\d{3}) -->/g)].map((m) => ((+m[1] * 60 + +m[2]) * 60 + +m[3]) * 1000 + +m[4]);
+    const gaps = rel.map((r) => truthOf(w.originMs + r) - (w.originMs + r)).sort((x, y) => x - y);
+    const mid = Math.floor(gaps.length / 2);
+    return Math.round(gaps.length % 2 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2);
+  };
+}
+
+test('subtitles: a framerate stretch pivots on the line it was measured at, so every line lands (result 126)', async () => {
+  // A PAL caption on a 23.976 file: line n is spoken at truth(n) but the file says truth(n) * 25/23.976.
+  const ratio = 25 / 23.976;
+  const truth = Array.from({ length: 200 }, (_, n) => ({ n, start: 2000 + n * 3100 + (n % 3) * 400 }));
+  const vtt = subSyncTestVtt(truth.map((c) => ({ n: c.n, start: c.start * ratio })));
+  const onDemandSubSync = subSyncCoreWith(subSyncIdealHear((subMs) => subMs / ratio));
+  const res = await onDemandSubSync({ id: 't' }, vtt, 'u', 330, 0);
+  assert.ok(res.driftMsPer30s, 'the slide is found and confirmed by the far slice');
+  const got = subSyncCueStarts(res.vtt);
+  const worst = Math.max(...truth.map((c, k) => Math.abs(got[k] - c.start)));
+  assert.ok(worst <= 150, `every line within 150ms after the stretch (worst ${worst}ms)`);
+});
+
+test('subtitles: slices that disagree are heard again with a padded clip; two wrong slices never outvote (result 126)', async () => {
+  const vtt = subSyncTestVtt(Array.from({ length: 70 }, (_, n) => ({ n, start: 1500 + n * 2900 })));
+  // Real alass 2.0.0 readings, offline, words 8.5s early (the right move is +8.5s). 30s clips: the
+  // playhead slice (a), the slice before (b), the tie slice after (c). With the padded clip all hear 8.46s.
+  const heard = (table) => { const calls = []; const hear = (w, o) => { calls.push(o.padded ? 'p' : o.tag); return o.padded ? 8461 : table[o.tag]; }; return { hear, calls }; };
+  // At 2:20: a right, b and c wrong but 1.47s apart. The old code applied b (-0.5s, the wrong way).
+  const one = heard({ a: 8388, b: -506, c: 963 });
+  const r1 = await subSyncCoreWith(one.hear)({ id: 't' }, vtt, 'u', 140, 0);
+  assert.strictEqual(r1.shiftMs, 8461, 'two wrong slices 1.47s apart do not outvote; the padded clip answers');
+  // At 1:40: only b right. The old code gave up ("witnesses disagree") and the words stayed 8.5s early.
+  const two = heard({ a: -5143, b: 8464, c: -1914 });
+  const r2 = await subSyncCoreWith(two.hear)({ id: 't' }, vtt, 'u', 100, 0);
+  assert.strictEqual(r2.shiftMs, 8461);
+  assert.deepStrictEqual(two.calls, ['a', 'b', 'c', 'p', 'p'], 'two padded slices that agree end the retry (no third 50s pull)');
+  // A timeout is not a "no" vote: it ends the try, so the handler's timeout stop still applies.
+  const slow = (w, o) => { if (o.padded) throw new Error('subtitle sync audio sample took too long'); return { a: -5143, b: 8464, c: -1914 }[o.tag]; };
+  await assert.rejects(subSyncCoreWith(slow)({ id: 't' }, vtt, 'u', 100, 0), /took too long/);
+  const slowTie = (w, o) => { if (o.tag === 'c') throw new Error('subtitle sync took too long'); return o.padded ? 8461 : { a: -5143, b: 8464 }[o.tag]; };
+  await assert.rejects(subSyncCoreWith(slowTie)({ id: 't' }, vtt, 'u', 100, 0), /took too long/);
+  // Slices that agree never pay for the padded clip.
+  const calm = heard({ a: -2534, b: -2536 });
+  const r3 = await subSyncCoreWith(calm.hear)({ id: 't' }, vtt, 'u', 100, 0);
+  assert.strictEqual(r3.shiftMs, -2534);
+  assert.deepStrictEqual(calm.calls, ['a', 'b'], 'two agreeing 30s slices: no third pull, no padded pull');
+  // A caption that fits nowhere (wrong language): the padded clip disagrees too, and nothing is applied.
+  let k = 0;
+  const lost = (w, o) => (o.padded ? [-4809, 2914, 5618][k++] : { a: 3232, b: -1119, c: 5618 }[o.tag]);
+  await assert.rejects(subSyncCoreWith(lost)({ id: 't' }, vtt, 'u', 100, 0), /witnesses disagree \(3232ms vs -1119ms\)/);
+});
+
 test('subtitles: Play waits for the moviehash only when OpenSubtitles (its only user) is on', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   assert.match(src, /if \(!variant && osActive && vf\._moviehash === undefined\) \{/);

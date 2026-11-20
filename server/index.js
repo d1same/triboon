@@ -375,14 +375,15 @@ function vttToSrt(vtt) {
 // Thirty seconds of the first audio track, starting at atSec. alass then measures the gap
 // in that slice. A longer slice that crosses a quiet gap, or the whole caption lined up
 // against the opening, is what shoved the words to the wrong scene.
-function extractSyncSample(streamUrl, wavPath, atSec = 0, audioIndex = 0) {
+function extractSyncSample(streamUrl, wavPath, atSec = 0, audioIndex = 0, durSec = 30) {
   const ff = detectFfmpeg();
   if (!ff) return Promise.reject(new Error('ffmpeg not available'));
   const at = Math.max(0, Number(atSec) || 0);
   const audio = Math.max(0, Math.min(15, parseInt(audioIndex, 10) || 0));
+  const span = Math.max(1, Math.min(60, Number(durSec) || 30));
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
   if (at >= 1) args.push('-ss', at.toFixed(3));
-  args.push('-i', streamUrl, '-t', '30', '-map', `0:a:${audio}`, '-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', wavPath);
+  args.push('-i', streamUrl, '-t', String(span), '-map', `0:a:${audio}`, '-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', wavPath);
   return new Promise((resolve, reject) => {
     const p = spawnResumePad(ff.path, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
     let err = '';
@@ -429,6 +430,49 @@ async function measureSubSyncWindow(dir, tag, streamUrl, windowed, audioIndex) {
   if (shiftMs == null) throw new Error('subtitle sync offset was not a single gap');
   return shiftMs;
 }
+// The second try when the 30-second slices disagree: the same lines, with audio reaching
+// SUBSYNC_PAD_MS past both ends (50s of audio for 30s of lines). When the words are 8s early,
+// their speech sits 8s after the lines; a clip cut at the lines' own edges does not hold it, so
+// alass locked onto a neighbouring line (result 126, alass 2.0.0 offline: at -10..+10s 7 of 42
+// cases gave up or moved the words the wrong way; 0 of 42 with the padded clip). Only used after
+// a disagreement: on a framerate-drifting caption the longer clip measured worse.
+const SUBSYNC_PAD_MS = 10000;
+function moveSrtTimes(srt, ms) {
+  const add = Math.round(Number(ms) || 0);
+  if (!add) return String(srt || '');
+  return String(srt || '').replace(/(\d{2,}):(\d{2}):(\d{2}),(\d{3})/g, (m0, h, m, s, f) => {
+    let n = Math.max(0, ((+h * 60 + +m) * 60 + +s) * 1000 + +f + add);
+    const hh = Math.floor(n / 3600000); n -= hh * 3600000;
+    const mm = Math.floor(n / 60000); n -= mm * 60000;
+    const ss = Math.floor(n / 1000); n -= ss * 1000;
+    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')},${String(n).padStart(3, '0')}`;
+  });
+}
+async function measurePaddedSyncWindow(dir, tag, streamUrl, windowed, audioIndex) {
+  const fsp = fs.promises;
+  // The clip starts at 0 or at least 1s in (extractSyncSample does not seek under 1s).
+  const origin = Math.max(0, Number(windowed.originMs) || 0);
+  const pad = origin - SUBSYNC_PAD_MS >= 1000 ? SUBSYNC_PAD_MS : origin;
+  const lines = moveSrtTimes(windowed.srt, pad);
+  const inSrt = path.join(dir, `in-${tag}.srt`);
+  const outSrt = path.join(dir, `out-${tag}.srt`);
+  const wav = path.join(dir, `ref-${tag}.wav`);
+  await fsp.writeFile(inSrt, lines, 'utf8');
+  await extractSyncSample(streamUrl, wav, (windowed.originMs - pad) / 1000, audioIndex, (30000 + pad + SUBSYNC_PAD_MS) / 1000);
+  await new Promise((resolve, reject) => {
+    const p = spawnSubSync(wav, inSrt, outSrt, ['--no-split', '--disable-fps-guessing']);
+    let err = '';
+    const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('subtitle sync took too long')); }, 60000);
+    p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
+    p.on('error', (e) => { clearTimeout(killer); reject(e); });
+    p.on('close', (code) => { clearTimeout(killer); code === 0 ? resolve() : reject(new Error(`alass exited ${code}: ${err.slice(-200)}`)); });
+  });
+  const out = await fsp.readFile(outSrt, 'utf8');
+  if (!subSyncResultOk(lines, out)) throw new Error('alass output failed the cue-count sanity check');
+  const shiftMs = syncShiftMs(lines, out);
+  if (shiftMs == null) throw new Error('subtitle sync offset was not a single gap');
+  return shiftMs;
+}
 // How fast the offset changes, per 30s of subtitle time, from two measured slices. Only a
 // framerate mismatch makes a real linear slide (PAL 25 vs 23.976/24 fps: about 1.2-1.3s every 30s),
 // so anything else is two slices that grabbed different lines: no stretch. The value is snapped to
@@ -448,6 +492,19 @@ function subtitleDriftPer30s(shiftA, originA, shiftB, originB) {
   }
   return bestErr <= 0.15 ? Math.round(best) : 0;
 }
+// The subtitle second of a slice's middle line (the slice's lines are timed from originMs).
+function syncMedianLineSec(windowed) {
+  const starts = [];
+  const re = /(\d{2,}):(\d{2}):(\d{2}),(\d{3})\s*-->/g;
+  let m;
+  while ((m = re.exec(String((windowed && windowed.srt) || '')))) starts.push(((+m[1] * 60 + +m[2]) * 60 + +m[3]) * 1000 + +m[4]);
+  const origin = Number(windowed && windowed.originMs) || 0;
+  if (!starts.length) return origin / 1000;
+  starts.sort((x, y) => x - y);
+  const mid = Math.floor(starts.length / 2);
+  const med = starts.length % 2 ? starts[mid] : (starts[mid - 1] + starts[mid]) / 2;
+  return (origin + med) / 1000;
+}
 async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
   const os2 = require('os');
   const fsp = fs.promises;
@@ -466,7 +523,42 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
     // bypasses the active-player connection reserve — so enabling CC mid-playback would steal
     // connections from the live video and cause buffering. Local add-ins skip the HTTP hop.
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
-    let shiftMs = await measureSubSyncWindow(dir, 'a', selfUrl, spoken, audioIndex);
+    // The other side of the playhead slice: the tie-breaker, and the third slice of a padded retry.
+    const tieAtFor = (hasBefore) => (hasBefore ? spoken.originMs + 30000
+      : (spoken.originMs >= 30000 ? spoken.originMs - 30000 : spoken.originMs + 60000));
+    // When the 30-second slices cannot agree, hear the same lines again with a padded clip (see
+    // measurePaddedSyncWindow). Two padded slices that agree win; otherwise nothing is applied.
+    let rescued = null;
+    // A slice whose lines found no single gap is one more "no" vote. Anything else (a timeout, a
+    // failed audio pull) still ends the try, so the handler's timeout and failure stops apply.
+    const unalignedSlice = (e) => {
+      if (!/not a single gap|cue-count/i.test(String(e && e.message))) throw e;
+      return null;
+    };
+    const paddedRetry = async (why, witnessWin) => {
+      const tieAt = tieAtFor(witnessWin && witnessWin.originMs < spoken.originMs);
+      const tieWin = windowSrt(srt, tieAt, 30000);
+      const wins = [spoken, witnessWin, tieWin ? { ...tieWin, originMs: tieAt } : null].filter(Boolean);
+      // Two padded slices first; the third only when those two do not agree. Each padded slice
+      // reads 50s of audio, so stopping early keeps the retry short beside the viewer.
+      const xs = [];
+      let pick = null;
+      for (let k = 0; k < wins.length && !pick; k++) {
+        xs.push(await measurePaddedSyncWindow(dir, `p${k}`, selfUrl, wins[k], audioIndex).catch(unalignedSlice));
+        if (k >= 1) pick = pickAgreedSyncShift(xs.map((x) => (x == null ? NaN : x)));
+      }
+      if (!pick || pick.agreed < 2) throw new Error(why);
+      const partner = xs.filter((x) => x != null && x !== pick.shiftMs)
+        .sort((x, y) => Math.abs(x - pick.shiftMs) - Math.abs(y - pick.shiftMs))[0];
+      rescued = { shiftMs: pick.shiftMs, partner: partner == null ? pick.shiftMs : partner };
+      return pick.shiftMs;
+    };
+    let firstErr = null;
+    let shiftMs = await measureSubSyncWindow(dir, 'a', selfUrl, spoken, audioIndex).catch((e) => {
+      if (!/not a single gap|cue-count/i.test(String(e && e.message))) throw e;
+      firstErr = e;
+      return null;
+    });
     // Second witness. Five lines in thirty seconds can lock onto the neighbouring line
     // when the gap is close to the spacing between lines (proven offline: a 5.2s-late
     // caption came back as 0.2s). The slice already played is cheap; the slice after the
@@ -478,25 +570,33 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
     let agreed = 1;
     let driftMsPer30s = 0;
     let pairedShift = null;
-    if (witness) {
+    if (shiftMs == null && !witness) throw firstErr;
+    if (shiftMs == null) {
+      // The playhead slice gave no single gap: the padded clip hears it again.
+      await paddedRetry(String(firstErr && firstErr.message), witness);
+    } else if (witness) {
       const second = await measureSubSyncWindow(dir, 'b', selfUrl, witness, audioIndex);
       let paired = second;
       let pairedOrigin = witness.originMs;
       if (Math.abs(second - shiftMs) > 1500) {
         // One slice grabbed the next line (several seconds off) and the other did not.
-        // A third slice breaks the tie. Two that agree win. Three that disagree still
-        // throw the correction away, so a real multi-second gap is not replaced by noise.
-        const tieAt = before ? spoken.originMs + 30000
-          : (spoken.originMs >= 30000 ? spoken.originMs - 30000 : spoken.originMs + 60000);
+        // A third slice breaks the tie. Two that agree win. The two witnesses sit a minute
+        // apart and must agree closely (no framerate pair is that far apart and within 0.6s of
+        // each other by accident: result 126 had two wrong slices 1.47s apart outvote a right
+        // one). Otherwise the padded clip hears all three again; if that cannot agree either,
+        // the correction is thrown away, so a real multi-second gap is not replaced by noise.
+        const tieAt = tieAtFor(!!before);
         const tie = windowSrt(srt, tieAt, 30000);
-        const third = tie ? await measureSubSyncWindow(dir, 'c', selfUrl, { ...tie, originMs: tieAt }, audioIndex) : null;
+        const third = tie ? await measureSubSyncWindow(dir, 'c', selfUrl, { ...tie, originMs: tieAt }, audioIndex).catch(unalignedSlice) : null;
         if (third != null && Math.abs(third - shiftMs) <= 1500) { paired = third; pairedOrigin = tieAt; }
-        else if (third != null && Math.abs(third - second) <= 1500) shiftMs = second;
-        else throw new Error(`subtitle sync witnesses disagree (${shiftMs}ms vs ${second}ms)`);
+        else if (third != null && Math.abs(third - second) <= 600) shiftMs = second;
+        else await paddedRetry(`subtitle sync witnesses disagree (${shiftMs}ms vs ${second}ms)`, witness);
       }
-      agreed = 2;
-      pairedShift = paired;
-      driftMsPer30s = subtitleDriftPer30s(shiftMs, spoken.originMs, paired, pairedOrigin);
+      if (!rescued) {
+        agreed = 2;
+        pairedShift = paired;
+        driftMsPer30s = subtitleDriftPer30s(shiftMs, spoken.originMs, paired, pairedOrigin);
+      }
       if (driftMsPer30s) {
         // Two slices can look like a framerate slide by accident. Stretch the whole file only when
         // a slice two minutes away lands where that slide predicts.
@@ -507,10 +607,20 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
         if (farShift == null || Math.abs(farShift - predicted) > 700) driftMsPer30s = 0;
       }
     }
+    if (rescued) {
+      shiftMs = rescued.shiftMs;
+      agreed = 2;
+      pairedShift = rescued.partner;
+      driftMsPer30s = 0;
+    }
     // A sub-400ms move is within what one slice can mis-measure. Keep it only when both slices
     // agree within 200ms; otherwise leave the words where they were.
     if (Math.abs(shiftMs) < 400 && !(pairedShift != null && Math.abs(pairedShift - shiftMs) <= 200)) shiftMs = 0;
-    return { vtt: shiftVtt(vtt, shiftMs / 1000, driftMsPer30s, origin), shiftMs, originSec: origin, cues: spoken.count, agreed, driftMsPer30s };
+    // The stretch pivots on the line the gap was measured at: alass reports the median gap of the
+    // slice's lines, which belongs to its middle line, not to the slice's first second. Pivoting
+    // 15-20s early left every line of a stretched file about 0.6-0.8s off (result 126).
+    const anchor = driftMsPer30s ? syncMedianLineSec(spoken) : origin;
+    return { vtt: shiftVtt(vtt, shiftMs / 1000, driftMsPer30s, anchor), shiftMs, originSec: origin, cues: spoken.count, agreed, driftMsPer30s };
   } finally {
     fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -1098,7 +1208,7 @@ const pipeline = new Pipeline({
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
 const {
   fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, usableVariants, distinctVariants, hasConfidentAutoPick, srtToVtt, shiftVtt, decodeSubtitleBuffer,
-  osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks, subtitleLooksSynced, subSyncResultOk, syncShiftMs, windowSrt, speechWindow,
+  osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks, subtitleLooksSynced, subSyncResultOk, syncShiftMs, pickAgreedSyncShift, windowSrt, speechWindow,
   _isTransientError: isTransientSubError,
   _isNoSubtitleError: isNoSubtitleError,
 } = require('./opensubs');

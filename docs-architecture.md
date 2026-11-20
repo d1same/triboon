@@ -266,8 +266,11 @@ The manual sync nudge is applied exactly once per player. The server can bake
 its overlay. The Windows shell strips it from `sub-add` and sets
 `sub-delay = nudge − stream offset`, because a server-side seek restarts the
 stream clock at zero. Alass on-demand sync measures two 30-second witness
-slices; a disagreement over 1.5s rejects the measurement, and one over 600ms
-is logged as framerate drift while the slice nearest the playhead still wins.
+slices; a disagreement over 1.5s asks a third slice, and when that cannot settle
+it the same slices are heard again with 10s of audio past both ends (two that
+agree win, else nothing is applied). One over 600ms is logged as framerate drift
+while the slice nearest the playhead still wins; a confirmed stretch pivots on
+that slice's middle line.
 
 The web caption clock (`subtitleMediaNow`) follows the picture, not the browser
 cue scheduler. Every start and seek arms a 20-second landing window
