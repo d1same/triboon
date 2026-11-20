@@ -2949,6 +2949,47 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
   assert.ok(!subtitleSearches.some((s) => s.id === '700700'),
     'the dead-ending tmdb-tv id is never what Wyzie is searched by once the episode imdb resolves');
 
+  // Brief 135 Step 2b, last because it ends this play: a page reload plays the same file on a new
+  // mount. Within 45 s of the last measured minute it keeps that correction (-500 ms at 20:00,
+  // measured above) at once, instead of showing the raw words while it measures again.
+  {
+    await httpJson(srv.port, 'POST', '/api/settings', { tmdbKey: '' }, admin); // the subtitle row as it was measured
+    const jobs = [];
+    const restoreSync = srv.subSyncForTest({
+      detect: () => ({ path: 'stand-in' }),
+      run: (_vf, vtt, _uid, at, _audio, signal) => new Promise((resolve, reject) => {
+        const job = { at };
+        jobs.push(job);
+        signal.addEventListener('abort', () => reject(Object.assign(new Error('subtitle sync stopped'), { stopped: true })), { once: true });
+        job.finish = (shiftMs) => resolve({ vtt: `${String(vtt).trimEnd()}\n\nNOTE Hello synced ${shiftMs}\n`, shiftMs, originSec: Math.max(0, at - 30), cues: 5, agreed: 2, driftMsPer30s: 0 });
+      }),
+    });
+    const until = async (cond, ms = 5000) => { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > ms) throw new Error('timed out waiting'); await new Promise((r) => setTimeout(r, 20)); } };
+    try {
+      await httpJson(srv.port, 'POST', '/api/play/stop', { sessionId: play.sessionId }, admin);
+      srv.mounts.delete(play.id); // the old mount is gone, as on the copy after a page reload
+      const again = (await httpJson(srv.port, 'POST', '/api/play', { q: 'Sec Test 2024' }, admin)).json;
+      assert.notStrictEqual(again.id, play.id, 'the reload got a new mount');
+      const remounted = srv.mounts.get(again.id);
+      // The same file: earlier steps renamed the first mount, so the new one takes the same name.
+      remounted.name = mounted.name;
+      for (const k of ['_releaseName', '_sourceName']) { if (mounted[k] == null) delete remounted[k]; else remounted[k] = mounted[k]; }
+      remounted._subQuery = mounted._subQuery;
+      const reloadPath = (at) => `/api/ossubs/${again.id}?lang=en&tmdb=4242&variant=2&audio=0&sync=1&at=${at}&t=${again.streamToken}`;
+      const reloaded = await httpRaw(srv.port, reloadPath(1210));
+      assert.strictEqual(reloaded.headers['x-triboon-subsync'], 'corrected', 'the reloaded page keeps synced words');
+      assert.strictEqual(reloaded.headers['x-triboon-subsync-shift'], '-500');
+      assert.match(reloaded.body.toString('utf8'), /Hello synced -500/);
+      assert.strictEqual(jobs.length, 0, 'and measures nothing again');
+      // Further than 45 s away it measures, as on the first mount.
+      const farAfterReload = httpRaw(srv.port, reloadPath(1500));
+      await until(() => jobs.length === 1);
+      jobs[0].finish(700);
+      assert.strictEqual((await farAfterReload).headers['x-triboon-subsync-shift'], '700');
+    } finally {
+      restoreSync();
+    }
+  }
 
   } finally {
     delete process.env.WYZIE_BASE;

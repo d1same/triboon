@@ -650,6 +650,11 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
 // The sync engine the subtitle route calls. Tests swap in a stand-in (subSyncForTest) to count jobs
 // and hold an answer past the 30 s socket cut without alass or real audio.
 const subSyncEngine = { detect: () => detectSubSync(), run: onDemandSubSync };
+// Brief 135 Step 2b: the newest correction per file, subtitle row and audio track, across mounts. A page
+// reload plays the same file on a new mount; near the measured minute it keeps the synced words at
+// once instead of the raw ones while it measures again.
+const subSyncByFile = new Map();
+function subSyncFileKey(vf, syncKey) { return `${subtitleReleaseName(vf) || vf.name}|${syncKey}`; }
 
 function clampInt(value, fallback, min, max) {
   const n = parseInt(value, 10);
@@ -12041,7 +12046,7 @@ Object.assign(H, {
       // reload used to stop the new minute's job and wait on a fresh one at the old minute, past
       // Android's 20 s subtitle read timeout.
       if (ctx.url.searchParams.get('hold') === '1') {
-        const last = vf._subSyncLast && vf._subSyncLast.get(syncKey);
+        const last = (vf._subSyncLast && vf._subSyncLast.get(syncKey)) || subSyncByFile.get(subSyncFileKey(vf, syncKey));
         if (last) return send(ctx.res, 200, shift ? shiftVtt(last.vtt, shift) : last.vtt,
           { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'corrected', 'x-triboon-subsync-shift': String(last.shiftMs) });
         return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt, { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'pending' });
@@ -12055,6 +12060,14 @@ Object.assign(H, {
         vf._subSyncAt.delete(syncKey);
         vf._subSyncShift.delete(syncKey);
         vf._subSyncFail.delete(syncKey);
+      }
+      if (!vf._osCache.has(syncKey)) {
+        const carried = subSyncByFile.get(subSyncFileKey(vf, syncKey));
+        if (carried && Math.abs(carried.atSec - atSec) <= 45) {
+          vf._osCache.set(syncKey, carried.vtt); capMap(vf._osCache, 12);
+          vf._subSyncAt.set(syncKey, carried.atSec);
+          vf._subSyncShift.set(syncKey, carried.shiftMs); capMap(vf._subSyncShift, 24);
+        }
       }
       // A new minute earns fresh tries, but a timeout and the per-mount total do not reset: each
       // try takes long enough for playback to move 45s, so resetting on move retried forever
@@ -12105,6 +12118,7 @@ Object.assign(H, {
               // The newest correction outlives a move to another minute, for a rebuilt player's reload.
               vf._subSyncLast = vf._subSyncLast || new Map();
               vf._subSyncLast.set(syncKey, { vtt: synced, shiftMs: res.shiftMs }); capMap(vf._subSyncLast, 12);
+              subSyncByFile.set(subSyncFileKey(vf, syncKey), { vtt: synced, shiftMs: res.shiftMs, atSec }); capMap(subSyncByFile, 64);
               vf._subSyncFail.delete(syncKey);
               console.log(`[subsync ${vf.id}] moved the words ${secs}s ${dir} (heard ${mmss(res.originSec)} to ${mmss(res.originSec + 30)}, ${res.cues} lines, ${res.agreed === 2 ? 'two slices agree' : 'one slice'}; ${costLine()})`);
               story.noteMount(vf.id, `subtitle sync moved the words ${secs}s ${dir} (${costLine()})`);

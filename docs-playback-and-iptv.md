@@ -198,6 +198,8 @@ Flow (`/api/ossubs/:mount`):
   server's job; a shorter skip keeps it. A rebuilt native player reloads its synced link with
   `&hold=1`: the server answers at once with the newest correction for that subtitle and track
   (`vf._subSyncLast`) and never starts, stops or moves a measurement for it.
+  A page reload that lands on a new mount of the same file keeps the newest correction made within
+  45 s of its minute (`subSyncByFile`, keyed by release name, subtitle row and audio track).
 - **Skip rule (the "don't pull audio when you don't need to"):** `?sync=1` returns the sub as-is
   without running alass when `subtitleLooksSynced` is true. alass (which reads audio) only runs for
   non-matched subs. Any failure falls back to the unsynced track — auto-sync can never regress.
