@@ -189,6 +189,46 @@ test('search: when no number confirms the episode, Play does not start a copy of
   }, titles, 4);
 });
 
+// The episode card sends its own query with the TMDB number in it ("Paper Street S03E08"), next to
+// season/ep. The release number in ep (or a title-evidence hop) must win over that token, or the
+// indexer and the verifier keep asking for the TMDB number (3.5.4 second check, The Office S06E15).
+test('search: a card query with the TMDB SxxEyy token still searches the release number (group path)', async () => {
+  const map = episodeOrder.releaseNumbering(TMDB_S3, AIR_GROUP, 3);
+  await withIndexer(async (pipeline, asked) => {
+    const r = await pipeline.search({ q: 'Paper Street S03E08', season: 3, ep: map.get(8)[0] }, policyFor(8));
+    assert.match(top(r), /S03E09/, `played ${top(r)}`);
+    assert.ok(r.candidates.every((c) => c.score <= -5000 || /S03E09/.test(c.name)), 'nothing from release E08 (Fire Drill)');
+    assert.ok(asked.length && asked.every((e) => e === 9), `searched ${asked.join(',')}`);
+  });
+});
+test('search: a card query with the TMDB token follows the release titles (evidence path)', async () => {
+  await withIndexer(async (pipeline, asked) => {
+    const r = await pipeline.search({ q: 'Paper Street S03E08', season: 3, ep: 8 }, policyFor(8));
+    assert.match(top(r), /S03E09/, `played ${top(r)}`);
+    assert.deepEqual(r.episodeNumbering, { from: 8, to: 9, evidence: 7 });
+    assert.ok(asked.includes(9), `searched ${asked.join(',')}`);
+  });
+});
+test('search: a card query for a TMDB two-parter prefers the file that holds both parts', async () => {
+  const map = episodeOrder.releaseNumbering(TMDB_S3, AIR_GROUP, 3);
+  const [e, eTo] = [map.get(5)[0], undefined];
+  await withIndexer(async (pipeline) => {
+    // TMDB E05 "Ledger" is release E06; the card still says S03E05.
+    const r = await pipeline.search({ q: 'Paper Street S03E05', season: 3, ep: e, epTo: eTo }, policyFor(5));
+    assert.match(top(r), /S03E06/, `played ${top(r)}`);
+    const both = await pipeline.search({ q: 'Paper Street S03E04', season: 3, ep: map.get(4)[0], epTo: map.get(4)[1] }, policyFor(4));
+    assert.equal(top(both), 'Paper.Street.S03E04E05.1080p.BluRay.x264-BLU');
+  });
+});
+test('search: a card query for a normal show is unchanged', async () => {
+  await withIndexer(async (pipeline, asked) => {
+    const r = await pipeline.search({ q: 'Paper Street S03E02', season: 3, ep: 2 }, policyFor(2));
+    assert.match(top(r), /S03E02/);
+    assert.ok(!r.episodeNumbering);
+    assert.ok(asked.every((x) => x === 2));
+  });
+});
+
 test('search: a normal show (names agree with TMDB) takes one search, no retry', async () => {
   await withIndexer(async (pipeline, asked) => {
     const r = await pipeline.search({ q: 'Paper Street', season: 3, ep: 2 }, policyFor(2));

@@ -2892,6 +2892,20 @@ class Pipeline {
     const season = Number(params.season);
     const ep = Number(params.ep);
     let verifyQ = rawQ;
+    // An episode card sends its own query with the TMDB number in it ("The Office S06E15") next to
+    // season/ep. ep is the number to search: the release number (catalogFactsFor) or a title-evidence
+    // hop. A token for the same season but another episode is rewritten to ep, or the indexer and the
+    // verifier kept asking for the TMDB number (3.5.4 second check). Equal numbers change nothing.
+    if (Number.isInteger(season) && Number.isInteger(ep) && season >= 0 && ep > 0) {
+      const token = /\bS(\d{1,2})\s*E(\d{1,3})(?:\s*-?\s*E\d{1,3})*\b/i;
+      const se = `S${String(season).padStart(2, '0')}E${String(ep).padStart(2, '0')}`;
+      const fix = (q) => {
+        const m = token.exec(q);
+        return m && Number(m[1]) === season && Number(m[2]) !== ep ? q.replace(token, se) : q;
+      };
+      params.q = fix(params.q);
+      verifyQ = fix(verifyQ);
+    }
     if (Number.isInteger(season) && Number.isInteger(ep) && season >= 0 && ep > 0 && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(params.q)) {
       const se = ` S${String(season).padStart(2, '0')}E${String(ep).padStart(2, '0')}`;
       params.q = `${params.q}${se}`.trim();
