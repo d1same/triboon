@@ -12465,6 +12465,51 @@ test('a TV that cannot play the first track starts on a same-language track it p
   assert.strictEqual(run({ native: true, source: 'exo-mediacodec', ac3: true, eac3: true }, { _userPickedAudio: true }), 0, 'a viewer pick wins');
 });
 
+test('the same-language direct track keeps the language, the surround and the track ExoPlayer starts on (second check 3.5.5)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const src = grab('function preferredAudioTrackForPlayer(', '// Remux/hls/transcode mux ONE audio track.')
+    + grab('function audioDescriptorForClient(', 'function nativeDirectAudioNameRisk(')
+    + grab('function selectedPlayerAudioTrack(', '// Audio Description (a narrator')
+    + grab('function isAudioDescriptionTrack(', 'function preferredAudioTrackForPlayer(');
+  const fns = new Function('clientCaps', 'audioLangKey', 'prefAudioLang', `${src}\nreturn { applyInitialAudioPreference };`)(
+    () => ({ native: true, source: 'exo-mediacodec', ac3: true, eac3: true, passthrough: false }),
+    (l) => String(l || '').slice(0, 2).toLowerCase(), () => '');
+  const run = (audio) => { const p = { tracks: { audio }, audioTrack: 0 }; fns.applyInitialAudioPreference(p); return p; };
+  // Direct play hands ExoPlayer a language, not a track: the twin's language goes with it, so a box
+  // with no saved language does not start on the Portuguese track beside the Korean one.
+  const parasite = run([
+    { rel: 0, lang: 'kor', codec: 'truehd', channels: 8 },
+    { rel: 1, lang: 'kor', codec: 'ac3', channels: 6 },
+    { rel: 2, lang: 'por', codec: 'eac3', channels: 6 },
+  ]);
+  assert.strictEqual(parasite.audioTrack, 1);
+  assert.strictEqual(parasite._directTwinLang, 'ko', 'the twin language is kept for the direct handoff');
+  assert.match(ui, /transcodeUrl: p\.transcodeUrl \? new URL\(p\.transcodeUrl, location\.origin\)\.href : '',\s*\n\s*\};[\s\S]{0,400}if \(kind === 'direct' && p\._directTwinLang\) payload\.preferredAudioLanguage = p\._directTwinLang;/,
+    'the direct handoff asks ExoPlayer for the twin language');
+  // Untagged tracks prove no language: a dub and the original can both be untagged.
+  assert.strictEqual(run([
+    { rel: 0, lang: '', codec: 'truehd', channels: 8 },
+    { rel: 1, lang: '', codec: 'ac3', channels: 2 },
+  ]).audioTrack, 0, 'two untagged tracks are not the same language');
+  assert.strictEqual(run([
+    { rel: 0, lang: 'und', codec: 'truehd', channels: 8 },
+    { rel: 1, lang: 'und', codec: 'ac3', channels: 6 },
+  ]).audioTrack, 0, '"und" is not a language either');
+  // The remux gives 5.1 AAC; a stereo twin would lose the surround.
+  assert.strictEqual(run([
+    { rel: 0, lang: 'eng', codec: 'truehd', channels: 8 },
+    { rel: 1, lang: 'eng', codec: 'aac', channels: 2 },
+  ]).audioTrack, 0, 'no stereo twin for a 7.1 track');
+  assert.strictEqual(run([
+    { rel: 0, lang: 'eng', codec: 'truehd', channels: 8 },
+    { rel: 1, lang: 'eng', codec: 'ac3', channels: 6 },
+    { rel: 2, lang: 'eng', codec: 'aac', channels: 2 },
+  ]).audioTrack, 1, 'a 5.1 twin still wins');
+  assert.strictEqual(run([{ rel: 0, lang: 'eng', codec: 'aac', channels: 2 }, { rel: 1, lang: 'eng', codec: 'ac3', channels: 2 }])._directTwinLang || '', '',
+    'no twin, no language override');
+});
+
 test('a native sheet row longer than the sheet scrolls its full text while focused (brief 137 step 3)', () => {
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   assert.match(android, /private TextView nativeSheetRow\(String label, boolean selected\) \{[\s\S]+row\.setOnFocusChangeListener\(\(v, hasFocus\) -> \{[\s\S]+setEllipsize\(hasFocus \? TextUtils\.TruncateAt\.MARQUEE : TextUtils\.TruncateAt\.END\);\s*v\.setSelected\(hasFocus\);\s*\}\);\s*row\.setMarqueeRepeatLimit\(-1\);\s*return row;/);

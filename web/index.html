@@ -15997,6 +15997,8 @@ function applyInitialAudioPreference(p) {
   const best = preferredAudioTrackForPlayer(p);
   if (best && best.rel !== undefined) p.audioTrack = best.rel;
   const direct = nativeDirectPlayableTwin(p);
+  // Direct play hands ExoPlayer a language, not a track: the twin's language goes with the handoff.
+  p._directTwinLang = direct ? audioLangKey(direct.lang) : '';
   if (direct) p.audioTrack = direct.rel;
 }
 // Brief 137: a TV that cannot play the chosen track (Korean TrueHD 7.1) would go to the server
@@ -16006,8 +16008,13 @@ function nativeDirectPlayableTwin(p, caps = clientCaps()) {
   if (!p || !caps || !caps.native) return null;
   const cur = selectedPlayerAudioTrack(p);
   if (!cur || !nativeDirectAudioNeedsSafeRemux(cur, caps)) return null;
+  // Untagged tracks prove no language (a dub and the original can both be untagged), and the remux
+  // plays 5.1 AAC, so a twin never has fewer channels than that (second check 3.5.5).
+  const curLang = audioLangKey(cur.lang);
+  if (!curLang || curLang === 'un' || /^(und|unk|mis|zxx)$/i.test(String(cur.lang || '').trim())) return null;
+  const floor = Math.min(Number(cur.channels) || 0, 6);
   const audio = p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
-  return audio.filter((a) => a && a.rel !== cur.rel && audioLangKey(a.lang) === audioLangKey(cur.lang)
+  return audio.filter((a) => a && a.rel !== cur.rel && audioLangKey(a.lang) === curLang && (Number(a.channels) || 0) >= floor
       && !isAudioDescriptionTrack(a) && !a.comment && !nativeDirectAudioNeedsSafeRemux(a, caps))
     .sort((a, b) => (b.channels || 0) - (a.channels || 0))[0] || null;
 }
@@ -16254,6 +16261,10 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
     remuxUrl: p.remuxUrl ? new URL(p.remuxUrl, location.origin).href : '',
     transcodeUrl: p.transcodeUrl ? new URL(p.transcodeUrl, location.origin).href : '',
   };
+  // Direct play hands ExoPlayer a language, not a track. When the box starts on a same-language
+  // track it plays as it is (nativeDirectPlayableTwin), ask for that language, or a file with no
+  // track in the saved one can start on another language's track (second check 3.5.5).
+  if (kind === 'direct' && p._directTwinLang) payload.preferredAudioLanguage = p._directTwinLang;
   if (sub.rel) {
     p.subTrack = sub.rel;
     p._subShift = loadSubShift(sub.rel);
