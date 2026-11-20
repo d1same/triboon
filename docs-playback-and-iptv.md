@@ -179,6 +179,16 @@ Flow (`/api/ossubs/:mount`):
   `moved the words X.XXs earlier|later (... two slices agree|one slice)`; the response carries
   `x-triboon-subsync-shift` (ms) and the player toasts "Subtitles moved X.Xs earlier/later". A
   rejected measurement makes the player wait 60s before asking again from a different minute.
+- **Gave up because the words fit the sound nowhere (brief 131):** when slices disagree at two
+  different minutes, the `failed` answer also carries `x-triboon-subsync-reason: misfit`, and the
+  player says "This subtitle does not match the sound. It may be for another episode or cut." This
+  is a web toast; the native TV and Windows players hide the WebView, so there it reaches only the
+  playback log. A give-up for any other reason stays quiet.
+- **Episode number (brief 131):** when Play searched another number than the card's (TMDB and
+  release numbering differ, e.g. The Office TMDB S07E21 plays file S07E22), the mount keeps the
+  file's number (`vf._subEpisode`) and the search, list, auto pick and release match use it. Such
+  an episode is asked for by show and file number; the episode IMDb id is only the fallback when
+  that finds nothing. Every other play keeps the card's number and today's path.
 - **Skip rule (the "don't pull audio when you don't need to"):** `?sync=1` returns the sub as-is
   without running alass when `subtitleLooksSynced` is true. alass (which reads audio) only runs for
   non-matched subs. Any failure falls back to the unsynced track — auto-sync can never regress.
