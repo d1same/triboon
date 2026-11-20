@@ -20805,7 +20805,8 @@ async function runPendingNativeSync() {
     const syncVerdict = r.headers.get('x-triboon-subsync');
     // 'failed' = the server declared the sync terminally dead (300s timeout / repeated alass
     // errors) — stop retrying NOW; each retry re-pulled the mount's full audio from usenet.
-    if (syncVerdict === 'failed') { p._pendingNativeSyncRel = null; subtitleMisfitNotice(r); return; }
+    if (syncVerdict === 'failed') subtitleMisfitNotice(r);
+    if (syncVerdict === 'failed') { p._pendingNativeSyncRel = null; return; }
     // alass didn't correct it yet (cold audio / transient failure): leave queued so a later native
     // tick retries once the audio has warmed, instead of permanently abandoning the sync.
     if (syncVerdict !== 'corrected') { p._nativeSyncNextAt = Date.now() + 60000; return; }
