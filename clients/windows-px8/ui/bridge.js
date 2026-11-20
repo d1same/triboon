@@ -214,6 +214,7 @@
     selectSubtitle(rel) { return playerControl('subtitle', { rel: String(rel || '') }); },
 
     updateSubtitleChoices(raw) { return playerUpdate('subtitle_choices', raw); },
+    updateOtherVersions(raw) { return playerUpdate('other_versions', raw); },
     updateActiveSubtitle(raw) { return playerUpdate('active_subtitle', raw); },
     updateVideoDuration(seconds) {
       return playerUpdate('duration', { seconds: Math.max(0, Number(seconds) || 0) });

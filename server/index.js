@@ -7576,7 +7576,13 @@ const H = {
       // The player sends its CURRENT position as a fraction so the replacement mount warms the
       // right byte window (see pipeline.advance). Empty body = old clients → original behavior.
       const b = await readJson(ctx.req).catch(() => ({}));
-      const { session, vf, candidate, attempts } = await pipeline.advance(ctx.m[1], {
+      // "Other versions" (brief 137 step 6): a deliberate pick of another release of this title,
+      // resolved from this session's own ranked list (same rules as a Sources tap). Not a failure.
+      const pickKey = b && typeof b.pickKey === 'string' ? b.pickKey.slice(0, 512) : '';
+      if (b && b.pickKey !== undefined && !pickKey) return send(ctx.res, 400, { error: 'pickKey must be a string', attempts: [] });
+      const { session, vf, candidate, attempts } = pickKey
+        ? await pipeline.switchTo(ctx.m[1], pickKey, { resumeFrac: b.resumeFrac })
+        : await pipeline.advance(ctx.m[1], {
         resumeFrac: b && b.resumeFrac,
         cause: b && b.cause === 'stall-repeat' ? 'stall-repeat' : undefined,
         // Log-only: what the player saw (e.g. "source health blocked (dead piece)"). Capped and redacted.
@@ -7597,7 +7603,9 @@ const H = {
       }));
     } catch (e) {
       debug.fail('play', `next source failed — ${playFailDetail(e)}`);
-      send(ctx.res, e.message.includes('unknown') ? 404 : 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
+      const status = e.message.includes('unknown') || e.message === 'picked source not found' ? 404
+        : e.message === 'already playing that source' ? 409 : 502;
+      send(ctx.res, status, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
 

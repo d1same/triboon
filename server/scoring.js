@@ -184,7 +184,28 @@ function parseRelease(name) {
     resolution: res ? res.key : 'unknown', resolutionRank: res ? res.rank : 2,
     source: source ? source.key : 'unknown', codec: codec ? codec.key : 'unknown',
     features, bad, group, groupScore, groupClass,
+    ...releaseAudioFacts(name),
   };
+}
+
+// Brief 137 step 6: the audio a release NAME says, for the Sources drawer and "Other versions"
+// ("TrueHD 7.1 Atmos", "DTS-HD MA 5.1", "DDP 5.1"). Names only: the file is never read for this.
+function releaseAudioFacts(name) {
+  const s = String(name || '');
+  let audio = '';
+  if (/\btruehd(?=\d|\b|atmos)/i.test(s)) audio = 'truehd';
+  else if (/\bdts[ ._:-]?x\b/i.test(s)) audio = 'dts-x';
+  else if (/\b(?:dts[ ._-]?hd[ ._-]?ma|dtsma|dts[ ._-]?ma)(?=\d|\b)/i.test(s)) audio = 'dts-hd-ma';
+  else if (/\bdts[ ._-]?hd(?=\d|\b)/i.test(s)) audio = 'dts-hd';
+  else if (/\bdts(?=\d|\b)/i.test(s)) audio = 'dts';
+  else if (/\b(?:ddpa?(?=\d|\b)|dd\+|e-?ac-?3)/i.test(s)) audio = 'ddp';
+  else if (/\b(?:dd(?=\d|\b|-ex)|ac-?3\b|dolby[ ._]?digital\b)/i.test(s)) audio = 'dd';
+  else if (/\b(?:l?pcm)(?=\d|\b)/i.test(s)) audio = 'pcm';
+  else if (/\bflac(?=\d|\b)/i.test(s)) audio = 'flac';
+  else if (/\bopus(?=\d|\b)/i.test(s)) audio = 'opus';
+  else if (/\baac(?=\d|\b)/i.test(s)) audio = 'aac';
+  const ch = s.match(/(?<![0-9])([2567])\.([01])(?![0-9])/);
+  return { audio, channels: ch ? `${ch[1]}.${ch[2]}` : '' };
 }
 
 // Explicit language tags in scene names. English-tagged or untagged releases are assumed
@@ -664,7 +685,7 @@ function sourceDrawerCandidates(candidates, { hideCam = true } = {}) {
   return [...out.values()].slice(0, 360);
 }
 
-module.exports = {
+module.exports = { releaseAudioFacts,
   parseRelease, scoreRelease, rankReleases, isCamCandidate, isCamKeywordTerm, camScoringEnabled, sourceDrawerCandidates,
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
   notTheMovie, unstreamableContainer, isAudioDescriptionRelease, normalizeLanguageCode, releaseLanguageTag, releaseLanguageTags, RES, SOURCE,

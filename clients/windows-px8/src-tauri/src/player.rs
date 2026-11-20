@@ -851,6 +851,7 @@ enum ControlAction {
     SubtitleVersions(String),
     SubtitleShift(f64),
     Audio(String),
+    OtherVersion(String),
     Volume(f64),
     Mute(bool),
     Retry,
@@ -1003,6 +1004,13 @@ fn parse_control(
             }
             Ok(ControlAction::SubtitleShift(value))
         }
+        "other_version" => {
+            let key = string_from_payload(&payload, &["pickKey", "value"]).unwrap_or_default();
+            if key.is_empty() || key.chars().count() > 512 {
+                return Err("other version is missing".into());
+            }
+            Ok(ControlAction::OtherVersion(key))
+        }
         "audio" | "audio_select" => Ok(ControlAction::Audio(
             string_from_payload(&payload, &["id", "value"])
                 .unwrap_or_default()
@@ -1077,6 +1085,7 @@ fn parse_control(
 #[derive(Debug, Clone)]
 enum UpdateAction {
     SubtitleChoices(Vec<Value>),
+    OtherVersions(Vec<Value>),
     ActiveSubtitle(SubtitleRequest),
     Duration(f64),
     EpisodeChoices {
@@ -1087,6 +1096,21 @@ enum UpdateAction {
     UpNextHide,
     LiveEpg(Vec<Value>),
     LiveFavorite(bool),
+}
+
+// "Other versions" rows from the page: at most 3, each a pick key and a short label.
+fn other_version_rows(rows: Vec<Value>) -> Vec<Value> {
+    rows.into_iter()
+        .filter_map(|row| {
+            let key = row.get("pickKey").and_then(Value::as_str)?.to_string();
+            let label = row.get("label").and_then(Value::as_str)?.trim().to_string();
+            if key.is_empty() || key.chars().count() > 512 || label.is_empty() || label.chars().count() > 160 {
+                return None;
+            }
+            Some(json!({ "pickKey": key, "label": label }))
+        })
+        .take(3)
+        .collect()
 }
 
 fn value_choices(payload: Value, key: &str) -> Result<Vec<Value>, String> {
@@ -1107,6 +1131,9 @@ fn parse_update(kind: &str, payload: Value, server: &str) -> Result<UpdateAction
         "subtitle_choices" => Ok(UpdateAction::SubtitleChoices(value_choices(
             payload, "choices",
         )?)),
+        "other_versions" => Ok(UpdateAction::OtherVersions(other_version_rows(value_choices(
+            payload, "choices",
+        )?))),
         "active_subtitle" => {
             let parsed: ActiveSubtitlePayload = serde_json::from_value(payload)
                 .map_err(|_| "invalid subtitle update".to_string())?;
@@ -1193,6 +1220,7 @@ struct PlayerUiState {
     // relabel mpv's own audio list, paired by order + language + channels; never sent to the UI.
     #[serde(skip)]
     audio_rows: Vec<Value>,
+    other_versions: Vec<Value>,
     audio_id: String,
     audio_label: String,
     hwdec: String,
@@ -1241,6 +1269,7 @@ impl Default for PlayerUiState {
             subtitle_label: String::new(),
             audio_tracks: Vec::new(),
             audio_rows: Vec::new(),
+            other_versions: Vec::new(),
             audio_id: String::new(),
             audio_label: String::new(),
             hwdec: String::new(),
@@ -3638,6 +3667,17 @@ fn handle_control(
                 json!(active.token),
             ],
         ),
+        // Brief 137 step 6: the web switches to the picked release at the live second.
+        ControlAction::OtherVersion(key) => eval_callback(
+            app,
+            "__tvNativeOtherVersion",
+            vec![
+                json!(key),
+                json!(active.last_position),
+                json!(active.last_duration),
+                json!(active.token),
+            ],
+        ),
         ControlAction::SubtitleVersions(lang) => eval_callback(
             app,
             "__tvNativeSubtitleVersions",
@@ -3781,6 +3821,7 @@ fn handle_update(
     let Some(active) = session else { return };
     match update {
         UpdateAction::SubtitleChoices(choices) => active.ui.subtitle_choices = choices,
+        UpdateAction::OtherVersions(rows) => active.ui.other_versions = rows,
         UpdateAction::ActiveSubtitle(mut subtitle) => {
             // Page updates carry no size. Keep the viewer's size instead of falling back to default.
             if subtitle.size.is_empty() {
@@ -3875,6 +3916,24 @@ fn close_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn other_version_rows_keep_three_valid_rows() {
+        let rows = vec![
+            json!({"pickKey": "k1", "label": "Other version · 4K · TrueHD 7.1 Atmos"}),
+            json!({"pickKey": "", "label": "no key"}),
+            json!({"pickKey": "k2"}),
+            json!({"pickKey": "k3", "label": "Other version · 1080p · DTS-HD MA 5.1"}),
+            json!({"pickKey": "k4", "label": "four"}),
+            json!({"pickKey": "k5", "label": "five"}),
+        ];
+        let out = other_version_rows(rows);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["pickKey"], "k1");
+        assert_eq!(out[1]["pickKey"], "k3");
+        assert_eq!(out[2]["pickKey"], "k4");
+        assert!(parse_update("other_versions", json!({"choices": [{"pickKey": "a", "label": "b"}]}), "http://127.0.0.1:1").is_ok());
+    }
 
     #[test]
     fn audio_rows_relabel_mpv_tracks_only_when_every_track_lines_up() {

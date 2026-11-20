@@ -4413,6 +4413,45 @@ class Pipeline {
   }
 
   // Auto-advance API: the player reports the current source died → next source, same query.
+  // Brief 137 step 6, "Other versions": the viewer picks another release of the title from inside the
+  // player. Nothing died, so unlike advance() the playing source is never demoted, the standby is not
+  // spent, and only the picked release is tried. It obeys the same rules as a Sources tap (never over
+  // the admin cap or the per-play resolution cap, never a hard-dead file). If it fails, the session
+  // keeps the source it had, so the player keeps its picture.
+  async switchTo(sessionId, pickKey, mountOpts = {}) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('unknown play session');
+    const key = String(pickKey || '');
+    const picked = key ? (session.candidates || []).find((c) => c && c.pickKey === key) : null;
+    const overCap = !!(picked && (picked.reasons || []).some((r) => /^(over-cap |not-requested-resolution)/i.test(String(r))));
+    if (!picked || this._overAdminCap(picked) || this._hardDeadCandidate(picked) || overCap) {
+      throw new Error('picked source not found');
+    }
+    if (session.activeCandidate && session.activeCandidate.pickKey === key) throw new Error('already playing that source');
+    const { resumeFrac, ...rest } = mountOpts;
+    const frac = Number(resumeFrac);
+    if (Number.isFinite(frac) && frac > 0 && frac < 1) session.query = { ...(session.query || {}), resumeFrac: frac };
+    const _we = wantedEpisodeOf(session.query);
+    const nextOpts = _we ? { ...rest, wantedEpisode: _we } : rest;
+    const kept = {
+      candidates: session.candidates, cursor: session.cursor,
+      activeCandidate: session.activeCandidate, currentMountId: session.currentMountId,
+    };
+    debug.log('play', `switch to picked version "${String(picked.name || '').slice(0, 90)}" (not a failure; the playing copy keeps its standing)`);
+    session.candidates = [picked];
+    session.cursor = 0;
+    try {
+      return await this._advance(session, nextOpts, { width: 1 });
+    } catch (e) {
+      session.activeCandidate = kept.activeCandidate;
+      session.currentMountId = kept.currentMountId;
+      throw e;
+    } finally {
+      session.candidates = kept.candidates;
+      session.cursor = kept.cursor;
+    }
+  }
+
   async advance(sessionId, mountOpts = {}) {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('unknown play session');

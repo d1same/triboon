@@ -10955,16 +10955,7 @@ async function openSources(it) {
       const map = { webdl: 'WEB-DL', webrip: 'WEBRip', bluray: 'BluRay', remux: 'Remux', hdtv: 'HDTV', dvd: 'DVD', avc: 'H.264', hevc: 'HEVC', av1: 'AV1', xvid: 'Xvid' };
       return map[v] || String(v).replace(/-/g, ' ').toUpperCase();
     };
-    const audioInfo = (a) => {
-      const f = new Set(a.features || []);
-      return [
-        f.has('atmos') ? 'Atmos' : '',
-        f.has('truehd') ? 'TrueHD' : '',
-        f.has('dts-hd') ? 'DTS-HD' : '',
-        f.has('ddp') ? 'DDP' : '',
-        f.has('multi') ? 'Multi' : '',
-      ].filter(Boolean).join(' / ');
-    };
+    const audioInfo = (a) => releaseAudioLabel(a);
     const displayReleaseName = (name) => {
       const cleaned = String(name || '')
         .replace(/[._]+/g, ' ')
@@ -14953,6 +14944,12 @@ function stopActivePlaybackForReplacement(opts = {}) {
 window.__tvPlaybackIssue = (kind, detail, sec) => notePlaybackIssue(kind, detail, sec);
 function startNativePlayerHousekeeping(it) {
   stopWebVideoElement();
+  const otherFor = S.playing;
+  if (otherFor) {
+    otherFor._otherVersions = [];
+    otherFor._otherVersionList = null;
+    setTimeout(() => { if (S.playing === otherFor && otherFor.usingNative) loadOtherVersions(otherFor); }, 8000);
+  }
   // Native ExoPlayer used to disable source triage entirely. That left a Continue Watching resume
   // on a release which had rotted while the viewer was away waiting only on media timeouts.
   startHealthPoll(S.playing && S.playing.mountId);
@@ -15874,6 +15871,88 @@ function audioTrackRowLabel(a, opts = {}) {
   if (opts.playsAs) bits.push(opts.playsAs);
   return [lang, ...bits.filter(Boolean)].join(' · ');
 }
+// Brief 137 step 6: what a release NAME says about its audio, from the server's parse:
+// "TrueHD 7.1 Atmos", "DTS-HD MA 5.1", "DDP 5.1 Atmos". Older servers only send features.
+function releaseAudioLabel(a) {
+  if (!a) return '';
+  const f = new Set(a.features || []);
+  const names = { truehd: 'TrueHD', 'dts-x': 'DTS:X', 'dts-hd-ma': 'DTS-HD MA', 'dts-hd': 'DTS-HD', dts: 'DTS',
+    ddp: 'DDP', dd: 'DD', pcm: 'PCM', flac: 'FLAC', opus: 'Opus', aac: 'AAC' };
+  const codec = names[a.audio] || (f.has('truehd') ? 'TrueHD' : f.has('dts-hd') ? 'DTS-HD' : f.has('ddp') ? 'DDP' : '');
+  const main = [codec, a.channels || '', f.has('atmos') ? 'Atmos' : ''].filter(Boolean).join(' ');
+  return [main, f.has('multi') ? 'Multi' : ''].filter(Boolean).join(' / ');
+}
+// How good a sound is, coarse: lossless 3, Dolby/DTS lossy 2, AAC/Opus/MP3 1, plus the layout.
+function releaseAudioRank(a) {
+  if (!a) return 0;
+  const f = new Set(a.features || []);
+  const kind = a.audio || (f.has('truehd') ? 'truehd' : f.has('dts-hd') ? 'dts-hd' : f.has('ddp') ? 'ddp' : '');
+  const base = ['truehd', 'dts-hd-ma', 'dts-x', 'pcm', 'flac'].includes(kind) ? 3
+    : ['dts-hd', 'dts', 'ddp', 'dd'].includes(kind) ? 2 : ['aac', 'opus'].includes(kind) ? 1 : 0;
+  const ch = parseFloat(a.channels) || 0;
+  return base + (ch >= 7 ? 0.2 : ch >= 5 ? 0.1 : 0);
+}
+function trackAudioRank(t) {
+  if (!t) return 0;
+  const c = String(t.codec || '').toLowerCase();
+  const prof = String(t.profile || '');
+  const base = c === 'truehd' || c === 'mlp' || c === 'flac' || c.startsWith('pcm') || (c === 'dts' && /\b(ma|dts[ :-]?x)\b/i.test(prof)) ? 3
+    : ['eac3', 'ac3', 'dts'].includes(c) ? 2 : ['aac', 'opus', 'mp3', 'vorbis'].includes(c) ? 1 : 0;
+  const ch = Number(t.channels) || 0;
+  return base + (ch >= 7 ? 0.2 : ch >= 5 ? 0.1 : 0);
+}
+// Can this device play that release's audio as it is? Only native apps get "Other versions":
+// the browser always hears AAC, so a better source changes nothing there.
+function devicePlaysReleaseAudio(a, caps) {
+  if (!a || !caps || !caps.native) return false;
+  if (nativeDecodesAllAudio(caps)) return true;
+  const f = new Set(a.features || []);
+  const kind = a.audio || (f.has('truehd') ? 'truehd' : f.has('dts-hd') ? 'dts-hd' : '');
+  const pass = !!caps.passthrough;
+  if (kind === 'truehd') return pass && !!caps.truehd;
+  if (kind === 'dts-hd-ma' || kind === 'dts-x' || kind === 'dts-hd') return pass && !!caps.dtsHd;
+  if (kind === 'dts') return pass && !!caps.dts;
+  if (kind === 'ddp' || kind === 'dd') return nativeDolbyPlaysDirect(caps) && !!(caps.ac3 || caps.eac3);
+  return true;
+}
+// At most 3 other releases of this title whose sound beats the file playing and that this device
+// plays as it is. Built from the Sources list (already cached on the server); nothing runs before
+// the first frame.
+function otherVersionRows(p, list, caps = clientCaps()) {
+  if (!p || !caps || !caps.native || !Array.isArray(list)) return [];
+  const audio = p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
+  const cur = audio.find((a) => a && a.rel === p.audioTrack) || audio[0];
+  const curRank = Math.max(trackAudioRank(cur), ...audio.filter((a) => !isAudioDescriptionTrack(a)).map(trackAudioRank), 0);
+  return list
+    .filter((c) => c && c.pickKey && c.pickKey !== p.sourcePickKey && (Number(c.score) || 0) > -5000)
+    .filter((c) => devicePlaysReleaseAudio(c.attributes, caps) && releaseAudioRank(c.attributes) > curRank + 0.05)
+    .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0))
+    .slice(0, 3)
+    .map((c) => {
+      const a = c.attributes || {};
+      const res = a.resolution === '2160p' ? '4K' : (a.resolution && a.resolution !== 'unknown' ? a.resolution : '');
+      return { pickKey: c.pickKey, label: ['Other version', res, releaseAudioLabel(a)].filter(Boolean).join(' · ') };
+    });
+}
+async function loadOtherVersions(p) {
+  if (!p || !p.item || p.item.type === 'live' || p._otherVersionsLoading || !p.usingNative) return;
+  if (!(clientCaps() || {}).native) return;
+  p._otherVersionsLoading = true;
+  try {
+    const r = await api('/api/search?' + sourceSearchQuery(p.item));
+    if (S.playing !== p) return;
+    p._otherVersionList = Array.isArray(r && r.candidates) ? r.candidates : [];
+    if (!p.tracks) await fetchPlayerTracks(p, 8000).catch(() => null);
+    if (S.playing !== p) return;
+    p._otherVersions = otherVersionRows(p, p._otherVersionList);
+    refreshNativeAudioChoices();
+    pushNativeOtherVersions(p);
+  } catch {} finally { p._otherVersionsLoading = false; }
+}
+function pushNativeOtherVersions(p) {
+  if (!p || !p.usingNative || !(window.TriboonTV && window.TriboonTV.updateOtherVersions)) return;
+  try { window.TriboonTV.updateOtherVersions(JSON.stringify({ choices: p._otherVersions || [] })); } catch {}
+}
 // File order, Audio Description last.
 function audioMenuTracks(audio) {
   const list = Array.isArray(audio) ? audio.filter((a) => a && Number.isInteger(a.rel)) : [];
@@ -15903,7 +15982,7 @@ function refreshNativeAudioChoices() {
   if (!p || !p.usingNative || !canUseNativeVideoPlayer()) return;
   if (!(window.TriboonTV && window.TriboonTV.updateAudioChoices)) return; // older shells: no-op
   try {
-    window.TriboonTV.updateAudioChoices(JSON.stringify({ choices: nativeAudioChoices(), rows: nativeAudioTrackRows() }));
+    window.TriboonTV.updateAudioChoices(JSON.stringify({ choices: nativeAudioChoices(), rows: nativeAudioTrackRows(), otherVersions: (p._otherVersions || []).slice(0, 3) }));
   } catch {}
 }
 // The browser <video> track applies the saved sync offset on its own cues; the server must
@@ -16867,6 +16946,17 @@ function switchNativeDirectAudioToRemux(p, index) {
   refreshNativeAudioChoices();
   if (typeof p.subTrack === 'string' && p.subTrack.startsWith('os:')) autoSyncNative(p, p.subTrack);
 }
+// "Other versions" (brief 137 step 6): switch to another release of this title at the live second.
+// The old picture keeps playing until the new one is ready; a pick that fails leaves it playing.
+window.__tvNativeOtherVersion = (pickKey, pos, dur, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  window.__tvNativeVideoProgress(pos, dur, token);
+  const row = (p._otherVersions || []).find((v) => v && v.pickKey === String(pickKey || ''));
+  if (!row || p._sourceAdvancePending) return;
+  toast(`Switching to ${row.label.replace(/^Other version · /, '')}…`);
+  autoAdvance({ allowMidstreamAdvance: true, nativePreferred: true, pickKey: row.pickKey, reason: 'viewer picked another version' });
+};
 window.__tvNativeVideoAudio = (index, pos, dur, token) => {
   const p = S.playing;
   if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
@@ -17645,6 +17735,7 @@ async function autoAdvance(opts = {}) {
         ...(opts.cause === 'stall-repeat' ? { cause: 'stall-repeat' } : {}),
         // Log-only on the server: the "file died" line then says what the player saw.
         ...(opts.reason ? { reason: String(opts.reason).slice(0, 120) } : {}),
+        ...(opts.pickKey ? { pickKey: String(opts.pickKey) } : {}),
       },
     });
     if (S.playing !== p || S.view !== 'player') return;
@@ -17703,6 +17794,12 @@ async function autoAdvance(opts = {}) {
     if (carriedSubTrack) setSubtitle(carriedSubTrack, { startup: true });
   } catch (e) {
     if (S.playing !== p || S.view !== 'player') return;
+    if (opts.pickKey) {
+      // A chosen version that would not start: nothing died, so stay on the copy that plays.
+      notePlaybackIssue('source', `picked version did not start: ${(e && e.message) || 'unknown'} — staying on this one`, 0);
+      toast('That version did not start. Still playing this one.');
+      return;
+    }
     if (opts.allowMidstreamAdvance && e && e.status === 404 && !p._reMounting) {
       // A rolling server restart/sweep loses the session as well as the mount. Re-create the same
       // title session; do not misreport that infrastructure case as exhausted alternate releases.

@@ -12431,7 +12431,7 @@ test('one audio menu: every app shows "English · TrueHD 7.1 · Atmos" rows, and
   // Native: direct play gets relabel rows in a NEW field (old shells ignore it); a pick of a row the
   // box cannot play moves to the remux on that track, everything else stays inside the player.
   assert.match(ui, /audioChoices: nativeAudioChoices\(\),\s*\n\s*audioTrackRows: nativeAudioTrackRows\(\),/);
-  assert.match(ui, /updateAudioChoices\(JSON\.stringify\(\{ choices: nativeAudioChoices\(\), rows: nativeAudioTrackRows\(\) \}\)\)/);
+  assert.match(ui, /updateAudioChoices\(JSON\.stringify\(\{ choices: nativeAudioChoices\(\), rows: nativeAudioTrackRows\(\), otherVersions: \(p\._otherVersions \|\| \[\]\)\.slice\(0, 3\) \}\)\)/);
   assert.match(ui, /if \(kind === 'direct' && nativeDirectPickNeedsRemux\(p, index\)\) return switchNativeDirectAudioToRemux\(p, index\);\s*\n\s*if \(kind === 'direct'\) return;/);
   const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   assert.match(java, /applyNativeAudioRows\(j\.optJSONArray\("audioTrackRows"\)\);/);
@@ -12530,4 +12530,55 @@ test('audio rows name every language, never a bare code like "tam" (brief 137 st
   assert.strictEqual(row('mal'), 'Malayalam · Dolby Digital Plus 5.1');
   assert.strictEqual(row('und'), 'Track 1 · Dolby Digital Plus 5.1');
   assert.strictEqual(row('qaa'), 'QAA · Dolby Digital Plus 5.1', 'an unknown private code is shown upper-case, not lower-case raw');
+});
+
+test('Other versions: rows only for better sound this device plays as it is, never in the browser (brief 137 step 6)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const src = grab('function isAudioDescriptionTrack(', 'function preferredAudioTrackForPlayer(')
+    + grab('function nativeDolbyPlaysDirect(', 'function nativeDirectAudioNeedsSafeRemux(')
+    + grab('function nativeDecodesAllAudio(', 'function nativeDirectAudioNeedsSafeRemux(')
+    + grab('function releaseAudioLabel(', 'async function loadOtherVersions(');
+  const fns = new Function('clientCaps', `${src}\nreturn { releaseAudioLabel, otherVersionRows };`)(() => ({}));
+  const { releaseAudioFacts, parseRelease } = require('../server/scoring');
+  const cand = (name, score, key) => ({ name, pickKey: key, score, attributes: parseRelease(name) });
+  assert.strictEqual(fns.releaseAudioLabel(parseRelease('Movie.2010.2160p.BluRay.TrueHD.7.1.Atmos.x265-GRP')), 'TrueHD 7.1 Atmos');
+  assert.strictEqual(fns.releaseAudioLabel(parseRelease('Movie.2015.1080p.BluRay.DTS-HD.MA.5.1.x264-GRP')), 'DTS-HD MA 5.1');
+  assert.strictEqual(fns.releaseAudioLabel(parseRelease('Film.2019.1080p.AMZN.WEB-DL.DDP5.1.Atmos.H.264-FLUX')), 'DDP 5.1 Atmos');
+  assert.strictEqual(fns.releaseAudioLabel({ features: ['truehd', 'atmos'] }), 'TrueHD Atmos', 'an older server without audio facts');
+  assert.deepStrictEqual(releaseAudioFacts('Film.2019.1080p.WEB.DTS-x264-GRP'), { audio: 'dts', channels: '' });
+  const list = [
+    cand('Movie.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX', 370, 'playing'),
+    cand('Movie.2024.2160p.BluRay.TrueHD.7.1.Atmos.x265-A', 285, 'thd'),
+    cand('Movie.2024.1080p.BluRay.DTS-HD.MA.5.1.x264-B', 280, 'dtsma'),
+    cand('Movie.2024.1080p.WEB-DL.DDP5.1.H.264-C', 360, 'same'),
+    cand('Movie.2024.2160p.BluRay.TrueHD.7.1.Atmos.x265-D', -6000, 'dead'),
+    cand('Movie.2024.1080p.BluRay.AAC.2.0.x264-E', 300, 'worse'),
+  ];
+  const p = { sourcePickKey: 'playing', audioTrack: 0, tracks: { audio: [{ rel: 0, codec: 'eac3', channels: 6 }] } };
+  const win = { native: true, source: 'libmpv', ac3: true, eac3: true, truehd: true, dts: true };
+  assert.deepStrictEqual(fns.otherVersionRows(p, list, win).map((r) => [r.pickKey, r.label]), [
+    ['thd', 'Other version · 4K · TrueHD 7.1 Atmos'],
+    ['dtsma', 'Other version · 1080p · DTS-HD MA 5.1'],
+  ], 'Windows: lossless rows, best first; not the playing copy, not the same sound, not a dead copy, not worse sound');
+  const tvNoPass = { native: true, source: 'exo-mediacodec', ac3: true, eac3: true, passthrough: false };
+  assert.deepStrictEqual(fns.otherVersionRows(p, list, tvNoPass), [], 'a TV without passthrough is offered no lossless copy');
+  const shield = { native: true, source: 'exo-mediacodec', ac3: true, eac3: true, passthrough: true, truehd: true, dtsHd: false };
+  assert.deepStrictEqual(fns.otherVersionRows(p, list, shield).map((r) => r.pickKey), ['thd'], 'a TrueHD passthrough box gets TrueHD only');
+  assert.deepStrictEqual(fns.otherVersionRows(p, list, { ac3: false, eac3: false }), [], 'the browser gets no Other versions');
+  const lossless = { ...p, tracks: { audio: [{ rel: 0, codec: 'truehd', profile: 'Dolby TrueHD + Dolby Atmos', channels: 8 }] } };
+  assert.deepStrictEqual(fns.otherVersionRows(lossless, list, win), [], 'nothing beats the TrueHD 7.1 already playing');
+
+  // The pick goes through the same advance route with a pickKey, and a failed pick keeps the copy that plays.
+  assert.match(ui, /\.\.\.\(opts\.pickKey \? \{ pickKey: String\(opts\.pickKey\) \} : \{\}\),/);
+  assert.match(ui, /\} catch \(e\) \{\s*if \(S\.playing !== p \|\| S\.view !== 'player'\) return;\s*if \(opts\.pickKey\) \{[\s\S]{0,260}toast\('That version did not start\. Still playing this one\.'\);\s*return;\s*\}/);
+  assert.match(ui, /window\.__tvNativeOtherVersion = \(pickKey, pos, dur, token\) => \{[\s\S]{0,400}autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: true, pickKey: row\.pickKey/);
+  assert.match(ui, /setTimeout\(\(\) => \{ if \(S\.playing === otherFor && otherFor\.usingNative\) loadOtherVersions\(otherFor\); \}, 8000\);/,
+    'the Sources list is read 8 s after the native start, never before the first frame');
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(android, /"other_version"\.equals\(choice\.subtitleAction\)[\s\S]{0,200}window\.__tvNativeOtherVersion\(/);
+  const winUi = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'ui', 'player.js'), 'utf8');
+  assert.match(winUi, /send\('other_version', \{ pickKey: String\(v\.pickKey\) \}\)/);
+  const rust = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'src-tauri', 'src', 'player.rs'), 'utf8');
+  assert.match(rust, /ControlAction::OtherVersion\(key\) => eval_callback\(\s*app,\s*"__tvNativeOtherVersion",/);
 });

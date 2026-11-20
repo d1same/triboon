@@ -325,6 +325,10 @@ public class MainActivity extends Activity {
     // Brief 137: probe rows that RELABEL ExoPlayer's own audio list on direct play (one row shape on
     // every app). Paired by file order + language + channels; any mismatch keeps Exo's labels.
     private final java.util.ArrayList<NativeAudioRows.Row> nativeAudioRows = new java.util.ArrayList<>();
+    // Brief 137 step 6: "Other versions" rows (another release of this title with better sound this
+    // box plays as it is). A pick round-trips to the web, which switches at the live second.
+    private final java.util.ArrayList<String> nativeOtherVersionKeys = new java.util.ArrayList<>();
+    private final java.util.ArrayList<String> nativeOtherVersionLabels = new java.util.ArrayList<>();
     // Audio-language selection state: the payload carries the user's saved preference (web
     // Preferences → Audio language); a manual in-player pick is stickier and survives the
     // quiet-seek player rebuilds that used to silently reset audio to the hardcoded "en".
@@ -4715,6 +4719,7 @@ public class MainActivity extends Activity {
             if (!quietSeek) nativeManualAudioLang = "";
             if (!quietSeek) nativeManualAudioIsDescription = false;
             if (!quietSeek) nativeAudioRescueUrl = "";
+            if (!quietSeek) applyNativeOtherVersions(null);
             applyNativeAudioRows(j.optJSONArray("audioTrackRows"));
             applyNativeAudioChoices(audioChoices);
             nativeAudioDescriptionRels.clear();
@@ -6295,8 +6300,9 @@ public class MainActivity extends Activity {
 
     private boolean nativeAudioHasOptions() {
         // Server-muxed streams expose one ExoPlayer track; the web-probed source list is the menu.
-        // Brief 137: direct-play probe rows also list a track this box plays only through the remux.
-        if (nativeAudioRowChoiceCount() > 1) return true;
+        // Brief 137: direct-play probe rows also list a track this box plays only through the remux,
+        // and "Other versions" rows offer another release with better sound.
+        if (nativeAudioRowChoiceCount() > 1 || !nativeOtherVersionKeys.isEmpty()) return true;
         return nativeSupportedTrackCount(C.TRACK_TYPE_AUDIO) > 1 || nativeAudioChoiceLabels.size() > 1;
     }
 
@@ -7318,6 +7324,7 @@ public class MainActivity extends Activity {
         try {
             org.json.JSONObject o = new org.json.JSONObject(json);
             applyNativeAudioRows(o.optJSONArray("rows"));
+            applyNativeOtherVersions(o.optJSONArray("otherVersions"));
             applyNativeAudioChoices(o.optJSONArray("choices"));
         } catch (Exception ignored) {
         }
@@ -7334,6 +7341,21 @@ public class MainActivity extends Activity {
             if (index < 0 || label.isEmpty()) { nativeAudioRows.clear(); return; }
             nativeAudioRows.add(new NativeAudioRows.Row(index, r.optString("lang", ""),
                     r.optInt("channels", 0), label, r.optBoolean("needsRemux", false)));
+        }
+    }
+
+    private void applyNativeOtherVersions(org.json.JSONArray list) {
+        nativeOtherVersionKeys.clear();
+        nativeOtherVersionLabels.clear();
+        if (list == null) return;
+        for (int i = 0; i < list.length() && nativeOtherVersionKeys.size() < 3; i++) {
+            org.json.JSONObject v = list.optJSONObject(i);
+            if (v == null) continue;
+            String key = v.optString("pickKey", "");
+            String label = v.optString("label", "");
+            if (key.isEmpty() || key.length() > 512 || label.isEmpty()) continue;
+            nativeOtherVersionKeys.add(key);
+            nativeOtherVersionLabels.add(label);
         }
     }
 
@@ -8036,6 +8058,13 @@ public class MainActivity extends Activity {
             }
         }
 
+        if (trackType == C.TRACK_TYPE_AUDIO) {
+            for (int i = 0; i < nativeOtherVersionKeys.size(); i++) {
+                choices.add(new NativeTrackChoice(null, -1, nativeOtherVersionLabels.get(i), false, false,
+                        nativeOtherVersionKeys.get(i), "other_version", ""));
+            }
+        }
+
         if (choices.size() == (trackType == C.TRACK_TYPE_TEXT ? 1 : 0)) {
             Toast.makeText(this,
                     trackType == C.TRACK_TYPE_TEXT
@@ -8101,6 +8130,15 @@ public class MainActivity extends Activity {
         if (nativePlayer == null) return;
         // Web-provided audio choice (server-muxed stream): the web layer owns the switch — it
         // respawns the stream with the chosen &audio= index at the current position.
+        if (trackType == C.TRACK_TYPE_AUDIO && "other_version".equals(choice.subtitleAction)) {
+            if (web != null && choice.subtitleRel != null && !choice.subtitleRel.isEmpty()) {
+                web.evaluateJavascript("window.__tvNativeOtherVersion && window.__tvNativeOtherVersion("
+                        + jsQuote(choice.subtitleRel) + "," + nativePosSecondsPrecise() + "," + nativeDurSeconds()
+                        + "," + nativePlaybackToken + ")", null);
+            }
+            showNativeChrome(false);
+            return;
+        }
         if (trackType == C.TRACK_TYPE_AUDIO && choice.group == null) {
             if (web != null && choice.index >= 0) {
                 web.evaluateJavascript("window.__tvNativeVideoAudio && window.__tvNativeVideoAudio("

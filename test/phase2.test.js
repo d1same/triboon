@@ -8296,6 +8296,73 @@ test('the Windows app plays an obfuscated release with no file extension direct,
   assert.notStrictEqual(decidePlayback('Film.2160p.mkv', lowPower4k).method, 'direct', 'the 4K help rule still wins');
 });
 
+test('pipeline: "Other versions" switches to the picked release without blaming the one that was playing (brief 137 step 6)', async () => {
+  const pay1 = seededPayload(90 * 1024, 31);
+  const pay2 = seededPayload(90 * 1024, 32);
+  const pay3 = seededPayload(90 * 1024, 33);
+  const r1 = nzbFor(writeRar4Store([{ name: 'A.mkv', data: pay1 }], { base: 'v1' }), 30000, 'v1');
+  const r2 = nzbFor(writeRar4Store([{ name: 'B.mkv', data: pay2 }], { base: 'v2' }), 30000, 'v2');
+  const r3 = nzbFor(writeRar4Store([{ name: 'C.mkv', data: pay3 }], { base: 'v3' }), 30000, 'v3');
+  // r3's articles are never served: a dead pick.
+  const articles = new Map([...r1.articles, ...r2.articles]);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'Movie.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX', size: 7e9, nzb: r1.nzb },
+    { name: 'Movie.2024.1080p.BluRay.TrueHD.7.1.Atmos.x264-NTb', size: 7e9, nzb: r2.nzb },
+    { name: 'Movie.2024.1080p.BluRay.DTS-HD.MA.5.1.x264-EbP', size: 7e9, nzb: r3.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  const first = await pipeline.play({ q: 'movie' }, {});
+  assert.strictEqual(first.candidate.name, 'Movie.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX');
+  const sid = first.session.id;
+  const byName = (n) => first.session.candidates.find((c) => c.name === n);
+  const truehd = byName('Movie.2024.1080p.BluRay.TrueHD.7.1.Atmos.x264-NTb');
+  const dts = byName('Movie.2024.1080p.BluRay.DTS-HD.MA.5.1.x264-EbP');
+  assert.ok(truehd && truehd.pickKey && dts && dts.pickKey);
+
+  await assert.rejects(() => pipeline.switchTo(sid, 'no-such-key'), /picked source not found/);
+  await assert.rejects(() => pipeline.switchTo(sid, first.candidate.pickKey), /already playing that source/);
+  await assert.rejects(() => pipeline.switchTo('nope', truehd.pickKey), /unknown play session/);
+  const savedReasons = truehd.reasons;
+  truehd.reasons = [...(savedReasons || []), 'over-cap 2160p'];
+  await assert.rejects(() => pipeline.switchTo(sid, truehd.pickKey), /picked source not found/, 'never over the resolution cap');
+  truehd.reasons = [...(savedReasons || []), 'over-admin-cap 2160p'];
+  await assert.rejects(() => pipeline.switchTo(sid, truehd.pickKey), /picked source not found/, 'never over the admin cap');
+  truehd.reasons = savedReasons;
+
+  // A dead pick fails and leaves the session on the copy that plays; nothing is demoted.
+  const cursorBefore = first.session.cursor;
+  await assert.rejects(() => pipeline.switchTo(sid, dts.pickKey));
+  assert.strictEqual(first.session.activeCandidate.pickKey, first.candidate.pickKey, 'still on the playing copy');
+  assert.strictEqual(first.session.currentMountId, first.vf.id);
+  assert.strictEqual(first.session.candidates.length, 3, 'the full ranked list is back');
+  assert.strictEqual(first.session.cursor, cursorBefore);
+
+  // The real pick mounts the TrueHD release, byte-exact, at the asked position.
+  const next = await pipeline.switchTo(sid, truehd.pickKey, { resumeFrac: 0.4 });
+  assert.strictEqual(next.candidate.name, truehd.name);
+  assert.strictEqual(next.session.query.resumeFrac, 0.4);
+  const chunks = [];
+  for await (const c of next.vf.read(0, next.vf.size)) chunks.push(c);
+  assert.ok(Buffer.concat(chunks).equals(pay2));
+  const flux = verdicts.get('t:' + normTitle('Movie.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX'));
+  assert.ok(!flux || !/failed|dead|blocked/i.test(String(flux.verdict || '')), 'the copy the viewer left is not marked failed');
+
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /const pickKey = b && typeof b\.pickKey === 'string' \? b\.pickKey\.slice\(0, 512\) : '';[\s\S]{0,200}return send\(ctx\.res, 400, \{ error: 'pickKey must be a string'[\s\S]{0,120}\? await pipeline\.switchTo\(ctx\.m\[1\], pickKey, \{ resumeFrac: b\.resumeFrac \}\)/,
+    '/api/advance takes an optional pickKey on the same route, auth and throttle');
+  pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
 test('a probe that never finished is a failure, not an empty file that gets cached (brief 137)', () => {
   const { parseProbeStreams } = require('../server/transcode');
   assert.throws(() => parseProbeStreams({}), /no audio or video stream/, 'ffprobe killed with no output');

@@ -1130,6 +1130,14 @@ test('e2e: HTTP play pipeline — search, play, stream with token, advance 404 w
   const adv = await httpJson(srv.port, 'POST', `/api/advance/${play.json.sessionId}`, {}, admin);
   assert.strictEqual(adv.status, 502);
   assert.strictEqual((await httpJson(srv.port, 'POST', '/api/advance/zzzz', {}, admin)).status, 404);
+  // Brief 137 step 6: the optional pickKey ("Other versions") rides the same route and auth.
+  const advPath = `/api/advance/${play.json.sessionId}`;
+  assert.strictEqual((await httpJson(srv.port, 'POST', advPath, { pickKey: 'no-such-release' }, admin)).status, 404,
+    'an unknown pick key is not found, and nothing else is tried in its place');
+  assert.strictEqual((await httpJson(srv.port, 'POST', advPath, { pickKey: 42 }, admin)).status, 400, 'pickKey must be a string');
+  assert.strictEqual((await httpJson(srv.port, 'POST', advPath, { pickKey: 'no-such-release' }, otherUser.json.token)).status, 404,
+    'another user cannot switch this session');
+  assert.strictEqual((await httpJson(srv.port, 'POST', advPath, { pickKey: 'x' })).status, 401, 'no session, no switch');
 });
 
 test('security: a forged token with no exp claim is rejected (immortal-token footgun)', async () => {

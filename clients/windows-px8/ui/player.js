@@ -27,6 +27,7 @@
     episodeChoices: [],
     episodeFocusIndex: 0,
     audioTracks: [],
+    otherVersions: [],
     audioId: '',
     stats: {},
     upNext: null,
@@ -257,7 +258,7 @@
     $('next').hidden = state.mode === 'live' || !state.hasNext;
     $('episodes').hidden = state.mode === 'live' || !state.episodeChoices.length;
     $('quality').hidden = state.mode === 'live' || !state.qualityChoices;
-    $('audio').hidden = state.mode === 'live' || state.audioTracks.length < 2;
+    $('audio').hidden = state.mode === 'live' || (state.audioTracks.length < 2 && !state.otherVersions.length);
     $('captions').hidden = state.mode === 'live';
     $('guide').hidden = false;
     $('cast').hidden = state.mode === 'live';
@@ -311,6 +312,7 @@
     if (session.subtitleRel !== undefined) state.subtitleRel = text(session.subtitleRel, 1000);
     if (session.subtitleLabel !== undefined) state.subtitleLabel = text(session.subtitleLabel, 200);
     if (Array.isArray(session.audioTracks)) state.audioTracks = session.audioTracks;
+    if (Array.isArray(session.otherVersions)) state.otherVersions = session.otherVersions;
     if (session.audioId !== undefined) state.audioId = text(session.audioId, 32);
     if (session.upNext !== undefined) {
       state.upNext = session.upNext && typeof session.upNext === 'object' ? session.upNext : null;
@@ -361,6 +363,8 @@
     } else if (kind === 'episode_choices') {
       state.episodeChoices = state.mode === 'live' ? [] : (Array.isArray(data.episodes) ? data.episodes : []);
       state.episodeFocusIndex = Math.max(0, finite(data.focusIndex));
+    } else if (kind === 'other_versions') {
+      state.otherVersions = Array.isArray(data.choices) ? data.choices.slice(0, 3) : [];
     } else if (kind === 'audio_tracks') {
       state.audioTracks = Array.isArray(data.tracks) ? data.tracks : [];
       state.audioId = data.activeId ?? data.id ?? state.audioId;
@@ -391,7 +395,7 @@
     const type = text(event.type || event.event || event.kind || '', 80).toLowerCase().replace(/-/g, '_');
     const data = event.data && typeof event.data === 'object' ? { ...event, ...event.data } : event;
     if (type === 'update') applyUpdate(text(event.kind || data.updateKind, 80), decode(event.value || event.payload || event.data) || {});
-    else if (['subtitle_choices', 'active_subtitle', 'duration', 'episode_choices', 'audio_tracks', 'up_next', 'live_favorite', 'live_epg'].includes(type)) applyUpdate(type, data);
+    else if (['subtitle_choices', 'active_subtitle', 'duration', 'episode_choices', 'audio_tracks', 'other_versions', 'up_next', 'live_favorite', 'live_epg'].includes(type)) applyUpdate(type, data);
 
     if (['loading', 'session', 'state_snapshot', 'ready', 'playing', 'paused', 'buffering', 'progress', 'stats'].includes(type)) copySession(data);
     if (Number.isFinite(Number(data.position ?? data.pos ?? data.timePos))) state.position = Math.max(0, finite(data.position ?? data.pos ?? data.timePos));
@@ -627,6 +631,13 @@
       { selected: String(track.id ?? track.rel ?? index) === String(state.audioId), sub: track.codec || track.channels || '' },
       () => { closePanels(); send('audio', { id: track.id ?? track.rel ?? index }); },
     ));
+    // Brief 137 step 6: another release of this title with better sound, switched at the live second.
+    state.otherVersions.forEach((v) => {
+      if (!v || !v.pickKey || !v.label) return;
+      items.push(menuItem(String(v.label), { sub: 'Switch version' }, () => {
+        closePanels(); send('other_version', { pickKey: String(v.pickKey) });
+      }));
+    });
     if (items.length) openMenu('Audio track', 'SOUND', items);
   }
 
