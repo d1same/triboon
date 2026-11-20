@@ -15983,6 +15983,20 @@ function applyInitialAudioPreference(p) {
   if (!p || p._userPickedAudio) return;
   const best = preferredAudioTrackForPlayer(p);
   if (best && best.rel !== undefined) p.audioTrack = best.rel;
+  const direct = nativeDirectPlayableTwin(p);
+  if (direct) p.audioTrack = direct.rel;
+}
+// Brief 137: a TV that cannot play the chosen track (Korean TrueHD 7.1) would go to the server
+// remux and hear 5.1 AAC, while the same file carries a track in that language it plays as it is
+// (Korean Dolby Digital 5.1). Start on that one; the TrueHD row stays one press away in the menu.
+function nativeDirectPlayableTwin(p, caps = clientCaps()) {
+  if (!p || !caps || !caps.native) return null;
+  const cur = selectedPlayerAudioTrack(p);
+  if (!cur || !nativeDirectAudioNeedsSafeRemux(cur, caps)) return null;
+  const audio = p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
+  return audio.filter((a) => a && a.rel !== cur.rel && audioLangKey(a.lang) === audioLangKey(cur.lang)
+      && !isAudioDescriptionTrack(a) && !a.comment && !nativeDirectAudioNeedsSafeRemux(a, caps))
+    .sort((a, b) => (b.channels || 0) - (a.channels || 0))[0] || null;
 }
 // Remux/hls/transcode mux ONE audio track. Direct play lets Exo/mpv pick by language;
 // server-muxed native starts on whatever &audio= was in the URL (often track 0 = Italian).

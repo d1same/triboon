@@ -8265,3 +8265,15 @@ test('lossless names with a glued channel count are read, and the Windows app is
   const ui = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   assert.match(ui, /policy\.audioDecodesLossless = nativeDecodesAllAudio\(caps\);/, 'Play passes the libmpv decode fact to scoring');
 });
+
+test('the Windows app plays an obfuscated release with no file extension direct, not through the AAC remux (brief 137 step 2)', () => {
+  const { decidePlayback } = require('../server/transcode');
+  const win = { native: true, source: 'libmpv', mkv: true, mp4: true, hevc: true, aac: true, ac3: true, eac3: true, dts: true, truehd: true, passthrough: false };
+  assert.strictEqual(decidePlayback('r5eKHsUGHvtkXxv', win).method, 'direct');
+  assert.strictEqual(decidePlayback('Some.Film.2019.2160p.BluRay.TrueHD.7.1.Atmos-GRP', win).method, 'direct');
+  const tv = { ...win, source: 'exo-mediacodec', truehd: false };
+  const { detectFfmpeg } = require('../server/transcode');
+  if (detectFfmpeg()) assert.strictEqual(decidePlayback('r5eKHsUGHvtkXxv', tv).method, 'remux', 'Android keeps the unknown-container remux');
+  const lowPower4k = { ...win, lowPower: true, hevc: false };
+  assert.notStrictEqual(decidePlayback('Film.2160p.mkv', lowPower4k).method, 'direct', 'the 4K help rule still wins');
+});

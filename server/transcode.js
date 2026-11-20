@@ -184,6 +184,10 @@ function decidePlayback(name, caps = {}) {
   const losslessAudioOk = releaseLosslessAudioDirectOk(name, caps);
   const is4k = /\b(2160p|4k|uhd)\b/i.test(String(name || ''));
   const fourKNeedsHelp = !!(caps.lowPower && is4k && !caps.hevc);
+  // libmpv (the Windows app) opens every container and decodes every audio codec ffmpeg knows, so
+  // it plays the file itself, even an obfuscated name with no extension. The remux would turn its
+  // TrueHD into 5.1 AAC (brief 137).
+  if (capsDecodeAllAudio(caps) && !fourKNeedsHelp) return { method: 'direct' };
   // MKV direct play needs MORE than container support: most MKVs carry AC3-family audio,
   // and Chromium happily claims matroska while decoding none of it — a "direct" DDP MKV
   // plays silent video. Devices with full container+audio hardware DO skip the server

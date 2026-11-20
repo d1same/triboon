@@ -12439,3 +12439,28 @@ test('one audio menu: every app shows "English · TrueHD 7.1 · Atmos" rows, and
   const rust = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'src-tauri', 'src', 'player.rs'), 'utf8');
   assert.match(rust, /if let Some\(labels\) = paired_audio_row_labels\(&ui\.audio_rows, &tracks\)/);
 });
+
+test('a TV that cannot play the first track starts on a same-language track it plays direct (brief 137 step 3)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const src = grab('function preferredAudioTrackForPlayer(', '// Remux/hls/transcode mux ONE audio track.')
+    + grab('function audioDescriptorForClient(', 'function nativeDirectAudioNameRisk(')
+    + grab('function selectedPlayerAudioTrack(', '// Audio Description (a narrator')
+    + grab('function isAudioDescriptionTrack(', 'function preferredAudioTrackForPlayer(');
+  let caps = {};
+  const fns = new Function('clientCaps', 'audioLangKey', 'prefAudioLang', `${src}\nreturn { applyInitialAudioPreference };`)(
+    () => caps, (l) => String(l || '').slice(0, 2).toLowerCase(), () => '');
+  const tracks = { audio: [
+    { rel: 0, lang: 'kor', codec: 'truehd', profile: 'Dolby TrueHD + Dolby Atmos', channels: 8 },
+    { rel: 1, lang: 'kor', codec: 'ac3', channels: 6 },
+    { rel: 2, lang: 'por', codec: 'eac3', channels: 6 },
+  ] };
+  const run = (c, extra = {}) => { caps = c; const p = { tracks, audioTrack: 0, ...extra }; fns.applyInitialAudioPreference(p); return p.audioTrack; };
+  assert.strictEqual(run({ native: true, source: 'exo-mediacodec', ac3: true, eac3: true, passthrough: false }), 1,
+    'no-TrueHD TV: Korean Dolby Digital direct, not Korean TrueHD as 5.1 AAC');
+  assert.strictEqual(run({ native: true, source: 'exo-mediacodec', ac3: true, eac3: true, passthrough: true, truehd: true }), 0,
+    'a TrueHD passthrough box keeps TrueHD');
+  assert.strictEqual(run({ native: true, source: 'libmpv', ac3: true, eac3: true, truehd: true }), 0, 'Windows decodes TrueHD itself');
+  assert.strictEqual(run({ ac3: false, eac3: false }), 0, 'the browser is unchanged');
+  assert.strictEqual(run({ native: true, source: 'exo-mediacodec', ac3: true, eac3: true }, { _userPickedAudio: true }), 0, 'a viewer pick wins');
+});
