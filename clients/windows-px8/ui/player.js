@@ -618,7 +618,7 @@
         else send('subtitle', {
           rel: choice.rel || '', url: choice.url || '', lang: choice.lang || '',
           label: choice.label || 'Triboon subtitles', shift: finite(choice.shift),
-          size: choice.size || 'M',
+          size: choice.size || 'M', file: choice.file && typeof choice.file === 'object' ? choice.file : undefined,
         });
       }));
     });

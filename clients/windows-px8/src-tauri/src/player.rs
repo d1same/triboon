@@ -55,6 +55,7 @@ pub(crate) fn native_playback_caps() -> Value {
         "audioPassthrough": false,
         "nativeLive": true,
         "subtitles": true,
+        "fileSubtitles": true,
         "episodeHandoff": true,
         "progressIntervalMs": 1000,
         "statsIntervalMs": 2000
@@ -132,6 +133,8 @@ pub struct VodPayload {
     #[serde(default)]
     subtitle_size: String,
     #[serde(default)]
+    subtitle_file: Option<Value>,
+    #[serde(default)]
     subtitle_choices: Vec<Value>,
     #[serde(default)]
     episode_choices: Vec<Value>,
@@ -141,6 +144,8 @@ pub struct VodPayload {
     percent_resume: bool,
     #[serde(default)]
     preferred_audio_language: String,
+    #[serde(default)]
+    file_subtitles_active: bool,
     #[serde(default)]
     audio_track_rows: Vec<Value>,
     #[serde(default)]
@@ -186,6 +191,8 @@ struct ActiveSubtitlePayload {
     subtitle_size: String,
     #[serde(default)]
     subtitle_startup: bool,
+    #[serde(default)]
+    subtitle_file: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -646,6 +653,54 @@ fn validated_live_url(raw: &str, server: &str, field: &str) -> Result<ValidatedL
     })
 }
 
+// Brief 137 step 4: a subtitle inside the file, named by its place among the file's subtitle tracks
+// (ffprobe s:N, equal to mpv's internal sub order on the files checked) plus the facts to verify.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct FileSubtitle {
+    ordinal: i64,
+    lang: String,
+    codec: String,
+}
+
+fn file_subtitle_from(value: Option<&Value>) -> Option<FileSubtitle> {
+    let v = value?;
+    let ordinal = v.get("ordinal").and_then(Value::as_i64)?;
+    if !(0..=200).contains(&ordinal) {
+        return None;
+    }
+    Some(FileSubtitle {
+        ordinal,
+        lang: v.get("lang").and_then(Value::as_str).unwrap_or("").chars().take(16).collect(),
+        codec: v.get("codec").and_then(Value::as_str).unwrap_or("").chars().take(32).collect(),
+    })
+}
+
+fn sub_codec_key(codec: &str) -> String {
+    match codec.trim().to_ascii_lowercase().as_str() {
+        "srt" => "subrip".into(),
+        "ssa" => "ass".into(),
+        "pgs" | "pgssub" => "hdmv_pgs_subtitle".into(),
+        "vobsub" | "dvdsub" => "dvd_subtitle".into(),
+        other => other.to_string(),
+    }
+}
+
+// mpv's internal (not side-loaded) subtitle tracks in file order as (id, lang, codec). The asked
+// ordinal must match in language and codec, or nothing is picked and the page goes online.
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
+fn pick_file_subtitle(tracks: &[(i64, String, String)], file: &FileSubtitle) -> Option<i64> {
+    let (id, lang, codec) = tracks.get(usize::try_from(file.ordinal).ok()?)?;
+    let want_lang = audio_row_lang_key(&file.lang);
+    let have_lang = audio_row_lang_key(lang);
+    if !want_lang.is_empty() && !have_lang.is_empty() && want_lang != have_lang {
+        return None;
+    }
+    if sub_codec_key(codec) != sub_codec_key(&file.codec) {
+        return None;
+    }
+    Some(*id)
+}
+
 #[derive(Debug, Clone)]
 struct SubtitleRequest {
     rel: String,
@@ -655,6 +710,13 @@ struct SubtitleRequest {
     shift: f64,
     size: String,
     startup: bool,
+    file: Option<FileSubtitle>,
+}
+
+impl SubtitleRequest {
+    fn is_off(&self) -> bool {
+        self.url.is_empty() && self.file.is_none()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -681,6 +743,7 @@ struct VodRequest {
     quiet_seek: bool,
     percent_resume: bool,
     preferred_audio_language: String,
+    file_subtitles_active: bool,
     audio_track_rows: Vec<Value>,
     remux_url: String,
     transcode_url: String,
@@ -760,12 +823,14 @@ fn validate_vod(payload: VodPayload, server: &str) -> Result<VodRequest, String>
             shift: payload.subtitle_shift,
             size: payload.subtitle_size.chars().take(16).collect(),
             startup: true,
+            file: file_subtitle_from(payload.subtitle_file.as_ref()),
         },
         subtitle_choices: payload.subtitle_choices,
         episode_choices: payload.episode_choices,
         quiet_seek: payload.quiet_seek,
         percent_resume: payload.percent_resume,
         preferred_audio_language: payload.preferred_audio_language.chars().take(16).collect(),
+        file_subtitles_active: payload.file_subtitles_active,
         audio_track_rows: payload.audio_track_rows.into_iter().take(64).collect(),
         remux_url: optional_vod_url(&payload.remux_url, server, "remux")?,
         transcode_url: optional_vod_url(&payload.transcode_url, server, "transcode")?,
@@ -986,6 +1051,7 @@ fn parse_control(
                     .take(16)
                     .collect(),
                 startup: false,
+                file: file_subtitle_from(payload.get("file")),
             }))
         }
         "subtitle_show_all" => Ok(ControlAction::SubtitleShowAll),
@@ -1158,6 +1224,7 @@ fn parse_update(kind: &str, payload: Value, server: &str) -> Result<UpdateAction
                 shift: parsed.subtitle_shift,
                 size: parsed.subtitle_size.chars().take(16).collect(),
                 startup: parsed.subtitle_startup,
+                file: file_subtitle_from(parsed.subtitle_file.as_ref()),
             }))
         }
         "duration" => {
@@ -2060,6 +2127,8 @@ struct NativeSession {
     buffer_goal_sec: u32,
     subtitle: SubtitleRequest,
     preferred_audio_language: String,
+    // Brief 137 step 4: file subtitles are in play for this stream, so no subtitle means sid=no.
+    file_subtitles_active: bool,
     remux_url: String,
     transcode_url: String,
     ready: bool,
@@ -2145,6 +2214,7 @@ impl NativeSession {
             buffer_goal_sec: request.buffer_goal_sec,
             subtitle: request.subtitle,
             preferred_audio_language: request.preferred_audio_language,
+            file_subtitles_active: request.file_subtitles_active,
             remux_url: request.remux_url,
             transcode_url: request.transcode_url,
             ready: false,
@@ -2193,8 +2263,10 @@ impl NativeSession {
                 shift: 0.0,
                 size: String::new(),
                 startup: false,
+                file: None,
             },
             preferred_audio_language: String::new(),
+            file_subtitles_active: false,
             remux_url: String::new(),
             transcode_url: String::new(),
             ready: false,
@@ -2569,7 +2641,7 @@ fn load_session(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> Result<(), S
     session.file_loaded = false;
     session.playback_restarted = false;
     session.video_reconfigured = false;
-    session.subtitle_attached = session.subtitle.url.is_empty();
+    session.subtitle_attached = session.subtitle.is_off() && !session.file_subtitles_active;
     session.audio_description_checked = false;
     apply_session_buffer(mpv, session)?;
     if session.reset_audio_state {
@@ -2676,6 +2748,16 @@ fn apply_subtitle(
     subtitle: &SubtitleRequest,
     stream_offset: f64,
 ) -> Result<(), String> {
+    if let Some(file) = &subtitle.file {
+        // Brief 137 step 4: show mpv's own track from the file. No side-loaded file, no extra read;
+        // sub-delay still nudges it like any other subtitle.
+        let id = file_subtitle_track_id(mpv, file).ok_or_else(|| "file subtitle not found".to_string())?;
+        mpv.set_property("sid", id).map_err(|e| e.to_string())?;
+        mpv.set_property("sub-delay", subtitle_delay(subtitle.shift, stream_offset))
+            .map_err(|e| e.to_string())?;
+        return mpv.set_property("sub-scale", subtitle_scale(&subtitle.size))
+            .map_err(|e| e.to_string());
+    }
     if subtitle.url.is_empty() {
         mpv.set_property("sid", "no").map_err(|e| e.to_string())?;
         return Ok(());
@@ -2702,6 +2784,27 @@ fn apply_subtitle(
         .map_err(|e| e.to_string())?;
     mpv.set_property("sub-scale", subtitle_scale(&subtitle.size))
         .map_err(|e| e.to_string())
+}
+
+#[cfg(all(feature = "player", target_os = "windows"))]
+fn file_subtitle_track_id(mpv: &libmpv2::Mpv, file: &FileSubtitle) -> Option<i64> {
+    let count = property::<i64>(mpv, "track-list/count").unwrap_or(0).clamp(0, 256);
+    let mut tracks = Vec::new();
+    for index in 0..count {
+        let prefix = format!("track-list/{index}");
+        if property::<String>(mpv, &format!("{prefix}/type")).as_deref() != Some("sub") {
+            continue;
+        }
+        if property::<bool>(mpv, &format!("{prefix}/external")).unwrap_or(false) {
+            continue;
+        }
+        tracks.push((
+            property::<i64>(mpv, &format!("{prefix}/id")).unwrap_or(-1),
+            property::<String>(mpv, &format!("{prefix}/lang")).unwrap_or_default(),
+            property::<String>(mpv, &format!("{prefix}/codec")).unwrap_or_default(),
+        ));
+    }
+    pick_file_subtitle(&tracks, file)
 }
 
 #[cfg(all(feature = "player", target_os = "windows"))]
@@ -2802,7 +2905,7 @@ fn drain_session_events(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> (boo
                 session.file_loaded = false;
                 session.playback_restarted = false;
                 session.video_reconfigured = false;
-                session.subtitle_attached = session.subtitle.url.is_empty();
+                session.subtitle_attached = session.subtitle.is_off() && !session.file_subtitles_active;
                 session.audio_description_checked = false;
             }
             Ok(libmpv2::events::Event::FileLoaded) if session.start_seen => {
@@ -2863,6 +2966,13 @@ fn tick_session(
     if session.file_loaded && !session.subtitle_attached {
         session.subtitle_attached = true;
         if apply_subtitle(mpv, &session.subtitle, session.subtitle_stream_offset()).is_err() {
+            if session.subtitle.file.is_some() {
+                eval_callback(
+                    app,
+                    "__tvNativeFileSubtitleFailed",
+                    vec![json!(session.subtitle.rel), json!("track not found or did not match"), json!(session.token)],
+                );
+            }
             session.ui.subtitle_rel.clear();
             session.ui.subtitle_label.clear();
         }
@@ -3626,7 +3736,7 @@ fn handle_control(
         ),
         ControlAction::Subtitle(subtitle) => {
             let rel = subtitle.rel.clone();
-            if subtitle.url.is_empty() {
+            if subtitle.is_off() {
                 let _ = mpv.set_property("sid", "no");
                 active.subtitle = SubtitleRequest {
                     rel: String::new(),
@@ -3636,9 +3746,16 @@ fn handle_control(
                     shift: 0.0,
                     size: "M".into(),
                     startup: false,
+                    file: None,
                 };
             } else {
-                let _ = apply_subtitle(mpv, &subtitle, active.subtitle_stream_offset());
+                if apply_subtitle(mpv, &subtitle, active.subtitle_stream_offset()).is_err() && subtitle.file.is_some() {
+                    eval_callback(
+                        app,
+                        "__tvNativeFileSubtitleFailed",
+                        vec![json!(subtitle.rel), json!("track not found or did not match"), json!(active.token)],
+                    );
+                }
                 active.subtitle = subtitle.clone();
             }
             active.ui.subtitle_rel = rel.clone();
@@ -3833,6 +3950,10 @@ fn handle_update(
                 active.ui.subtitle_rel = subtitle.rel.clone();
                 active.ui.subtitle_label = subtitle.label.clone();
                 active.subtitle_attached = subtitle.url.is_empty();
+                // Brief 137 step 4: a file track has no URL and still waits for the file to open.
+                if subtitle.file.is_some() {
+                    active.subtitle_attached = false;
+                }
                 active.subtitle = subtitle;
             } else if apply_subtitle(mpv, &subtitle, active.subtitle_stream_offset()).is_ok() {
                 active.ui.subtitle_rel = subtitle.rel.clone();
@@ -3916,6 +4037,30 @@ fn close_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_subtitle_pick_needs_order_language_and_codec() {
+        let tracks = vec![
+            (1, "eng".to_string(), "subrip".to_string()),
+            (2, "eng".to_string(), "subrip".to_string()),
+            (3, "eng".to_string(), "hdmv_pgs_subtitle".to_string()),
+            (4, "jpn".to_string(), "ass".to_string()),
+        ];
+        let f = |ordinal: i64, lang: &str, codec: &str| FileSubtitle { ordinal, lang: lang.into(), codec: codec.into() };
+        assert_eq!(pick_file_subtitle(&tracks, &f(1, "eng", "subrip")), Some(2));
+        assert_eq!(pick_file_subtitle(&tracks, &f(2, "en", "pgs")), Some(3));
+        assert_eq!(pick_file_subtitle(&tracks, &f(3, "jpn", "ssa")), Some(4));
+        assert_eq!(pick_file_subtitle(&tracks, &f(1, "fre", "subrip")), None, "wrong language");
+        assert_eq!(pick_file_subtitle(&tracks, &f(1, "eng", "ass")), None, "wrong codec");
+        assert_eq!(pick_file_subtitle(&tracks, &f(9, "eng", "subrip")), None, "no such track");
+        assert_eq!(file_subtitle_from(Some(&json!({"ordinal": 2, "lang": "eng", "codec": "subrip"}))), Some(f(2, "eng", "subrip")));
+        assert_eq!(file_subtitle_from(Some(&json!({"ordinal": -1}))), None);
+        let off = SubtitleRequest { rel: String::new(), url: String::new(), lang: String::new(), label: String::new(),
+            shift: 0.0, size: String::new(), startup: false, file: None };
+        assert!(off.is_off());
+        assert!(!SubtitleRequest { rel: "fs:1".into(), file: Some(f(1, "eng", "subrip")), ..off.clone() }.is_off(),
+            "a file row has no URL and is still on");
+    }
 
     #[test]
     fn other_version_rows_keep_three_valid_rows() {
@@ -4398,12 +4543,14 @@ mod tests {
                 shift: 0.0,
                 size: String::new(),
                 startup: false,
+                file: None,
             },
             subtitle_choices: Vec::new(),
             episode_choices: Vec::new(),
             quiet_seek: false,
             percent_resume: false,
             preferred_audio_language: String::new(),
+            file_subtitles_active: false,
             audio_track_rows: Vec::new(),
             remux_url: String::new(),
             transcode_url: String::new(),

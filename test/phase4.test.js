@@ -12582,3 +12582,54 @@ test('Other versions: rows only for better sound this device plays as it is, nev
   const rust = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'src-tauri', 'src', 'player.rs'), 'utf8');
   assert.match(rust, /ControlAction::OtherVersion\(key\) => eval_callback\(\s*app,\s*"__tvNativeOtherVersion",/);
 });
+
+test('file subtitles: only a shell that draws them, only on direct play, and they fall back online off direct (brief 137 step 4)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const src = grab('function nativeFileSubtitlesOn(', 'function embeddedSubRel(')
+    + grab('function embeddedSubIsForced(', 'function bestEmbeddedSubtitleRel(')
+    + grab('function audioTrackLangName(', 'function audioTrackRowLabel(')
+    + grab('function sourceSubtitleLabel(', 'function stripSubtitleSourceLabel(');
+  let builtIn = true; let caps = {};
+  const p = { item: { type: 'movie' }, tracks: { subs: [
+    { rel: 0, lang: 'eng', codec: 'subrip', text: true, forced: true },
+    { rel: 1, lang: 'eng', codec: 'subrip', text: true },
+    { rel: 2, lang: 'eng', codec: 'hdmv_pgs_subtitle', text: false, sdh: true },
+  ] } };
+  const fns = new Function('S', 'clientCaps', 'builtInSubtitlesEnabled', 'currentPlayerKind', 'canAutoSubtitle', 'osLang', 'osTrackRel',
+    'preferredAutoSubtitleLang', 'langCode', 'langName',
+    `${src}\nreturn { nativeFileSubtitlesOn, fileSubLabel, fileSubPayload, fileSubForRel, fileSubOnlineFallbackRel };`)(
+    { playing: p }, () => caps, () => builtIn, () => 'direct', () => true, (l) => (String(l).startsWith('en') ? 'en' : l),
+    (l) => 'os:' + l, () => 'en', (l) => String(l || '').toLowerCase(), (l) => ({ eng: 'English' })[String(l).toLowerCase()] || l);
+  const android = { native: true, source: 'exo-mediacodec', fileSubtitles: true };
+  caps = android;
+  assert.strictEqual(fns.nativeFileSubtitlesOn(p, android, 'direct'), true);
+  assert.strictEqual(fns.nativeFileSubtitlesOn(p, android, 'remux'), false, 'the remux carries no subtitle stream');
+  assert.strictEqual(fns.nativeFileSubtitlesOn(p, android, 'transcode'), false);
+  assert.strictEqual(fns.nativeFileSubtitlesOn(p, { native: true, source: 'exo-mediacodec' }, 'direct'), false, 'an older APK never gets them');
+  assert.strictEqual(fns.nativeFileSubtitlesOn(p, { mkv: true }, 'direct'), false, 'the browser never gets them (no extraction at Play)');
+  builtIn = false;
+  assert.strictEqual(fns.nativeFileSubtitlesOn(p, android, 'direct'), false, 'the admin switch is a kill switch');
+  builtIn = true;
+  assert.strictEqual(fns.fileSubLabel(p.tracks.subs[0]), 'In the file - English (forced)');
+  assert.strictEqual(fns.fileSubLabel(p.tracks.subs[2]), 'In the file - English (SDH) · picture', 'picture subtitles show on native players');
+  assert.deepStrictEqual(fns.fileSubPayload(p.tracks.subs[1]), { ordinal: 1, lang: 'eng', codec: 'subrip', forced: false, sdh: false, picture: false });
+  assert.strictEqual(fns.fileSubOnlineFallbackRel(p, 'fs:2'), 'os:en', 'leaving direct continues online in that language');
+
+  // The payload, the handoff, the fallback and the native pushes.
+  assert.match(ui, /if \(chosen\.startsWith\('fs:'\)\) \{[\s\S]{0,200}rel: sub \? chosen : '', url: '',[\s\S]{0,200}file: fileSubPayload\(sub\),/);
+  assert.match(ui, /subtitleFile: subPayload\.file \|\| null,\s*\n[^\n]*\n\s*fileSubtitlesActive: nativeFileSubtitlesFlag\(p, kind\),/);
+  assert.match(ui, /if \(kind !== 'direct' && typeof sub\.rel === 'string' && sub\.rel\.startsWith\('fs:'\)\) \{\s*sub\.rel = fileSubOnlineFallbackRel\(p, sub\.rel\);/);
+  assert.match(ui, /window\.__tvNativeFileSubtitleFailed = \(rel, reason, token\) => \{[\s\S]{0,500}const next = fileSubOnlineFallbackRel\(p, rel\);[\s\S]{0,80}if \(next\) pushNativeActiveSubtitle\(p, next\);/);
+  assert.match(ui, /if \(nativeFileSubtitlesOn\(p\)\) \{\s*fileSubChoices\(p\)[\s\S]{0,300}addChoice\(\{ rel: fileSubRel\(sub\.rel\), label: fileSubLabel\(sub\)/);
+  const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(java, /j\.put\("fileSubtitles", true\);/);
+  assert.match(java, /NativeFileSubtitle\.Pick pick = NativeFileSubtitle\.find\(/);
+  assert.match(java, /__tvNativeFileSubtitleFailed\(/);
+  assert.match(java, /if \(trackType == C\.TRACK_TYPE_TEXT && !nativeSubtitleRel\.startsWith\("fs:"\)\) \{\s*labels\.add\("\\u00a7Timing"/,
+    'ExoPlayer cannot delay a track in the file, so no Timing rows for it on Android');
+  const rust = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'src-tauri', 'src', 'player.rs'), 'utf8');
+  assert.match(rust, /"fileSubtitles": true,/);
+  assert.match(rust, /if let Some\(file\) = &subtitle\.file \{[\s\S]{0,300}mpv\.set_property\("sid", id\)/);
+  assert.match(rust, /session\.subtitle_attached = session\.subtitle\.is_off\(\) && !session\.file_subtitles_active;/);
+});

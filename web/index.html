@@ -15476,10 +15476,11 @@ function nativeVideoSubtitleRel(p) {
 function pushNativeActiveSubtitle(p, rel, opts = {}) {
   if (!p || !p.usingNative || !rel || !(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) return;
   const payload = nativeSubtitleOnPlayer(p, nativeSubtitlePayload(p, rel, 'manual'));
-  if (!payload.url) return;
+  if (!payload.url && !payload.file) return;
   try {
     window.TriboonTV.updateActiveSubtitle(JSON.stringify({
       subtitleRel: payload.rel,
+      subtitleFile: payload.file || null,
       subtitleUrl: payload.url,
       subtitleLang: payload.lang,
       subtitleLabel: payload.label,
@@ -15490,6 +15491,13 @@ function pushNativeActiveSubtitle(p, rel, opts = {}) {
 }
 function nativeSubtitlePayload(p, rel, mode = 'startup') {
   const chosen = rel || '';
+  if (chosen.startsWith('fs:')) {
+    const sub = fileSubForRel(chosen, p);
+    return {
+      rel: sub ? chosen : '', url: '', lang: sub ? subtitleLangForRel(chosen) : '',
+      label: sub ? fileSubLabel(sub) : '', shift: sub ? (loadSubShift(chosen) || 0) : 0, file: fileSubPayload(sub),
+    };
+  }
   return {
     rel: chosen,
     url: chosen ? new URL(subtitleUrlForRel(p, chosen, { mode }), location.origin).href : '',
@@ -15692,6 +15700,10 @@ async function resolveOnlineSubtitleRel(rel) {
 }
 function nativeSubtitleLabel(rel) {
   if (!rel) return '';
+  if (typeof rel === 'string' && rel.startsWith('fs:')) {
+    const sub = fileSubForRel(rel);
+    return sub ? fileSubLabel(sub) : 'Subtitle in the file';
+  }
   if (typeof rel === 'string' && rel.startsWith('rs:')) {
     const sub = releaseSubForRel(rel);
     return sub ? releaseSubLabel(sub) : 'Built-in subtitle';
@@ -15725,6 +15737,8 @@ function nativeSubtitleChoices() {
         const sub = embeddedSubForRel(choice.rel);
         choice.lang = choice.lang || (sub && sub.lang) || '';
         choice.url = choice.url || new URL(embeddedSubUrl(p, choice.rel, { mode: 'manual' }), location.origin).href;
+      } else if (String(choice.rel).startsWith('fs:')) {
+        choice.url = '';
       } else {
         const info = osTrackInfo(choice.rel);
         choice.lang = choice.lang || info.lang || '';
@@ -15742,10 +15756,18 @@ function nativeSubtitleChoices() {
     const rel = releaseSubRel(sub.id);
     addChoice({ rel, label: releaseSubLabel(sub) });
   });
-  visibleEmbeddedSubChoices().slice(0, 8).forEach((sub) => {
-    const rel = embeddedSubRel(sub.rel);
-    addChoice({ rel, label: embeddedSubLabel(sub) });
-  });
+  if (nativeFileSubtitlesOn(p)) {
+    fileSubChoices(p).filter((sub) => showAllLocalSubtitles() || subtitleChoiceMatchesPreferred(sub) || embeddedSubIsForced(sub))
+      .slice(0, 12).forEach((sub) => {
+        addChoice({ rel: fileSubRel(sub.rel), label: fileSubLabel(sub), lang: subtitleLangForRel(fileSubRel(sub.rel)),
+          file: fileSubPayload(sub), url: '' });
+      });
+  } else {
+    visibleEmbeddedSubChoices().slice(0, 8).forEach((sub) => {
+      const rel = embeddedSubRel(sub.rel);
+      addChoice({ rel, label: embeddedSubLabel(sub) });
+    });
+  }
   if (hiddenLocalSubtitleCount()) {
     addChoice({ action: 'local_all', label: `Show all subtitle languages (${hiddenLocalSubtitleCount()} more)` });
   }
@@ -16008,6 +16030,10 @@ function subtitleLangForRel(rel) {
     const sub = embeddedSubForRel(rel);
     return sub && sub.lang ? (LANG_3TO2[langCode(sub.lang)] || sub.lang) : '';
   }
+  if (typeof rel === 'string' && rel.startsWith('fs:')) {
+    const sub = fileSubForRel(rel);
+    return sub && sub.lang ? (LANG_3TO2[langCode(sub.lang)] || sub.lang) : '';
+  }
   return osTrackInfo(rel).lang;
 }
 function nativeKindAvailable(p, kind) {
@@ -16255,6 +16281,12 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   p._remuxStartSeq = (p._remuxStartSeq || 0) + 1; // any pending keyframe answer for an older ask is void
   const sub = nativeVideoSubtitleRel(p);
   if (sub.blocked) return false;
+  // Brief 137 step 4: the remux and transcode carry no subtitle stream, so a subtitle from the file
+  // continues online in its language (never "on" with nothing drawn).
+  if (kind !== 'direct' && typeof sub.rel === 'string' && sub.rel.startsWith('fs:')) {
+    sub.rel = fileSubOnlineFallbackRel(p, sub.rel);
+    if (p.subTrack && String(p.subTrack).startsWith('fs:')) p.subTrack = sub.rel || null;
+  }
   // A copy-remux starts on the keyframe at-or-before the ask. The native shell gets startOffset
   // once, at handoff, so learn that second first (sync when known, else a sub-second probe) and
   // hand over a stream whose 0:00 really is startOffset. Direct/transcode are exact already.
@@ -16332,6 +16364,9 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
     subtitleLang: subPayload.lang,
     subtitleLabel: subPayload.label,
     subtitleShift: subPayload.shift,
+    subtitleFile: subPayload.file || null,
+    // Brief 137 step 4: file subtitles are in play for this stream, so "no subtitle" means text off.
+    fileSubtitlesActive: nativeFileSubtitlesFlag(p, kind),
     subtitleSize: applySubSize(),
     subtitleChoices: nativeSubtitleChoices(),
     episodeChoices: nativeEpisodeChoices(),
@@ -16400,6 +16435,11 @@ function nativeAudioTrackRows() {
     needsRemux: !!(caps && caps.native) && nativeDirectAudioNeedsSafeRemux(a, caps),
     audioDescription: isAudioDescriptionTrack(a),
   }));
+}
+// Brief 137 step 4: whether this handoff plays the file itself on a shell that draws the file's own
+// subtitles; then "no subtitle" means text off there. False whenever that cannot be told.
+function nativeFileSubtitlesFlag(p, kind) {
+  try { return nativeFileSubtitlesOn(p, clientCaps(), kind); } catch { return false; }
 }
 function tryNativePlaybackLadder(atSeconds, preferredKind, opts = {}) {
   const p = S.playing;
@@ -17014,6 +17054,16 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur, token) => {
     autoSyncNative(p, rel);
   }
   p.usingNative = true;
+};
+window.__tvNativeFileSubtitleFailed = (rel, reason, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  if (p.subTrack !== rel) return;
+  notePlaybackIssue('subtitle', `subtitle in the file not shown (${String(reason || 'not found').slice(0, 80)}) — online instead`, 0);
+  const next = fileSubOnlineFallbackRel(p, rel);
+  p.subTrack = next || null;
+  if (next) pushNativeActiveSubtitle(p, next);
+  refreshNativeSubtitleChoices();
 };
 window.__tvNativeSubtitleShowAll = (pos, dur, token) => {
   const p = S.playing;
@@ -20232,6 +20282,50 @@ function visibleReleaseSubChoices() {
 function hiddenReleaseSubCount() {
   return Math.max(0, releaseSubChoices().length - visibleReleaseSubChoices().length);
 }
+// Brief 137 step 4: a subtitle INSIDE the file, drawn by the native player itself on direct play
+// (ExoPlayer's text track, mpv's sid). No server extraction, no extra read, timing exact by
+// construction. Only a shell that says so (caps.fileSubtitles) gets them, and only while the stream
+// is the file itself: the remux and transcode carry no subtitle stream, so those fall back online.
+function nativeFileSubtitlesOn(p = S.playing, caps = clientCaps(), kind = currentPlayerKind(p)) {
+  return !!(p && caps && caps.native && caps.fileSubtitles === true && builtInSubtitlesEnabled()
+    && kind === 'direct' && p.item && p.item.type !== 'live');
+}
+function fileSubRel(n) {
+  const k = parseInt(n, 10);
+  return Number.isFinite(k) && k >= 0 ? `fs:${k}` : '';
+}
+function fileSubIndex(rel) {
+  if (!(typeof rel === 'string' && rel.startsWith('fs:'))) return -1;
+  const n = parseInt(rel.slice(3), 10);
+  return Number.isFinite(n) && n >= 0 ? n : -1;
+}
+function fileSubChoices(p = S.playing) {
+  const subs = p && p.tracks && Array.isArray(p.tracks.subs) ? p.tracks.subs : [];
+  return subs.filter((sub) => sub && Number.isInteger(sub.rel));
+}
+function fileSubForRel(rel, p = S.playing) {
+  const i = fileSubIndex(rel);
+  return i < 0 ? null : (fileSubChoices(p).find((sub) => sub.rel === i) || null);
+}
+function fileSubLabel(sub) {
+  const lang = sub && sub.lang ? (audioTrackLangName(sub.lang) || String(sub.lang).toUpperCase()) : 'Unknown';
+  const flag = embeddedSubIsForced(sub) ? ' (forced)' : embeddedSubIsSdh(sub) ? ' (SDH)' : '';
+  return sourceSubtitleLabel('In the file', `${lang}${flag}${sub && sub.text !== true ? ' · picture' : ''}`);
+}
+// What the native player needs to find the track: its place among the file's subtitle tracks
+// (ffprobe s:N; equal to mpv's sub order and Exo's text order on the files checked) plus the facts
+// it verifies before showing it. A mismatch makes the native side fall back online, never a neighbour.
+function fileSubPayload(sub) {
+  if (!sub) return null;
+  return { ordinal: sub.rel, lang: String(sub.lang || ''), codec: String(sub.codec || ''),
+    forced: embeddedSubIsForced(sub), sdh: embeddedSubIsSdh(sub), picture: sub.text !== true };
+}
+function fileSubOnlineFallbackRel(p, rel) {
+  const sub = fileSubForRel(rel, p);
+  if (!canAutoSubtitle(p)) return '';
+  const lang = sub && sub.lang ? osLang(sub.lang) : osLang(preferredAutoSubtitleLang());
+  return osTrackRel(lang || 'en');
+}
 function embeddedSubRel(rel) {
   const n = parseInt(rel, 10);
   return Number.isFinite(n) && n >= 0 ? `em:${n}` : '';
@@ -20366,6 +20460,7 @@ function subtitleRelPlayable(p, rel) {
   if (!rel || rel === 'off') return false;
   if (typeof rel === 'string' && rel.startsWith('rs:')) return builtInSubtitlesEnabled() && !!releaseSubForRel(rel);
   if (typeof rel === 'string' && rel.startsWith('em:')) return builtInSubtitlesEnabled() && !!embeddedSubForRel(rel);
+  if (typeof rel === 'string' && rel.startsWith('fs:')) return nativeFileSubtitlesOn(p) && !!fileSubForRel(rel, p);
   if (typeof rel === 'string' && rel.startsWith('os:')) return canAutoSubtitle(p);
   return false;
 }
@@ -20442,6 +20537,10 @@ function cleanSubtitleLabel(label) {
 }
 function subtitleDisplayName(rel) {
   if (!rel) return '';
+  if (typeof rel === 'string' && rel.startsWith('fs:')) {
+    const sub = fileSubForRel(rel);
+    return sub ? fileSubLabel(sub) : 'Subtitle in the file';
+  }
   if (typeof rel === 'string' && rel.startsWith('rs:')) {
     const sub = releaseSubForRel(rel);
     return sub ? releaseSubLabel(sub) : 'Built-in subtitle';

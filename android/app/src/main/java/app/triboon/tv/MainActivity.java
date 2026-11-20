@@ -328,6 +328,12 @@ public class MainActivity extends Activity {
     // Brief 137 step 6: "Other versions" rows (another release of this title with better sound this
     // box plays as it is). A pick round-trips to the web, which switches at the live second.
     private final java.util.ArrayList<String> nativeOtherVersionKeys = new java.util.ArrayList<>();
+    // Brief 137 step 4: the subtitle inside the file to show (ordinal among the file's subtitle tracks,
+    // language and codec to verify), whether it is on screen, and per-choice file facts for the menu.
+    private org.json.JSONObject nativeFileSubtitle = null;
+    private boolean nativeFileSubtitleApplied = false;
+    private boolean nativeFileSubtitlesActive = false;
+    private final java.util.ArrayList<String> nativeSubtitleChoiceFiles = new java.util.ArrayList<>();
     private final java.util.ArrayList<String> nativeOtherVersionLabels = new java.util.ArrayList<>();
     // Audio-language selection state: the payload carries the user's saved preference (web
     // Preferences → Audio language); a manual in-player pick is stickier and survives the
@@ -3006,6 +3012,9 @@ public class MainActivity extends Activity {
             boolean sinkTrueHd = sink.optBoolean("truehd");
             boolean passthrough = sink.optBoolean("passthrough");
             j.put("native", true);
+            // Brief 137 step 4: this build shows a subtitle that is inside the file with ExoPlayer's own
+            // text renderer (direct play only). Older builds lack it, so the web never sends them one.
+            j.put("fileSubtitles", true);
             j.put("sdk", Build.VERSION.SDK_INT);
             j.put("manufacturer", Build.MANUFACTURER == null ? "" : Build.MANUFACTURER);
             j.put("brand", Build.BRAND == null ? "" : Build.BRAND);
@@ -4744,6 +4753,15 @@ public class MainActivity extends Activity {
                     ? (!subtitleLang.isEmpty() ? nativeLangName(subtitleLang) : "Subtitles")
                     : subtitleLabel;
             nativeHasWyzieSubtitle = subtitlePin != null;
+            nativeFileSubtitlesActive = j.optBoolean("fileSubtitlesActive", false);
+            org.json.JSONObject subtitleFile = j.optJSONObject("subtitleFile");
+            nativeFileSubtitle = subtitleFile != null && !subtitleRel.isEmpty() ? subtitleFile : null;
+            nativeFileSubtitleApplied = false;
+            if (nativeFileSubtitle != null) {
+                nativeHasWyzieSubtitle = false;
+                nativeSubtitleUrl = "";
+                clearNativeSubtitleOverlay();
+            }
             applyNativeSubtitleChoices(j.optJSONArray("subtitleChoices"));
             updateNativeEpisodeChoices(new org.json.JSONObject()
                     .put("episodes", j.optJSONArray("episodeChoices"))
@@ -4976,6 +4994,7 @@ public class MainActivity extends Activity {
                 @Override public void onTracksChanged(Tracks tracks) {
                     if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
                     updateNativeChrome();
+                    applyNativeFileSubtitle();
                     maybeLeaveNativeAudioDescription(tracks);
                     if (NativeAudioRescue.noPlayableAudio(tracks)) {
                         onNativeNoPlayableAudio(listenerPlayer, listenerPlaybackToken, NativeAudioRescue.unplayableAudioNames(tracks));
@@ -7397,6 +7416,7 @@ public class MainActivity extends Activity {
         nativeSubtitleChoiceActions.clear();
         nativeSubtitleChoiceLangs.clear();
         nativeSubtitleChoiceUrls.clear();
+        nativeSubtitleChoiceFiles.clear();
     }
 
     private void applyNativeSubtitleChoices(org.json.JSONArray subtitleChoices) {
@@ -7423,6 +7443,8 @@ public class MainActivity extends Activity {
             nativeSubtitleChoiceActions.add(action);
             nativeSubtitleChoiceLangs.add(lang);
             nativeSubtitleChoiceUrls.add(url);
+            org.json.JSONObject file = choice.optJSONObject("file");
+            nativeSubtitleChoiceFiles.add(file == null ? "" : file.toString());
         }
         updateNativeChrome();
     }
@@ -7460,6 +7482,22 @@ public class MainActivity extends Activity {
             if (choices != null) applyNativeSubtitleChoices(choices);
             String rel = j.optString("subtitleRel", "");
             String subtitleUrl = j.optString("subtitleUrl", "");
+            org.json.JSONObject subtitleFile = j.optJSONObject("subtitleFile");
+            if (!rel.isEmpty() && subtitleFile != null) {
+                nativeSubtitleRel = rel;
+                nativeSubtitleLabel = j.optString("subtitleLabel", "Subtitles");
+                nativeSubtitleLang = j.optString("subtitleLang", "");
+                nativeSubtitleShift = 0f;
+                nativeHasWyzieSubtitle = false;
+                nativeSubtitleUrl = "";
+                clearNativeSubtitleOverlay();
+                nativeFileSubtitle = subtitleFile;
+                nativeFileSubtitleApplied = false;
+                applyNativeFileSubtitle();
+                updateNativeChrome();
+                return;
+            }
+            nativeFileSubtitle = null;
             if (rel.isEmpty() || subtitleUrl.isEmpty()) {
                 nativeHasWyzieSubtitle = false;
                 nativeSubtitleRel = "";
@@ -8083,7 +8121,8 @@ public class MainActivity extends Activity {
         int syncLaterIndex = -1;
         int syncEarlierIndex = -1;
         int resetIndex = -1;
-        if (trackType == C.TRACK_TYPE_TEXT) {
+        // Brief 137: ExoPlayer has no delay for a track inside the file, so a file row shows no timing rows.
+        if (trackType == C.TRACK_TYPE_TEXT && !nativeSubtitleRel.startsWith("fs:")) {
             labels.add("\u00a7Timing" + nativeSubShiftLabel()); // 3.5.1 option A: a quiet section label
             selected.add(false);
             syncEarlierIndex = labels.size();
@@ -8164,7 +8203,24 @@ public class MainActivity extends Activity {
             showNativeChrome(false);
             return;
         }
+        if (trackType == C.TRACK_TYPE_TEXT && choice.subtitleRel != null && choice.subtitleRel.startsWith("fs:")) {
+            org.json.JSONObject file = nativeFileForSubtitleRel(choice.subtitleRel);
+            if (file == null) { showNativeChrome(false); return; }
+            nativeSubtitleRel = choice.subtitleRel;
+            nativeSubtitleLabel = choice.label;
+            nativeSubtitleShift = 0f;
+            nativeHasWyzieSubtitle = false;
+            nativeSubtitleUrl = "";
+            clearNativeSubtitleOverlay();
+            nativeFileSubtitle = file;
+            nativeFileSubtitleApplied = false;
+            applyNativeFileSubtitle();
+            notifyNativeSubtitleSelect(choice.subtitleRel);
+            showNativeChrome(false);
+            return;
+        }
         if (trackType == C.TRACK_TYPE_TEXT && choice.subtitleRel != null) {
+            nativeFileSubtitle = null;
             nativeSubtitleRel = choice.subtitleRel;
             nativeSubtitleLabel = choice.label;
             nativeSubtitleLang = nativeLangFromSubtitleRel(choice.subtitleRel);
@@ -8196,6 +8252,8 @@ public class MainActivity extends Activity {
         if (choice.off) {
             b.clearOverridesOfType(trackType).setTrackTypeDisabled(trackType, true);
             if (trackType == C.TRACK_TYPE_TEXT) {
+                nativeFileSubtitle = null;
+                nativeFileSubtitleApplied = false;
                 nativeSubtitleRel = "";
                 nativeSubtitleUrl = "";
                 nativeSubtitleHostHeader = "";
@@ -8232,6 +8290,57 @@ public class MainActivity extends Activity {
         }
         nativePlayer.setTrackSelectionParameters(b.build());
         showNativeChrome(false);
+    }
+
+    private org.json.JSONObject nativeFileForSubtitleRel(String rel) {
+        if (rel == null) return null;
+        for (int i = 0; i < nativeSubtitleChoiceRels.size(); i++) {
+            if (!rel.equals(nativeSubtitleChoiceRels.get(i)) || i >= nativeSubtitleChoiceFiles.size()) continue;
+            String raw = nativeSubtitleChoiceFiles.get(i);
+            if (raw == null || raw.isEmpty()) return null;
+            try { return new org.json.JSONObject(raw); } catch (Exception e) { return null; }
+        }
+        return null;
+    }
+
+    // Brief 137 step 4: once ExoPlayer knows the file's tracks, select the asked text track (or keep
+    // text off when the web says subtitles are off for this file). A track that is missing or does not
+    // match tells the web, which continues online; it never shows a neighbouring track.
+    private void applyNativeFileSubtitle() {
+        if (nativePlayer == null || !"video".equals(nativeMode)) return;
+        Tracks tracks = nativePlayer.getCurrentTracks();
+        if (tracks == null || tracks.isEmpty()) return;
+        if (nativeFileSubtitle == null) {
+            if (nativeFileSubtitlesActive && !nativeHasWyzieSubtitle && !nativeFileSubtitleApplied) {
+                nativeFileSubtitleApplied = true;
+                disableNativeTextTracks();
+            }
+            return;
+        }
+        if (nativeFileSubtitleApplied) return;
+        nativeFileSubtitleApplied = true;
+        NativeFileSubtitle.Pick pick = NativeFileSubtitle.find(tracks.getGroups(),
+                nativeFileSubtitle.optInt("ordinal", -1), nativeFileSubtitle.optString("lang", ""),
+                nativeFileSubtitle.optString("codec", ""), java.util.Collections.<String>emptyList());
+        if (pick == null) {
+            String rel = nativeSubtitleRel;
+            nativeFileSubtitle = null;
+            disableNativeTextTracks();
+            if (web != null) {
+                web.evaluateJavascript("window.__tvNativeFileSubtitleFailed && window.__tvNativeFileSubtitleFailed("
+                        + jsQuote(rel) + "," + jsQuote("track not found or did not match") + "," + nativePlaybackToken + ")", null);
+            }
+            return;
+        }
+        clearNativeSubtitleOverlay();
+        nativePlayer.setTrackSelectionParameters(nativePlayer.getTrackSelectionParameters().buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .setOverrideForType(new TrackSelectionOverride(pick.group.getMediaTrackGroup(), pick.track))
+                .build());
+        if (nativePlayerView != null && nativePlayerView.getSubtitleView() != null) {
+            nativePlayerView.getSubtitleView().setVisibility(View.VISIBLE);
+        }
     }
 
     private void disableNativeTextTracks() {
