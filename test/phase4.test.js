@@ -12735,3 +12735,25 @@ test('a release sidecar in "eng" shows for a profile language saved as "en" (sec
   assert.strictEqual(match({ lang: '' }, 'eng'), false, 'an untagged sidecar is not the wanted language');
   assert.strictEqual(match({ lang: 'und' }, 'und'), false, '"und" is no language');
 });
+
+test('Other versions is looked up only for a usenet play with a session, never a library file (second check 3.5.6)', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const i = ui.indexOf('async function loadOtherVersions(p) {');
+  const j = ui.indexOf('function pushNativeOtherVersions(p) {', i);
+  assert.ok(i >= 0 && j > i);
+  const asked = [];
+  const S = { playing: null };
+  const load = new Function('S', 'clientCaps', 'api', 'sourceSearchQuery', 'fetchPlayerTracks', 'otherVersionRows', 'refreshNativeAudioChoices', 'pushNativeOtherVersions',
+    `${ui.slice(i, j)}\nreturn loadOtherVersions;`)(
+    S, () => ({ native: true }), async (url) => { asked.push(url); return { candidates: [] }; }, () => 'q=x',
+    async () => null, () => [], () => {}, () => {});
+  const local = { item: { type: 'movie', title: 'A Film', _local: { playUrl: '/api/local/l/1/play' } }, usingNative: true, tracks: { audio: [] } };
+  S.playing = local; await load(local);
+  assert.deepStrictEqual(asked, [], 'a library file never sends an indexer search');
+  const noSession = { item: { type: 'movie', title: 'A Film' }, usingNative: true, tracks: { audio: [] } };
+  S.playing = noSession; await load(noSession);
+  assert.deepStrictEqual(asked, [], 'a play with no usenet session (it cannot switch) sends none either');
+  const usenet = { item: { type: 'movie', title: 'A Film' }, usingNative: true, sessionId: 's1', tracks: { audio: [] } };
+  S.playing = usenet; await load(usenet);
+  assert.strictEqual(asked.length, 1, 'a usenet play still looks up its other versions');
+});

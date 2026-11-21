@@ -15977,6 +15977,9 @@ function otherVersionRows(p, list, caps = clientCaps()) {
 }
 async function loadOtherVersions(p) {
   if (!p || !p.item || p.item.type === 'live' || p._otherVersionsLoading || !p.usingNative) return;
+  // Only a usenet play with a session can switch (autoAdvance needs it). A library file has no
+  // search to reuse, so asking would fan out to every indexer on each play (second check 3.5.6).
+  if (!p.sessionId || p.item._local) return;
   if (!(clientCaps() || {}).native) return;
   p._otherVersionsLoading = true;
   try {
