@@ -101,6 +101,16 @@ test('/api/filesub serves the side track; a play without a side file answers NO_
     const r = await httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${t}&fs=abc123def`);
     assert.strictEqual(r.status, 200);
     assert.match(r.raw, /00:31\.000 --> 00:33\.000\nEnglish line 6/);
+    // A seek respawns the remux with the same play id: the same address now reads the new side file.
+    await new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: srv.port, path: `/api/remux/${id}?t=${t}&start=90&fs=abc123def` }, (res) => {
+        res.resume(); res.on('end', resolve);
+      }).on('error', reject);
+    });
+    const afterSeek = await httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${t}&fs=abc123def`);
+    assert.strictEqual(afterSeek.status, 200);
+    assert.match(afterSeek.raw, /01:31\.000 --> 01:33\.000\nEnglish line 18/, 'the newest remux of this play');
+    assert.doesNotMatch(afterSeek.raw, /English line 6\b/, 'not the side file of the remux before the seek');
     const missing = await httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${t}&fs=zzz999zzz`);
     assert.strictEqual(missing.status, 404);
     assert.strictEqual(missing.json.code, 'NO_SIDE');

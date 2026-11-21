@@ -4857,17 +4857,39 @@ function fileSubTextRels(vf) {
   return subs.filter((s) => s && s.text === true && FILE_SUB_SIDE_CODECS.has(String(s.codec || '').toLowerCase()) && Number.isInteger(Number(s.rel)))
     .map((s) => Number(s.rel)).slice(0, FILE_SUB_MAX_TRACKS);
 }
+// Windows will not delete a file ffmpeg still holds (the old remux of a seek is killed a moment
+// later), so a failed delete is tried again.
+function removeFileSubFile(file, tries = 0) {
+  try { fs.rmSync(file, { force: true }); }
+  catch { if (tries < 4) setTimeout(() => removeFileSubFile(file, tries + 1), 15000).unref(); }
+}
 function dropFileSubSession(sess) {
   if (!sess || sess.dropped) return;
   sess.dropped = true;
-  try { fs.rmSync(sess.file, { force: true }); } catch {}
+  removeFileSubFile(sess.file);
 }
+// Left behind by a server that stopped without cleaning up (another process id).
+function sweepOldFileSubDirs(now = Date.now()) {
+  const base = path.dirname(FILE_SUB_DIR);
+  let names = [];
+  try { names = fs.readdirSync(base); } catch { return; }
+  for (const name of names) {
+    if (!/^triboon-filesub-\d+$/.test(name) || path.join(base, name) === FILE_SUB_DIR) continue;
+    try {
+      const st = fs.statSync(path.join(base, name));
+      if (now - st.mtimeMs > 6 * 3600 * 1000) fs.rmSync(path.join(base, name), { recursive: true, force: true });
+    } catch {}
+  }
+}
+setTimeout(() => { try { sweepOldFileSubDirs(); } catch {} }, 30000).unref();
 function closeMountFileSubs(vf) {
   if (!vf || !vf._fileSubs) return;
   for (const sess of vf._fileSubs.values()) dropFileSubSession(sess);
   vf._fileSubs.clear();
 }
-// Returns { file, rels } for the spawn, or null (no ask, no known text track, or no disk).
+// One id per play (fs=<id>): every remux of that play (Play, each seek, an audio switch) gets a
+// fresh side file and the id points at the newest one, so the subtitle address a player holds never
+// goes stale. Returns { file, rels } for the spawn, or null (no ask, no known text track, no disk).
 function openFileSubSession(vf, fsidRaw, startSeconds, uid) {
   const fsid = fileSubSessionId(fsidRaw);
   if (!vf || !fsid) return null;
@@ -4882,8 +4904,8 @@ function openFileSubSession(vf, fsidRaw, startSeconds, uid) {
     dropFileSubSession(sess);
     vf._fileSubs.delete(k);
   }
-  const file = path.join(FILE_SUB_DIR, `${vf.id}-${fsid}.mkv`);
-  try { fs.rmSync(file, { force: true }); } catch {}
+  vf._fileSubSeq = (Number(vf._fileSubSeq) || 0) + 1;
+  const file = path.join(FILE_SUB_DIR, `${vf.id}-${fsid}-${vf._fileSubSeq}.mkv`);
   const sess = { fsid, file, rels, start: Math.max(0, Number(startSeconds) || 0), uid: uid || null, done: false, at: Date.now(), cache: null };
   vf._fileSubs.set(fsid, sess);
   return sess;
