@@ -15303,7 +15303,11 @@ async function loadTracks() {
     applyTrackPrefs(); // preferred audio/subtitle language + surround button
     updateClocks(); // duration just arrived → "Ends at" can render
     applyEpisodePartStart(p);
-  } catch { updatePlayerControlAvailability(); }
+  } catch {
+    if (fileSubDeadline) clearTimeout(fileSubDeadline);
+    releaseFileSubWait();
+    updatePlayerControlAvailability();
+  }
 }
 // Brief 127: this file holds two (or more) episodes and the viewer chose a later one (S05E14E15
 // for Part 2). Start at that part: the chapter nearest its share of the file. Without a fitting

@@ -12857,3 +12857,12 @@ test('file subtitle languages match through the code table, never by cutting a c
   assert.strictEqual(same('und', 'und'), false);
   assert.strictEqual(same('', 'en'), false);
 });
+
+test('a track probe that errors releases the file-subtitle wait at once, not at the 6 s deadline (second check 3.5.6)', () => {
+  const web = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const i = web.indexOf('async function loadTracks() {');
+  const j = web.indexOf('\n}\n', i);
+  assert.ok(i >= 0 && j > i);
+  assert.match(web.slice(i, j + 2), /\} catch \{\s*if \(fileSubDeadline\) clearTimeout\(fileSubDeadline\);\s*releaseFileSubWait\(\);\s*updatePlayerControlAvailability\(\);\s*\}\s*\}\s*$/,
+    'a network or server error on the probe goes online at once, as an empty answer does');
+});
