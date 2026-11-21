@@ -12974,3 +12974,26 @@ test('Other versions never offers an AV1 copy to a device without an AV1 decoder
   assert.deepStrictEqual(fns.otherVersionRows(p, list, shield).map((r) => r.pickKey), ['avc'], 'no AV1 copy without an AV1 decoder');
   assert.deepStrictEqual(fns.otherVersionRows(p, list, { ...shield, av1: true }).map((r) => r.pickKey), ['av1', 'avc']);
 });
+
+test('browser file lines: the read pace follows the lines near the picture, and a release swap starts clean (second check 3.5.7)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const src = grab('function fileSideNextReadMs(', 'function startFileSideSubtitles(');
+  const fns = new Function(`${src}\nreturn { fileSideNextReadMs, fileSideAheadSeconds };`)();
+  assert.strictEqual(typeof fns.fileSideAheadSeconds, 'function');
+  // Read up to 40:00, then a seek back to 10:00: the lines on hand are far ahead, but none near 10:00.
+  const lines = [];
+  for (let t = 2390; t < 2400; t += 3) lines.push({ start: t, end: t + 2 });
+  assert.strictEqual(fns.fileSideAheadSeconds(lines, 600), 0, 'nothing near the picture after the seek back');
+  assert.strictEqual(fns.fileSideNextReadMs(20, fns.fileSideAheadSeconds(lines, 600)), 1000, 'so the next read is soon, not in 8 s');
+  // Lines that run on from the picture count as ahead.
+  const near = [];
+  for (let t = 600; t < 660; t += 4) near.push({ start: t, end: t + 2 });
+  assert.ok(fns.fileSideAheadSeconds(near.concat(lines), 601) >= 55, 'a run of lines from the picture');
+  // A release swap clears the old release's lines: the cue set is keyed by the mount too.
+  const start = grab('function startFileSideSubtitles(p, rel, seq) {', 'function applySubtitleTrack() {');
+  assert.match(start, /const cueKey = `\$\{p\.mountId \|\| ''\}\|\$\{rel\}`;\s*\n\s*if \(p\._fsCueRel !== cueKey\) \{/);
+  assert.match(start, /if \(Math\.abs\(now - lastNow\) > 20\) polls = 0;/, 'a jump of the picture starts the pace again');
+  const swap = grab('p.tracks = null; p._tracksJob = null; p.subTrack = null; p.audioTrack = 0; p.forceAacRemux = false;', 'updatePlayerMeta();');
+  assert.match(swap, /p\._fileSubFailed = false;/, 'a failure on the old release does not hide the new release\'s file track');
+});

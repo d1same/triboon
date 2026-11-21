@@ -17848,6 +17848,7 @@ async function autoAdvance(opts = {}) {
     p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0;
     p.tracks = null; p._tracksJob = null; p.subTrack = null; p.audioTrack = 0; p.forceAacRemux = false;
     p.nativeAacAudio = false;
+    p._fileSubFailed = false; // the new release's own file track gets its own chance (second check 3.5.7)
     if (!opts.allowMidstreamAdvance) {
       $('pSrc').textContent = r.candidate ? r.candidate.name : r.name;
     }
@@ -21866,12 +21867,25 @@ function fileSideNextReadMs(reads, aheadSeconds) {
   if (!(aheadSeconds >= 15)) return 1000;
   return reads < 8 ? 3000 : 8000;
 }
+// How far the lines on hand run on from the picture: a run of lines with no gap over 30 s. The end
+// of the whole list is no measure after a seek back (lines far ahead, none here; second check 3.5.7).
+function fileSideAheadSeconds(lines, now) {
+  let end = now; let found = false;
+  for (const c of lines || []) {
+    if (!(c && c.end >= now)) continue;
+    if (c.start - end > 30) break;
+    end = Math.max(end, c.end); found = true;
+  }
+  return found ? end - now : 0;
+}
 function startFileSideSubtitles(p, rel, seq) {
   const tt = fileSideTextTrack(p);
-  if (p._fsCueRel !== rel) {
+  // Keyed by the mount too: after a release swap the old release's lines must not stay.
+  const cueKey = `${p.mountId || ''}|${rel}`;
+  if (p._fsCueRel !== cueKey) {
     for (const c of [...(tt.cues || [])]) { try { tt.removeCue(c); } catch {} }
     p._fsCueKeys = new Set();
-    p._fsCueRel = rel;
+    p._fsCueRel = cueKey;
   }
   try { for (const other of [...($('video').textTracks || [])]) if (other !== tt) other.mode = 'disabled'; } catch {}
   tt.mode = 'hidden';
@@ -21880,7 +21894,8 @@ function startFileSideSubtitles(p, rel, seq) {
   applySubShiftToCues(tt, p._subShift || 0); // a nudge or Reset reaches the lines already here
   let fails = 0;
   let polls = 0;
-  let sideEnd = 0; // where the newest read of the side file ends (the track also keeps older lines)
+  let sideLines = []; // the newest read of the side file, on the picture's clock
+  let lastNow = subtitleCueNow(p);
   const live = () => S.playing === p && p._subSeq === seq && p.subTrack === rel;
   const poll = async () => {
     if (!live()) return;
@@ -21892,7 +21907,7 @@ function startFileSideSubtitles(p, rel, seq) {
       fails = 0;
       const shift = +(p._subShift || 0);
       const lines = parseVttCues(await r.text().catch(() => ''));
-      sideEnd = lines.length ? lines[lines.length - 1].end + shift : 0;
+      sideLines = lines.map((c) => ({ start: c.start + shift, end: c.end + shift }));
       for (const c of lines) {
         const key = `${c.start}|${c.end}|${c.text}`;
         if (p._fsCueKeys.has(key)) continue;
@@ -21917,7 +21932,10 @@ function startFileSideSubtitles(p, rel, seq) {
     }
     // Read again soon while the lines already here end close to the picture: a remux that runs only
     // a few seconds ahead (a slow source) writes the next line just in time.
-    setTimeout(poll, fileSideNextReadMs(polls, sideEnd - subtitleCueNow(p)));
+    const now = subtitleCueNow(p);
+    if (Math.abs(now - lastNow) > 20) polls = 0;
+    lastNow = now;
+    setTimeout(poll, fileSideNextReadMs(polls, fileSideAheadSeconds(sideLines, now)));
   };
   poll();
 }
