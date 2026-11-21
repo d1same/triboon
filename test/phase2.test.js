@@ -7215,10 +7215,12 @@ test('pipeline: a file that died is not picked again for that title (backup, pre
   pipeline._advance = async (session) => { walked = session.candidates.slice(session.cursor).map((c) => c.pickKey); return { ok: true }; };
   const armed = [];
   pipeline._tryCandidate = (c) => { armed.push(c.pickKey); return new Promise(() => {}); };
-  pipeline.sessions.set('s1', { id: 's1', activeCandidate: dead, currentMountId: 'm1', candidates: [dead, other, third], cursor: 1, query, policy: {}, history: [] });
+  // The same release name from a second indexer sits ahead of the cursor, as in the log's 60-copy list.
+  const twin = { ...dead, nzbUrl: 'http://ix2/getnzb/1', pickKey: 'k1b' };
+  pipeline.sessions.set('s1', { id: 's1', activeCandidate: dead, currentMountId: 'm1', candidates: [dead, twin, other, third], cursor: 1, query, policy: {}, history: [] });
   await pipeline.advance('s1', { cause: 'stall-repeat', reason: 'failed at 0s: ERROR_CODE_TIMEOUT' });
   assert.strictEqual(store.size, 0, 'a stall-caused switch still leaves the release reputation alone for everyone else');
-  assert.deepStrictEqual(walked, ['k2', 'k3', 'k1'], 'the walk tries every other copy first; the dead one only as the last copy left');
+  assert.deepStrictEqual(walked, ['k2', 'k3', 'k1b'], 'the walk tries every other copy first; another copy of the dead file only as the last one left');
   assert.strictEqual(pipeline._preparedForPlay(query, {}), null, 'the next Play does not join the dead file through the prepared copy');
   assert.deepStrictEqual(pipeline._playableCandidates([dead, other, third], query).map((c) => c.pickKey), ['k2', 'k3', 'k1'],
     'a fresh search for the same title ranks the dead file last');

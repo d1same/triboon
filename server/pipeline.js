@@ -2048,7 +2048,7 @@ class Pipeline {
   // false, true (it died for this title) or 'damaged' (the byte check proved the file broken).
   _diedForTitle(params, candidate) {
     if (!candidate) return false;
-    const list = this.diedForTitle.get(this._titleIdentity(params || {}));
+    const list = this.diedForTitle && this.diedForTitle.get(this._titleIdentity(params || {}));
     if (!list) return false;
     const now = Date.now();
     const name = candidate.name ? normTitle(candidate.name) : '';
@@ -2072,7 +2072,7 @@ class Pipeline {
   // The same order with this title's dead files moved to the end, so they are tried only when
   // nothing else is left.
   _deferDied(params, list) {
-    if (!Array.isArray(list) || !this.diedForTitle.size) return list;
+    if (!Array.isArray(list) || !this.diedForTitle || !this.diedForTitle.size) return list;
     const keep = [];
     const died = [];
     for (const c of list) (this._diedForTitle(params, c) ? died : keep).push(c);
@@ -4485,22 +4485,18 @@ class Pipeline {
   // spent, and only the picked release is tried. It obeys the same rules as a Sources tap (never over
   // the admin cap or the per-play resolution cap, never a hard-dead file). If it fails, the session
   // keeps the source it had, so the player keeps its picture.
-  // Moves this title's dead files behind the unwalked copies, so the walk reaches them only when
-  // every other copy has been tried. The order of everything else is kept.
+  // Moves this title's dead files that the walk has not reached yet behind the other unwalked
+  // copies. A copy already walked stays walked (as in 3.5.6), so a play whose only copy died still
+  // ends with "no other copy". The order of everything else is kept.
   _deferDiedInSession(session) {
     const list = session && session.candidates;
     if (!Array.isArray(list) || !list.length) return;
     const cursor = Math.max(0, Math.min(list.length, Number(session.cursor) || 0));
-    const walked = [];
     const ahead = [];
     const died = [];
-    list.forEach((c, i) => {
-      if (this._diedForTitle(session.query, c)) died.push(c);
-      else (i < cursor ? walked : ahead).push(c);
-    });
+    list.slice(cursor).forEach((c) => (this._diedForTitle(session.query, c) ? died : ahead).push(c));
     if (!died.length) return;
-    session.candidates = [...walked, ...ahead, ...died];
-    session.cursor = walked.length;
+    session.candidates = [...list.slice(0, cursor), ...ahead, ...died];
   }
 
   async switchTo(sessionId, pickKey, mountOpts = {}) {
