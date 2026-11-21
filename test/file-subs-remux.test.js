@@ -165,3 +165,39 @@ test('a hostile or broken size field never freezes the server (second check 3.5.
   assert.strictEqual(r.status, 0, r.stderr);
   assert.match(r.stdout, /done/);
 });
+
+test('/api/filesub: a local file seek back reads the lines at the new picture (second check 3.5.7)', { skip: !ff && 'no ffmpeg' }, async () => {
+  // 6 minutes at about 2 Mbit/s, so the 90 s read-ahead spans many 4 MB reads. An English line every 5 s.
+  const lines = [];
+  for (let i = 0; i < 72; i++) lines.push([i * 5 + 1, i * 5 + 3, `Long line ${i}`]);
+  fs.writeFileSync(path.join(dir, 'long.srt'), srt(lines));
+  const movie = path.join(dir, 'long.mkv');
+  const r = spawnSync(ff.path, ['-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc=size=640x360:rate=24', '-i', path.join(dir, 'long.srt'), '-t', '360',
+    '-map', '0', '-map', '1', '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '2M', '-g', '48',
+    '-c:s', 'srt', '-metadata:s:s:0', 'language=eng', movie]);
+  assert.strictEqual(r.status, 0, String(r.stderr));
+  const size = fs.statSync(movie).size;
+  assert.ok(size > 40 * 1048576, `fixture is big enough (${size})`);
+  const srv = await bootServer();
+  try {
+    await setupAdmin(srv.port);
+    const uid = srv.auth._users().list[0].id;
+    const tracks = { available: true, duration: 360, audio: [], subs: [{ rel: 0, codec: 'subrip', lang: 'eng', text: true }] };
+    const id = 'fsubseekback';
+    srv.mounts.set(id, { id, name: 'Long.mkv', size, streamable: true, mountedAt: Date.now(), _local: { file: movie }, _tracks: tracks });
+    const t = srv.auth.streamToken(uid, id);
+    const ask = (at) => httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${t}&at=${at}`);
+    const until = async (at, re) => {
+      for (let n = 0; n < 40; n++) { const a = await ask(at); if (re.test(a.raw)) return true; await new Promise((ok) => setTimeout(ok, 250)); }
+      return false;
+    };
+    // Resume at 5:00: the lines there arrive.
+    assert.ok(await until(300, /00:05:01\.000 --> 00:05:03\.000\nLong line 60/), 'the lines at 5:00');
+    // Seek back to 1:00: the lines at the new picture arrive too.
+    assert.ok(await until(60, /00:01:01\.000 --> 00:01:03\.000\nLong line 12/), 'the lines at 1:00 after a seek back');
+    assert.ok(await until(60, /00:01:46\.000 --> 00:01:48\.000\nLong line 21/), 'and the next minute and a half');
+  } finally {
+    await srv.shutdown();
+  }
+});

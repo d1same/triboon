@@ -4901,21 +4901,33 @@ async function readLocalSubtitlesAhead(vf, tap, at) {
     }
     const fh = await fs.promises.open(file, 'r');
     try {
-      let read = 0;
-      const before = tap.maxTime;
+      // Second check 3.5.7: coverage is what THIS read reached (its own first and last cluster
+      // times), not the latest time any reader ever saw. With that running maximum, a seek back
+      // stopped after one read and marked minutes it never read as covered, so their lines never came.
+      let read = 0; let startOff = off; let back = 0; let span = null; let eof = false;
       for (;;) {
         const b = Buffer.alloc(4 * 1048576);
         const { bytesRead } = await fh.read(b, 0, b.length, off);
-        if (!bytesRead) { st.to = Infinity; break; }
+        if (!bytesRead) { eof = true; break; }
         tap.feed(off, b.subarray(0, bytesRead));
         off += bytesRead; read += bytesRead;
-        const now = tap.maxTime;
-        if (st.from < 0 && now > 0) st.from = Math.min(now, at);
-        st.to = Math.max(st.to, now);
         st.next = off;
-        if (now >= at + LOCAL_SUB_AHEAD_SEC || read >= LOCAL_SUB_READ_CAP) break;
-        if (now === before && read > 64 * 1048576) break; // no clusters here: give up for this ask
+        const seen = tap.timesAt(off);
+        if (seen) span = { first: span ? span.first : seen.first, last: seen.last };
+        // The guess landed past the picture (a variable bitrate): start earlier, a few times at most.
+        if (!contiguous && span && span.first > at + 1 && startOff > 0 && back < 4) {
+          startOff = Math.max(0, startOff - 16 * 1048576); off = startOff; back += 1; read = 0; span = null;
+          continue;
+        }
+        if (span && span.last >= at + LOCAL_SUB_AHEAD_SEC) break;
+        if (read >= LOCAL_SUB_READ_CAP) break;
+        if (!span && read > 64 * 1048576) break; // no clusters here: give up for this ask
       }
+      if (span) {
+        st.from = contiguous && st.from >= 0 ? Math.min(st.from, span.first) : span.first;
+        st.to = contiguous ? Math.max(st.to, span.last) : span.last;
+      }
+      if (eof) st.to = Infinity;
     } finally { await fh.close(); }
   })().catch(() => {}).finally(() => { st.job = null; });
   return st.job;

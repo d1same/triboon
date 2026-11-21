@@ -146,6 +146,11 @@ class MkvSubtitleTap {
     this.cursors = [];       // contiguous readers: { next, buf, skip, inCluster, clusterEnd, tc, pending }
     this.maxTime = 0;        // the latest cluster time seen (for the local reader)
   }
+  // The first and last cluster times the reader that has read up to `offset` has seen (null before any).
+  timesAt(offset) {
+    const c = this.cursors.find((x) => x.next === offset);
+    return c && c.firstSec != null ? { first: c.firstSec, last: c.lastSec } : null;
+  }
   textIndex(number) {
     if (!this.header) return -1;
     const t = this.header.subs.find((s) => s.number === number);
@@ -216,7 +221,10 @@ class MkvSubtitleTap {
       if (id.value === ID.Timecode) {
         if (p + hl + sz.value > buf.length) break;
         cur.tc = readUint(buf, p + hl, sz.value); take(hl + sz.value);
-        this.maxTime = Math.max(this.maxTime, cur.tc * this.header.scale / 1e9);
+        const sec = cur.tc * this.header.scale / 1e9;
+        this.maxTime = Math.max(this.maxTime, sec);
+        if (cur.firstSec == null) cur.firstSec = sec;
+        cur.lastSec = sec;
         continue;
       }
       if (id.value === ID.SimpleBlock || id.value === ID.BlockGroup) {
