@@ -12839,3 +12839,21 @@ test('Windows: a file subtitle the page sends after the file opened still falls 
   assert.match(arm, /\} else if apply_subtitle\(mpv, &subtitle, active\.subtitle_stream_offset\(\)\)\.is_ok\(\) \{[\s\S]+?\} else if subtitle\.file\.is_some\(\) \{(?:\s*\/\/[^\n]*)*\s*eval_callback\(\s*app,\s*"__tvNativeFileSubtitleFailed",\s*vec!\[json!\(subtitle\.rel\), json!\("track not found or did not match"\), json!\(active\.token\)\],\s*\);\s*\}/,
     'a mismatch tells the page, which goes online, as the two other apply paths do');
 });
+
+test('file subtitle languages match through the code table, never by cutting a code short (second check 3.5.6)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const src = grab('const LANG_ALIAS = ', 'const LANG_NAMES = ')
+    + grab('function langCode(c) {', '// Online subtitle APIs speak')
+    + grab('const LANG_3TO2 = ', 'const LANG_2TO3 = ')
+    + grab('function audioLangKey(c) {', 'function savePrefLang(')
+    + grab('function sameSubLang(', 'function fileSubMatchesPreferred(');
+  const same = new Function(`${src}\nreturn sameSubLang;`)();
+  assert.strictEqual(same('eng', 'en'), true);
+  assert.strictEqual(same('per', 'fa'), true, 'Persian, both ways of writing it');
+  assert.strictEqual(same('fas', 'per'), true);
+  assert.strictEqual(same('fao', 'fa'), false, 'Faroese is not Persian');
+  assert.strictEqual(same('jav', 'jpn'), false, 'Javanese is not Japanese');
+  assert.strictEqual(same('und', 'und'), false);
+  assert.strictEqual(same('', 'en'), false);
+});

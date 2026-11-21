@@ -20382,9 +20382,12 @@ function subtitleIntentFromSaved(saved, label = '') {
   return code ? { lang: code, forced: /\(forced\)/i.test(label), sdh: /\bSDH\b/.test(label) } : null;
 }
 // One language, however it is written: "en" (what a pick saves), "eng" or "fre" (what files carry).
+// Through the known code table only: an unknown code is compared whole, never cut to two letters
+// ("fao" Faroese is not "fa" Persian; second check 3.5.6).
 function sameSubLang(a, b) {
-  const x = audioLangKey(a);
-  return !!x && x !== 'un' && x === audioLangKey(b);
+  const key = (c) => { const x = langCode(c); return LANG_3TO2[x] || x; };
+  const x = key(a);
+  return !!x && !/^(un|und|unk|mis|zxx|mul)$/.test(x) && x === key(b);
 }
 function fileSubMatchesPreferred(sub) {
   return sameSubLang(sub && sub.lang, preferredAutoSubtitleLang());
