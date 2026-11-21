@@ -137,3 +137,31 @@ test('the remux and transcode stay exactly as in 3.5.6 (nothing added to the pic
   assert.match(server, /const subTap = mountSubtitleTap\(vf\);\s*\n\s*for await \(const chunk of vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)\) \{\s*\n\s*if \(subTap\) subTap\.feed\(start \+ sentBytes, chunk\);/,
     'the stream handler shows each chunk to the tap before sending it');
 });
+
+test('a hostile or broken size field never freezes the server (second check 3.5.7)', () => {
+  // Each case runs in a child process: the old reader looped forever on these bytes, which would
+  // stop the whole server's event loop (VOD, Live TV, API) on the first read of such a file.
+  const probe = `
+    const { MkvSubtitleTap, parseHeader } = require(${JSON.stringify(path.join(__dirname, '..', 'server', 'mkvsubs.js'))});
+    const ebml = Buffer.from([0x1A, 0x45, 0xDF, 0xA3, 0x84, 0x42, 0x86, 0x81, 0x01]);
+    const seg = Buffer.from([0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+    const el = (id, body) => Buffer.concat([Buffer.from(id), Buffer.from([0x80 | body.length]), body]);
+    const cases = {
+      // TimecodeScale with an "unknown" (all ones) size.
+      scaleUnknown: Buffer.concat([ebml, seg, el([0x15, 0x49, 0xA9, 0x66], Buffer.from([0x2A, 0xD7, 0xB1, 0xFF]))]),
+      // TimecodeScale with an 8-byte size of 2^40.
+      scaleHuge: Buffer.concat([ebml, seg, el([0x15, 0x49, 0xA9, 0x66], Buffer.from([0x2A, 0xD7, 0xB1, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]))]),
+      // A TrackEntry whose TrackNumber claims 2^40 bytes.
+      trackHuge: Buffer.concat([ebml, seg, el([0x16, 0x54, 0xAE, 0x6B], el([0xAE], Buffer.from([0xD7, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00])))]),
+    };
+    for (const [k, b] of Object.entries(cases)) {
+      parseHeader(b);
+      const tap = new MkvSubtitleTap(); tap.feed(0, b);
+    }
+    console.log('done');
+  `;
+  const r = spawnSync(process.execPath, ['-e', probe], { timeout: 10000, encoding: 'utf8' });
+  assert.strictEqual(r.signal, null, 'the reader returned instead of looping forever');
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /done/);
+});

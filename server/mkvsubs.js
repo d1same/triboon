@@ -48,7 +48,16 @@ function readSize(buf, pos) {
   for (let i = 1; i < len; i++) { v = v * 256 + buf[pos + i]; if (buf[pos + i] !== 0xFF) allOnes = false; }
   return { value: allOnes ? Infinity : v, len };
 }
-function readUint(buf, start, len) { let v = 0; for (let i = 0; i < len; i++) v = v * 256 + buf[start + i]; return v; }
+// Sizes come from the file: a length over 8 bytes, or past the bytes on hand, is a broken element.
+// Looping on it froze the whole server (an "unknown" size is Infinity; second check 3.5.7).
+function readUint(buf, start, len) {
+  if (!(len >= 0) || len > 8 || !(start >= 0) || start + len > buf.length) return 0;
+  let v = 0; for (let i = 0; i < len; i++) v = v * 256 + buf[start + i]; return v;
+}
+// A child element that does not fit inside its parent ends that parent's walk.
+function childFits(id, size, at, end) {
+  return !!(id && !id.bad && size && !size.bad && size.value !== Infinity && at + size.value <= end);
+}
 
 // Info + Tracks from the bytes at the start of the file. Returns null until enough bytes are there.
 function parseHeader(buf) {
@@ -72,7 +81,9 @@ function parseHeader(buf) {
       if (body + sz.value > buf.length) return null;
       if (id.value === ID.Info) {
         for (let p = body; p < body + sz.value;) {
-          const cid = readId(buf, p); const cs = readSize(buf, p + cid.len); const cb = p + cid.len + cs.len;
+          const cid = readId(buf, p); const cs = cid && !cid.bad ? readSize(buf, p + cid.len) : null;
+          const cb = cs ? p + cid.len + cs.len : NaN;
+          if (!childFits(cid, cs, cb, body + sz.value)) break;
           if (cid.value === ID.TimecodeScale) scale = readUint(buf, cb, cs.value) || scale;
           if (cid.value === ID.Duration) duration = cs.value === 8 ? buf.readDoubleBE(cb) : cs.value === 4 ? buf.readFloatBE(cb) : 0;
           p = cb + cs.value;
@@ -80,11 +91,15 @@ function parseHeader(buf) {
       } else {
         tracks = [];
         for (let p = body; p < body + sz.value;) {
-          const tid = readId(buf, p); const ts = readSize(buf, p + tid.len); const tb = p + tid.len + ts.len;
+          const tid = readId(buf, p); const ts = tid && !tid.bad ? readSize(buf, p + tid.len) : null;
+          const tb = ts ? p + tid.len + ts.len : NaN;
+          if (!childFits(tid, ts, tb, body + sz.value)) break;
           if (tid.value === ID.TrackEntry) {
             const t = { number: 0, type: 0, codec: '', lang: 'eng' };
             for (let q = tb; q < tb + ts.value;) {
-              const fid = readId(buf, q); const fs = readSize(buf, q + fid.len); const fb = q + fid.len + fs.len;
+              const fid = readId(buf, q); const fs = fid && !fid.bad ? readSize(buf, q + fid.len) : null;
+              const fb = fs ? q + fid.len + fs.len : NaN;
+              if (!childFits(fid, fs, fb, tb + ts.value)) break;
               if (fid.value === ID.TrackNumber) t.number = readUint(buf, fb, fs.value);
               else if (fid.value === ID.TrackType) t.type = readUint(buf, fb, fs.value);
               else if (fid.value === ID.CodecID) t.codec = buf.toString('latin1', fb, fb + fs.value).replace(/\0+$/, '');
