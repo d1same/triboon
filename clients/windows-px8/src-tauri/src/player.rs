@@ -3959,6 +3959,15 @@ fn handle_update(
                 active.ui.subtitle_rel = subtitle.rel.clone();
                 active.ui.subtitle_label = subtitle.label.clone();
                 active.subtitle = subtitle;
+            } else if subtitle.file.is_some() {
+                // Second check 3.5.6: the usual timing (the probe answer arrives after mpv opened the
+                // file). A track that does not match tells the page, which goes online, as the
+                // handoff and the control paths do; it used to stay silent with nothing on screen.
+                eval_callback(
+                    app,
+                    "__tvNativeFileSubtitleFailed",
+                    vec![json!(subtitle.rel), json!("track not found or did not match"), json!(active.token)],
+                );
             }
         }
         UpdateAction::Duration(duration) => {

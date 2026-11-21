@@ -12828,3 +12828,14 @@ test('a saved hand pick of the release\'s own subtitle file still wins on the ap
   ep = { season: 1, episode: 3 };
   assert.strictEqual(fn({ item: { type: 'episode' } }, 'rs:sub1'), 'fs:0', 'an episode keeps the 3.5.5 rule: a remembered sidecar does not stick');
 });
+
+test('Windows: a file subtitle the page sends after the file opened still falls back when it does not match (second check 3.5.6)', () => {
+  const rust = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'src-tauri', 'src', 'player.rs'), 'utf8');
+  const i = rust.indexOf('UpdateAction::ActiveSubtitle(mut subtitle) => {');
+  const j = rust.indexOf('UpdateAction::Duration(duration) => {', i);
+  assert.ok(i >= 0 && j > i);
+  const arm = rust.slice(i, j);
+  // The usual timing: the probe answer arrives after mpv opened the file.
+  assert.match(arm, /\} else if apply_subtitle\(mpv, &subtitle, active\.subtitle_stream_offset\(\)\)\.is_ok\(\) \{[\s\S]+?\} else if subtitle\.file\.is_some\(\) \{(?:\s*\/\/[^\n]*)*\s*eval_callback\(\s*app,\s*"__tvNativeFileSubtitleFailed",\s*vec!\[json!\(subtitle\.rel\), json!\("track not found or did not match"\), json!\(active\.token\)\],\s*\);\s*\}/,
+    'a mismatch tells the page, which goes online, as the two other apply paths do');
+});
