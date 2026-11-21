@@ -13036,3 +13036,9 @@ test('Android side file: the pace follows the lines near the picture, re-reads s
   assert.match(java, /if \(NativeSideSubtitle\.isSideFile\(cleanUrl\) && nativeSubtitleCues\.isEmpty\(\) && web != null\) \{\s*web\.evaluateJavascript\("window\.__tvNativeFileSubtitleFailed && window\.__tvNativeFileSubtitleFailed\("/,
     'a side file that never loads hands over to online');
 });
+
+test('a release swap on the TV and Windows apps marks the carried online subtitle as automatic, so the new file\'s track can take over (second check 3.5.7)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(ui, /if \(nativePreferred && carriedSubTrack\) p\.subTrack = carriedSubTrack;\s*\n\s*if \(nativePreferred && carriedSubTrack\) p\._subAutoPick = carriedSubTrack;/,
+    'as setSubtitle already does for the browser');
+});

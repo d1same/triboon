@@ -17860,7 +17860,10 @@ async function autoAdvance(opts = {}) {
     }
     resumeAt = liveAt();
     const quiet = !!opts.allowMidstreamAdvance;
+    // The carried pick is automatic, as setSubtitle marks it in the browser: the new file's own track
+    // in the viewer's language may take over once its probe lands (second check 3.5.7).
     if (nativePreferred && carriedSubTrack) p.subTrack = carriedSubTrack;
+    if (nativePreferred && carriedSubTrack) p._subAutoPick = carriedSubTrack;
     if (nativePreferred && tryNativePlaybackLadder(resumeAt, startKind, quiet ? { quietSeek: true } : {})) {
       startNativePlayerHousekeeping(p.item);
       if (typeof p.subTrack === 'string' && p.subTrack.startsWith('os:')) autoSyncNative(p, p.subTrack);
