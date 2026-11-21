@@ -7260,6 +7260,35 @@ test('pipeline: a file the byte check proved damaged is never the backup, even a
   assert.strictEqual(pipeline._diedForTitle(other, next), false, 'a verdict that blames Triboon marks nothing');
 });
 
+test('pipeline: a backup still warming when the byte check proves its file damaged is not kept, and the dead file stops being the title\'s prepared copy', async () => {
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(), performance: () => ({}) });
+  const query = { q: 'Show S04E04', season: 4, ep: 4 };
+  const broken = { nzbUrl: 'http://ix/getnzb/1', name: 'Show.S04E04.2160p.AMZN.WEB-DL.DDP5.1.H.265-GRP', pickKey: 'k1', score: 300 };
+  const next = { nzbUrl: 'http://ix/getnzb/2', name: 'Show.S04E04.2160p.WEB.H265-OTH', pickKey: 'k2', score: 250 };
+  // The dead file only died, so it is the last backup left; its mount finishes after the verdict.
+  pipeline._noteDiedForTitle(query, broken);
+  let finish;
+  pipeline._tryCandidate = () => new Promise((r) => { finish = r; });
+  pipeline._startPlaybackWarmup = () => {};
+  pipeline._armStandby(query, {}, {}, [broken, next], 'k2', 0, next);
+  pipeline._onByteCheckVerdict(query, {}, broken, { fault: 'file', text: 'FILE damaged' });
+  finish({ vf: { id: 'm7', streamable: true } });
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(pipeline._findTitleStandby(query, {}), null, 'a warm-up that lands after the verdict is not kept as the backup');
+
+  // The prepared record pointed at the file that died: advance drops it, so prepare warms another copy.
+  const vf = { id: 'm1', streamable: true };
+  pipeline.mounts.set('m1', vf);
+  const q2 = { q: 'Show S06E24', season: 6, ep: 24 };
+  const dead = { nzbUrl: 'http://ix/getnzb/9', name: 'Show.S06E26.1080p.WEB-DL-GRP', pickKey: 'k9', score: 300 };
+  pipeline._rememberTitlePrepared(q2, {}, vf, dead);
+  pipeline._advance = async () => ({ ok: true });
+  pipeline._tryCandidate = () => new Promise(() => {});
+  pipeline.sessions.set('s2', { id: 's2', activeCandidate: dead, currentMountId: 'm1', candidates: [dead], cursor: 1, query: q2, policy: {}, history: [] });
+  await pipeline.advance('s2', { cause: 'stall-repeat' });
+  assert.strictEqual(pipeline._findTitlePreparedReady(q2, {}), null, 'the title no longer answers "prepared" with the dead file');
+});
+
 test('subtitles: malformed SRT timestamps from old fan subs become valid VTT; dialogue digits are untouched', () => {
   const { srtToVtt } = require('../server/opensubs');
   const vtt = srtToVtt('1\r\n0:00:01,500 --> 00:00:04,5\r\nHello 1:23:45,6 world\r\n\r\n2\r\n00:00:05,000 --> 00:00:06.250\r\nok\r\n');

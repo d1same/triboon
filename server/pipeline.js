@@ -2144,6 +2144,16 @@ class Pipeline {
     return null;
   }
 
+  // The title's warmed copy is the file that just died: drop the record (not the mount, which the
+  // session may still hold), so the next prepare warms another copy instead of answering with it.
+  _clearTitlePrepared(params, pickKey) {
+    const titleId = this._titleIdentity(params || {});
+    if (!pickKey || !titleId || titleId === '||||') return;
+    for (const [key, rec] of [...this.titlePreparedReady]) {
+      if (rec && rec.titleId === titleId && rec.candidate && rec.candidate.pickKey === pickKey) this.titlePreparedReady.delete(key);
+    }
+  }
+
   _clearTitleStandby(params, policy, pickKey) {
     for (const key of this._standbyKeys(params, policy)) {
       const rec = this.titlePreparedStandby.get(key);
@@ -2237,6 +2247,8 @@ class Pipeline {
       }
       const prepared = this._findTitlePreparedReady(params, policy);
       if (prepared && prepared.candidate && prepared.candidate.pickKey === next.pickKey) return;
+      // The byte check can prove the file damaged while its warm-up is still mounting.
+      if (this._diedForTitle(params, next) === 'damaged') return;
       res.vf._touched = Date.now();
       if (!mountHasActivePlayback(res.vf)) res.vf._preparedOnly = true;
       if (next.name) res.vf._releaseName = next.name;
@@ -4582,6 +4594,7 @@ class Pipeline {
       this._noteDiedForTitle(session.query, session.activeCandidate);
       this._deferDiedInSession(session);
       this._clearTitleStandby(session.query || {}, session.policy || {}, session.activeCandidate.pickKey);
+      this._clearTitlePrepared(session.query || {}, session.activeCandidate.pickKey);
       session.activeCandidate = null;
     }
     const nextOpts = _we ? { ...rest, wantedEpisode: _we } : rest;
