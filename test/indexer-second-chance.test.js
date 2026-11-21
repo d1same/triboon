@@ -266,21 +266,26 @@ test('Settings → Indexers: the health line says plainly when an indexer is slo
   assert.match(html, /\$\{esc\(ixHealth\.text\)\}/, 'and escapes it');
 });
 
-test('second chance: a Play pressed while a warm-up round runs joins that round instead of asking the indexer again', async () => {
+test('second chance: only a Play the viewer pressed asks the slow indexer again; a warm-up never starts or joins a round (lead decision, 3.5.8)', async () => {
+  // Warm-ups (card focus, Up next, Jellyfin prepare) run for titles nobody pressed Play on. A round
+  // for them spends indexer API calls against the daily limit, and a round that finds nothing marks
+  // the search tried for 10 minutes, taking the second chance away from the Play that follows.
   const r = await rig([
     { name: 'quick' },
     { name: 'slowgeek', delayMs: 1200, release: PLAYABLE },
   ]);
   try {
-    const prep = r.pipeline.prepare({ q: 'Movie 2024' });
+    await r.pipeline.prepare({ q: 'Movie 2024' }).catch(() => null);
+    assert.ok(!(r.pipeline.metrics.secondChanceRounds > 0), 'the warm-up started no round');
+    assert.strictEqual(r.pipeline._secondChanceTried.size, 0, 'and used up nothing');
+    const play = r.pipeline.play({ q: 'Movie 2024' });
     const until = Date.now() + 5000;
     while (!(r.pipeline.metrics.secondChanceInflight > 0) && Date.now() < until) await new Promise((res) => setTimeout(res, 5));
-    assert.ok(r.pipeline.metrics.secondChanceInflight > 0, 'the warm-up started its round');
-    const play = await r.pipeline.play({ q: 'Movie 2024' });
-    await prep;
-    assert.strictEqual(play.candidate.name, PLAYABLE);
-    assert.strictEqual(r.pipeline.metrics.secondChanceRounds, 1, 'one round for the warm-up and the Play together');
-    assert.ok(r.pipeline.metrics.secondChanceJoins >= 1, 'the Play joined it');
+    assert.ok(r.pipeline.metrics.secondChanceInflight > 0, 'the Play started its own round');
+    await r.pipeline.prepare({ q: 'Movie 2024' }).catch(() => null);
+    assert.ok(!(r.pipeline.metrics.secondChanceJoins > 0), 'a warm-up during the Play round does not join it');
+    assert.strictEqual((await play).candidate.name, PLAYABLE, 'the Play still gets its second chance and plays');
+    assert.strictEqual(r.pipeline.metrics.secondChanceRounds, 1, 'one round, for the Play');
   } finally {
     await r.done();
   }

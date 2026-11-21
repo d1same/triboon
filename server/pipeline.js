@@ -4433,11 +4433,10 @@ class Pipeline {
     // release, so the warm-up failed and was cached as failed ("House S04E06 — 33 disqualified by
     // score") and every episode then started cold. Play itself already fell back to 1080p.
     // (The soft exact-rank pass is Play-only, as before.)
-    let chosen = await this._playableWithFallbacks(params, policy, first.candidates, { softExact: false });
-    // Brief 148: the owner's "prepare failed … NZBgeek: deadline after 2000ms (x4)" was a warm-up.
-    // A Play joining while this round runs shares it instead of asking the indexer again.
-    const second = await this._playableAfterSecondChance(params, policy, first, chosen, { softExact: false });
-    if (second) { chosen = second; searchErrors = second.errors; }
+    const chosen = await this._playableWithFallbacks(params, policy, first.candidates, { softExact: false });
+    // No second chance here (lead decision, 3.5.8): a warm-up runs for a title nobody pressed Play
+    // on. Asking a slow indexer again would spend its daily API calls, and a round that found nothing
+    // would mark the search tried and take the second chance away from the Play that follows.
     const candidates = chosen.candidates;
     let playable = chosen.playable;
     if (!playable.length) throw noPlayableError(candidates, searchErrors, this.indexers().length);

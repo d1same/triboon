@@ -572,12 +572,14 @@ then a false "no sources"). Fast home/card focus still uses cheap `/api/search` 
 it does not mount every title the user scrolls past.
 
 Each indexer search has a hard 2 s budget. An indexer that misses it gets ONE second chance
-(brief 148), and only when the Play or warm-up ended with nothing playable after every fallback
+(brief 148), and only when a Play the viewer pressed ended with nothing playable after every fallback
 (soft exact rank, 4K relax, 1080 widen): the same queries go again to only the timed-out indexers,
 three at a time each, under one shared 8 s deadline, then the same fallbacks run on the merged hit.
 A Play that has a playable result never waits for it. A limited (429/503) indexer is not asked; a
-round that found nothing new is not repeated for 10 minutes for that search; Plays and warm-ups of
-the same search share one round, and it stops only when every waiting Play request has closed. The
+round that found nothing new is not repeated for 10 minutes for that search; Plays of the same
+search share one round, and it stops only when every waiting Play request has closed. Warm-ups
+(card focus, Up next, Jellyfin prepare) never start or join a round: they would spend the indexer's
+daily API calls on titles nobody pressed Play on (lead decision, 3.5.8). The
 round does not count in `_activeFanouts`, so it never narrows another title's fan-out. The log line is
 `second chance: <indexer> answered in N ms, M new releases` or `… still no answer after N ms`, and
 Settings → Indexers shows each indexer's last-24-hour search health (in memory only).
