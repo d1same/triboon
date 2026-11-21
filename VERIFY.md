@@ -128,6 +128,64 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-11-21, v3.5.8 — Release gate for a second chance for a slow indexer, a plain "nothing playable" reason, a timeout rescue on the TV and phone apps, and Discover Back:
+- Why this release:
+  - A slow indexer that missed the 2 s search budget made Play say "no playable releases" with no reason.
+  - On the TV app, a direct file whose player timed out right after the picture came was retried four times, then picked again for the next Play.
+  - A file the byte check proved damaged could become the backup.
+  - Back from Details onto Discover froze the title block on one title.
+- What changed:
+  - **Second chance:** when nothing is playable and an indexer timed out, a Play the viewer pressed asks only the timed-out indexers once more, under one 8 s deadline. It skips indexers in a 429/503 cool-down and stops when the Play is closed. Warm-ups (card focus, Up next, Jellyfin prepare) never start or join one.
+  - **Reason text:** "nothing playable" now says why, for example "Found 6 releases, none playable (6 cinema copies skipped until a home release)".
+  - **Indexer health in Settings → Indexers:** searches, timeouts and failed NZB downloads per indexer. Counts only, admin-only.
+  - **Timeout rescue on the TV and phone apps:** the first player timeout on a direct file plays the same second as a remux with AAC sound, once per release. The timeout text now names the wait.
+  - **Failed files:** a file that failed for a title is tried last for that title for 30 minutes (memory only; the verdict cache is not written for a stall). A file the byte check proved damaged is never the backup.
+  - **Discover Back:** Discover keeps its own rows and title block.
+- Second check before the release: two independent reads of the merged branch. Two faults were fixed, each with a test that fails on the code before it:
+  - The TV app's new timeout text contains "decoded", which the page took for a decoder failure. The same-spot ledger never counted it, so a remux that kept timing out restarted at the same second forever instead of moving to another copy.
+  - Warm-ups started the slow indexer's second chance, spending its API calls on titles nobody pressed Play on, and used up the following Play's chance for 10 minutes.
+  - Reported, not fixed: after one viewer's own stalls, the 30-minute memory also orders that file last for other viewers of the same episode (it is still played if nothing else is left).
+- Speed, before and after, on a copy of a test server's data (real usenet, 6 connections, Wyzie stand-in). 3.5.7 and the final code each ran on a fresh server, 5 rounds, in two pairs in both orders. Medians are given 3.5.7 first, then 3.5.8, one value per pair.
+  - **Web film first frame (1080p remux):** 507 and 537 ms against 564 and 556 ms. A tighter rerun with servers alternating 3 times each, 10 rounds per run (30 rounds per version), gave 200.5 against 200.5 ms, and cold first plays averaged 504 against 505 ms.
+  - **Seeks:** +10 s 471/425 against 415/474 ms; −10 s 309/306 against 301/307 ms; +30 s 387/412 against 400/396 ms; −30 s 316/301 against 289/322 ms; +10 min 855/790 against 777/774 ms.
+  - **Continue Watching resume at 25:00:** 272/265 against 273/271 ms.
+  - **Card-focus warm-up to ready:** 160/145 against 126/129 ms.
+  - **Warmed Play first frame:** 405/406 against 427/407 ms.
+  - **Up next to the next episode's first frame:** 234/243 against 230/234 ms.
+  - **TV caps on the server path:**
+    - 1080p answer plus 4 MB: 506/461 against 449/477 ms;
+    - 4K answer plus 4 MB: 463/333 against 296/385 ms;
+    - mid-file first byte: 112/66 against 79/63 ms (1080p) and 92/86 against 108/76 ms (4K).
+  - **Cold, search-bound resume:** 7 alternating fresh-server pairs, one cold resume each, gave a median first frame of 3835 ms on 3.5.7 against 3738 ms on 3.5.8 (same release picked).
+  - **Live TV, on the QA fixture:** `verify-live --iptv`, 3 runs per version, alternating, on fresh QA servers.
+    - Web first byte: 129–137 and 71–120 ms on 3.5.7 against 128–135 and 91–108 ms on 3.5.8.
+    - Native first byte: 4–7 ms on both, plus one 131 ms first-channel outlier on 3.5.7.
+  - Nothing was slower beyond the round-to-round spread.
+- Gate: `verify:full` passed 15 of 15 steps on 2026-11-21 on the QA emulator (an Android TV image, API 36), on the final commit.
+  - Node suite 1384 of 1384, 0 fail; 77 Android unit tests, 0 failures, including the 4 new `NativeTimeoutReason` tests; the isolated server reported 3.5.8.
+  - The emulator was stopped for the Node suite and booted again before the Android steps.
+  - One earlier start from a plain file copy failed the whitespace step only, because that copy had no git metadata. It ran no product test.
+- Household: the movie and the episode played by remux with health verified (ready 97ms and 215ms, first byte 91ms and 34ms, seek 84ms and 29ms, resume 54ms and 5ms). IPTV first byte and retune passed on two of 32 channels, web and native (142ms/136ms and 79ms/4ms). Overlapping Play: both Plays returned in 15ms.
+- Android stress on the emulator: 0 failures, 0 warnings. It covered page churn, Live TV start, Multiview and its native handoff, 20 zaps, the PiP guide, native VOD play, Player About, the Continue Watching relaunch, 10 seeks, the Sources lists, subtitles, and a log scan with no fatal line.
+- Windows client: Rust tests with `--features player` passed 48 of 48, and the NSIS installer built from this commit with the pinned LGPL libmpv (archive and DLL SHA-256 verified). Its payload check found `triboon-px8.exe`, `libmpv-2.dll`, `LIBMPV-LICENSE.LGPL`, `LIBMPV-SOURCE.md` and the notices. The mirror pin resolves; the upstream copy is gone, as expected. Unsigned, as before.
+- Real check (a copy of a test server's data with its Persian library, real usenet capped at 6 connections, IPTV sources removed from the copy):
+  - **Discover Back, TV layout (1920×1080), real key presses:** after Details and Back, each Right moved the title block to the focused film.
+  - **A just-released film with only cinema copies:** the page showed "Can't play this — Found 6 releases, none playable (6 cinema copies skipped until a home release)".
+  - **The episode cards for season 6 episodes 22 and 24 (one of them the episode from the timeout report):** both played the right files in the browser, with the file's English subtitle.
+  - **A Persian library film:** direct in the browser, first frame 332 ms.
+  - **On the TV app (3.5.8 debug build on the emulator):** a Persian film was playing direct at 0:21 when it received the shell's own timeout callback with the new detail. It continued as a remux with AAC from 0:21 and was at 0:32 eight seconds later.
+- Linux: one full `npm test` run in a local Ubuntu 24.04 container (Node 24.22.3, ffmpeg 6.1.1) passed 1384 of 1384, 0 fail, the same total as on Windows.
+- TMDB data came from a local stand-in for the gate. No subtitle provider was configured on the QA server, so the CC check got `no_subtitles`.
+- NOT verified:
+  - the GitHub build of this commit (not run when this was written);
+  - the owner's own server;
+  - a real TV box, a phone, or the Shield;
+  - a real player timeout (the rescue was started with the shell's own callback);
+  - the phone app on screen;
+  - the Windows app at runtime (the built app shares the installed client's settings folder, so it was not started);
+  - a real subtitle provider, Jellyfin clients, Safari.
+- Version contract: `package.json` 3.5.8; Android `versionName` 3.5.8 / `versionCode` 453; Windows client package/Tauri/Cargo(.lock) 3.5.8.
+
 2026-11-21, v3.5.7 — Release gate for the file's own subtitles first on every app, with online only when the file has none:
 - Why this release: the browser and a phone or TV on the remux or transcode never showed a file's own subtitles (the remux carries no subtitle stream), so the same file showed its own English on one app and only online rows on another; the menus differed between apps.
 - What changed: the server reads the file's text subtitle lines out of the Matroska bytes the remux already pulls through `/api/stream` (a local file is read ahead of the picture) and serves one track as WebVTT on the movie's own clock at `/api/filesub` (stream-token scoped, in deny-by-default and route coverage); the remux and transcode are unchanged. The browser on the remux and the TV and phone apps on the remux or transcode read that side file; direct play keeps the file's own tracks. One plain menu on every app: when the file has a subtitle in the viewer's language, its rows only, with no online rows; when it has none, the online rows; when the file's track cannot be shown, online takes over by itself; other file languages under "Other languages".
