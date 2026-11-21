@@ -15773,7 +15773,7 @@ function nativeSubtitleChoices() {
   const fileRows = nativeFileSubtitlesOn(p);
   if (fileRows && fileSubChoices(p).length) addChoice({ action: 'section', label: 'From the file' });
   if (fileRows) {
-    fileSubChoices(p).filter((sub) => showAllLocalSubtitles() || subtitleChoiceMatchesPreferred(sub) || embeddedSubIsForced(sub))
+    fileSubChoices(p).filter((sub) => showAllLocalSubtitles() || fileSubMatchesPreferred(sub) || embeddedSubIsForced(sub))
       .slice(0, 12).forEach((sub) => {
         addChoice({ rel: fileSubRel(sub.rel), label: fileSubLabel(sub), lang: subtitleLangForRel(fileSubRel(sub.rel)),
           file: fileSubPayload(sub), url: '' });
@@ -20362,9 +20362,17 @@ function subtitleIntentFromSaved(saved, label = '') {
   const code = Object.keys(LANG_NAMES).find((k) => String(LANG_NAMES[k]).toLowerCase() === name);
   return code ? { lang: code, forced: /\(forced\)/i.test(label), sdh: /\bSDH\b/.test(label) } : null;
 }
+// One language, however it is written: "en" (what a pick saves), "eng" or "fre" (what files carry).
+function sameSubLang(a, b) {
+  const x = audioLangKey(a);
+  return !!x && x !== 'un' && x === audioLangKey(b);
+}
+function fileSubMatchesPreferred(sub) {
+  return sameSubLang(sub && sub.lang, preferredAutoSubtitleLang());
+}
 function fileSubForIntent(p, intent) {
   if (!intent) return null;
-  const same = fileSubChoices(p).filter((sub) => langCode(sub.lang) === intent.lang && embeddedSubIsForced(sub) === !!intent.forced);
+  const same = fileSubChoices(p).filter((sub) => sameSubLang(sub.lang, intent.lang) && embeddedSubIsForced(sub) === !!intent.forced);
   return same.find((sub) => embeddedSubIsSdh(sub) === !!intent.sdh && sub.text === true)
     || same.find((sub) => embeddedSubIsSdh(sub) === !!intent.sdh)
     || same.find((sub) => sub.text === true) || same[0] || null;
@@ -20376,18 +20384,18 @@ function fileSubForIntent(p, intent) {
 function bestFileSubtitleRel(p) {
   if (!nativeFileSubtitlesOn(p)) return '';
   const pref = prefLang('slang');
-  const want = langCode(pref && pref !== 'off' ? pref : preferredAutoSubtitleLang());
+  const want = pref && pref !== 'off' ? pref : preferredAutoSubtitleLang();
   if (!want) return '';
-  const mine = fileSubChoices(p).filter((sub) => langCode(sub.lang) === want);
+  const mine = fileSubChoices(p).filter((sub) => sameSubLang(sub.lang, want));
   const sdhStyle = prefCcStyle() === 'sdh';
   const rank = (sub) => (sub.text === true ? 4 : 0) + (embeddedSubIsSdh(sub) === sdhStyle ? 2 : 0);
   const full = mine.filter((sub) => !embeddedSubIsForced(sub)).sort((a, b) => rank(b) - rank(a));
   if (full.length) return fileSubRel(full[0].rel);
   const audio = p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
   const cur = audio.find((a) => a && a.rel === p.audioTrack) || audio[0];
-  const soundLang = cur ? langCode(cur.lang) : '';
+  const soundLang = cur ? cur.lang : '';
   const forced = mine.filter((sub) => embeddedSubIsForced(sub)).sort((a, b) => rank(b) - rank(a));
-  return soundLang && soundLang !== want && forced.length ? fileSubRel(forced[0].rel) : '';
+  return audioLangKey(soundLang) && !sameSubLang(soundLang, want) && forced.length ? fileSubRel(forced[0].rel) : '';
 }
 // Forced ride-along, one rule for every app (brief 137 step 5). When nothing else is on, the file's
 // forced track in the language of the sound plays by itself: it only translates the lines in
@@ -20401,9 +20409,9 @@ function forcedRideAlongRel(p, saved = loadSubChoice(), rideMode = FORCED_RIDE_M
   if (!nativeFileSubtitlesOn(p) || !p.tracks) return '';
   const audio = Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
   const cur = audio.find((a) => a && a.rel === p.audioTrack) || audio[0];
-  const soundLang = cur ? langCode(cur.lang) : '';
-  if (!soundLang || soundLang === 'und') return '';
-  const forced = fileSubChoices(p).filter((sub) => embeddedSubIsForced(sub) && langCode(sub.lang) === soundLang);
+  const soundLang = cur ? cur.lang : '';
+  if (!soundLang || langCode(soundLang) === 'und') return '';
+  const forced = fileSubChoices(p).filter((sub) => embeddedSubIsForced(sub) && sameSubLang(sub.lang, soundLang));
   const pick = forced.find((sub) => sub.text === true) || forced[0];
   return pick ? fileSubRel(pick.rel) : '';
 }

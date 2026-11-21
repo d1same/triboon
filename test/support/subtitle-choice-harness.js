@@ -20,7 +20,7 @@ const NAMES = [
   'canAutoSubtitle', 'preferredAutoSubtitleLang', 'osTrackRel', 'osLang', 'osTrackInfo', 'episodeKeyParts', 'subtitleCatalogAvailable',
   'forcedRideAlongRel', 'fileSubtitleIntentRel', 'fileSubIntentFromRel', 'fileSubForIntent', 'nativeStartSubtitlePlan',
   'subtitleIntentFromSaved', 'fileSubPayload', 'audioTrackLangName', 'fileSubLabel', 'sourceSubtitleLabel',
-  'bestFileSubtitleRel', 'fileSubIntentRel',
+  'bestFileSubtitleRel', 'fileSubIntentRel', 'sameSubLang', 'fileSubMatchesPreferred', 'audioLangKey',
 ];
 function load(uiPath, env) {
   const ui = fs.readFileSync(uiPath, 'utf8');
@@ -31,10 +31,10 @@ function load(uiPath, env) {
     'subtitleListConfident', 'bestSubtitleVariantRel', 'subtitleMiss', 'LANG_3TO2', 'subChoiceKey', 'loadSubChoice', 'profilePrefKey',
     'prefAudioLang', 'audioLangKey', 'subtitleImdbId', 'loadSubChoiceLabel', 'SERVER_SUBTITLE_EXTRACTION_ROWS', 'LANG_NAMES', 'FORCED_RIDE_MODE', body)(
     env.S, env.localStorage, env.clientCaps, env.currentPlayerKind, env.prefLang, () => env.ccStyle || 'dialogue',
-    (l) => ({ en: 'eng', eng: 'eng', fr: 'fra', fre: 'fra', ja: 'jpn', jpn: 'jpn', ko: 'kor', kor: 'kor' })[String(l || '').toLowerCase()] || String(l || '').toLowerCase(),
+    (l) => String(l || '').toLowerCase(), // like the page: "en" stays "en", "eng" stays "eng"
     (l) => ({ eng: 'English', fra: 'French', jpn: 'Japanese', kor: 'Korean' })[String(l || '').toLowerCase()] || String(l || ''),
-    () => true, (l) => `os:${l}:best`, () => '', { eng: 'en', fra: 'fr', jpn: 'ja', kor: 'ko' }, () => 'k', () => env.saved || '',
-    (n) => `triboon.${n}`, () => env.alang || '', (l) => String(l || '').slice(0, 2).toLowerCase(), () => 'tt0000001',
+    () => true, (l) => `os:${l}:best`, () => '', { eng: 'en', fra: 'fr', fre: 'fr', jpn: 'ja', kor: 'ko', chi: 'zh' }, () => 'k', () => env.saved || '',
+    (n) => `triboon.${n}`, () => env.alang || '', null, () => 'tt0000001',
     () => env.label || '', false, { eng: 'English', fre: 'French', jpn: 'Japanese', kor: 'Korean' },
     ((ui.match(/^const FORCED_RIDE_MODE = '([a-z-]+)';$/m) || [])[1] || 'always'));
 }

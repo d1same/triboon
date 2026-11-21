@@ -12669,7 +12669,8 @@ test('built-in subtitles on: file tracks first on the apps that draw them, never
     browser: { mkv: true }, oldApk: { native: true, source: 'exo-mediacodec' },
     newApk: { native: true, source: 'exo-mediacodec', fileSubtitles: true }, win: { native: true, source: 'libmpv', fileSubtitles: true },
   };
-  const run = (o) => scenario(ui, { builtIn: true, mode: 'always', subs: SUBS, releaseSubs: [{ id: 'x', lang: 'eng', name: 'a.srt' }], kind: 'direct', ...o });
+  // The profile language is saved as 'en' (what a pick saves) while files say 'eng' (the TV emulator fault).
+  const run = (o) => scenario(ui, { builtIn: true, mode: 'always', subs: SUBS, releaseSubs: [{ id: 'x', lang: 'en', name: 'a.en.srt' }], kind: 'direct', slang: 'en', ...o });
   for (const caps of ['browser', 'oldApk']) for (const kind of ['direct', 'remux']) for (const tracks of [undefined, false]) {
     const r = run({ caps: CAPS[caps], kind, tracks });
     assert.strictEqual(r.start, tracks === false ? 'os:en' : 'rs:x', `${caps} ${kind}: the release sidecar or online, never the whole-file extraction`);
