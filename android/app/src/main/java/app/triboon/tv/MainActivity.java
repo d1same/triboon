@@ -7096,7 +7096,9 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 if (token != nativeSubtitleLoadToken || nativeSubtitleFetchCancelled(e)) return;
                 Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
-                final boolean definitive = e instanceof NativeSubtitleDefinitiveMiss;
+                // Brief 143: the side file of a remux that is still starting answers 404 for a moment;
+                // only a 404 from anything else is a definitive miss.
+                final boolean definitive = e instanceof NativeSubtitleDefinitiveMiss && !NativeSideSubtitle.isSideFile(cleanUrl);
                 // Surface the server's ACTIONABLE reason on the TV instead of a generic toast —
                 // "OpenSubtitles login failed — check the username/password" beats "could not
                 // load" when the fix is a settings field (the server embeds it in the error body).
