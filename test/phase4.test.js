@@ -12808,3 +12808,23 @@ test('the native menu offers "Show all subtitle languages" for file tracks in ot
   showAll = false; fileOn = false;
   assert.strictEqual(fns.hiddenLocalSubtitleCount(), 0, 'no file rows (browser, old app, remux): the count is as before');
 });
+
+test('a saved hand pick of the release\'s own subtitle file still wins on the apps that draw file tracks (second check 3.5.6)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const i = ui.indexOf('function startupSubtitleRelFor(p, saved = loadSubChoice()) {');
+  const j = ui.indexOf('function subtitleRequestParams(', i);
+  assert.ok(i >= 0 && j > i);
+  let ep = null;
+  const fn = new Function('prefSubtitleMode', 'episodeKeyParts', 'nativeFileSubtitlesOn', 'subtitleRelPlayable', 'fileSubForIntent',
+    'subtitleIntentFromSaved', 'loadSubChoiceLabel', 'bestFileSubtitleRel', 'fileSubRel', 'autoSubtitleRelFor', 'bestBuiltInSubtitleRel', 'loadSubChoice',
+    `${ui.slice(i, j)}\nreturn startupSubtitleRelFor;`)(
+    () => 'always', () => ep, () => true, (_p, rel) => rel === 'rs:sub1' || rel.startsWith('os:'),
+    (_p, intent) => (intent ? { rel: 0 } : null), (saved) => (saved ? { lang: 'eng' } : null), () => 'English',
+    () => 'fs:0', (n) => `fs:${n}`, () => 'os:en', () => 'rs:sub1', () => '');
+  const p = { item: { type: 'movie' } };
+  assert.strictEqual(fn(p, 'rs:sub1'), 'rs:sub1', 'a film: the sidecar the viewer picked, not the muxed track');
+  assert.strictEqual(fn(p, 'rs:gone'), 'fs:0', 'a sidecar this release does not have: the saved intent maps onto the file');
+  assert.strictEqual(fn(p, 'os:en:42'), 'os:en:42', 'a saved online pick still wins');
+  ep = { season: 1, episode: 3 };
+  assert.strictEqual(fn({ item: { type: 'episode' } }, 'rs:sub1'), 'fs:0', 'an episode keeps the 3.5.5 rule: a remembered sidecar does not stick');
+});

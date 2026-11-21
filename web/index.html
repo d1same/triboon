@@ -20616,6 +20616,9 @@ function startupSubtitleRelFor(p, saved = loadSubChoice()) {
   // episode's online subtitle, then the release's sidecar, then online.
   const fileOn = nativeFileSubtitlesOn(p);
   if (fileOn && typeof saved === 'string' && saved.startsWith('os:') && subtitleRelPlayable(p, saved)) return saved;
+  // A film's saved hand pick of this release's own subtitle file wins too, as in 3.5.5 (second
+  // check 3.5.6); an episode keeps the rule that a remembered sidecar does not stick.
+  if (fileOn && typeof saved === 'string' && saved.startsWith('rs:') && !episodePlay && subtitleRelPlayable(p, saved)) return saved;
   if (fileOn) {
     const intended = fileSubForIntent(p, subtitleIntentFromSaved(saved, loadSubChoiceLabel()));
     if (intended) return fileSubRel(intended.rel);
