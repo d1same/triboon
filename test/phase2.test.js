@@ -7198,6 +7198,39 @@ test('pipeline: a switch caused by repeated stalls moves on without demoting the
   assert.ok([...store.values()].some((v) => v.verdict === 'playback-failed'), 'an advance without the stall cause (old clients, content errors) still demotes');
 });
 
+test('pipeline: a file that died is not picked again for that title (backup, prepared copy, next Play) unless nothing else is left', async () => {
+  const store = new Map();
+  const verdicts = { get: (k) => store.get(k) || null, set: (k, verdict, detail) => store.set(k, { verdict, detail, checkedAt: Date.now() }) };
+  const mounts = new Map();
+  const pipeline = new Pipeline({ pool: () => null, verdicts, mounts, performance: () => ({}) });
+  const query = { q: 'Show S06E24', season: 6, ep: 24 };
+  const dead = { nzbUrl: 'http://ix/getnzb/1', name: 'Show.S06E26.EXTENDED.1080p.WEB-DL.DDP5.1.H.264-GRP', pickKey: 'k1', score: 300 };
+  const other = { nzbUrl: 'http://ix/getnzb/2', name: 'Show.S06E26.1080p.AMZN.WEB-DL.DDP5.1.H.264-OTH', pickKey: 'k2', score: 250 };
+  const third = { nzbUrl: 'http://ix/getnzb/3', name: 'Show.S06E26.720p.WEB-DL-THR', pickKey: 'k3', score: 100 };
+  // The dead file is the title's prepared copy too, as in the log (prepare ready → joined prepared).
+  const vf = { id: 'm1', streamable: true };
+  mounts.set('m1', vf);
+  pipeline._rememberTitlePrepared(query, {}, vf, dead);
+  let walked = null;
+  pipeline._advance = async (session) => { walked = session.candidates.slice(session.cursor).map((c) => c.pickKey); return { ok: true }; };
+  const armed = [];
+  pipeline._tryCandidate = (c) => { armed.push(c.pickKey); return new Promise(() => {}); };
+  pipeline.sessions.set('s1', { id: 's1', activeCandidate: dead, currentMountId: 'm1', candidates: [dead, other, third], cursor: 1, query, policy: {}, history: [] });
+  await pipeline.advance('s1', { cause: 'stall-repeat', reason: 'failed at 0s: ERROR_CODE_TIMEOUT' });
+  assert.strictEqual(store.size, 0, 'a stall-caused switch still leaves the release reputation alone for everyone else');
+  assert.deepStrictEqual(walked, ['k2', 'k3', 'k1'], 'the walk tries every other copy first; the dead one only as the last copy left');
+  assert.strictEqual(pipeline._preparedForPlay(query, {}), null, 'the next Play does not join the dead file through the prepared copy');
+  assert.deepStrictEqual(pipeline._playableCandidates([dead, other, third], query).map((c) => c.pickKey), ['k2', 'k3', 'k1'],
+    'a fresh search for the same title ranks the dead file last');
+  pipeline._armStandby(query, {}, {}, [dead, other, third], 'k2', 0, other);
+  assert.deepStrictEqual(armed, ['k3'], 'the backup for the new copy is not the file that just died');
+  assert.strictEqual(pipeline._pickStandbyCandidate([dead, other], 'k2', other, (c) => pipeline._diedForTitle(query, c)).pickKey, 'k1',
+    'when the dead file is the only other copy it can still be the backup');
+  assert.deepStrictEqual(pipeline._playableCandidates([dead, other], { q: 'Show S06E25', season: 6, ep: 25 }).map((c) => c.pickKey), ['k1', 'k2'],
+    'another title keeps its own order');
+});
+
+
 test('subtitles: malformed SRT timestamps from old fan subs become valid VTT; dialogue digits are untouched', () => {
   const { srtToVtt } = require('../server/opensubs');
   const vtt = srtToVtt('1\r\n0:00:01,500 --> 00:00:04,5\r\nHello 1:23:45,6 world\r\n\r\n2\r\n00:00:05,000 --> 00:00:06.250\r\nok\r\n');
