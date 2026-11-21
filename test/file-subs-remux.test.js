@@ -57,9 +57,10 @@ test('the tap reads every text line of the file, in any chunk sizes, with the ti
   let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
   for (let o = 0; o < buf.length;) { const n = 1 + Math.floor(rnd() * 90000); tap.feed(o, buf.subarray(o, o + n)); o += n; }
   assert.deepStrictEqual(tap.header.subs.map((s) => [s.index, s.codec, s.lang, s.text]), [[0, 'S_TEXT/UTF8', 'eng', true], [1, 'S_TEXT/ASS', 'fre', true]]);
-  const ffEn = spawnSync(ff.path, ['-hide_banner', '-loglevel', 'error', '-i', movie, '-map', '0:s:0', '-f', 'webvtt', '-'], { encoding: 'utf8' }).stdout;
-  const norm = (s) => (s.length === 9 ? `00:${s}` : s);
-  assert.deepStrictEqual(starts(tap.vtt(0)), starts(ffEn).map(norm), 'the same 24 English lines at the same times');
+  // The times written into the file (ffmpeg's own read shifts them by the file's start offset on some
+  // versions: 6 ms with ffmpeg 6.1 on Ubuntu 24.04).
+  const want = Array.from({ length: 24 }, (_, i) => `00:${String(Math.floor((i * 5 + 1) / 60)).padStart(2, '0')}:${String((i * 5 + 1) % 60).padStart(2, '0')}.000`);
+  assert.deepStrictEqual(starts(tap.vtt(0)), want, 'the same 24 English lines at the times written into the file');
   assert.match(tap.vtt(0), /00:01:01\.000 --> 00:01:03\.000\nEnglish line 12\n/);
   assert.match(tap.vtt(1), /00:01:02\.000 --> 00:01:04\.000\nLigne 12\n/, 'the ASS track as plain text');
 });
