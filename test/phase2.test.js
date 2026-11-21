@@ -7198,6 +7198,97 @@ test('pipeline: a switch caused by repeated stalls moves on without demoting the
   assert.ok([...store.values()].some((v) => v.verdict === 'playback-failed'), 'an advance without the stall cause (old clients, content errors) still demotes');
 });
 
+test('pipeline: a file that died is not picked again for that title (backup, prepared copy, next Play) unless nothing else is left', async () => {
+  const store = new Map();
+  const verdicts = { get: (k) => store.get(k) || null, set: (k, verdict, detail) => store.set(k, { verdict, detail, checkedAt: Date.now() }) };
+  const mounts = new Map();
+  const pipeline = new Pipeline({ pool: () => null, verdicts, mounts, performance: () => ({}) });
+  const query = { q: 'Show S06E24', season: 6, ep: 24 };
+  const dead = { nzbUrl: 'http://ix/getnzb/1', name: 'Show.S06E26.EXTENDED.1080p.WEB-DL.DDP5.1.H.264-GRP', pickKey: 'k1', score: 300 };
+  const other = { nzbUrl: 'http://ix/getnzb/2', name: 'Show.S06E26.1080p.AMZN.WEB-DL.DDP5.1.H.264-OTH', pickKey: 'k2', score: 250 };
+  const third = { nzbUrl: 'http://ix/getnzb/3', name: 'Show.S06E26.720p.WEB-DL-THR', pickKey: 'k3', score: 100 };
+  // The dead file is the title's prepared copy too, as in the log (prepare ready → joined prepared).
+  const vf = { id: 'm1', streamable: true };
+  mounts.set('m1', vf);
+  pipeline._rememberTitlePrepared(query, {}, vf, dead);
+  let walked = null;
+  pipeline._advance = async (session) => { walked = session.candidates.slice(session.cursor).map((c) => c.pickKey); return { ok: true }; };
+  const armed = [];
+  pipeline._tryCandidate = (c) => { armed.push(c.pickKey); return new Promise(() => {}); };
+  // The same release name from a second indexer sits ahead of the cursor, as in the log's 60-copy list.
+  const twin = { ...dead, nzbUrl: 'http://ix2/getnzb/1', pickKey: 'k1b' };
+  pipeline.sessions.set('s1', { id: 's1', activeCandidate: dead, currentMountId: 'm1', candidates: [dead, twin, other, third], cursor: 1, query, policy: {}, history: [] });
+  await pipeline.advance('s1', { cause: 'stall-repeat', reason: 'failed at 0s: ERROR_CODE_TIMEOUT' });
+  assert.strictEqual(store.size, 0, 'a stall-caused switch still leaves the release reputation alone for everyone else');
+  assert.deepStrictEqual(walked, ['k2', 'k3', 'k1b'], 'the walk tries every other copy first; another copy of the dead file only as the last one left');
+  assert.strictEqual(pipeline._preparedForPlay(query, {}), null, 'the next Play does not join the dead file through the prepared copy');
+  assert.deepStrictEqual(pipeline._playableCandidates([dead, other, third], query).map((c) => c.pickKey), ['k2', 'k3', 'k1'],
+    'a fresh search for the same title ranks the dead file last');
+  pipeline._armStandby(query, {}, {}, [dead, other, third], 'k2', 0, other);
+  assert.deepStrictEqual(armed, ['k3'], 'the backup for the new copy is not the file that just died');
+  assert.strictEqual(pipeline._pickStandbyCandidate([dead, other], 'k2', other, (c) => pipeline._diedForTitle(query, c)).pickKey, 'k1',
+    'when the dead file is the only other copy it can still be the backup');
+  assert.deepStrictEqual(pipeline._playableCandidates([dead, other], { q: 'Show S06E25', season: 6, ep: 25 }).map((c) => c.pickKey), ['k1', 'k2'],
+    'another title keeps its own order');
+});
+
+
+test('pipeline: a file the byte check proved damaged is never the backup, even as the only other copy, and an armed backup of it is dropped', async () => {
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(), performance: () => ({}) });
+  const query = { q: 'Show S04E04', season: 4, ep: 4 };
+  const broken = { nzbUrl: 'http://ix/getnzb/1', name: 'Show.S04E04.2160p.AMZN.WEB-DL.DDP5.1.H.265-GRP', pickKey: 'k1', score: 300 };
+  const next = { nzbUrl: 'http://ix/getnzb/2', name: 'Show.S04E04.2160p.WEB.H265-OTH', pickKey: 'k2', score: 250 };
+  const died = (c) => pipeline._diedForTitle(query, c);
+  pipeline._noteDiedForTitle(query, broken);
+  assert.strictEqual(pipeline._pickStandbyCandidate([broken, next], 'k2', next, died).pickKey, 'k1',
+    'a file that only died may still be the last backup');
+  // The backup was already armed before the byte check finished (the log: warming at 09:17:45, verdict at 09:17:45).
+  const vf = { id: 'm9', streamable: true };
+  pipeline.mounts.set('m9', vf);
+  pipeline._rememberTitleStandby(query, {}, vf, broken);
+  const session = { id: 's1', query, policy: {}, standby: { vf, candidate: broken } };
+  pipeline.sessions.set('s1', session);
+  pipeline._onByteCheckVerdict(query, {}, broken, { fault: 'file', text: 'FILE damaged: …' });
+  assert.strictEqual(pipeline._pickStandbyCandidate([broken, next], 'k2', next, died), null,
+    'once the byte check proves the file damaged it is never the backup');
+  assert.strictEqual(pipeline._findTitleStandby(query, {}), null, 'the backup already armed on it is dropped');
+  assert.strictEqual(session.standby, null, 'and the playing session no longer holds it');
+  assert.deepStrictEqual(pipeline._playableCandidates([broken, next], query).map((c) => c.pickKey), ['k2', 'k1'],
+    'the walk still ranks it last (it plays up to the damage)');
+  const other = { q: 'Show S04E05', season: 4, ep: 5 };
+  pipeline._onByteCheckVerdict(other, {}, next, { fault: 'triboon', text: 'TRIBOON likely' });
+  assert.strictEqual(pipeline._diedForTitle(other, next), false, 'a verdict that blames Triboon marks nothing');
+});
+
+test('pipeline: a backup still warming when the byte check proves its file damaged is not kept, and the dead file stops being the title\'s prepared copy', async () => {
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(), performance: () => ({}) });
+  const query = { q: 'Show S04E04', season: 4, ep: 4 };
+  const broken = { nzbUrl: 'http://ix/getnzb/1', name: 'Show.S04E04.2160p.AMZN.WEB-DL.DDP5.1.H.265-GRP', pickKey: 'k1', score: 300 };
+  const next = { nzbUrl: 'http://ix/getnzb/2', name: 'Show.S04E04.2160p.WEB.H265-OTH', pickKey: 'k2', score: 250 };
+  // The dead file only died, so it is the last backup left; its mount finishes after the verdict.
+  pipeline._noteDiedForTitle(query, broken);
+  let finish;
+  pipeline._tryCandidate = () => new Promise((r) => { finish = r; });
+  pipeline._startPlaybackWarmup = () => {};
+  pipeline._armStandby(query, {}, {}, [broken, next], 'k2', 0, next);
+  pipeline._onByteCheckVerdict(query, {}, broken, { fault: 'file', text: 'FILE damaged' });
+  finish({ vf: { id: 'm7', streamable: true } });
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(pipeline._findTitleStandby(query, {}), null, 'a warm-up that lands after the verdict is not kept as the backup');
+
+  // The prepared record pointed at the file that died: advance drops it, so prepare warms another copy.
+  const vf = { id: 'm1', streamable: true };
+  pipeline.mounts.set('m1', vf);
+  const q2 = { q: 'Show S06E24', season: 6, ep: 24 };
+  const dead = { nzbUrl: 'http://ix/getnzb/9', name: 'Show.S06E26.1080p.WEB-DL-GRP', pickKey: 'k9', score: 300 };
+  pipeline._rememberTitlePrepared(q2, {}, vf, dead);
+  pipeline._advance = async () => ({ ok: true });
+  pipeline._tryCandidate = () => new Promise(() => {});
+  pipeline.sessions.set('s2', { id: 's2', activeCandidate: dead, currentMountId: 'm1', candidates: [dead], cursor: 1, query: q2, policy: {}, history: [] });
+  await pipeline.advance('s2', { cause: 'stall-repeat' });
+  assert.strictEqual(pipeline._findTitlePreparedReady(q2, {}), null, 'the title no longer answers "prepared" with the dead file');
+});
+
 test('subtitles: malformed SRT timestamps from old fan subs become valid VTT; dialogue digits are untouched', () => {
   const { srtToVtt } = require('../server/opensubs');
   const vtt = srtToVtt('1\r\n0:00:01,500 --> 00:00:04,5\r\nHello 1:23:45,6 world\r\n\r\n2\r\n00:00:05,000 --> 00:00:06.250\r\nok\r\n');

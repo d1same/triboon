@@ -1451,6 +1451,11 @@ const STARTUP_SLOTS = 3;
 // already declared its active release unhealthy.
 const RECOVERY_RACE_WIDTH = 2;
 const STANDBY_RETRIES = 3;
+// A file that died for a title stays out of that title's next picks for this long: the walk, the
+// backup and the prepared copy (owner log 2026-11-21: one file timed out four times, and the backup
+// and the next Play both went back to it). Memory only; the release's standing for everyone else is
+// the verdict cache's job and is not touched here.
+const DIED_FOR_TITLE_MS = 30 * 60 * 1000;
 const STANDBY_RETRY_MS = 15000;
 const UNREADABLE_REASON_RE = /unreadable data|PARSING_|MALFORMED|varint/i;
 // A warm-up beside a playing stream rides below read-ahead, because it is usually a guess. The next
@@ -1917,6 +1922,7 @@ class Pipeline {
     this.prepareFailUntil = new Map(); // prepareJobKey -> Date.now() until we retry a no-playable miss
     this.titlePreparedReady = new Map(); // prepareJobKey -> { vf, candidate, at } after prepare wins
     this.titlePreparedStandby = new Map(); // next-ranked backup mount, warmed during Details
+    this.diedForTitle = new Map(); // titleIdentity -> [{ pickKey, name, at }] files that died for that title
     this.mountByUrl = new Map();  // mountIdentity -> mount id (same selected payload reuses instantly)
     this._startupGate = new StartupGate(STARTUP_SLOTS, {
       prepareLimit: () => (this._hasActiveForeignPlayback() ? 1 : STARTUP_SLOTS),
@@ -2291,6 +2297,52 @@ class Pipeline {
       .map((v) => String(v || '').trim().toLowerCase()).join('|');
   }
 
+  // damaged: the byte check proved the file itself broken, so it is never a backup again.
+  _noteDiedForTitle(params, candidate, { damaged = false } = {}) {
+    const id = this._titleIdentity(params || {});
+    if (!candidate || !id || id === '||||') return;
+    const now = Date.now();
+    const list = (this.diedForTitle.get(id) || []).filter((d) => now - d.at < DIED_FOR_TITLE_MS);
+    list.push({ pickKey: candidate.pickKey || '', name: candidate.name ? normTitle(candidate.name) : '', at: now, damaged: !!damaged });
+    this.diedForTitle.delete(id);
+    this.diedForTitle.set(id, list.slice(-8));
+    while (this.diedForTitle.size > 200) this.diedForTitle.delete(this.diedForTitle.keys().next().value);
+  }
+
+  // false, true (it died for this title) or 'damaged' (the byte check proved the file broken).
+  _diedForTitle(params, candidate) {
+    if (!candidate) return false;
+    const list = this.diedForTitle && this.diedForTitle.get(this._titleIdentity(params || {}));
+    if (!list) return false;
+    const now = Date.now();
+    const name = candidate.name ? normTitle(candidate.name) : '';
+    const hits = list.filter((d) => now - d.at < DIED_FOR_TITLE_MS
+      && ((d.pickKey && d.pickKey === candidate.pickKey) || (d.name && d.name === name)));
+    if (!hits.length) return false;
+    return hits.some((d) => d.damaged) ? 'damaged' : true;
+  }
+
+  // The byte check runs after the switch, so a backup may already be warming on the broken file.
+  _onByteCheckVerdict(params, policy, candidate, verdict) {
+    if (!verdict || verdict.fault !== 'file' || !candidate) return;
+    this._noteDiedForTitle(params, candidate, { damaged: true });
+    this._clearTitleStandby(params || {}, policy || {}, candidate.pickKey);
+    for (const s of this.sessions.values()) {
+      if (s && s.standby && s.standby.candidate && s.standby.candidate.pickKey === candidate.pickKey
+          && this._titleIdentity(s.query || {}) === this._titleIdentity(params || {})) s.standby = null;
+    }
+  }
+
+  // The same order with this title's dead files moved to the end, so they are tried only when
+  // nothing else is left.
+  _deferDied(params, list) {
+    if (!Array.isArray(list) || !this.diedForTitle || !this.diedForTitle.size) return list;
+    const keep = [];
+    const died = [];
+    for (const c of list) (this._diedForTitle(params, c) ? died : keep).push(c);
+    return died.length ? [...keep, ...died] : list;
+  }
+
   _rememberTitlePrepared(params, policy, vf, candidate) {
     if (!vf || !candidate) return;
     const rec = { vf, candidate, at: Date.now(), titleId: this._titleIdentity(params) };
@@ -2356,6 +2408,16 @@ class Pipeline {
     return null;
   }
 
+  // The title's warmed copy is the file that just died: drop the record (not the mount, which the
+  // session may still hold), so the next prepare warms another copy instead of answering with it.
+  _clearTitlePrepared(params, pickKey) {
+    const titleId = this._titleIdentity(params || {});
+    if (!pickKey || !titleId || titleId === '||||') return;
+    for (const [key, rec] of [...this.titlePreparedReady]) {
+      if (rec && rec.titleId === titleId && rec.candidate && rec.candidate.pickKey === pickKey) this.titlePreparedReady.delete(key);
+    }
+  }
+
   _clearTitleStandby(params, policy, pickKey) {
     for (const key of this._standbyKeys(params, policy)) {
       const rec = this.titlePreparedStandby.get(key);
@@ -2402,9 +2464,16 @@ class Pipeline {
     return next;
   }
 
-  _pickStandbyCandidate(playable, primaryPickKey, primary = null) {
-    const rest = (playable || []).filter((c) => c && c.pickKey && c.pickKey !== primaryPickKey && c.score > -5000);
+  _pickStandbyCandidate(playable, primaryPickKey, primary = null, died = null) {
+    let rest = (playable || []).filter((c) => c && c.pickKey && c.pickKey !== primaryPickKey && c.score > -5000);
     if (!rest.length) return null;
+    // A file that just died for this title is the backup only when it is the only other copy, and
+    // a file the byte check proved damaged never is.
+    if (died) {
+      const alive = rest.filter((c) => !died(c));
+      rest = alive.length ? alive : rest.filter((c) => died(c) !== 'damaged');
+      if (!rest.length) return null;
+    }
     const want = this._standbyResolutionRank(primary);
     if (want != null) {
       const same = rest.find((c) => this._standbyResolutionRank(c) === want);
@@ -2414,7 +2483,7 @@ class Pipeline {
   }
 
   _armStandby(params, policy = {}, mountOpts = {}, playable = [], primaryPickKey, resumeFrac = 0, primary = null, attempt = 0) {
-    const next = this._pickStandbyCandidate(playable, primaryPickKey, primary);
+    const next = this._pickStandbyCandidate(playable, primaryPickKey, primary, (c) => this._diedForTitle(params, c));
     if (!next) return;
     const existing = this._findTitleStandby(params, policy);
     if (existing && existing.candidate && existing.candidate.pickKey === next.pickKey) {
@@ -2442,6 +2511,8 @@ class Pipeline {
       }
       const prepared = this._findTitlePreparedReady(params, policy);
       if (prepared && prepared.candidate && prepared.candidate.pickKey === next.pickKey) return;
+      // The byte check can prove the file damaged while its warm-up is still mounting.
+      if (this._diedForTitle(params, next) === 'damaged') return;
       res.vf._touched = Date.now();
       if (!mountHasActivePlayback(res.vf)) res.vf._preparedOnly = true;
       if (next.name) res.vf._releaseName = next.name;
@@ -4095,6 +4166,12 @@ class Pipeline {
     // so Play opens a lighter copy instead of cutting over mid-movie.
     const userChose = (params.pickKey || params.pick) && !params.pinnedResume;
     if (ready && !userChose && !this._fitsPipe(ready.candidate, policy)) ready = null;
+    // The warmed file is the one that just died for this title: Play searches and walks instead,
+    // where that file is tried only as the last copy left.
+    if (ready && !userChose && this._diedForTitle(params, ready.candidate)) {
+      console.log('[play] skip prepared ' + (ready.candidate && ready.candidate.name || '') + ' (it died for this title)');
+      ready = null;
+    }
     // A warmed Dolby Vision file paints the picture green on a screen that cannot
     // decode it. Skip that warmup so Play opens the normal copy. A pin and a
     // Sources tap keep the file they already chose.
@@ -4151,7 +4228,7 @@ class Pipeline {
   }
 
   _playableCandidates(candidates, params = {}) {
-    const autoPlayable = (candidates || []).filter((c) => c.score > -5000);
+    const autoPlayable = this._deferDied(params, (candidates || []).filter((c) => c.score > -5000));
     if (!params.pickKey && !params.pick) return autoPlayable;
     let picked = (candidates || []).find((c) => params.pickKey && c.pickKey === params.pickKey)
       || (candidates || []).find((c) => params.pick && c.name === params.pick);
@@ -4168,7 +4245,9 @@ class Pipeline {
       // A pin that turned out to be a DIFFERENT film (runtime verdict) is not owed either: the
       // knock-off "The Odyssey" resumed forever on Nolan's page until the ranked race got a turn.
       const overResCap = !!(picked && (picked.reasons || []).some((r) => /^over-cap /.test(String(r))));
-      const pinOk = picked && !this._hardDeadCandidate(picked) && picked.health !== 'wrong-runtime' && !overResCap;
+      // A pin on the file that just died for this title is not owed either.
+      const pinOk = picked && !this._hardDeadCandidate(picked) && picked.health !== 'wrong-runtime' && !overResCap
+        && !this._diedForTitle(params, picked);
       if (!pinOk) return autoPlayable;
       return [picked, ...autoPlayable.filter((c) => c.pickKey !== picked.pickKey)];
     }
@@ -4721,6 +4800,20 @@ class Pipeline {
   // spent, and only the picked release is tried. It obeys the same rules as a Sources tap (never over
   // the admin cap or the per-play resolution cap, never a hard-dead file). If it fails, the session
   // keeps the source it had, so the player keeps its picture.
+  // Moves this title's dead files that the walk has not reached yet behind the other unwalked
+  // copies. A copy already walked stays walked (as in 3.5.6), so a play whose only copy died still
+  // ends with "no other copy". The order of everything else is kept.
+  _deferDiedInSession(session) {
+    const list = session && session.candidates;
+    if (!Array.isArray(list) || !list.length) return;
+    const cursor = Math.max(0, Math.min(list.length, Number(session.cursor) || 0));
+    const ahead = [];
+    const died = [];
+    list.slice(cursor).forEach((c) => (this._diedForTitle(session.query, c) ? died : ahead).push(c));
+    if (!died.length) return;
+    session.candidates = [...list.slice(0, cursor), ...ahead, ...died];
+  }
+
   async switchTo(sessionId, pickKey, mountOpts = {}) {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('unknown play session');
@@ -4792,10 +4885,19 @@ class Pipeline {
       debug.fail('play', `file died — "${String(session.activeCandidate.name || '').slice(0, 90)}" — player: ${String(reason || cause || 'no reason given').replace(/\s+/g, ' ').slice(0, 120)}`
         + ` — server health: ${describeHealth(this.mounts.get(session.currentMountId))}`);
       if (UNREADABLE_REASON_RE.test(String(reason || ''))) {
-        runByteCheck(this.mounts.get(session.currentMountId), { name: session.activeCandidate.name }).catch(() => {});
+        const checked = session.activeCandidate;
+        const checkQuery = session.query || {};
+        const checkPolicy = session.policy || {};
+        runByteCheck(this.mounts.get(session.currentMountId), { name: checked.name })
+          .then((verdict) => this._onByteCheckVerdict(checkQuery, checkPolicy, checked, verdict))
+          .catch(() => {});
       }
       if (!stallOnly) this._recordPlaybackFailed(session.activeCandidate, { episodeScoped: !!_we });
+      // For this title, whatever the cause: the walk, the backup and the prepared copy move past it.
+      this._noteDiedForTitle(session.query, session.activeCandidate);
+      this._deferDiedInSession(session);
       this._clearTitleStandby(session.query || {}, session.policy || {}, session.activeCandidate.pickKey);
+      this._clearTitlePrepared(session.query || {}, session.activeCandidate.pickKey);
       session.activeCandidate = null;
     }
     const nextOpts = _we ? { ...rest, wantedEpisode: _we } : rest;
@@ -4808,7 +4910,8 @@ class Pipeline {
     // Vision a TV cannot show turns the picture green, so it walks the screen-ordered list instead.
     const greenStandby = standby && warm.candidate && (session.policy || {}).dolbyVision === false
       && this._isDolbyVisionRelease(warm.candidate);
-    if (standby && standby.streamable && warm.candidate && standby.id !== session.currentMountId && !greenStandby) {
+    const diedStandby = !!(standby && warm.candidate && this._diedForTitle(session.query, warm.candidate));
+    if (standby && standby.streamable && warm.candidate && standby.id !== session.currentMountId && !greenStandby && !diedStandby) {
       const committed = this._commitMount(session, warm.candidate, standby, [], nextOpts);
       session.standby = null;
       return committed;
