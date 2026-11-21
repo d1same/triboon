@@ -12866,3 +12866,21 @@ test('a track probe that errors releases the file-subtitle wait at once, not at 
   assert.match(web.slice(i, j + 2), /\} catch \{\s*if \(fileSubDeadline\) clearTimeout\(fileSubDeadline\);\s*releaseFileSubWait\(\);\s*updatePlayerControlAvailability\(\);\s*\}\s*\}\s*$/,
     'a network or server error on the probe goes online at once, as an empty answer does');
 });
+
+test('Other versions never offers an AV1 copy to a device without an AV1 decoder (second check 3.5.6)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const src = grab('function isAudioDescriptionTrack(', 'function preferredAudioTrackForPlayer(')
+    + grab('function nativeDolbyPlaysDirect(', 'function nativeDirectAudioNeedsSafeRemux(')
+    + grab('function nativeDecodesAllAudio(', 'function nativeDirectAudioNeedsSafeRemux(')
+    + grab('function releaseAudioLabel(', 'async function loadOtherVersions(');
+  const fns = new Function('clientCaps', `${src}\nreturn { otherVersionRows };`)(() => ({}));
+  const { parseRelease } = require('../server/scoring');
+  const cand = (name, score, key) => ({ name, pickKey: key, score, attributes: parseRelease(name) });
+  const list = [cand('Movie.2024.1080p.BluRay.AV1.TrueHD.7.1.Atmos-AVONE', 300, 'av1'), cand('Movie.2024.1080p.BluRay.TrueHD.7.1.Atmos.x264-AVC', 290, 'avc')];
+  const p = { sourcePickKey: 'playing', audioTrack: 0, tracks: { audio: [{ rel: 0, codec: 'eac3', channels: 6 }] } };
+  const shield = { native: true, source: 'exo-mediacodec', ac3: true, eac3: true, passthrough: true, truehd: true, av1: false };
+  // A picked copy that mounts but cannot be decoded leaves the old picture behind (it is not kept).
+  assert.deepStrictEqual(fns.otherVersionRows(p, list, shield).map((r) => r.pickKey), ['avc'], 'no AV1 copy without an AV1 decoder');
+  assert.deepStrictEqual(fns.otherVersionRows(p, list, { ...shield, av1: true }).map((r) => r.pickKey), ['av1', 'avc']);
+});

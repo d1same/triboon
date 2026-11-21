@@ -15975,6 +15975,8 @@ function otherVersionRows(p, list, caps = clientCaps()) {
   const picOk = (a) => {
     const f = new Set((a && a.features) || []);
     if (f.has('dovi') && !caps.dovi) return false;
+    // A pick that mounts but cannot be decoded does not keep the old copy, so no AV1 without a decoder.
+    if (a && a.codec === 'av1' && !caps.av1) return false;
     const r = Number(a && a.resolution !== 'unknown' && a.resolutionRank) || 0;
     return !curRes || !r || r >= curRes;
   };
