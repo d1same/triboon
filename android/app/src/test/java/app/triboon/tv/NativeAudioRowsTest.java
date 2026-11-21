@@ -69,6 +69,15 @@ public class NativeAudioRowsTest {
     }
 
     @Test
+    public void aOneTrackFileStillGetsTheSharedLabel() {
+        List<Tracks.Group> one = Arrays.asList(video(), audio(MimeTypes.AUDIO_E_AC3, "en", 6, true, true));
+        List<NativeAudioRows.Entry> out = NativeAudioRows.pair(one, Arrays.asList(row(0, "eng", 6, "English · Dolby Digital Plus 5.1 · Atmos", false)));
+        assertNotNull(out);
+        assertEquals("English · Dolby Digital Plus 5.1 · Atmos", out.get(0).row.label);
+        assertNull(NativeAudioRows.pair(one, java.util.Collections.<NativeAudioRows.Row>emptyList()));
+    }
+
+    @Test
     public void languageCodesCompareAcrossTheirForms() {
         assertTrue(NativeAudioRows.sameLang("eng", "en"));
         assertTrue(NativeAudioRows.sameLang("ger", "de"));

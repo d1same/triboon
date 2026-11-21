@@ -3363,7 +3363,7 @@ fn audio_row_lang_key(lang: &str) -> String {
 // must line up on language and channel count, or none is relabelled and mpv's own labels stay.
 #[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
 fn paired_audio_row_labels(rows: &[Value], tracks: &[Value]) -> Option<Vec<String>> {
-    if rows.len() < 2 || rows.len() != tracks.len() {
+    if rows.is_empty() || rows.len() != tracks.len() {
         return None;
     }
     let mut labels = Vec::with_capacity(rows.len());
@@ -4098,7 +4098,11 @@ mod tests {
         assert_eq!(paired_audio_row_labels(&rows, &swapped), None, "channel mismatch keeps mpv labels");
         let french = vec![json!({"id": "1", "lang": "fre", "channels": 8}), tracks[1].clone()];
         assert_eq!(paired_audio_row_labels(&rows, &french), None, "language mismatch keeps mpv labels");
-        assert_eq!(paired_audio_row_labels(&rows[..1], &tracks[..1]), None, "one track needs no relabel");
+        assert_eq!(
+            paired_audio_row_labels(&rows[..1], &tracks[..1]),
+            Some(vec!["English · TrueHD 7.1 · Atmos".to_string()]),
+            "one track still gets the shared label (it sits beside the Other version rows)"
+        );
         assert_eq!(paired_audio_row_labels(&rows, &tracks[..1]), None, "count mismatch");
         let unknown = vec![json!({"id": "1", "lang": "", "channels": 0}), json!({"id": "2", "lang": "und"})];
         assert!(paired_audio_row_labels(&rows, &unknown).is_some(), "unknown facts never block");

@@ -606,6 +606,11 @@
     })];
     state.subtitleChoices.forEach((choice) => {
       if (!choice || typeof choice !== 'object') return;
+      if (choice.action === 'section') {
+        // Brief 137 step 5: "From the file" / "Online" headers.
+        items.push(menuItem(String(choice.label || ''), { disabled: true }, () => {}));
+        return;
+      }
       const disabled = choice.action === 'missing';
       items.push(menuItem(choice.label || 'Subtitle', {
         selected: !!choice.rel && choice.rel === state.subtitleRel,

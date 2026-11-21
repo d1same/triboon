@@ -176,8 +176,9 @@ test('boot: fresh server requires setup, then issues a working admin token', asy
   assert.strictEqual(s.status, 200);
   assert.match(s.json.version, /^\d+\.\d+\.\d+/, 'server info should expose the running version for Unraid/update checks');
   assert.strictEqual(s.json.needsSetup, true);
-  assert.strictEqual(s.json.builtInSubtitlesEnabled, false,
-    'built-in subtitles default to off while online-only testing is enabled');
+  // Brief 137 step 5 (owner yes): the admin switch is a kill switch whose default is on.
+  assert.strictEqual(s.json.builtInSubtitlesEnabled, true,
+    'built-in subtitles default to on; the admin switch only turns them off');
   assert.match(String(s.json.boot || ''), /^[0-9a-f]{16}$/, '/api/server carries a per-process boot id');
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.boot, s.json.boot,
     'the boot id is stable for the life of the process — the player remounts only when it changes');
@@ -557,6 +558,10 @@ test('accounts: the boot warning names the id and length of a stored over-long s
 test('settings ops: add/remove multiple providers and indexers, secrets never round-trip', async () => {
   // add two providers with different connection limits via ops
   await httpJson(srv.port, 'POST', '/api/settings', { addProvider: { host: 'news.a.com', port: 563, user: 'u1', pass: 'p-one-secret', connections: 30 } }, admin);
+  // Brief 137 step 5: a save of anything else leaves the built-in subtitle switch as it was (on).
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.builtInSubtitlesEnabled, true,
+    'an unrelated settings save never turns built-in subtitles off');
+  assert.strictEqual(srv.settings.get().builtInSubtitlesEnabled, undefined, 'and stores no choice the admin never made');
   await httpJson(srv.port, 'POST', '/api/settings', { addProvider: { host: 'news.b.com', port: 119, tls: false, user: 'u2', pass: 'p-two-secret', connections: 8 } }, admin);
   await httpJson(srv.port, 'POST', '/api/settings', { addIndexer: { name: 'geek2', url: 'https://api2.example/api', apikey: 'k-secret-2' } }, admin);
   let s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);

@@ -20,6 +20,7 @@ const NAMES = [
   'canAutoSubtitle', 'preferredAutoSubtitleLang', 'osTrackRel', 'osLang', 'osTrackInfo', 'episodeKeyParts', 'subtitleCatalogAvailable',
   'forcedRideAlongRel', 'fileSubtitleIntentRel', 'fileSubIntentFromRel', 'fileSubForIntent', 'nativeStartSubtitlePlan',
   'subtitleIntentFromSaved', 'fileSubPayload', 'audioTrackLangName', 'fileSubLabel', 'sourceSubtitleLabel',
+  'bestFileSubtitleRel', 'fileSubIntentRel',
 ];
 function load(uiPath, env) {
   const ui = fs.readFileSync(uiPath, 'utf8');
@@ -28,26 +29,28 @@ function load(uiPath, env) {
   const body = `${srcs.join('\n')}\nreturn { ${NAMES.filter((n) => fnSource(ui, n)).join(', ')} };`;
   return new Function('S', 'localStorage', 'clientCaps', 'currentPlayerKind', 'prefLang', 'prefCcStyle', 'langCode', 'langName',
     'subtitleListConfident', 'bestSubtitleVariantRel', 'subtitleMiss', 'LANG_3TO2', 'subChoiceKey', 'loadSubChoice', 'profilePrefKey',
-    'prefAudioLang', 'audioLangKey', 'subtitleImdbId', body)(
+    'prefAudioLang', 'audioLangKey', 'subtitleImdbId', 'loadSubChoiceLabel', 'SERVER_SUBTITLE_EXTRACTION_ROWS', 'LANG_NAMES', 'FORCED_RIDE_MODE', body)(
     env.S, env.localStorage, env.clientCaps, env.currentPlayerKind, env.prefLang, () => env.ccStyle || 'dialogue',
     (l) => ({ en: 'eng', eng: 'eng', fr: 'fra', fre: 'fra', ja: 'jpn', jpn: 'jpn', ko: 'kor', kor: 'kor' })[String(l || '').toLowerCase()] || String(l || '').toLowerCase(),
     (l) => ({ eng: 'English', fra: 'French', jpn: 'Japanese', kor: 'Korean' })[String(l || '').toLowerCase()] || String(l || ''),
     () => true, (l) => `os:${l}:best`, () => '', { eng: 'en', fra: 'fr', jpn: 'ja', kor: 'ko' }, () => 'k', () => env.saved || '',
-    (n) => `triboon.${n}`, () => env.alang || '', (l) => String(l || '').slice(0, 2).toLowerCase(), () => 'tt0000001');
+    (n) => `triboon.${n}`, () => env.alang || '', (l) => String(l || '').slice(0, 2).toLowerCase(), () => 'tt0000001',
+    () => env.label || '', false, { eng: 'English', fre: 'French', jpn: 'Japanese', kor: 'Korean' }, 'per-title');
 }
 function scenario(uiPath, sc) {
   const store = { 'triboon.subtitleMode': sc.mode === 'always' ? 'always' : 'manual' };
   const p = {
     item: sc.episode ? { type: 'episode', key: 'tmdb:tv:1:1:2', season: 1, episode: 2, tmdbId: 1, imdbId: 'tt0000001' } : { type: 'movie', key: 'tmdb:movie:1', tmdbId: 1, imdbId: 'tt0000001' },
-    mountId: 'm', tracksUrl: '/t', tracks: sc.tracks === false ? null : { audio: [{ rel: 0, lang: sc.audioLang || 'eng', codec: 'aac', channels: 2 }], subs: sc.subs || [] },
+    mountId: 'm', tracksUrl: '/t', tracks: sc.tracks === false ? null : { audio: [{ rel: 0, lang: sc.audioLang || 'eng', codec: 'aac', channels: 2 }], subs: sc.subs || [], releaseSubs: sc.releaseSubs || [] },
     releaseSubs: sc.releaseSubs || [], _subtitleDisabledThisSession: !!sc.disabled, audioTrack: 0,
   };
   const env = {
     S: { playing: p, serverInfo: { builtInSubtitlesEnabled: sc.builtIn, opensubs: true } },
     localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } },
     clientCaps: () => sc.caps || {}, currentPlayerKind: () => sc.kind || 'direct', prefLang: (k) => (k === 'slang' ? (sc.slang ?? 'en') : ''),
-    saved: sc.saved || '', ccStyle: sc.ccStyle, alang: sc.alang,
+    saved: sc.saved || '', ccStyle: sc.ccStyle, alang: sc.alang, label: sc.label || '',
   };
+  if (sc.gaveUp) p._fileSubProbeGaveUp = true;
   const f = load(uiPath, env);
   const out = {};
   try { out.start = f.startupSubtitleRelFor(p, sc.saved || ''); } catch (e) { out.start = 'ERR ' + e.message; }
@@ -55,6 +58,8 @@ function scenario(uiPath, sc) {
   try { out.auto = f.autoSubtitleRelFor(p); } catch (e) { out.auto = 'ERR ' + e.message; }
   try { out.emRows = f.embeddedSubChoices().map((x) => x.rel).join(','); } catch (e) { out.emRows = 'ERR ' + e.message; }
   try { out.fileOn = f.nativeFileSubtitlesOn ? f.nativeFileSubtitlesOn(p, sc.caps || {}, sc.kind || 'direct') : 'n/a'; } catch (e) { out.fileOn = 'ERR ' + e.message; }
+  try { out.ride = f.forcedRideAlongRel ? f.forcedRideAlongRel(p, sc.saved || '', sc.rideMode || 'per-title') : 'n/a'; } catch (e) { out.ride = 'ERR ' + e.message; }
+  try { out.intent = f.fileSubIntentRel ? f.fileSubIntentRel(p.tracks && p.tracks.subs && p.tracks.subs[2]) : 'n/a'; } catch (e) { out.intent = 'ERR ' + e.message; }
   return out;
 }
 

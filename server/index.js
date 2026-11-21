@@ -6922,7 +6922,8 @@ const H = {
     opensubs: !!effectiveOpenSubsKey(),
     // alass sidecar present → the player auto-syncs non-matched subtitles in the background.
     subSync: !!detectSubSync(),
-    builtInSubtitlesEnabled: settings.get().builtInSubtitlesEnabled === true,
+    // Brief 137 step 5: on unless the admin turned it off (a kill switch, default on).
+    builtInSubtitlesEnabled: settings.get().builtInSubtitlesEnabled !== false,
     debugLogging: debug.enabled(),
     iptv: iptvConfigured(settings.get()),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
@@ -10510,7 +10511,7 @@ Object.assign(H, {
       settingsUnreadable: settings.unreadable === true,
       ...(() => { const n = settings.sideCopyNotice(); return { settingsSideCopy: n.copy, settingsSideCopyDismissed: n.dismissed }; })(),
       openSubsKey: effectiveOpenSubsKey(s) ? '•••' : null,
-      builtInSubtitlesEnabled: s.builtInSubtitlesEnabled === true,
+      builtInSubtitlesEnabled: s.builtInSubtitlesEnabled !== false,
       debugLogging: debug.enabled(),
       debugLoggingSaved: s.debugLogging === true,
       debugLoggingEnvForced: debug.envForced(),
@@ -10693,9 +10694,11 @@ Object.assign(H, {
         indexers: b.indexers !== undefined ? b.indexers : [...(s.indexers || [])],
         tmdbKey: b.tmdbKey !== undefined ? b.tmdbKey : s.tmdbKey,
         openSubsKey: b.openSubsKey !== undefined ? (b.openSubsKey || null) : (s.openSubsKey ?? null),
+        // Only the subtitle setting itself changes it: any other save used to store false here, so
+        // a server that never chose turned itself off on its first unrelated save.
         builtInSubtitlesEnabled: b.builtInSubtitlesEnabled !== undefined
           ? b.builtInSubtitlesEnabled === true
-          : s.builtInSubtitlesEnabled === true,
+          : s.builtInSubtitlesEnabled,
         debugLogging: b.debugLogging !== undefined
           ? b.debugLogging === true
           : s.debugLogging === true,

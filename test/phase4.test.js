@@ -3286,10 +3286,14 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'admin Settings should expose an online-only/built-in-first subtitle toggle');
   assert.match(ui, /const body = \{ builtInSubtitlesEnabled: \$\('builtInSubsMode'\)\.value === 'on' \};[\s\S]+if \(key\) body\.openSubsKey = key;/,
     'saving subtitle settings should allow toggling built-ins without erasing the saved online key');
-  assert.match(ui, /function bestBuiltInSubtitleRel\(\) \{[\s\S]+if \(!builtInSubtitlesEnabled\(\)\) return '';[\s\S]+return bestReleaseSubtitleRel\(\) \|\| bestEmbeddedSubtitleRel\(\);[\s\S]+\}/,
-    'automatic subtitle startup should skip same-release and embedded built-in choices when the admin disables them');
-  assert.match(ui, /function autoSubtitleRelFor\(p\) \{[\s\S]+if \(builtInSubtitlesEnabled\(\) && p && p\.tracksUrl && !p\.tracks\) return '';[\s\S]+return osTrackRel\(preferredAutoSubtitleLang\(\)\);[\s\S]+\}/,
-    'online subtitles should not wait for the track probe while built-in subtitles are disabled by settings');
+  // Brief 137 step 5 (owner yes): the server's whole-file extraction never starts at Play; the
+  // admin switch still turns release sidecars off.
+  assert.match(ui, /function bestBuiltInSubtitleRel\(\) \{\s+if \(!builtInSubtitlesEnabled\(\)\) return '';[\s\S]{0,260}return bestReleaseSubtitleRel\(\);\s+\}/,
+    'automatic subtitle startup should skip same-release built-ins when the admin disables them, and never start the whole-file extraction');
+  // Brief 137 step 5 (owner yes): only a native app drawing the file's subtitles on direct play waits
+  // for the probe, and only until the probe fails or its deadline passes.
+  assert.match(ui, /function autoSubtitleRelFor\(p\) \{[\s\S]+if \(nativeFileSubtitlesOn\(p\) && p && p\.tracksUrl && !p\.tracks && !p\._fileSubProbeGaveUp\) return '';[\s\S]+return osTrackRel\(preferredAutoSubtitleLang\(\)\);[\s\S]+\}/,
+    'online subtitles never wait for the track probe in the browser or older apps, and a native wait ends at the deadline');
   assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(saved === 'off'\) return '';[\s\S]+const episodePlay = !!\(ep && ep\.episode > 0\);[\s\S]+const savedBuiltIn = typeof saved === 'string' && \(saved\.startsWith\('em:'\) \|\| saved\.startsWith\('rs:'\)\);[\s\S]+if \(subtitleRelPlayable\(p, saved\) && !\(episodePlay && savedBuiltIn\)\) return saved;[\s\S]+if \(episodePlay\) \{[\s\S]+const online = autoSubtitleRelFor\(p\);[\s\S]+if \(online\) return online;[\s\S]+\}[\s\S]+const builtIn = bestBuiltInSubtitleRel\(\);[\s\S]+if \(builtIn\) return builtIn;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
     'a TV episode auto-picks the online subtitle for that episode; movies still try the file first');
   assert.match(webHousekeeping, /loadTracks\(\);[\s\S]+if \(!applyStartupSubtitlePref\(\)\) \{/,
@@ -3866,8 +3870,10 @@ test('web VOD rebuffer and subtitle handoff stay bounded, fast, and mobile-safe'
     'playing and meaningful time progress cancel the watchdog');
   assert.match(ui, /function startSource\([\s\S]+clearWebRebufferRecovery\(\);[\s\S]+function seekTo\(seconds\) \{[\s\S]+clearWebRebufferRecovery\(\);/,
     'source swaps and user seeks invalidate an old rebuffer timer');
-  assert.match(ui, /if \(builtInSubtitlesEnabled\(\)\) await fetchPlayerTracks\(p, 1400\)/,
-    'online subtitle warming skips the built-in track-probe delay when built-ins are disabled');
+  // Brief 137 step 5 (owner yes): only a native app that draws the file's own subtitles on direct play
+  // waits for the probe; the browser and older apps warm online at once.
+  assert.match(ui, /if \(nativeFileSubtitlesOn\(p\)\) await fetchPlayerTracks\(p, 1400\)/,
+    'online subtitle warming skips the track-probe delay unless the native player draws the file subtitles');
   assert.match(ui, /subtitleShift: subPayload\.shift,[\s\S]+subtitleSize: applySubSize\(\),/,
     'native subtitle handoff carries the saved caption-size preference');
   assert.match(ui, /#subOverlay\{[^}]+var\(--safeL\)[^}]+var\(--safeR\)[^}]+var\(--safeB\)/,
@@ -6296,8 +6302,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'web CC should open for mounted VOD even when it needs to show unavailable-subtitle diagnostics');
   assert.match(ui, /function updatePlayerControlAvailability\(\) \{[\s\S]+setPlayerControlEnabled\('ccBtn', playerCcCanOpen\(\)\);[\s\S]+setPlayerControlEnabled\('audBtn', playerAudioHasOptions\(\)\);[\s\S]+setPlayerControlEnabled\('qualBtn', playerQualityHasOptions\(\)\);/,
     'web CC should stay selectable for VOD while audio/HD buttons remain disabled without real options');
-  assert.match(ui, /const ccProbePending = builtInSubtitlesEnabled\(\) && kind === 'cc' && !p\.tracks && !!p\.tracksUrl;[\s\S]+fetchPlayerTracks\(p, 2500\)[\s\S]+Built-in subtitles off in Settings/,
-    'web CC menu should avoid built-in probing in online-only mode and explain why local rows are hidden');
+  // Brief 137 step 5 (owner yes): the browser menu shows no rows from the file yet (step 7), so it never probes for them.
+  assert.match(ui, /const ccProbePending = nativeFileSubtitlesOn\(p\) && kind === 'cc' && !p\.tracks && !!p\.tracksUrl;[\s\S]+fetchPlayerTracks\(p, 2500\)[\s\S]+Built-in subtitles off in Settings/,
+    'web CC menu never probes for file rows in the browser and still explains when the admin turned built-ins off');
   assert.match(ui, /ctlButtons\(\) \{[\s\S]+!b\.disabled && !b\.classList\.contains\('disabled'\)/,
     'web player D-pad focus should skip disabled controls');
   assert.match(android, /setNativeButtonIcon\(ImageButton b, int iconRes, boolean primary, boolean focused\) \{[\s\S]+!b\.isEnabled\(\) \? 0x88EDEFF3 : \(focused \? 0xFF14161A : 0xFFEDEFF3\)/,
@@ -12621,7 +12628,7 @@ test('file subtitles: only a shell that draws them, only on direct play, and the
   assert.match(ui, /subtitleFile: subPayload\.file \|\| null,\s*\n[^\n]*\n\s*fileSubtitlesActive: nativeFileSubtitlesFlag\(p, kind\),/);
   assert.match(ui, /if \(kind !== 'direct' && typeof sub\.rel === 'string' && sub\.rel\.startsWith\('fs:'\)\) \{\s*sub\.rel = fileSubOnlineFallbackRel\(p, sub\.rel\);/);
   assert.match(ui, /window\.__tvNativeFileSubtitleFailed = \(rel, reason, token\) => \{[\s\S]{0,500}const next = fileSubOnlineFallbackRel\(p, rel\);[\s\S]{0,80}if \(next\) pushNativeActiveSubtitle\(p, next\);/);
-  assert.match(ui, /if \(nativeFileSubtitlesOn\(p\)\) \{\s*fileSubChoices\(p\)[\s\S]{0,300}addChoice\(\{ rel: fileSubRel\(sub\.rel\), label: fileSubLabel\(sub\)/);
+  assert.match(ui, /const fileRows = nativeFileSubtitlesOn\(p\);[\s\S]{0,200}if \(fileRows\) \{\s*fileSubChoices\(p\)[\s\S]{0,300}addChoice\(\{ rel: fileSubRel\(sub\.rel\), label: fileSubLabel\(sub\)/);
   const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   assert.match(java, /j\.put\("fileSubtitles", true\);/);
   assert.match(java, /NativeFileSubtitle\.Pick pick = NativeFileSubtitle\.find\(/);
@@ -12647,4 +12654,56 @@ test('the admin switch set to off keeps today\'s subtitle choices exactly (brief
   const got = (r) => [r.start, r.builtIn, r.auto, r.emRows, r.fileOn].join(' / ');
   const diffs = rows.filter((r) => got(r) !== want[r.k]).map((r) => r.k + ': ' + got(r) + ' (was ' + want[r.k] + ')');
   assert.deepStrictEqual(diffs.slice(0, 10), [], diffs.length + ' scenarios changed');
+});
+
+test('built-in subtitles on: file tracks first on the apps that draw them, never a wait or an extraction in the browser (brief 137 step 5)', () => {
+  const { scenario } = require('./support/subtitle-choice-harness');
+  const ui = path.join(__dirname, '..', 'web', 'index.html');
+  const SUBS = [
+    { rel: 0, lang: 'eng', codec: 'subrip', text: true, forced: true },
+    { rel: 1, lang: 'eng', codec: 'subrip', text: true },
+    { rel: 2, lang: 'eng', codec: 'subrip', text: true, sdh: true },
+    { rel: 3, lang: 'jpn', codec: 'ass', text: true },
+  ];
+  const CAPS = {
+    browser: { mkv: true }, oldApk: { native: true, source: 'exo-mediacodec' },
+    newApk: { native: true, source: 'exo-mediacodec', fileSubtitles: true }, win: { native: true, source: 'libmpv', fileSubtitles: true },
+  };
+  const run = (o) => scenario(ui, { builtIn: true, mode: 'always', subs: SUBS, releaseSubs: [{ id: 'x', lang: 'eng', name: 'a.srt' }], kind: 'direct', ...o });
+  for (const caps of ['browser', 'oldApk']) for (const kind of ['direct', 'remux']) for (const tracks of [undefined, false]) {
+    const r = run({ caps: CAPS[caps], kind, tracks });
+    assert.strictEqual(r.start, tracks === false ? 'os:en' : 'rs:x', `${caps} ${kind}: the release sidecar or online, never the whole-file extraction`);
+    assert.strictEqual(r.emRows, '', `${caps} ${kind}: no server-extracted rows until step 7`);
+    assert.strictEqual(r.auto, 'os:en', `${caps} ${kind}: online never waits for the probe`);
+    assert.strictEqual(r.fileOn, false);
+  }
+  assert.strictEqual(run({ caps: CAPS.newApk, kind: 'remux' }).start, 'rs:x', 'the remux carries no subtitle stream');
+  for (const caps of ['newApk', 'win']) {
+    assert.strictEqual(run({ caps: CAPS[caps] }).start, 'fs:1', `${caps}: the full English track, never the forced one`);
+    assert.strictEqual(run({ caps: CAPS[caps], ccStyle: 'sdh' }).start, 'fs:2', `${caps}: SDH under the SDH caption style`);
+    assert.strictEqual(run({ caps: CAPS[caps], episode: true }).start, 'fs:1', `${caps}: a muxed track belongs to the episode`);
+    assert.strictEqual(run({ caps: CAPS[caps], tracks: false }).auto, '', `${caps}: waits for the probe...`);
+    assert.strictEqual(run({ caps: CAPS[caps], tracks: false, gaveUp: true }).auto, 'os:en', `${caps}: ...until it fails or runs late`);
+    assert.strictEqual(run({ caps: CAPS[caps], saved: 'os:en:abc' }).start, 'os:en:abc', `${caps}: a saved online hand pick still wins`);
+    assert.strictEqual(run({ caps: CAPS[caps], saved: 'fi:eng:0:1' }).start, 'fs:2', `${caps}: the saved intent maps onto this file`);
+    assert.strictEqual(run({ caps: CAPS[caps], saved: 'em:5', label: 'Built-in - English (SDH)' }).start, 'fs:2', `${caps}: an index saved before 3.5.6 maps by its label`);
+    assert.strictEqual(run({ caps: CAPS[caps], saved: 'off' }).start, '', `${caps}: Off is remembered`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual' }).start, '', `${caps}: "Choose per title" starts no subtitle`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual' }).ride, 'fs:0', `${caps}: the forced English track rides along with English sound`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', saved: 'off' }).ride, '', `${caps}: an explicit Off stops the ride-along`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', slang: 'off' }).ride, '', `${caps}: the profile language off stops it`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', disabled: true }).ride, '', `${caps}: Off for this play stops it`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', rideMode: 'always' }).ride, '', `${caps}: the strict rule rides only in "Always show"`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', audioLang: 'kor' }).ride, '', `${caps}: no ride-along when the sound is in another language`);
+    const foreignFilm = [{ rel: 0, lang: 'eng', codec: 'subrip', text: true, forced: true }, { rel: 1, lang: 'chi', codec: 'hdmv_pgs_subtitle', text: false }];
+    assert.strictEqual(run({ caps: CAPS[caps], subs: foreignFilm, audioLang: 'kor' }).start, 'fs:0',
+      `${caps}: with Korean sound, the English track marked forced is the whole subtitle`);
+    assert.strictEqual(run({ caps: CAPS[caps], subs: foreignFilm }).start, 'rs:x', `${caps}: with English sound it is not`);
+  }
+  assert.strictEqual(run({ caps: CAPS.newApk }).intent, 'fi:eng:0:1', 'a pick is saved as language, forced, SDH');
+  const web = fs.readFileSync(ui, 'utf8');
+  assert.match(web, /saveSubChoice\(rel, subtitleDisplayName\(rel\)\);\s*\n[^\n]*\n\s*const fileSub = [^\n]+\n\s*if \(fileSub\) saveSubChoice\(fileSubIntentRel\(fileSub\), subtitleDisplayName\(rel\)\);/);
+  assert.match(web, /const startRel = \(sub && sub\.rel\) \|\| forcedRideAlongRel\(p\);/, 'the ride-along applies after the probe, never before the first frame');
+  assert.match(web, /const fileSubDeadline = nativeFileSubtitlesOn\(p\) \? setTimeout\(releaseFileSubWait, 6000\) : null;/);
+  assert.match(web, /if \(!t\) \{ releaseFileSubWait\(\); return; \}/, 'a failed probe goes online at once');
 });

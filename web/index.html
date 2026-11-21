@@ -14948,6 +14948,9 @@ function startNativePlayerHousekeeping(it) {
   if (otherFor) {
     otherFor._otherVersions = [];
     otherFor._otherVersionList = null;
+    // A switch must not leave the old release's rows in the native menu for the next 8 s.
+    refreshNativeAudioChoices();
+    pushNativeOtherVersions(otherFor);
     setTimeout(() => { if (S.playing === otherFor && otherFor.usingNative) loadOtherVersions(otherFor); }, 8000);
   }
   // Native ExoPlayer used to disable source triage entirely. That left a Continue Watching resume
@@ -14996,7 +14999,7 @@ function startWebPlayerHousekeeping(mount, it) {
       if (!p || S.playing !== p || p.mountId !== mount.id) return;
       // Built-in probing can scan deep into a large file. When that optional path is off,
       // warm online subtitles immediately instead of inserting a 1.4-second wait first.
-      if (builtInSubtitlesEnabled()) await fetchPlayerTracks(p, 1400).catch(() => null);
+      if (nativeFileSubtitlesOn(p)) await fetchPlayerTracks(p, 1400).catch(() => null);
       if (!S.playing || S.playing !== p || p.subTrack) return;
       const ep = p.item && episodeKeyParts(p.item);
       const episodePlay = !!(ep && ep.episode > 0);
@@ -15266,9 +15269,18 @@ async function openPlayer(it, mount, opts = {}) {
 // powers the CC/audio menus and the "Ends at" clock).
 async function loadTracks() {
   const p = S.playing; if (!p || !p.tracksUrl) return;
+  // Brief 137 step 5: a native file-subtitle play holds its subtitle for the probe. A probe that
+  // fails or takes longer than 6 s releases it online; a subtitle already on screen is never swapped.
+  const releaseFileSubWait = () => {
+    if (S.playing !== p || p.tracks || p._fileSubProbeGaveUp) return;
+    p._fileSubProbeGaveUp = true;
+    if (p.usingNative && canUseNativeVideoPlayer()) applyNativeStartupSubtitleAfterTrackProbe(p).catch(() => {});
+  };
+  const fileSubDeadline = nativeFileSubtitlesOn(p) ? setTimeout(releaseFileSubWait, 6000) : null;
   try {
     const t = await fetchPlayerTracks(p);
-    if (!t) return;
+    if (fileSubDeadline) clearTimeout(fileSubDeadline);
+    if (!t) { releaseFileSubWait(); return; }
     if (p.usingNative && canUseNativeVideoPlayer()) {
       p.nativeDuration = p.duration || p.nativeDuration || 0;
       try {
@@ -15521,14 +15533,16 @@ async function applyNativeStartupSubtitleAfterTrackProbe(p) {
   if (p.subTrack !== null && p.subTrack !== undefined) return false;
   const playbackToken = Number(p.playbackToken || 0);
   const sub = nativeVideoSubtitleRel(p);
-  const rel = await nativeStartupSubtitleRelAfterPreflight(p, sub && sub.rel ? sub.rel : '');
+  const startRel = (sub && sub.rel) || forcedRideAlongRel(p);
+  const rel = await nativeStartupSubtitleRelAfterPreflight(p, startRel || '');
   if (S.playing !== p || !p.usingNative || Number(p.playbackToken || 0) !== playbackToken) return false;
   if (!rel || !(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) return false;
   const payload = nativeSubtitlePayload(p, rel, 'startup');
-  if (!payload.url) return false;
+  if (!payload.url && !payload.file) return false;
   try {
     window.TriboonTV.updateActiveSubtitle(JSON.stringify({
       subtitleRel: payload.rel,
+      subtitleFile: payload.file || null,
       subtitleUrl: payload.url,
       subtitleLang: payload.lang,
       subtitleLabel: payload.label,
@@ -15756,7 +15770,9 @@ function nativeSubtitleChoices() {
     const rel = releaseSubRel(sub.id);
     addChoice({ rel, label: releaseSubLabel(sub) });
   });
-  if (nativeFileSubtitlesOn(p)) {
+  const fileRows = nativeFileSubtitlesOn(p);
+  if (fileRows && fileSubChoices(p).length) addChoice({ action: 'section', label: 'From the file' });
+  if (fileRows) {
     fileSubChoices(p).filter((sub) => showAllLocalSubtitles() || subtitleChoiceMatchesPreferred(sub) || embeddedSubIsForced(sub))
       .slice(0, 12).forEach((sub) => {
         addChoice({ rel: fileSubRel(sub.rel), label: fileSubLabel(sub), lang: subtitleLangForRel(fileSubRel(sub.rel)),
@@ -15770,6 +15786,9 @@ function nativeSubtitleChoices() {
   }
   if (hiddenLocalSubtitleCount()) {
     addChoice({ action: 'local_all', label: `Show all subtitle languages (${hiddenLocalSubtitleCount()} more)` });
+  }
+  if (fileRows && fileSubChoices(p).length && S.serverInfo && S.serverInfo.opensubs && subtitleCatalogAvailable(p.item)) {
+    addChoice({ action: 'section', label: 'Online' });
   }
   if (S.serverInfo && S.serverInfo.opensubs && subtitleCatalogAvailable(p.item)) [...new Set([savedInfo && savedInfo.lang, pref, 'en'].filter(Boolean))].forEach((l) => {
     const name = OS_LANG_NAMES[l] || l.toUpperCase();
@@ -16424,7 +16443,8 @@ function nativeSubtitleOnPlayer(p, payload) {
 function nativeAudioTrackRows() {
   const p = S.playing;
   const audio = p && p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
-  if (audio.length <= 1) return [];
+  // One track still gets the shared label: it sits beside the "Other version" rows (brief 137).
+  if (!audio.length) return [];
   const caps = clientCaps();
   return audio.filter((a) => a && Number.isInteger(a.rel)).map((a) => ({
     index: a.rel,
@@ -17051,6 +17071,9 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur, token) => {
     const lang = subtitleLangForRel(rel);
     if (lang) savePrefLang('slang', lang);
     saveSubChoice(rel, subtitleDisplayName(rel));
+    // Brief 137 step 5: a track from the file is kept as its intent, so another release maps it.
+    const fileSub = typeof rel === 'string' && rel.startsWith('fs:') ? fileSubForRel(rel, p) : null;
+    if (fileSub) saveSubChoice(fileSubIntentRel(fileSub), subtitleDisplayName(rel));
     autoSyncNative(p, rel);
   }
   p.usingNative = true;
@@ -20286,6 +20309,7 @@ function hiddenReleaseSubCount() {
 // (ExoPlayer's text track, mpv's sid). No server extraction, no extra read, timing exact by
 // construction. Only a shell that says so (caps.fileSubtitles) gets them, and only while the stream
 // is the file itself: the remux and transcode carry no subtitle stream, so those fall back online.
+const SERVER_SUBTITLE_EXTRACTION_ROWS = false;
 function nativeFileSubtitlesOn(p = S.playing, caps = clientCaps(), kind = currentPlayerKind(p)) {
   return !!(p && caps && caps.native && caps.fileSubtitles === true && builtInSubtitlesEnabled()
     && kind === 'direct' && p.item && p.item.type !== 'live');
@@ -20320,6 +20344,68 @@ function fileSubPayload(sub) {
   return { ordinal: sub.rel, lang: String(sub.lang || ''), codec: String(sub.codec || ''),
     forced: embeddedSubIsForced(sub), sdh: embeddedSubIsSdh(sub), picture: sub.text !== true };
 }
+// Brief 137 step 5: a per-title save keeps the INTENT ("fi:eng:0:1" = English, not forced, SDH), so
+// another release of the same title maps it to its own matching track. An index (em:3) meant a
+// different track on another release.
+function fileSubIntentRel(sub) {
+  if (!sub) return '';
+  const lang = langCode(sub.lang) || 'und';
+  return `fi:${lang}:${embeddedSubIsForced(sub) ? 1 : 0}:${embeddedSubIsSdh(sub) ? 1 : 0}`;
+}
+function subtitleIntentFromSaved(saved, label = '') {
+  const v = String(saved || '');
+  const m = v.match(/^fi:([a-z]{2,3}):([01]):([01])$/);
+  if (m) return { lang: m[1], forced: m[2] === '1', sdh: m[3] === '1' };
+  if (!v.startsWith('em:')) return null;
+  // A pick saved before 3.5.6 kept an index plus its label ("Built-in - English (SDH)").
+  const name = String(label || '').replace(/^.*? - /, '').replace(/\s*\(.*$/, '').trim().toLowerCase();
+  const code = Object.keys(LANG_NAMES).find((k) => String(LANG_NAMES[k]).toLowerCase() === name);
+  return code ? { lang: code, forced: /\(forced\)/i.test(label), sdh: /\bSDH\b/.test(label) } : null;
+}
+function fileSubForIntent(p, intent) {
+  if (!intent) return null;
+  const same = fileSubChoices(p).filter((sub) => langCode(sub.lang) === intent.lang && embeddedSubIsForced(sub) === !!intent.forced);
+  return same.find((sub) => embeddedSubIsSdh(sub) === !!intent.sdh && sub.text === true)
+    || same.find((sub) => embeddedSubIsSdh(sub) === !!intent.sdh)
+    || same.find((sub) => sub.text === true) || same[0] || null;
+}
+// The file's own track in the viewer's subtitle language: a full track, SDH only under the SDH
+// caption style, text before picture. A forced track is "the" subtitle only when the sound is in
+// another language and the file has nothing else in this language (a foreign film whose only
+// English text is marked forced is that film's whole subtitle).
+function bestFileSubtitleRel(p) {
+  if (!nativeFileSubtitlesOn(p)) return '';
+  const pref = prefLang('slang');
+  const want = langCode(pref && pref !== 'off' ? pref : preferredAutoSubtitleLang());
+  if (!want) return '';
+  const mine = fileSubChoices(p).filter((sub) => langCode(sub.lang) === want);
+  const sdhStyle = prefCcStyle() === 'sdh';
+  const rank = (sub) => (sub.text === true ? 4 : 0) + (embeddedSubIsSdh(sub) === sdhStyle ? 2 : 0);
+  const full = mine.filter((sub) => !embeddedSubIsForced(sub)).sort((a, b) => rank(b) - rank(a));
+  if (full.length) return fileSubRel(full[0].rel);
+  const audio = p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
+  const cur = audio.find((a) => a && a.rel === p.audioTrack) || audio[0];
+  const soundLang = cur ? langCode(cur.lang) : '';
+  const forced = mine.filter((sub) => embeddedSubIsForced(sub)).sort((a, b) => rank(b) - rank(a));
+  return soundLang && soundLang !== want && forced.length ? fileSubRel(forced[0].rel) : '';
+}
+// Forced ride-along, one rule for every app (brief 137 step 5). When nothing else is on, the file's
+// forced track in the language of the sound plays by itself: it only translates the lines in
+// another language. An explicit Off (this play, this title, or the profile language "off") turns it
+// off too. rideMode 'per-title' also rides in "Choose per title"; 'always' only in "Always show".
+const FORCED_RIDE_MODE = 'per-title';
+function forcedRideAlongRel(p, saved = loadSubChoice(), rideMode = FORCED_RIDE_MODE) {
+  if (!p || p._subtitleDisabledThisSession || saved === 'off' || prefLang('slang') === 'off') return '';
+  if (rideMode === 'always' && prefSubtitleMode() !== 'always') return '';
+  if (!nativeFileSubtitlesOn(p) || !p.tracks) return '';
+  const audio = Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
+  const cur = audio.find((a) => a && a.rel === p.audioTrack) || audio[0];
+  const soundLang = cur ? langCode(cur.lang) : '';
+  if (!soundLang || soundLang === 'und') return '';
+  const forced = fileSubChoices(p).filter((sub) => embeddedSubIsForced(sub) && langCode(sub.lang) === soundLang);
+  const pick = forced.find((sub) => sub.text === true) || forced[0];
+  return pick ? fileSubRel(pick.rel) : '';
+}
 function fileSubOnlineFallbackRel(p, rel) {
   const sub = fileSubForRel(rel, p);
   if (!canAutoSubtitle(p)) return '';
@@ -20337,6 +20423,9 @@ function embeddedSubIndex(rel) {
 }
 function embeddedSubChoices() {
   if (!builtInSubtitlesEnabled()) return [];
+  // Brief 137 step 5: no server-extracted rows until the browser path exists (step 7); native
+  // direct play lists the file's own tracks instead (fileSubChoices).
+  if (!SERVER_SUBTITLE_EXTRACTION_ROWS) return [];
   const p = S.playing;
   const subs = p && p.tracks && Array.isArray(p.tracks.subs) ? p.tracks.subs : [];
   return subs.filter((s) => s && s.text === true);
@@ -20410,7 +20499,9 @@ function bestEmbeddedSubtitleRel() {
 }
 function bestBuiltInSubtitleRel() {
   if (!builtInSubtitlesEnabled()) return '';
-  return bestReleaseSubtitleRel() || bestEmbeddedSubtitleRel();
+  // Brief 137 step 5: the server's whole-file extraction (em:) never starts at Play; the native apps
+  // draw the file's own tracks (fs:) and the browser path comes later (step 7).
+  return bestReleaseSubtitleRel();
 }
 function subtitleImdbId(it) {
   const id = String((it && (it.imdbId || it.imdbid)) || '').trim();
@@ -20453,7 +20544,9 @@ function bestReleaseSubtitleRel() {
 }
 function autoSubtitleRelFor(p) {
   if (prefSubtitleMode() !== 'always' || !canAutoSubtitle(p)) return '';
-  if (builtInSubtitlesEnabled() && p && p.tracksUrl && !p.tracks) return '';
+  // Brief 137 step 5: only a native app on direct play that draws the file's own subtitles waits for
+  // the probe, and only until it fails or the deadline passes; then it goes online.
+  if (nativeFileSubtitlesOn(p) && p && p.tracksUrl && !p.tracks && !p._fileSubProbeGaveUp) return '';
   return osTrackRel(preferredAutoSubtitleLang());
 }
 function subtitleRelPlayable(p, rel) {
@@ -20484,6 +20577,17 @@ function startupSubtitleRelFor(p, saved = loadSubChoice()) {
   const ep = p.item && episodeKeyParts(p.item);
   const episodePlay = !!(ep && ep.episode > 0);
   const savedBuiltIn = typeof saved === 'string' && (saved.startsWith('em:') || saved.startsWith('rs:'));
+  // Brief 137 step 5 order: a saved online hand pick, then the saved file intent mapped onto this
+  // file, then the file's own track (episodes too: a muxed track belongs to this file), then the
+  // episode's online subtitle, then the release's sidecar, then online.
+  const fileOn = nativeFileSubtitlesOn(p);
+  if (fileOn && typeof saved === 'string' && saved.startsWith('os:') && subtitleRelPlayable(p, saved)) return saved;
+  if (fileOn) {
+    const intended = fileSubForIntent(p, subtitleIntentFromSaved(saved, loadSubChoiceLabel()));
+    if (intended) return fileSubRel(intended.rel);
+    const own = bestFileSubtitleRel(p);
+    if (own) return own;
+  }
   if (subtitleRelPlayable(p, saved) && !(episodePlay && savedBuiltIn)) return saved;
   if (episodePlay) {
     const online = autoSubtitleRelFor(p);
@@ -20808,7 +20912,7 @@ function openTrackMenu(kind, restore = {}) {
   if (kind === 'quality' && !playerQualityHasOptions()) return;
   if (!p.tracks && kind !== 'cc') return; // CC works without a probe (online subtitles)
   closePlayerStats();
-  const ccProbePending = builtInSubtitlesEnabled() && kind === 'cc' && !p.tracks && !!p.tracksUrl;
+  const ccProbePending = nativeFileSubtitlesOn(p) && kind === 'cc' && !p.tracks && !!p.tracksUrl;
   if (ccProbePending) {
     fetchPlayerTracks(p, 2500).then(() => {
       if (S.playing === p && S.trackMenuKind === 'cc' && $('trackMenu').classList.contains('open')) {

@@ -88,7 +88,7 @@ final class NativeAudioRows {
 
     /** Pairs every ExoPlayer audio track with its row, in file order, or returns null. */
     static List<Entry> pair(List<Tracks.Group> groups, List<Row> rows) {
-        if (groups == null || rows == null || rows.size() < 2) return null;
+        if (groups == null || rows == null || rows.isEmpty()) return null;
         List<Entry> out = new ArrayList<>();
         int ordinal = 0;
         for (Tracks.Group group : groups) {

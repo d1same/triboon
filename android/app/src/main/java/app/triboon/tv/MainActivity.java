@@ -8053,6 +8053,11 @@ public class MainActivity extends Activity {
                 String label = i < nativeSubtitleChoiceLabels.size() ? nativeSubtitleChoiceLabels.get(i) : "";
                 String action = i < nativeSubtitleChoiceActions.size() ? nativeSubtitleChoiceActions.get(i) : "";
                 String lang = i < nativeSubtitleChoiceLangs.size() ? nativeSubtitleChoiceLangs.get(i) : "";
+                if ("section".equals(action)) {
+                    // Brief 137 step 5: "From the file" / "Online" headers; never a row to pick.
+                    choices.add(new NativeTrackChoice(null, -1, "\u00a7" + (label == null ? "" : label), false, false, "", "section", ""));
+                    continue;
+                }
                 if (label == null || label.isEmpty()) label = rel.isEmpty() ? "More subtitle versions" : nativeLabelForSubtitleRel(rel);
                 choices.add(new NativeTrackChoice(null, -1, label, false,
                         !rel.isEmpty() && rel.equals(nativeSubtitleRel), rel, action, lang));
@@ -8198,6 +8203,7 @@ public class MainActivity extends Activity {
             showNativeChrome(false);
             return;
         }
+        if ("section".equals(choice.subtitleAction)) return;
         if (trackType == C.TRACK_TYPE_TEXT && "local_all".equals(choice.subtitleAction)) {
             requestNativeSubtitleShowAll();
             showNativeChrome(false);
