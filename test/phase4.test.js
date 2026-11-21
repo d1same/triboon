@@ -13042,3 +13042,49 @@ test('a release swap on the TV and Windows apps marks the carried online subtitl
   assert.match(ui, /if \(nativePreferred && carriedSubTrack\) p\.subTrack = carriedSubTrack;\s*\n\s*if \(nativePreferred && carriedSubTrack\) p\._subAutoPick = carriedSubTrack;/,
     'as setSubtitle already does for the browser');
 });
+
+test('a player timeout right after the picture on the direct file plays the same second as a remux with AAC audio, once, and counts toward a switch', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const start = ui.indexOf('window.__tvNativeVideoError =');
+  const end = ui.indexOf('window.__tvNativeAudioUnplayable =', start);
+  assert.ok(start > 0 && end > start);
+  const calls = [];
+  const S = { playing: null };
+  const build = (remuxOk = true) => new Function('window', 'S', 'nativePlaybackCallbackMatches', 'applyNativeVideoProgress', 'currentTime',
+    'vodPlaybackStarted', 'recoverSamePlaybackSource', 'noteSourceFailure', 'appMs', 'notePlaybackIssue', 'tryNativeVideoPlayer',
+    'tryNextNativeKind', 'autoAdvance', 'toast', 'closePlayer',
+    `${ui.slice(start, end)}\nreturn window.__tvNativeVideoError;`)(
+      {}, S, () => true, () => {}, () => 0.4, (p) => !!p.started,
+      (why) => calls.push(['same-source', why]), (p, at) => calls.push(['ledger', at]), () => 1000,
+      (kind, text) => calls.push(['issue', kind, text]),
+      (kind, at, opts) => { calls.push(['native', kind, at, opts && opts.quietSeek]); return remuxOk; },
+      () => false, () => calls.push(['advance']), () => {}, () => {});
+  const onError = build();
+  const p = { usingNative: true, started: true, item: { type: 'episode' }, remuxUrl: '/api/remux/m1?t=x', playbackToken: 5 };
+  S.playing = p;
+  onError('ERROR_CODE_TIMEOUT', 0, 1500, 5);
+  assert.deepStrictEqual(calls.filter((c) => c[0] !== 'issue'), [['ledger', 0.4], ['native', 'remux', 0.4, true]],
+    'the timeout is counted, then the same second plays as a remux');
+  assert.strictEqual(p.nativeAacAudio, true, 'with AAC audio');
+  calls.length = 0;
+  p.usingNative = true;
+  onError('ERROR_CODE_TIMEOUT', 0, 1500, 5);
+  assert.deepStrictEqual(calls, [['same-source', 'ERROR_CODE_TIMEOUT']],
+    'a second timeout on the same release goes to the normal recovery, where the ledger moves on to another copy');
+  calls.length = 0;
+  const q = { usingNative: true, started: true, item: { type: 'episode' }, remuxUrl: '/api/remux/m2?t=x', playbackToken: 6 };
+  S.playing = q;
+  onError('stream dropped (code 2001)', 0, 1500, 6);
+  assert.deepStrictEqual(calls, [['same-source', 'stream dropped (code 2001)']], 'other errors keep the 3.5.6 path');
+  calls.length = 0;
+  q.usingRemux = true;
+  onError('ERROR_CODE_TIMEOUT', 0, 1500, 6);
+  assert.deepStrictEqual(calls, [['same-source', 'ERROR_CODE_TIMEOUT']], 'a remux that times out is not remuxed again');
+  calls.length = 0;
+  const r = { usingNative: true, started: true, item: { type: 'episode' }, remuxUrl: '/api/remux/m3?t=x', playbackToken: 7 };
+  S.playing = r;
+  build(false)('ERROR_CODE_TIMEOUT', 0, 1500, 7);
+  assert.strictEqual(r.nativeAacAudio, false, 'a remux that cannot start leaves the AAC rescue unused');
+  assert.strictEqual(r.usingNative, true);
+  assert.deepStrictEqual(calls.at(-1), ['same-source', 'ERROR_CODE_TIMEOUT'], 'and the normal recovery runs');
+});

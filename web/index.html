@@ -16885,6 +16885,19 @@ window.__tvNativeVideoError = (msg, pos, dur, token) => {
   const at = currentTime();
   const kind = p.usingTranscode ? 'transcode' : (p.usingRemux ? 'remux' : 'direct');
   if (vodPlaybackStarted(p)) {
+    if (nativeTimeoutWantsAacRemux(p, msg, kind)) {
+      // ExoPlayer gave up waiting on its own playback thread right after the picture came. The
+      // direct file's Dolby audio and its text track are the parts a remux changes, so the same
+      // second plays as a remux with AAC audio, once per release. Retrying the direct file timed
+      // out the same way four times in a row (owner log 2026-11-21). It counts toward a switch.
+      noteSourceFailure(p, at, appMs());
+      p.nativeAacAudio = true;
+      p.usingNative = false;
+      notePlaybackIssue('crash', `${msg} on the direct file — playing the same second as a remux with AAC audio`, 0);
+      if (tryNativeVideoPlayer('remux', at, { quietSeek: true })) return;
+      p.usingNative = true;
+      p.nativeAacAudio = false;
+    }
     recoverSamePlaybackSource(msg || 'native playback interrupted');
     return;
   }
@@ -16897,6 +16910,12 @@ window.__tvNativeVideoError = (msg, pos, dur, token) => {
   toast(msg ? `Native player failed (${msg})` : 'Native player failed');
   closePlayer();
 };
+// A player timeout (ERROR_CODE_TIMEOUT, with the shell's detail after it when it has one) on the
+// direct file, with a remux to go to and no AAC rescue used on this release yet.
+function nativeTimeoutWantsAacRemux(p, msg, kind) {
+  return !!(p && kind === 'direct' && !p.nativeAacAudio && p.remuxUrl
+    && /\bERROR_CODE_TIMEOUT\b/.test(String(msg || '')));
+}
 // ExoPlayer found audio that nothing on this box can play, or its audio output failed. Picture with
 // no sound raises no player error, so the shell tells us. One rescue per source: the same second as
 // a remux with 5.1 AAC, which every Android box decodes. Other audio paths stay exactly as they were.
