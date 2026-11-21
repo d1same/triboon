@@ -8383,3 +8383,13 @@ test('a probe that never finished is a failure, not an empty file that gets cach
   assert.match(src, /probeTracks\(selfUrl\)\.then\(\(t\) => \{[\s\S]{0,120}rememberProbe\(probeCacheKey\(vf\.name, vf\.size\), t\);[\s\S]{0,200}\}\)\.catch\(/,
     'only a probe that resolved is remembered');
 });
+
+test('a failed track probe waits a minute before the next one, so seeks do not re-probe (second check 3.5.6)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /function probeFailedRecently\(vf, now = Date\.now\(\)\) \{\s*return !!\(vf && vf\._probeFailedAt && now - vf\._probeFailedAt < PROBE_RETRY_MS\);\s*\}/);
+  // The remux route: every seek restarts the remux, and a 4K source whose probe cannot finish in 30 s
+  // used to start another startup-lane probe beside each seek.
+  assert.match(src, /if \(!vf\._tracks && detectFfprobe\(\) && !vf\._probing && !probeFailedRecently\(vf\)\) \{\s*vf\._probing = true;\s*probeTracks\(selfUrl\)\.then\(\(t\) => \{[\s\S]{0,200}\}\)\.catch\(\(\) => \{ vf\._probeFailedAt = Date\.now\(\); \}\)\.finally/);
+  // The shared menu probe: a failure is remembered the same way, and a recent one answers at once.
+  assert.match(src, /function probeMountTracks\(vf, uid\) \{[\s\S]{0,400}if \(probeFailedRecently\(vf\)\) return Promise\.reject\(new Error\('track probe failed a moment ago'\)\);[\s\S]{0,900}\}\)\.catch\(\(e\) => \{ vf\._probeFailedAt = Date\.now\(\); throw e; \}\)\.finally\(\(\) => \{ vf\._tracksProbe = null; \}\);/);
+});

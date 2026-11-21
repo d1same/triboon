@@ -11233,13 +11233,13 @@ Object.assign(H, {
       const remembered = recallProbe(probeCacheKey(vf.name, vf.size));
       if (remembered) vf._tracks = { available: true, ...remembered };
     }
-    if (!vf._tracks && detectFfprobe() && !vf._probing) {
+    if (!vf._tracks && detectFfprobe() && !vf._probing && !probeFailedRecently(vf)) {
       vf._probing = true;
       probeTracks(selfUrl).then((t) => {
         vf._tracks = { available: true, ...t };
         rememberProbe(probeCacheKey(vf.name, vf.size), t);
         noteRuntimeCheck(vf);
-      }).catch(() => {}).finally(() => { vf._probing = false; });
+      }).catch(() => { vf._probeFailedAt = Date.now(); }).finally(() => { vf._probing = false; });
     }
     const ff = spawnRemux(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe });
     attachMountFfmpegPipe(vf, ff, ctx.claims && ctx.claims.uid);
@@ -13140,6 +13140,13 @@ function jellyfinSubtitleWarm(ctx, mountId, spec) {
   if (!hasText) kickJellyfinOnlineSub(vf, spec);
 }
 
+// A probe that failed (since brief 137 an unfinished one fails instead of caching an empty file)
+// waits a minute before the next try: every seek restarts the remux, and a slow 4K source whose
+// probe cannot finish in 30 s started another startup-lane probe beside each seek (second check 3.5.6).
+const PROBE_RETRY_MS = 60000;
+function probeFailedRecently(vf, now = Date.now()) {
+  return !!(vf && vf._probeFailedAt && now - vf._probeFailedAt < PROBE_RETRY_MS);
+}
 // One shared track probe per mount: the web CC/audio menus and the Jellyfin
 // track list ask at the same moment on a fresh Play.
 function probeMountTracks(vf, uid) {
@@ -13149,6 +13156,7 @@ function probeMountTracks(vf, uid) {
     vf._tracks = { available: true, ...remembered, releaseSubs: publicReleaseSubs(vf) };
     return Promise.resolve(vf._tracks);
   }
+  if (probeFailedRecently(vf)) return Promise.reject(new Error('track probe failed a moment ago'));
   if (!vf._tracksProbe) {
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
     vf._tracksProbe = probeTracks(selfUrl).then((t) => {
@@ -13156,7 +13164,7 @@ function probeMountTracks(vf, uid) {
       vf._tracks = { available: true, ...t, releaseSubs: publicReleaseSubs(vf) };
       noteRuntimeCheck(vf);
       return vf._tracks;
-    }).finally(() => { vf._tracksProbe = null; });
+    }).catch((e) => { vf._probeFailedAt = Date.now(); throw e; }).finally(() => { vf._tracksProbe = null; });
   }
   return vf._tracksProbe;
 }
