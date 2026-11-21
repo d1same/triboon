@@ -571,6 +571,12 @@ test('settings ops: add/remove multiple providers and indexers, secrets never ro
   assert.strictEqual(a.connections, 30); assert.strictEqual(b.connections, 8);
   assert.strictEqual(a.user, '•••', 'secrets redacted in responses');
   assert.ok(s.json.indexers.some((i) => i.name === 'geek2'), 'ops-added indexer present');
+  // Brief 148: each indexer row carries its recent search health (counts only), on this
+  // admin-only answer; a user still gets 403 for GET /api/settings (the role test above).
+  const g2 = s.json.indexers.find((i) => i.name === 'geek2');
+  assert.deepStrictEqual(Object.keys(g2.health).sort(), ['failures', 'nzbFailures', 'searches', 'timeouts']);
+  assert.ok(['searches', 'timeouts', 'failures'].every((k) => Number.isInteger(g2.health[k]) && g2.health[k] >= 0));
+  assert.ok(Array.isArray(g2.health.nzbFailures), 'NZB download failures by code');
   const raw = fs.readFileSync(path.join(process.env.TRIBOON_DATA, 'settings.json'), 'utf8');
   for (const sec of ['p-one-secret', 'p-two-secret', 'k-secret-2']) assert.ok(!raw.includes(sec), sec + ' encrypted at rest');
   // remove by index
@@ -4665,6 +4671,36 @@ test('a double-tapped Play shares one start; another user or another title does 
   const later = srv.sharedUserPlay('user-a', params, policy, async () => { runs++; return {}; });
   await later;
   assert.strictEqual(runs, 4, 'a Play after the first one finished starts fresh');
+});
+
+test('a shared Play is cancelled only when every request sharing it has closed (brief 148)', async () => {
+  const { EventEmitter } = require('events');
+  const fakeRes = () => Object.assign(new EventEmitter(), { writableEnded: false });
+  let signal = null;
+  let finish;
+  const run = (s) => { signal = s; return new Promise((resolve) => { finish = resolve; }); };
+  const params = { q: 'Sunrise 2026' };
+  const policy = { maxResolutionRank: 3 };
+  const r1 = fakeRes();
+  const r2 = fakeRes();
+  const a = srv.sharedUserPlay('user-c', params, policy, run, r1);
+  const b = srv.sharedUserPlay('user-c', { ...params }, { ...policy }, run, r2);
+  await Promise.resolve();
+  assert.ok(signal && !signal.aborted, 'the run gets a live signal');
+  r1.emit('close');
+  assert.strictEqual(signal.aborted, false, 'one closed tap does not cancel a Play another tap still waits on');
+  r2.emit('close');
+  assert.strictEqual(signal.aborted, true, 'the last closed tap cancels it');
+  finish({});
+  await Promise.all([a, b]);
+  // A request that got its answer closes normally and never counts as a cancel.
+  const r3 = fakeRes();
+  let s3 = null;
+  const c = srv.sharedUserPlay('user-c', params, policy, (s) => { s3 = s; return Promise.resolve({}); }, r3);
+  await c;
+  r3.writableEnded = true;
+  r3.emit('close');
+  assert.strictEqual(s3.aborted, false);
 });
 
 test('resume seconds warm the resume spot even when the client has no length yet', () => {

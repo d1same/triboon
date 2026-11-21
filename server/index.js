@@ -5095,12 +5095,33 @@ function resumeFracFromBody(body = {}) {
 // A double-tapped Play sends the same request twice. Both answers must point at one
 // session and one mount, or the first stream gets released under the player.
 const userPlayInflight = new Map();
-function sharedUserPlay(uid, params, policy, run) {
+// `res` (optional) is the caller's HTTP answer. When every caller sharing one run has closed its
+// request before the answer was sent, `run` gets an aborted signal: the indexer second chance
+// (brief 148) stops instead of waiting out its budget for nobody. A tap still open keeps it going.
+const userPlayCallers = new Map(); // key -> { open, controller }
+function sharedUserPlay(uid, params, policy, run, res = null) {
   const key = JSON.stringify([uid, params, policy]);
+  const join = (rec) => {
+    if (!res || typeof res.once !== 'function') { rec.open++; return; } // a caller without a socket never cancels
+    rec.open++;
+    res.once('close', () => {
+      if (res.writableEnded) return;
+      rec.open--;
+      if (rec.open <= 0 && !rec.controller.signal.aborted) rec.controller.abort();
+    });
+  };
   const existing = userPlayInflight.get(key);
-  if (existing) return existing;
-  const p = Promise.resolve().then(run).finally(() => {
+  if (existing) {
+    const rec = userPlayCallers.get(key);
+    if (rec) join(rec);
+    return existing;
+  }
+  const rec = { open: 0, controller: new AbortController() };
+  userPlayCallers.set(key, rec);
+  join(rec);
+  const p = Promise.resolve().then(() => run(rec.controller.signal)).finally(() => {
     if (userPlayInflight.get(key) === p) userPlayInflight.delete(key);
+    if (userPlayCallers.get(key) === rec) userPlayCallers.delete(key);
   });
   userPlayInflight.set(key, p);
   return p;
@@ -7494,7 +7515,7 @@ const H = {
         resumeFrac: resumeFracFromBody(body),
       };
       const { session, vf, candidate, attempts, relaxedResolution, searchMs } = await sharedUserPlay(
-        ctx.user.id, playParams, policy, () => pipeline.play(playParams, policy)
+        ctx.user.id, playParams, policy, (signal) => pipeline.play(playParams, policy, {}, { signal }), ctx.res
       );
       if (!(await maturityAllowed)) { discardDeniedMount(session, vf); return maturityBlockedResponse(ctx); }
       session.uid = ctx.user.id;
@@ -10627,6 +10648,9 @@ Object.assign(H, {
         name: i.name, url: i.url, apikey: i.apikey ? '•••' : '',
         apiDayLimit: i.apiDayLimit || null, grabDayLimit: i.grabDayLimit || null,
         usage: ixUsageToday().byIndexer[i.name] || { api: 0, grabs: 0 },
+        // Brief 148: how this indexer answered the searches of the last 24 hours (since the server
+        // started). Counts only; admin-only like the rest of this answer.
+        health: pipeline.indexerHealth(i.name),
       })),
       tmdbKey: s.tmdbKey ? '•••' : null,
       // Audit F1-01: settings.json is there but does not open (secret changed/lost, damaged), and

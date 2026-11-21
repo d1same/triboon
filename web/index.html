@@ -31440,6 +31440,28 @@ async function hideSettingsSideCopyNotice(copy, btn) {
     if (panel) { S.settingsZone = 'panel'; focusSectionControl(formCtls(panel)[0]); }
   }
 }
+// Settings → Indexers: how each indexer answered the recent searches (brief 148). "Slow or
+// failing" once half or more of at least 3 searches timed out or failed.
+function indexerHealthText(h) {
+  // NZB downloads that failed, by code only ("HTTP 510, 3 today"). What a code means is the
+  // indexer's business; the line just says it keeps happening.
+  const nzb = (Array.isArray(h && h.nzbFailures) ? h.nzbFailures : [])
+    .filter((x) => x && x.code && Number(x.count) > 0)
+    .slice(0, 3)
+    .map((x) => `${String(x.code).slice(0, 40)}, ${Number(x.count)} today`);
+  const nzbText = nzb.length ? ` · NZB downloads failing: ${nzb.join('; ')}` : '';
+  const searches = Number(h && h.searches) || 0;
+  if (!searches) return { text: nzbText, bad: !!nzbText };
+  const timeouts = Number(h.timeouts) || 0;
+  const failures = Number(h.failures) || 0;
+  const missed = timeouts + failures;
+  const what = failures && timeouts ? 'timed out or failed' : (failures ? 'failed' : 'timed out');
+  if (missed && searches >= 3 && missed * 2 >= searches) {
+    return { text: ` · slow or failing today: ${missed} of ${searches} searches ${what}${nzbText}`, bad: true };
+  }
+  if (missed) return { text: ` · ${missed} of ${searches} searches ${what} today${nzbText}`, bad: !!nzbText };
+  return { text: ` · ${searches} searches answered today${nzbText}`, bad: !!nzbText };
+}
 async function refreshSettings(opts = {}) {
   const now = Date.now();
   const tab = accountTabKey();
@@ -31493,7 +31515,8 @@ async function refreshSettings(opts = {}) {
     $('ixList').innerHTML = s.indexers.length ? s.indexers.map((x, i) => {
       const lim = (x.apiDayLimit ? ` · api ${x.usage.api}/${x.apiDayLimit}` : '') +
                   (x.grabDayLimit ? ` · nzb ${x.usage.grabs}/${x.grabDayLimit}` : '');
-      return `<div class="kv"><span>${esc(x.name)} ${x.apikey ? '<span style="color:var(--amber)">· key ✓</span>' : '<span style="color:#ff8d8d">· no key</span>'}<span style="color:var(--muted)">${esc(lim)}</span></span>
+      const ixHealth = indexerHealthText(x.health);
+      return `<div class="kv"><span>${esc(x.name)} ${x.apikey ? '<span style="color:var(--amber)">· key ✓</span>' : '<span style="color:#ff8d8d">· no key</span>'}<span style="color:var(--muted)">${esc(lim)}</span>${ixHealth.text ? `<span class="ixHealth" style="color:${ixHealth.bad ? '#ff8d8d' : 'var(--muted)'}">${esc(ixHealth.text)}</span>` : ''}</span>
        <span>${esc(x.url.replace(/^https?:\/\//, '').slice(0, 30))}
        <button class="testBtn" data-ti="${i}" title="Test search">test</button>
        <button class="rm" data-edi="${i}" title="Edit" style="color:var(--amber);margin-left:8px">✎</button>
