@@ -311,6 +311,7 @@ public class MainActivity extends Activity {
     private String nativeSubtitleLang = "";
     private String nativeSubtitleLabel = "";
     private String nativeSubtitleRel = "";
+    private int nativeSideSubtitleFails = 0; // consecutive failed re-reads of the side file
     private String nativeSubtitleSize = "M";
     private final java.util.ArrayList<String> nativeSubtitleChoiceRels = new java.util.ArrayList<>();
     private final java.util.ArrayList<String> nativeSubtitleChoiceLabels = new java.util.ArrayList<>();
@@ -7086,6 +7087,7 @@ public class MainActivity extends Activity {
                     // Brief 143: the remux's side file grows as the remux reads ahead; read it again
                     // while this track stays on (a new pick bumps the token and ends the chain).
                     if (growing) {
+                        nativeSideSubtitleFails = 0;
                         final int reads = attempt < 0 ? -attempt : 0;
                         nativeSubtitleHandler.postDelayed(() -> {
                             if (token != nativeSubtitleLoadToken) return;
@@ -7112,6 +7114,8 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (token != nativeSubtitleLoadToken) return;
                     if (attempt < 0 && !definitive) { // a re-read of a growing side file: try again later
+                        // Second check 3.5.7: not forever (a mount gone after a swap, a server restart).
+                        if (NativeSideSubtitle.stopRereads(++nativeSideSubtitleFails)) return;
                         nativeSubtitleHandler.postDelayed(() -> {
                             if (token != nativeSubtitleLoadToken) return;
                             loadNativeSubtitleOverlayAttempt(subtitleUrl, cleanUrl, token, true, attempt);
@@ -7126,6 +7130,13 @@ public class MainActivity extends Activity {
                         return;
                     }
                     if (nativeSubtitleCues.isEmpty()) clearNativeSubtitleOverlay();
+                    // Second check 3.5.7: the file's side file never loaded (a track the remux cannot
+                    // carry, a mount gone): the page goes online, as for a direct-play track that fails.
+                    if (NativeSideSubtitle.isSideFile(cleanUrl) && nativeSubtitleCues.isEmpty() && web != null) {
+                        web.evaluateJavascript("window.__tvNativeFileSubtitleFailed && window.__tvNativeFileSubtitleFailed("
+                                + jsQuote(nativeSubtitleRel) + "," + jsQuote("the file's subtitle did not load") + "," + nativePlaybackToken + ")", null);
+                        return;
+                    }
                     if (!silent) Toast.makeText(this, reason, Toast.LENGTH_LONG).show();
                 });
             } finally {
@@ -7248,8 +7259,14 @@ public class MainActivity extends Activity {
     // Brief 143: how far ahead of the picture the last line on hand ends (NaN: no line yet).
     private double nativeSideSubtitleAheadSeconds() {
         if (nativeSubtitleCues.isEmpty()) return Double.NaN;
-        double last = nativeSubtitleCues.get(nativeSubtitleCues.size() - 1).end;
-        return last - nativeDisplayPositionMs() / 1000.0;
+        int n = nativeSubtitleCues.size();
+        double[] starts = new double[n];
+        double[] ends = new double[n];
+        for (int i = 0; i < n; i++) {
+            starts[i] = nativeSubtitleCues.get(i).start;
+            ends[i] = nativeSubtitleCues.get(i).end;
+        }
+        return NativeSideSubtitle.aheadSeconds(starts, ends, nativeDisplayPositionMs() / 1000.0);
     }
 
     private void updateNativeSubtitleOverlay() {

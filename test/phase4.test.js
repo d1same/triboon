@@ -13027,3 +13027,12 @@ test('the online subtitle list is not looked up at every handoff: only in "Alway
   asked.length = 0; builtIn = false; rowsFor(probed, []);
   assert.deepStrictEqual(asked, [], 'the built-in switch off and "Choose per title": no lookup, as in 3.5.6');
 });
+
+test('Android side file: the pace follows the lines near the picture, re-reads stop, and a file that never loads goes online (second check 3.5.7)', () => {
+  const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(java, /private double nativeSideSubtitleAheadSeconds\(\) \{[\s\S]{0,500}return NativeSideSubtitle\.aheadSeconds\(starts, ends, nativeDisplayPositionMs\(\) \/ 1000\.0\);/);
+  assert.match(java, /if \(NativeSideSubtitle\.stopRereads\(\+\+nativeSideSubtitleFails\)\) return;/, 'failed re-reads stop');
+  assert.match(java, /if \(growing\) \{\s*nativeSideSubtitleFails = 0;/, 'a good read resets the count');
+  assert.match(java, /if \(NativeSideSubtitle\.isSideFile\(cleanUrl\) && nativeSubtitleCues\.isEmpty\(\) && web != null\) \{\s*web\.evaluateJavascript\("window\.__tvNativeFileSubtitleFailed && window\.__tvNativeFileSubtitleFailed\("/,
+    'a side file that never loads hands over to online');
+});

@@ -30,6 +30,31 @@ final class NativeSideSubtitle {
         return base + (base.indexOf('?') < 0 ? "?" : "&") + "at=" + at;
     }
 
+    /** Consecutive failed re-reads after which the chain stops (a mount gone, an expired token). */
+    static final int MAX_REREAD_FAILS = 30;
+
+    static boolean stopRereads(int consecutiveFails) {
+        return consecutiveFails >= MAX_REREAD_FAILS;
+    }
+
+    /**
+     * How far the lines on hand run on from the picture: a run of lines with no gap over 30 s, NaN when
+     * none reaches the picture. The end of the whole list is no measure after a seek back (second check
+     * 3.5.7): lines far ahead, none here, and the reads slowed to every 8 s exactly where lines were missing.
+     */
+    static double aheadSeconds(double[] starts, double[] ends, double now) {
+        double end = now;
+        boolean found = false;
+        int n = Math.min(starts == null ? 0 : starts.length, ends == null ? 0 : ends.length);
+        for (int i = 0; i < n; i++) {
+            if (!(ends[i] >= now)) continue;
+            if (starts[i] - end > 30.0) break;
+            end = Math.max(end, ends[i]);
+            found = true;
+        }
+        return found ? end - now : Double.NaN;
+    }
+
     /** Delay before the next read, after `reads` re-reads, when the last line ends `aheadSeconds` ahead. */
     static long nextReadMs(int reads, double aheadSeconds) {
         if (!(aheadSeconds >= NEAR_SECONDS)) return NEAR_MS;
