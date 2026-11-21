@@ -401,6 +401,8 @@ public class MainActivity extends Activity {
     private int nativeLastPlayWhenReadyReason = Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST;
     private boolean nativeStayedPausedNoted;
     private boolean nativeVideoStarted;
+    // What the audio output is for this player, for a timeout's reason ("" until audio starts).
+    private String nativeAudioOutputText = "";
     private boolean nativeVideoMemoryTrimmedDuringBuffer;
     private boolean nativeVideoErrorNotified;
     private long nativeVideoErrorReportedAtMs; // B15B-02: when the last one-shot report went out
@@ -4717,6 +4719,7 @@ public class MainActivity extends Activity {
             // Quiet remount of an already-playing title is a rebuffer, not a cold start.
             // Resetting this made 4K remux Play use the 12s startup watchdog and recover-loop.
             if (!(reuseQuietVideo && nativeVideoStarted)) nativeVideoStarted = false;
+            nativeAudioOutputText = "";
             nativeLastVideoDisplayMs = "video".equals(mode) ? Math.max(startMs, startOffsetMs) : 0L;
             if (!quietSeek) {
                 nativeUserSeekTargetMs = -1L;
@@ -4818,7 +4821,8 @@ public class MainActivity extends Activity {
                     }
                     @Override public void onAudioTrackInitialized(EventTime eventTime, AudioSink.AudioTrackConfig config) {
                         if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken || config == null) return;
-                        reportNativePlaybackIssue("trace", "audio output " + NativeAudioRescue.describeOutput(config.encoding, config.channelConfig), 0L);
+                        nativeAudioOutputText = NativeAudioRescue.describeOutput(config.encoding, config.channelConfig);
+                        reportNativePlaybackIssue("trace", "audio output " + nativeAudioOutputText, 0L);
                     }
                     @Override public void onAudioInputFormatChanged(EventTime eventTime, Format format, androidx.media3.exoplayer.DecoderReuseEvaluation reuse) {
                         if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken || format == null) return;
@@ -6814,6 +6818,12 @@ public class MainActivity extends Activity {
             }
             t = t.getCause();
         }
+        boolean textOn = false;
+        try {
+            textOn = nativePlayer != null && nativePlayer.getCurrentTracks().isTypeSelected(C.TRACK_TYPE_TEXT);
+        } catch (RuntimeException ignored) {}
+        String timeout = NativeTimeoutReason.describe(error, nativeAudioOutputText, textOn);
+        if (timeout != null) return timeout;
         String name = error.getErrorCodeName();
         return name == null || name.isEmpty() ? "playback failed" : name;
     }
