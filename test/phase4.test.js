@@ -12689,12 +12689,14 @@ test('built-in subtitles on: file tracks first on the apps that draw them, never
     assert.strictEqual(run({ caps: CAPS[caps], saved: 'em:5', label: 'Built-in - English (SDH)' }).start, 'fs:2', `${caps}: an index saved before 3.5.6 maps by its label`);
     assert.strictEqual(run({ caps: CAPS[caps], saved: 'off' }).start, '', `${caps}: Off is remembered`);
     assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual' }).start, '', `${caps}: "Choose per title" starts no subtitle`);
-    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual' }).ride, 'fs:0', `${caps}: the forced English track rides along with English sound`);
-    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', saved: 'off' }).ride, '', `${caps}: an explicit Off stops the ride-along`);
-    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', slang: 'off' }).ride, '', `${caps}: the profile language off stops it`);
-    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', disabled: true }).ride, '', `${caps}: Off for this play stops it`);
-    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', rideMode: 'always' }).ride, '', `${caps}: the strict rule rides only in "Always show"`);
-    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', audioLang: 'kor' }).ride, '', `${caps}: no ride-along when the sound is in another language`);
+    // Owner decision (final): forced rides along only in "Always show"; "Choose per title" starts nothing.
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual' }).ride, '', `${caps}: "Choose per title" starts nothing, not even the forced track`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'always' }).ride, 'fs:0', `${caps}: in "Always show" the forced English track rides along with English sound`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'always', saved: 'off' }).ride, '', `${caps}: an explicit Off stops the ride-along`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'always', slang: 'off' }).ride, '', `${caps}: the profile language off stops it`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'always', disabled: true }).ride, '', `${caps}: Off for this play stops it`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'always', audioLang: 'kor' }).ride, '', `${caps}: no ride-along when the sound is in another language`);
+    assert.strictEqual(run({ caps: CAPS[caps], mode: 'manual', rideMode: 'per-title' }).ride, 'fs:0', `${caps}: the other rule is one constant away`);
     const foreignFilm = [{ rel: 0, lang: 'eng', codec: 'subrip', text: true, forced: true }, { rel: 1, lang: 'chi', codec: 'hdmv_pgs_subtitle', text: false }];
     assert.strictEqual(run({ caps: CAPS[caps], subs: foreignFilm, audioLang: 'kor' }).start, 'fs:0',
       `${caps}: with Korean sound, the English track marked forced is the whole subtitle`);
@@ -12706,4 +12708,10 @@ test('built-in subtitles on: file tracks first on the apps that draw them, never
   assert.match(web, /const startRel = \(sub && sub\.rel\) \|\| forcedRideAlongRel\(p\);/, 'the ride-along applies after the probe, never before the first frame');
   assert.match(web, /const fileSubDeadline = nativeFileSubtitlesOn\(p\) \? setTimeout\(releaseFileSubWait, 6000\) : null;/);
   assert.match(web, /if \(!t\) \{ releaseFileSubWait\(\); return; \}/, 'a failed probe goes online at once');
+});
+
+test('forced ride-along follows the owner decision: only in "Always show" (brief 137 step 5)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /^const FORCED_RIDE_MODE = 'always';$/m, 'the owner said "No, keep it off" for "Choose per title"');
+  assert.match(ui, /function forcedRideAlongRel\(p, saved = loadSubChoice\(\), rideMode = FORCED_RIDE_MODE\) \{[\s\S]{0,200}if \(rideMode === 'always' && prefSubtitleMode\(\) !== 'always'\) return '';/);
 });

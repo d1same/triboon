@@ -35,7 +35,8 @@ function load(uiPath, env) {
     (l) => ({ eng: 'English', fra: 'French', jpn: 'Japanese', kor: 'Korean' })[String(l || '').toLowerCase()] || String(l || ''),
     () => true, (l) => `os:${l}:best`, () => '', { eng: 'en', fra: 'fr', jpn: 'ja', kor: 'ko' }, () => 'k', () => env.saved || '',
     (n) => `triboon.${n}`, () => env.alang || '', (l) => String(l || '').slice(0, 2).toLowerCase(), () => 'tt0000001',
-    () => env.label || '', false, { eng: 'English', fre: 'French', jpn: 'Japanese', kor: 'Korean' }, 'per-title');
+    () => env.label || '', false, { eng: 'English', fre: 'French', jpn: 'Japanese', kor: 'Korean' },
+    ((ui.match(/^const FORCED_RIDE_MODE = '([a-z-]+)';$/m) || [])[1] || 'always'));
 }
 function scenario(uiPath, sc) {
   const store = { 'triboon.subtitleMode': sc.mode === 'always' ? 'always' : 'manual' };
@@ -58,7 +59,7 @@ function scenario(uiPath, sc) {
   try { out.auto = f.autoSubtitleRelFor(p); } catch (e) { out.auto = 'ERR ' + e.message; }
   try { out.emRows = f.embeddedSubChoices().map((x) => x.rel).join(','); } catch (e) { out.emRows = 'ERR ' + e.message; }
   try { out.fileOn = f.nativeFileSubtitlesOn ? f.nativeFileSubtitlesOn(p, sc.caps || {}, sc.kind || 'direct') : 'n/a'; } catch (e) { out.fileOn = 'ERR ' + e.message; }
-  try { out.ride = f.forcedRideAlongRel ? f.forcedRideAlongRel(p, sc.saved || '', sc.rideMode || 'per-title') : 'n/a'; } catch (e) { out.ride = 'ERR ' + e.message; }
+  try { out.ride = f.forcedRideAlongRel ? f.forcedRideAlongRel(p, sc.saved || '', sc.rideMode) : 'n/a'; } catch (e) { out.ride = 'ERR ' + e.message; }
   try { out.intent = f.fileSubIntentRel ? f.fileSubIntentRel(p.tracks && p.tracks.subs && p.tracks.subs[2]) : 'n/a'; } catch (e) { out.intent = 'ERR ' + e.message; }
   return out;
 }

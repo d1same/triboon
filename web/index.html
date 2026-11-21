@@ -20392,8 +20392,9 @@ function bestFileSubtitleRel(p) {
 // Forced ride-along, one rule for every app (brief 137 step 5). When nothing else is on, the file's
 // forced track in the language of the sound plays by itself: it only translates the lines in
 // another language. An explicit Off (this play, this title, or the profile language "off") turns it
-// off too. rideMode 'per-title' also rides in "Choose per title"; 'always' only in "Always show".
-const FORCED_RIDE_MODE = 'per-title';
+// off too. Owner decision (brief 137): only in "Always show"; "Choose per title" starts nothing.
+// ('per-title' would also ride in "Choose per title".)
+const FORCED_RIDE_MODE = 'always';
 function forcedRideAlongRel(p, saved = loadSubChoice(), rideMode = FORCED_RIDE_MODE) {
   if (!p || p._subtitleDisabledThisSession || saved === 'off' || prefLang('slang') === 'off') return '';
   if (rideMode === 'always' && prefSubtitleMode() !== 'always') return '';

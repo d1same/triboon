@@ -136,6 +136,28 @@ const story = require('./playback-log');
 const auth = new Auth(store, process.env.TRIBOON_SECRET);
 const settings = new SecureSettings(store, auth.secret);
 debug.bindSettings(() => settings.get());
+// Brief 137 (lead decision, owner yes): built-in subtitles are on by default from 3.5.6. Before
+// 3.5.6 every settings save stored builtInSubtitlesEnabled=false, so a stored false was rarely a
+// choice. Turn it on ONCE; the marker makes any "off" saved after this stick. A fresh install has
+// nothing stored, so nothing is written for it.
+const BUILT_IN_SUBTITLE_MIGRATION = 356;
+function migrateBuiltInSubtitleSetting(s) {
+  if (!s || typeof s !== 'object') return null;
+  if (Number(s.builtInSubtitlesMigrated) >= BUILT_IN_SUBTITLE_MIGRATION) return null;
+  if (s.builtInSubtitlesEnabled !== false) return null;
+  const next = { ...s, builtInSubtitlesMigrated: BUILT_IN_SUBTITLE_MIGRATION };
+  delete next.builtInSubtitlesEnabled;
+  return next;
+}
+try {
+  if (!settings.unreadable) {
+    const migrated = migrateBuiltInSubtitleSetting(settings.get());
+    if (migrated) {
+      settings.set(migrated);
+      console.log('[boot] built-in subtitles are now on (3.5.6); turn them off in Settings');
+    }
+  }
+} catch (e) { console.error('[boot] built-in subtitle migration skipped: ' + debug.redact(String(e && e.message || e))); }
 function transcode4kHardwareOnly(s = settings.get()) {
   return s.transcode4kHardwareOnly !== false;
 }
@@ -10699,6 +10721,9 @@ Object.assign(H, {
         builtInSubtitlesEnabled: b.builtInSubtitlesEnabled !== undefined
           ? b.builtInSubtitlesEnabled === true
           : s.builtInSubtitlesEnabled,
+        // A choice saved now is a real one: the one-time 3.5.6 migration never touches it again.
+        builtInSubtitlesMigrated: b.builtInSubtitlesEnabled !== undefined
+          ? BUILT_IN_SUBTITLE_MIGRATION : s.builtInSubtitlesMigrated,
         debugLogging: b.debugLogging !== undefined
           ? b.debugLogging === true
           : s.debugLogging === true,
@@ -14000,5 +14025,5 @@ module.exports = {
     if (engine) Object.assign(subSyncEngine, engine);
     return () => Object.assign(subSyncEngine, was);
   },
-  keyStoredLibraries,
+  keyStoredLibraries, migrateBuiltInSubtitleSetting,
 };

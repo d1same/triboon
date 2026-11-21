@@ -812,6 +812,38 @@ test('settings: built-in subtitle mode round-trips to player server info', async
     'player server info should reflect online-only mode');
 });
 
+test('built-in subtitles: one-time 3.5.6 migration turns a stored off on; a later off sticks; a fresh install is on (brief 137)', async () => {
+  const { migrateBuiltInSubtitleSetting } = srv;
+  assert.strictEqual(typeof migrateBuiltInSubtitleSetting, 'function');
+  // Migrated once.
+  const old = { tmdbKey: 'k', builtInSubtitlesEnabled: false };
+  const once = migrateBuiltInSubtitleSetting(old);
+  assert.ok(once, 'a false stored before 3.5.6 is migrated');
+  assert.strictEqual(once.builtInSubtitlesEnabled, undefined, 'so the default (on) applies');
+  assert.strictEqual(once.builtInSubtitlesMigrated, 356);
+  assert.strictEqual(once.tmdbKey, 'k', 'nothing else changes');
+  assert.strictEqual(migrateBuiltInSubtitleSetting(once), null, 'and only once');
+  // A later off sticks.
+  assert.strictEqual(migrateBuiltInSubtitleSetting({ builtInSubtitlesEnabled: false, builtInSubtitlesMigrated: 356 }), null,
+    'an off saved after the migration is never turned on again');
+  const before = srv.settings.get();
+  try {
+    srv.settings.set({ ...before, builtInSubtitlesEnabled: true, builtInSubtitlesMigrated: undefined });
+    await httpJson(srv.port, 'POST', '/api/settings', { builtInSubtitlesEnabled: false }, admin);
+    const saved = srv.settings.get();
+    assert.strictEqual(saved.builtInSubtitlesEnabled, false);
+    assert.strictEqual(saved.builtInSubtitlesMigrated, 356, 'an admin save marks the choice as real');
+    assert.strictEqual(migrateBuiltInSubtitleSetting(saved), null, 'so a restart keeps it off');
+    assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.builtInSubtitlesEnabled, false);
+  } finally { srv.settings.set(before); }
+  // A fresh install defaults on, and nothing is written for it.
+  assert.strictEqual(migrateBuiltInSubtitleSetting({}), null);
+  assert.strictEqual(migrateBuiltInSubtitleSetting({ builtInSubtitlesEnabled: true }), null);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /const migrated = migrateBuiltInSubtitleSetting\(settings\.get\(\)\);\s*if \(migrated\) \{\s*settings\.set\(migrated\);/,
+    'the server runs the migration at start');
+});
+
 test('privacy: viewer geolocation is opt-in, proxy-aware, bounded, and single-flight', async () => {
   const originalData = process.env.TRIBOON_DATA;
   const originalTmdbBase = process.env.TMDB_BASE;
@@ -5808,3 +5840,4 @@ test('security: an invite token must be a real saved invite, never a built-in pr
     store.close();
   }
 });
+
