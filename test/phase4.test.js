@@ -2565,11 +2565,11 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
   };
   const applyNativeStartupSubtitleAfterTrackProbe = new Function('window', 'S', 'canUseNativeVideoPlayer',
     'nativeVideoSubtitleRel', 'nativeStartupSubtitleRelAfterPreflight', 'nativeSubtitlePayload',
-    'loadSubShift', 'refreshNativeSubtitleChoices', 'autoSyncNative',
+    'loadSubShift', 'refreshNativeSubtitleChoices', 'autoSyncNative', 'fileTrackReplacesAutoOnline',
     `${ui.slice(subtitleApplyStart, subtitleApplyEnd)}\nreturn applyNativeStartupSubtitleAfterTrackProbe;`)(
       subtitleWindow, subtitleState, () => true, () => ({ rel: 'em:1' }), () => subtitleGate.promise,
       () => ({ rel: 'em:1', url: '/episode-a.vtt', lang: 'en', label: 'English', shift: 0 }),
-      () => 0, () => subtitleEvents.push(['refresh']), (...args) => subtitleEvents.push(['sync', ...args]));
+      () => 0, () => subtitleEvents.push(['refresh']), (...args) => subtitleEvents.push(['sync', ...args]), () => '');
   const staleSubtitleJob = applyNativeStartupSubtitleAfterTrackProbe(subtitleOld);
   subtitleState.playing = { usingNative: true, playbackToken: 72, subTrack: null };
   subtitleGate.resolve('em:1');
@@ -4718,32 +4718,32 @@ test('Android native player: direct source and native chrome stay out of the web
     'ExoPlayer should honor the server-selected fast path but let remux fall through to transcode when the device rejects the remuxed codec');
   assert.match(ui, /async function prepareNativeStartKindForAudio\(startKind\) \{[\s\S]+fetchPlayerTracks\(p, 1400\)[\s\S]+nativeDirectAudioNeedsSafeRemux\(selectedPlayerAudioTrack\(p\)\)[\s\S]+p\.forceAacRemux = true;[\s\S]+return 'remux';[\s\S]+nativeDirectAudioNameRisk\(p\)[\s\S]+return 'remux';[\s\S]+\}/,
     'Android direct playback should quickly probe risky audio and start a safe audio remux instead of silently direct-playing');
-  assert.match(ui, /function remuxPlaybackUrl\(p, seekStart = 0, opts = \{\}\) \{[\s\S]+p\.forceAacRemux && !opts\.native[\s\S]+'&audioSafe=1'[\s\S]+return `\$\{p\.remuxUrl\}&start=\$\{Math\.max\(0, Math\.round\(\(seekStart \|\| 0\) \* 1000\) \/ 1000\)\}&audio=\$\{audio\}\$\{safe\}\$\{fileSubSideParam\(p, opts\)\}`;/,
+  assert.match(ui, /function remuxPlaybackUrl\(p, seekStart = 0, opts = \{\}\) \{[\s\S]+p\.forceAacRemux && !opts\.native[\s\S]+'&audioSafe=1'[\s\S]+return `\$\{p\.remuxUrl\}&start=\$\{Math\.max\(0, Math\.round\(\(seekStart \|\| 0\) \* 1000\) \/ 1000\)\}&audio=\$\{audio\}\$\{safe\}`;/,
     'remux URL omits the stereo audioSafe flag for the native player (gets server-default 5.1) but keeps it for browser/MSE surfaces; video always copied');
   assert.match(server, /const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+const transcodeAudio = forceAudioSafe \|\| !audioCopyOk\(aud, vf\._caps\);/,
     'server remux should honor the audioSafe flag without forcing full video transcode');
   // audioSafe (multiview / any plain <video> MSE surface) must downmix to STEREO AAC — 5.1 AAC is
   // the least browser/WebView-decodable variant and plays as video-with-no-sound. The handler must
   // forward forceAudioSafe as safeStereo, and spawnRemux must pick 2 channels for it (6 otherwise).
-  assert.match(server, /spawnWithFileSubs\(spawnRemux, selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}, fileSubs\)/,
+  assert.match(server, /spawnRemux\(selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}\)/,
     'remux handler must forward the audio-safe flag so multiview audio is downmixed to stereo');
-  assert.match(transcode, /function spawnRemux\(streamUrl, \{ startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, sideSubs = null \} = \{\}\)[\s\S]+transcodeAudio[\s\S]+'-ac', safeStereo \? '2' : '6'/,
+  assert.match(transcode, /function spawnRemux\(streamUrl, \{ startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false \} = \{\}\)[\s\S]+transcodeAudio[\s\S]+'-ac', safeStereo \? '2' : '6'/,
     'spawnRemux must downmix the audio-safe path to stereo AAC (2ch) and keep 5.1 (6ch) for the normal transcode path');
   assert.match(transcode, /REMUX_MOVFLAGS = 'frag_keyframe\+empty_moov\+default_base_moof\+delay_moov\+negative_cts_offsets'/,
     'a copied movie must not hop the picture back about a second at each fragment');
   // The SAME 5.1-AAC-silent footgun hits the full transcode fallback: a browser must get stereo there too,
   // while the native ExoPlayer path (never sends audioSafe) keeps 5.1 surround.
-  assert.match(transcode, /function spawnTranscode\(streamUrl, \{ startSeconds = 0, audioTrack = 0, height = 1080, hdr = false, safeStereo = false, sideSubs = null \} = \{\}\)[\s\S]+'-c:a', 'aac', '-b:a', safeStereo \? '192k' : '256k', '-ac', safeStereo \? '2' : '6'/,
+  assert.match(transcode, /function spawnTranscode\(streamUrl, \{ startSeconds = 0, audioTrack = 0, height = 1080, hdr = false, safeStereo = false \} = \{\}\)[\s\S]+'-c:a', 'aac', '-b:a', safeStereo \? '192k' : '256k', '-ac', safeStereo \? '2' : '6'/,
     'spawnTranscode downmixes the audio-safe path to stereo AAC (2ch) and keeps 5.1 (6ch) otherwise');
   assert.match(server, /MAX_USER_FFMPEG_PIPES = 1;[\s\S]+function attachMountFfmpegPipe\(vf, ff, uid\) \{[\s\S]+old\.ff\.kill\('SIGKILL'\)[\s\S]+function closeMountFfmpegPipes\(vf\)/,
     'a remux/transcode skip-back must kill that viewer leftover ffmpeg without cutting another user on the same title');
   assert.match(server, /function releaseMountResources\(vf\) \{[\s\S]+closeMountHls\(vf\);[\s\S]+closeMountFfmpegPipes\(vf\);/,
     'sweeping a mount must reap remux/transcode ffmpeg, not only HLS sessions');
-  assert.match(server, /const ff = spawnWithFileSubs\(spawnRemux, selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}, fileSubs\);\s*\n\s*attachMountFfmpegPipe\(vf, ff, ctx\.claims && ctx\.claims\.uid\);/,
+  assert.match(server, /const ff = spawnRemux\(selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}\);\s*\n\s*attachMountFfmpegPipe\(vf, ff, ctx\.claims && ctx\.claims\.uid\);/,
     'every remux pipe is tracked against that viewer leftover cap');
-  assert.match(server, /transcode: async \(ctx\)[\s\S]+const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+spawnWithFileSubs\(spawnTranscode, selfUrl, \{ startSeconds, audioTrack, height: LADDER\[height\] \? height : 1080, hdr, safeStereo: forceAudioSafe \}, fileSubs\)[\s\S]+attachMountFfmpegPipe\(vf, ff, ctx\.claims && ctx\.claims\.uid\)/,
+  assert.match(server, /transcode: async \(ctx\)[\s\S]+const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+spawnTranscode\(selfUrl, \{ startSeconds, audioTrack, height: LADDER\[height\] \? height : 1080, hdr, safeStereo: forceAudioSafe \}\)[\s\S]+attachMountFfmpegPipe\(vf, ff, ctx\.claims && ctx\.claims\.uid\)/,
     'the /api/transcode handler honors audioSafe=1 (stereo) while the native path stays 5.1');
-  assert.match(ui, /kind === 'transcode'\) \{[\s\S]+v\.src = `\$\{p\.transcodeUrl\}&start=\$\{seekStart\}&audio=\$\{p\.audioTrack \|\| 0\}&height=\$\{p\.quality \|\| 1080\}\$\{p\.forceAacRemux \? '&audioSafe=1' : ''\}\$\{fileSubSideParam\(p\)\}`/,
+  assert.match(ui, /kind === 'transcode'\) \{[\s\S]+v\.src = `\$\{p\.transcodeUrl\}&start=\$\{seekStart\}&audio=\$\{p\.audioTrack \|\| 0\}&height=\$\{p\.quality \|\| 1080\}\$\{p\.forceAacRemux \? '&audioSafe=1' : ''\}`/,
     'the browser transcode fallback also requests stereo audio so an HEVC/10-bit source is not played silent');
   assert.match(ui, /function resolvePlaybackResume\(it\) \{[\s\S]+if \(it\._startOver\) return \{ \.\.\.it, resume: 0 \};[\s\S]+const pos = resumePositionForItem\(it\);[\s\S]+return pos > 0 \? \{ \.\.\.it, resume: pos \} : it;/,
     'Resume should be resolved from current watch state at click time, after quality changes');
@@ -7141,7 +7141,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // Multiview VOD panes have no track-probe loop and the WebView can't decode AC3/EAC3/DTS, so
   // they must force AAC remux AND prefer remux over direct (even when the server picks 'direct'),
   // or such sources play with no sound.
-  assert.match(ui, /function multiViewVodUrl\(mount, item, startAt = 0\) \{[\s\S]+forceAacRemux: true,[\s\S]+forceAacRemux: true,[\s\S]+if \(mount\.remuxUrl\) return \{ \.\.\.media, kind: 'remux', url: remuxPlaybackUrl\(p, start, \{ noFileSubs: true \}\)/,
+  assert.match(ui, /function multiViewVodUrl\(mount, item, startAt = 0\) \{[\s\S]+forceAacRemux: true,[\s\S]+forceAacRemux: true,[\s\S]+if \(mount\.remuxUrl\) return \{ \.\.\.media, kind: 'remux', url: remuxPlaybackUrl\(p, start\)/,
     'multiview VOD should prefer remux+AAC over direct so non-AAC audio still plays in the pane');
   assert.match(ui, /function multiViewVodUrlFromSlot\([\s\S]+forceAacRemux: true,[\s\S]+if \(p\.remuxUrl\) return \{ \.\.\.p, kind: 'remux'/,
     'multiview VOD seek-rebuild should also prefer remux+AAC');
@@ -12600,7 +12600,7 @@ test('Other versions: rows only for better sound this device plays as it is, nev
 test('file subtitles: direct play draws them in the app, the remux and transcode carry them in a side file, and a failure goes online (brief 137 step 4, brief 143)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
-  const src = grab('// Text codecs the side file copies', 'function embeddedSubRel(')
+  const src = grab('function fileSubSideCodec(', 'function embeddedSubRel(')
     + grab('function embeddedSubIsForced(', 'function bestEmbeddedSubtitleRel(')
     + grab('function audioTrackLangName(', 'function audioTrackRowLabel(');
   let builtIn = true; let caps = {}; let kind = 'direct';
@@ -12842,7 +12842,7 @@ test('Other versions never offers a picture this screen cannot show, a lower pic
 test('one subtitle menu for every app: the file first, no online rows when the file has the viewer\'s language, other languages under one row (brief 143)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
-  const src = grab('// Text codecs the side file copies', 'function embeddedSubRel(')
+  const src = grab('function fileSubSideCodec(', 'function embeddedSubRel(')
     + grab('function embeddedSubIsForced(', 'function bestEmbeddedSubtitleRel(')
     + grab('function audioTrackLangName(', 'function audioTrackRowLabel(');
   let showAll = false; let caps = { native: true, source: 'exo-mediacodec', fileSubtitles: true, fileSubtitlesSide: true }; let kind = 'direct';

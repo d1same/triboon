@@ -7089,8 +7089,14 @@ public class MainActivity extends Activity {
                         final int reads = attempt < 0 ? -attempt : 0;
                         nativeSubtitleHandler.postDelayed(() -> {
                             if (token != nativeSubtitleLoadToken) return;
-                            loadNativeSubtitleOverlayAttempt(subtitleUrl, cleanUrl, token, true, -(reads + 1));
-                        }, NativeSideSubtitle.nextReadMs(reads));
+                            // The picture time rides along: the server reads a local file ahead of it.
+                            ValidatedNativeUrl next = subtitleUrl;
+                            try {
+                                next = validateNativeSubtitleOverlayUrl(
+                                        NativeSideSubtitle.withAt(cleanUrl, nativeDisplayPositionMs() / 1000.0), nativeSubtitleHostHeader);
+                            } catch (Exception ignored) {}
+                            loadNativeSubtitleOverlayAttempt(next, cleanUrl, token, true, -(reads + 1));
+                        }, NativeSideSubtitle.nextReadMs(reads, nativeSideSubtitleAheadSeconds()));
                     }
                 });
             } catch (Exception e) {
@@ -7109,7 +7115,7 @@ public class MainActivity extends Activity {
                         nativeSubtitleHandler.postDelayed(() -> {
                             if (token != nativeSubtitleLoadToken) return;
                             loadNativeSubtitleOverlayAttempt(subtitleUrl, cleanUrl, token, true, attempt);
-                        }, NativeSideSubtitle.nextReadMs(-attempt));
+                        }, NativeSideSubtitle.nextReadMs(-attempt, nativeSideSubtitleAheadSeconds()));
                         return;
                     }
                     if (!definitive && attempt < 2) { // 3 attempts total, 4s then 9s apart
@@ -7237,6 +7243,13 @@ public class MainActivity extends Activity {
                     grew / 1000L);
         }
         return sample.mediaMs;
+    }
+
+    // Brief 143: how far ahead of the picture the last line on hand ends (NaN: no line yet).
+    private double nativeSideSubtitleAheadSeconds() {
+        if (nativeSubtitleCues.isEmpty()) return Double.NaN;
+        double last = nativeSubtitleCues.get(nativeSubtitleCues.size() - 1).end;
+        return last - nativeDisplayPositionMs() / 1000.0;
     }
 
     private void updateNativeSubtitleOverlay() {

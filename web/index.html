@@ -14251,7 +14251,7 @@ function multiViewVodUrl(mount, item, startAt = 0) {
   // picked 'direct': the multiview pane has no audio-fallback loop, and this WebView can't decode
   // AC3/EAC3/DTS — a direct play of such a source is silent. remux+audioSafe guarantees AAC.
   if (kind === 'transcode' && mount.transcodeUrl) return { ...media, url: `${mount.transcodeUrl}&start=${start}&audio=0&height=1080`, startOffset: start, directSeek: 0 };
-  if (mount.remuxUrl) return { ...media, kind: 'remux', url: remuxPlaybackUrl(p, start, { noFileSubs: true }), startOffset: start, directSeek: 0 };
+  if (mount.remuxUrl) return { ...media, kind: 'remux', url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
   return { ...media, kind: 'direct', url: mount.streamUrl, startOffset: 0, directSeek: start };
 }
 function multiViewVodUrlFromSlot(slot, startAt = multiViewSlotPosition(slot, multiViewActiveSlot())) {
@@ -14267,7 +14267,7 @@ function multiViewVodUrlFromSlot(slot, startAt = multiViewSlotPosition(slot, mul
     forceAacRemux: true, // multiview always wants browser-decodable (AAC) audio on the remux path
   };
   if (slot.kind === 'transcode' && p.transcodeUrl) return { ...p, kind: 'transcode', url: `${p.transcodeUrl}&start=${start}&audio=${p.audioTrack}&height=${p.quality}`, startOffset: start, directSeek: 0 };
-  if (p.remuxUrl) return { ...p, kind: 'remux', url: remuxPlaybackUrl(p, start, { noFileSubs: true }), startOffset: start, directSeek: 0 };
+  if (p.remuxUrl) return { ...p, kind: 'remux', url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
   return { ...p, kind: 'direct', url: p.streamUrl, startOffset: 0, directSeek: start };
 }
 function multiViewVodDuration(i, slot) {
@@ -15451,7 +15451,7 @@ function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
     // startSource is browser-only (it bails for the native player above), so forceAacRemux is true here
     // for every real browser → request stereo AAC on the full-transcode fallback too (an HEVC/10-bit
     // source that skips remux would otherwise hit the same silent-5.1-AAC bug).
-    v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${p.forceAacRemux ? '&audioSafe=1' : ''}${fileSubSideParam(p)}`;
+    v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${p.forceAacRemux ? '&audioSafe=1' : ''}`;
   } else if (kind === 'remux') {
     // Apple Safari (iOS AND Mac desktop) can't consume the 200-streamed remux pipe (no byte-range) →
     // deliver the SAME copy-remux as native HLS instead, which Safari plays. Every OTHER browser
@@ -15534,38 +15534,18 @@ function nativeSubtitlePayload(p, rel, mode = 'startup') {
     shift: chosen ? (loadSubShift(chosen) || 0) : 0,
   };
 }
-// Brief 143: does the server hold this play's side file? 'ok', 'restart' (the remux started
-// before the track probe: ask it again at this second) or 'fail' (go online).
+// Brief 143: can this play read the file's own track? 'ok', or 'fail' (not Matroska, or the server
+// cannot read it): then the play goes online.
 async function fileSideState(p, rel) {
   try {
     const r = await fetch(fileSideSubUrl(p, rel));
-    if (r.ok) return 'ok';
-    const j = await r.json().catch(() => ({}));
-    return r.status === 404 && j && j.code === 'NO_SIDE' ? 'restart' : 'fail';
+    return r.ok ? 'ok' : 'fail';
   } catch { return 'fail'; }
-}
-// Once per play: the remux of this second again, now with the file's text tracks.
-function restartForFileSubtitles(p, rel) {
-  if (!p || p._fileSideRestarted || !(p.usingRemux || p.usingTranscode)) return false;
-  p._fileSideRestarted = true;
-  p.subTrack = rel;
-  p._subtitleDisabledThisSession = false;
-  const kind = currentPlayerKind(p);
-  const at = currentTime();
-  if (p.usingNative && canUseNativeVideoPlayer()) {
-    p.usingNative = false;
-    if (tryNativeVideoPlayer(kind, at, { quietSeek: true })) return true;
-    p.usingNative = true;
-    return false;
-  }
-  startSource(kind, at, { quietSeek: true });
-  return true;
 }
 async function nativeStartupSubtitleRelAfterPreflight(p, rel) {
   if (typeof rel === 'string' && rel.startsWith('fs:') && fileSubTransport(p) === 'side') {
     const state = await fileSideState(p, rel);
     if (state === 'ok') return rel;
-    if (state === 'restart' && restartForFileSubtitles(p, rel)) return '';
     p._fileSubFailed = true;
     return canAutoSubtitle(p) ? fileSubOnlineFallbackRel(p, rel) : '';
   }
@@ -16065,19 +16045,11 @@ function nativeKindAvailable(p, kind) {
   if (kind === 'transcode') return !!p.transcodeUrl;
   return false;
 }
-// Brief 143: one id per play, sent with every remux/transcode of the play, so the server keeps the
-// file's text subtitles of the newest one in a side file (/api/filesub). Not for Live TV.
-function fileSubPlayId(p) {
-  if (!p) return '';
-  if (!p._fsid) p._fsid = Math.random().toString(36).slice(2, 10).padEnd(8, '0') + Date.now().toString(36).slice(-4);
-  return p._fsid;
-}
-function fileSubSideParam(p, opts = {}) {
-  if (!p || opts.noFileSubs || !p.item || p.item.type === 'live' || !builtInSubtitlesEnabled()) return '';
-  return `&fs=${fileSubPlayId(p)}`;
-}
-function fileSideSubUrl(p, rel) {
-  const q = new URLSearchParams({ t: (p && p.streamToken) || '', fs: fileSubPlayId(p) });
+// Brief 143: the file's own subtitle on the remux/transcode. The server reads the lines out of the
+// file's bytes as the remux reads them (and reads a local file ahead of the picture: at).
+function fileSideSubUrl(p, rel, at = null) {
+  const q = new URLSearchParams({ t: (p && p.streamToken) || '' });
+  if (Number.isFinite(at)) q.set('at', String(Math.max(0, Math.round(at))));
   return `/api/filesub/${p.mountId}/${Math.max(0, fileSubIndex(rel))}?${q.toString()}`;
 }
 function remuxPlaybackUrl(p, seekStart = 0, opts = {}) {
@@ -16089,7 +16061,7 @@ function remuxPlaybackUrl(p, seekStart = 0, opts = {}) {
   // audioAac is the native rescue: ExoPlayer could not play this audio, so ask for 5.1 AAC outright.
   const rescue = (p && p.nativeAacAudio && opts.native) ? '&audioAac=1' : '';
   const safe = (p && p.forceAacRemux && !opts.native) ? '&audioSafe=1' : rescue;
-  return `${p.remuxUrl}&start=${Math.max(0, Math.round((seekStart || 0) * 1000) / 1000)}&audio=${audio}${safe}${fileSubSideParam(p, opts)}`;
+  return `${p.remuxUrl}&start=${Math.max(0, Math.round((seekStart || 0) * 1000) / 1000)}&audio=${audio}${safe}`;
 }
 // iOS Safari <video> plays HLS natively (application/vnd.apple.mpegurl); each fMP4 segment is a rangeable
 // file, which is what Safari demands and what the 200-streamed remux/transcode pipe can't provide. Always
@@ -16356,7 +16328,7 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
   const serverSeek = kind === 'remux' || kind === 'transcode';
   let nativeUrl = baseUrl;
   if (kind === 'transcode') {
-    nativeUrl = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${fileSubSideParam(p)}`;
+    nativeUrl = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
   } else if (kind === 'remux') {
     nativeUrl = remuxPlaybackUrl(p, seekStart, { native: true }); // native ExoPlayer → 5.1, not the stereo audioSafe path
   }
@@ -17101,13 +17073,12 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur, token) => {
     const fileSub = typeof rel === 'string' && rel.startsWith('fs:') ? fileSubForRel(rel, p) : null;
     if (fileSub) saveSubChoice(fileSubIntentRel(fileSub), subtitleDisplayName(rel));
     autoSyncNative(p, rel);
-    // Brief 143: a file row on the remux reads the side file. A remux that began before the track
-    // probe has none yet: ask it again at this second; anything else goes online by itself.
+    // Brief 143: a file row on the remux reads the file's lines from the server; a file the server
+    // cannot read (not Matroska) goes online by itself.
     if (fileSub && fileSubTransport(p) === 'side') {
       fileSideState(p, rel).then((state) => {
         if (S.playing !== p || p.subTrack !== rel || state === 'ok') return;
-        if (state === 'restart' && restartForFileSubtitles(p, rel)) return;
-        window.__tvNativeFileSubtitleFailed(rel, 'the remux has no side file', p.playbackToken);
+        window.__tvNativeFileSubtitleFailed(rel, 'the server cannot read this file\'s subtitles', p.playbackToken);
       });
     }
   }
@@ -17336,7 +17307,7 @@ function currentPlaybackUrl(p, atSeconds = currentTime()) {
   if (!p) return '';
   const kind = currentPlayerKind(p);
   const start = Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000);
-  if (kind === 'transcode' && p.transcodeUrl) return `${p.transcodeUrl}&start=${start}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${fileSubSideParam(p)}`;
+  if (kind === 'transcode' && p.transcodeUrl) return `${p.transcodeUrl}&start=${start}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
   if (kind === 'remux' && p.remuxUrl) return remuxPlaybackUrl(p, start);
   return p.streamUrl || '';
 }
@@ -20354,7 +20325,7 @@ function hiddenReleaseSubCount() {
 // server reads out as WebVTT (/api/filesub). So the file's own subtitles reach the browser, and a
 // phone or TV on the remux (an app that says caps.fileSubtitlesSide), with the same rows.
 const SERVER_SUBTITLE_EXTRACTION_ROWS = false;
-// Text codecs the side file copies (Matroska takes them as they are; mov_text it does not).
+// Text codecs the server reads out of the file's Matroska bytes (a picture track has no text).
 function fileSubSideCodec(codec) { return /^(subrip|srt|ass|ssa|webvtt)$/i.test(String(codec || '')); }
 // How this play shows a track from the file: 'track' = the native player draws it from the file
 // (direct play), 'side' = the side file of the remux/transcode, '' = not on this play.
@@ -21863,7 +21834,7 @@ function renderSubCues() {
 // Brief 143: the browser shows a track from the file through the remux's side file. The lines are
 // read again while the picture plays (the side file grows as the remux reads ahead) and added to
 // one text track per play, on the movie's own clock like every other subtitle. A failure goes
-// online on its own; a remux that started before the track probe is asked again at this second.
+// online on its own.
 function parseVttCues(text) {
   const out = [];
   const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
@@ -21888,6 +21859,11 @@ function fileSideTextTrack(p) {
   p._fsCueKeys = new Set();
   return p._fsTextTrack;
 }
+// 1 s while the lines on hand end less than 15 s ahead of the picture, else 3 s at first, then 8 s.
+function fileSideNextReadMs(reads, aheadSeconds) {
+  if (!(aheadSeconds >= 15)) return 1000;
+  return reads < 8 ? 3000 : 8000;
+}
 function startFileSideSubtitles(p, rel, seq) {
   const tt = fileSideTextTrack(p);
   if (p._fsCueRel !== rel) {
@@ -21902,18 +21878,20 @@ function startFileSideSubtitles(p, rel, seq) {
   applySubShiftToCues(tt, p._subShift || 0); // a nudge or Reset reaches the lines already here
   let fails = 0;
   let polls = 0;
-  let noSide = 0;
+  let sideEnd = 0; // where the newest read of the side file ends (the track also keeps older lines)
   const live = () => S.playing === p && p._subSeq === seq && p.subTrack === rel;
   const poll = async () => {
     if (!live()) return;
     polls++;
     let r = null;
-    try { r = await fetch(fileSideSubUrl(p, rel)); } catch {}
+    try { r = await fetch(fileSideSubUrl(p, rel, subtitleCueNow(p))); } catch {}
     if (!live()) return;
     if (r && r.ok) {
-      fails = 0; noSide = 0;
+      fails = 0;
       const shift = +(p._subShift || 0);
-      for (const c of parseVttCues(await r.text().catch(() => ''))) {
+      const lines = parseVttCues(await r.text().catch(() => ''));
+      sideEnd = lines.length ? lines[lines.length - 1].end + shift : 0;
+      for (const c of lines) {
         const key = `${c.start}|${c.end}|${c.text}`;
         if (p._fsCueKeys.has(key)) continue;
         p._fsCueKeys.add(key);
@@ -21925,13 +21903,6 @@ function startFileSideSubtitles(p, rel, seq) {
       }
       renderSubCues();
     } else {
-      const j = r ? await r.json().catch(() => ({})) : {};
-      if (r && r.status === 404 && j.code === 'NO_SIDE') {
-        // The remux of this play started before the track probe. Ask it again once; while the new
-        // remux starts the address may still answer NO_SIDE for a moment.
-        if (!p._fileSideRestarted && restartForFileSubtitles(p, rel)) { setTimeout(poll, 1500); return; }
-        if (++noSide < 4) { setTimeout(poll, 1500); return; }
-      }
       if (++fails >= 3 || (r && r.status === 404)) {
         p._fileSubFailed = true;
         notePlaybackIssue('subtitle', 'subtitle in the file not shown in the browser — online instead', 0);
@@ -21942,7 +21913,9 @@ function startFileSideSubtitles(p, rel, seq) {
         return;
       }
     }
-    setTimeout(poll, polls < 8 ? 3000 : 8000);
+    // Read again soon while the lines already here end close to the picture: a remux that runs only
+    // a few seconds ahead (a slow source) writes the next line just in time.
+    setTimeout(poll, fileSideNextReadMs(polls, sideEnd - subtitleCueNow(p)));
   };
   poll();
 }
@@ -22304,7 +22277,7 @@ function currentCastStreamUrl() {
   const pos = Number.isFinite(p._castLoadPos) ? p._castLoadPos : Math.floor(currentTime() || 0);
   let path;
   if (p.usingTranscode) path = `${p.transcodeUrl}&start=${pos}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
-  else if (p.usingRemux) path = remuxPlaybackUrl(p, pos, { noFileSubs: true });
+  else if (p.usingRemux) path = remuxPlaybackUrl(p, pos);
   else path = p.streamUrl;
   try { return new URL(path, castPublicOrigin()).href; } catch { return null; }
 }

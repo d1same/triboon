@@ -1,8 +1,8 @@
 'use strict';
-// Brief 143: the file's own text subtitles ride along the remux/transcode as a side file, so the
-// phone on the remux and the browser can show them. The picture output must stay byte-for-byte
-// the same, the cues must be on the movie's own clock after a seek, and a play with no side file
-// must say so (the client then asks the remux again).
+// Brief 143: the file's own text subtitles for remux/transcode viewers (browser, phone, TV). The
+// server reads the subtitle blocks out of the Matroska bytes the remux already pulls through
+// /api/stream (or, for a local file, reads ahead of the picture), and /api/filesub hands one track
+// out as WebVTT on the movie's own clock. The remux itself is untouched.
 
 const { test, after } = require('node:test');
 const assert = require('node:assert');
@@ -13,6 +13,7 @@ const http = require('http');
 const { spawnSync } = require('child_process');
 const { bootServer, setupAdmin, httpJson } = require('./helpers');
 const tc = require('../server/transcode');
+const { MkvSubtitleTap, parseHeader, cueText } = require('../server/mkvsubs');
 
 const ff = tc.detectFfmpeg();
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-filesub-test-'));
@@ -22,8 +23,10 @@ function srt(lines) {
   const t = (x) => new Date(x * 1000).toISOString().slice(11, 23).replace('.', ',');
   return lines.map(([a, b, text], i) => `${i + 1}\n${t(a)} --> ${t(b)}\n${text}\n`).join('\n');
 }
-// 2 minutes: H.264 (keyframe every 2 s), AC3 audio, English SRT, a PGS-free French ASS-less SRT.
+let fixture = null;
+// 2 minutes: H.264, AC3, an English SRT track and a French ASS track (ffmpeg writes CRC-32 elements).
 function makeFixture() {
+  if (fixture) return fixture;
   const en = []; const fr = [];
   for (let i = 0; i < 24; i++) { en.push([i * 5 + 1, i * 5 + 3, `English line ${i}`]); fr.push([i * 5 + 2, i * 5 + 4, `Ligne ${i}`]); }
   fs.writeFileSync(path.join(dir, 'en.srt'), srt(en));
@@ -33,120 +36,103 @@ function makeFixture() {
     '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=24', '-f', 'lavfi', '-i', 'sine=f=440',
     '-i', path.join(dir, 'en.srt'), '-i', path.join(dir, 'fr.srt'), '-t', '120',
     '-map', '0', '-map', '1', '-map', '2', '-map', '3', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '48',
-    '-c:a', 'ac3', '-c:s', 'srt', '-metadata:s:s:0', 'language=eng', '-metadata:s:s:1', 'language=fre', out]);
+    '-c:a', 'ac3', '-c:s:0', 'srt', '-c:s:1', 'ass', '-metadata:s:s:0', 'language=eng', '-metadata:s:s:1', 'language=fre', out]);
   if (r.status !== 0) throw new Error(`fixture failed: ${r.stderr}`);
+  fixture = out;
   return out;
 }
-function runToEnd(child) {
-  return new Promise((resolve) => {
-    const chunks = [];
-    child.stdout.on('data', (c) => chunks.push(c));
-    child.stderr.resume();
-    child.on('close', (code) => resolve({ code, out: Buffer.concat(chunks) }));
-  });
-}
-function packetTimes(buf) {
-  const f = path.join(dir, `p${Date.now()}${Math.random()}.mp4`);
-  fs.writeFileSync(f, buf);
-  const probe = tc.detectFfprobe();
-  const r = spawnSync(probe.path, ['-v', 'error', '-show_entries', 'packet=pts_time,stream_index', '-of', 'csv', f], { encoding: 'utf8' });
-  return r.stdout;
-}
+const starts = (vtt) => vtt.split('\n').filter((l) => l.includes('-->')).map((l) => l.split(' --> ')[0]);
 
-test('side subtitle args map only the known text tracks and put cues back on the movie clock', () => {
-  assert.deepStrictEqual(tc.sideSubtitleArgs(null, 10), []);
-  assert.deepStrictEqual(tc.sideSubtitleArgs({ file: 'x.mkv', rels: [] }, 10), [], 'no track: no output (an empty output stops the picture)');
-  const a = tc.sideSubtitleArgs({ file: 'x.mkv', rels: [0, 3] }, 95.5);
-  assert.deepStrictEqual(a, ['-map', '0:s:0', '-map', '0:s:3', '-c', 'copy', '-output_ts_offset', '95.5', '-flush_packets', '1', '-f', 'matroska', 'x.mkv']);
-  assert.ok(!tc.sideSubtitleArgs({ file: 'x.mkv', rels: [1] }, 0).includes('-output_ts_offset'));
+test('ASS lines lose their fields and tags; SRT text stays; no line can end a WebVTT cue early', () => {
+  assert.strictEqual(cueText('S_TEXT/ASS', Buffer.from('3,0,Default,,0,0,0,,{\\i1}Hello{\\i0}\\Nthere, friend')), 'Hello\nthere, friend');
+  assert.strictEqual(cueText('S_TEXT/UTF8', Buffer.from('<i>Hi</i>\r\n\r\nyou')), '<i>Hi</i>\nyou');
+  assert.strictEqual(cueText('S_TEXT/UTF8', Buffer.from('a --> b')), 'a → b');
+  assert.deepStrictEqual(parseHeader(Buffer.from('not matroska')), { notMkv: true });
 });
 
-test('remux with the side file: same picture bytes, cues on the movie clock after a seek', { skip: !ff && 'no ffmpeg' }, async () => {
+test('the tap reads every text line of the file, in any chunk sizes, with the times ffmpeg reads', { skip: !ff && 'no ffmpeg' }, () => {
   const movie = makeFixture();
-  const side = path.join(dir, 'side.mkv');
-  const plain = await runToEnd(tc.spawnRemux(movie, { startSeconds: 60 }));
-  const withSide = await runToEnd(tc.spawnRemux(movie, { startSeconds: 60, sideSubs: { file: side, rels: [0, 1] } }));
-  assert.strictEqual(plain.code, 0);
-  assert.strictEqual(withSide.code, 0);
-  assert.strictEqual(packetTimes(withSide.out), packetTimes(plain.out), 'the picture and sound packets are unchanged');
-  const en = await tc.readSideSubtitleVtt(side, 0);
-  const fr = await tc.readSideSubtitleVtt(side, 1);
-  assert.match(en, /^WEBVTT/);
-  assert.match(en, /01:01\.000 --> 01:03\.000\nEnglish line 12/, 'a line at 61 s stays at 61 s after a 60 s seek');
-  assert.match(fr, /01:02\.000 --> 01:04\.000\nLigne 12/, 'the second track is read from the same side file');
-  assert.doesNotMatch(en, /English line 3\b/, 'nothing from before the seek');
+  const buf = fs.readFileSync(movie);
+  const tap = new MkvSubtitleTap();
+  let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  for (let o = 0; o < buf.length;) { const n = 1 + Math.floor(rnd() * 90000); tap.feed(o, buf.subarray(o, o + n)); o += n; }
+  assert.deepStrictEqual(tap.header.subs.map((s) => [s.index, s.codec, s.lang, s.text]), [[0, 'S_TEXT/UTF8', 'eng', true], [1, 'S_TEXT/ASS', 'fre', true]]);
+  const ffEn = spawnSync(ff.path, ['-hide_banner', '-loglevel', 'error', '-i', movie, '-map', '0:s:0', '-f', 'webvtt', '-'], { encoding: 'utf8' }).stdout;
+  const norm = (s) => (s.length === 9 ? `00:${s}` : s);
+  assert.deepStrictEqual(starts(tap.vtt(0)), starts(ffEn).map(norm), 'the same 24 English lines at the same times');
+  assert.match(tap.vtt(0), /00:01:01\.000 --> 00:01:03\.000\nEnglish line 12\n/);
+  assert.match(tap.vtt(1), /00:01:02\.000 --> 00:01:04\.000\nLigne 12\n/, 'the ASS track as plain text');
 });
 
-test('/api/filesub serves the side track; a play without a side file answers NO_SIDE', { skip: !ff && 'no ffmpeg' }, async () => {
-  const movie = fs.existsSync(path.join(dir, 'movie.mkv')) ? path.join(dir, 'movie.mkv') : makeFixture();
-  const srv = await bootServer();
-  try {
-    const admin = await setupAdmin(srv.port);
-    const uid = srv.auth._users().list[0].id;
-    const id = 'fsubmount1';
-    const size = fs.statSync(movie).size;
-    srv.mounts.set(id, {
-      id, name: 'Movie.2024.1080p.mkv', size, streamable: true, _local: { file: movie }, mountedAt: Date.now(),
-      _tracks: { available: true, duration: 120, audio: [{ rel: 0, codec: 'ac3', channels: 1 }],
-        subs: [{ rel: 0, codec: 'subrip', lang: 'eng', text: true }, { rel: 1, codec: 'subrip', lang: 'fre', text: true }] },
-    });
-    const t = srv.auth.streamToken(uid, id);
-    // The remux with fs=<id> writes the side file while the picture streams.
-    const body = await new Promise((resolve, reject) => {
-      http.get({ host: '127.0.0.1', port: srv.port, path: `/api/remux/${id}?t=${t}&start=30&fs=abc123def` }, (res) => {
-        const chunks = []; res.on('data', (c) => chunks.push(c)); res.on('end', () => resolve(Buffer.concat(chunks)));
-      }).on('error', reject);
-    });
-    assert.ok(body.length > 1000, 'the picture still streams');
-    const r = await httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${t}&fs=abc123def`);
-    assert.strictEqual(r.status, 200);
-    assert.match(r.raw, /00:31\.000 --> 00:33\.000\nEnglish line 6/);
-    // A seek respawns the remux with the same play id: the same address now reads the new side file.
-    await new Promise((resolve, reject) => {
-      http.get({ host: '127.0.0.1', port: srv.port, path: `/api/remux/${id}?t=${t}&start=90&fs=abc123def` }, (res) => {
-        res.resume(); res.on('end', resolve);
-      }).on('error', reject);
-    });
-    const afterSeek = await httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${t}&fs=abc123def`);
-    assert.strictEqual(afterSeek.status, 200);
-    assert.match(afterSeek.raw, /01:31\.000 --> 01:33\.000\nEnglish line 18/, 'the newest remux of this play');
-    assert.doesNotMatch(afterSeek.raw, /English line 6\b/, 'not the side file of the remux before the seek');
-    const missing = await httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${t}&fs=zzz999zzz`);
-    assert.strictEqual(missing.status, 404);
-    assert.strictEqual(missing.json.code, 'NO_SIDE');
-    const noTrack = await httpJson(srv.port, 'GET', `/api/filesub/${id}/7?t=${t}&fs=abc123def`);
-    assert.strictEqual(noTrack.status, 404);
-    assert.strictEqual(noTrack.json.code, 'NO_TRACK');
-    const wrongToken = await httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${srv.auth.streamToken(uid, 'other')}&fs=abc123def`);
-    assert.strictEqual(wrongToken.status, 401, 'a token for another mount cannot read it');
-    assert.ok(admin);
-  } finally {
-    await srv.shutdown();
-  }
+test('after a seek the tap starts in the middle of the file and finds the next cluster', { skip: !ff && 'no ffmpeg' }, () => {
+  const buf = fs.readFileSync(makeFixture());
+  const tap = new MkvSubtitleTap();
+  tap.feed(0, buf.subarray(0, 4096)); // the header, as every reader reads it first
+  const mid = Math.floor(buf.length * 0.5) + 12345; // not on a cluster boundary
+  for (let p = mid; p < buf.length; p += 65536) tap.feed(p, buf.subarray(p, Math.min(buf.length, p + 65536)));
+  const got = starts(tap.vtt(0));
+  assert.ok(got.length >= 10 && got.length < 24, `lines from the middle on (${got.length})`);
+  assert.strictEqual(got[got.length - 1], '00:01:56.000', 'up to the last line');
+  // Picture bytes that happen to hold the cluster id do not make lines (a cluster must start with its time).
+  const junk = Buffer.alloc(200000, 0x55); junk.writeUInt32BE(0x1F43B675, 5000); junk[5004] = 0x88; junk.writeUInt32BE(0xA3880081, 5012);
+  const t2 = new MkvSubtitleTap(); t2.feed(0, buf.subarray(0, 4096)); t2.feed(10000000, junk);
+  assert.strictEqual(starts(t2.vtt(0)).length, 0);
 });
 
-test('a side output that fails before the picture is respawned without it (the picture never stops)', { skip: !ff && 'no ffmpeg' }, async () => {
-  const movie = fs.existsSync(path.join(dir, 'movie.mkv')) ? path.join(dir, 'movie.mkv') : makeFixture();
+test('/api/filesub: lines from the bytes /api/stream hands the remux; a local file is read ahead of the picture', { skip: !ff && 'no ffmpeg' }, async () => {
+  const movie = makeFixture();
+  const buf = fs.readFileSync(movie);
   const srv = await bootServer();
   try {
     await setupAdmin(srv.port);
     const uid = srv.auth._users().list[0].id;
-    const id = 'fsubmount2';
-    // The probe claims a text track 5 the file does not have: the side output fails at once.
-    srv.mounts.set(id, {
-      id, name: 'Movie.2024.1080p.mkv', size: fs.statSync(movie).size, streamable: true, _local: { file: movie }, mountedAt: Date.now(),
-      _tracks: { available: true, duration: 120, audio: [{ rel: 0, codec: 'ac3', channels: 1 }], subs: [{ rel: 5, codec: 'subrip', lang: 'eng', text: true }] },
-    });
+    const tracks = { available: true, duration: 120, audio: [{ rel: 0, codec: 'ac3', channels: 1 }],
+      subs: [{ rel: 0, codec: 'subrip', lang: 'eng', text: true }, { rel: 1, codec: 'ass', lang: 'fre', text: true }] };
+    // A usenet-like mount: its bytes come from vf.read, like any mount.
+    const id = 'fsubmount1';
+    srv.mounts.set(id, { id, name: 'Movie.2024.1080p', size: buf.length, streamable: true, mountedAt: Date.now(), _tracks: tracks,
+      async *read(start, end) { for (let p = start; p < end; p += 65536) yield buf.subarray(p, Math.min(end, p + 65536)); } });
     const t = srv.auth.streamToken(uid, id);
-    const body = await new Promise((resolve, reject) => {
-      http.get({ host: '127.0.0.1', port: srv.port, path: `/api/remux/${id}?t=${t}&start=90&fs=abc123def` }, (res) => {
-        const chunks = []; res.on('data', (c) => chunks.push(c)); res.on('end', () => resolve(Buffer.concat(chunks)));
-      }).on('error', reject);
-    });
-    assert.ok(body.length > 1000, 'the plain remux took over');
-    const r = await httpJson(srv.port, 'GET', `/api/filesub/${id}/5?t=${t}&fs=abc123def`);
-    assert.strictEqual(r.status, 404, 'the play is marked as having no side file');
+    // Only the first bytes read (the header ask): the opening lines at most, not an error.
+    const early = await httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${t}`);
+    assert.strictEqual(early.status, 200);
+    assert.doesNotMatch(early.raw, /English line 23/);
+    // The remux reads the middle of the file through /api/stream: those lines are now known.
+    const from = Math.floor(buf.length * 0.5);
+    await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: srv.port, path: `/api/stream/${id}?t=${t}`, headers: { range: `bytes=${from}-` } },
+      (res) => { res.resume(); res.on('end', resolve); }).on('error', reject));
+    const mid = await httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${t}`);
+    assert.match(mid.raw, /00:01:56\.000 --> 00:01:58\.000\nEnglish line 23/);
+    assert.doesNotMatch(mid.raw, /English line 2\n/, 'only what was read');
+    assert.strictEqual((await httpJson(srv.port, 'GET', `/api/filesub/${id}/5?t=${t}`)).json.code, 'NO_TRACK');
+    assert.strictEqual((await httpJson(srv.port, 'GET', `/api/filesub/${id}/0?t=${srv.auth.streamToken(uid, 'other')}`)).status, 401, 'a token for another mount cannot read it');
+
+    // A local file: ffmpeg reads it from disk, so the server reads ahead of the picture (at=).
+    const lid = 'fsubmount2';
+    srv.mounts.set(lid, { id: lid, name: 'Local.Movie.mkv', size: buf.length, streamable: true, mountedAt: Date.now(), _local: { file: movie }, _tracks: tracks });
+    const lt = srv.auth.streamToken(uid, lid);
+    const loc = await httpJson(srv.port, 'GET', `/api/filesub/${lid}/1?t=${lt}&at=60`);
+    assert.strictEqual(loc.status, 200);
+    assert.match(loc.raw, /00:01:02\.000 --> 00:01:04\.000\nLigne 12/, 'the line at the picture is there on the first ask');
+
+    // Not Matroska: no file lines, the client goes online.
+    const mp4 = path.join(dir, 'movie.mp4');
+    spawnSync(ff.path, ['-hide_banner', '-loglevel', 'error', '-y', '-i', movie, '-map', '0:v', '-c', 'copy', '-t', '5', mp4]);
+    const mid4 = 'fsubmount3';
+    srv.mounts.set(mid4, { id: mid4, name: 'Movie.mp4', size: fs.statSync(mp4).size, streamable: true, mountedAt: Date.now(), _local: { file: mp4 }, _tracks: tracks });
+    const no = await httpJson(srv.port, 'GET', `/api/filesub/${mid4}/0?t=${srv.auth.streamToken(uid, mid4)}`);
+    assert.strictEqual(no.status, 404);
+    assert.strictEqual(no.json.code, 'NO_SIDE');
   } finally {
     await srv.shutdown();
   }
+});
+
+test('the remux and transcode stay exactly as in 3.5.6 (nothing added to the picture path)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'transcode.js'), 'utf8');
+  assert.match(src, /function spawnRemux\(streamUrl, \{ startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false \} = \{\}\)/);
+  assert.doesNotMatch(src, /sideSubs|sideSubtitleArgs/);
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /const subTap = mountSubtitleTap\(vf\);\s*\n\s*for await \(const chunk of vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)\) \{\s*\n\s*if \(subTap\) subTap\.feed\(start \+ sentBytes, chunk\);/,
+    'the stream handler shows each chunk to the tap before sending it');
 });
