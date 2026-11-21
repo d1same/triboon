@@ -20465,8 +20465,14 @@ function visibleEmbeddedSubChoices() {
 function hiddenEmbeddedSubCount() {
   return Math.max(0, embeddedSubChoices().length - visibleEmbeddedSubChoices().length);
 }
+// File tracks in other languages sit behind "Show all subtitle languages" too; without them in the
+// count that row never showed, so those tracks could not be picked (second check 3.5.6).
+function hiddenFileSubCount(p = S.playing) {
+  if (showAllLocalSubtitles() || !nativeFileSubtitlesOn(p)) return 0;
+  return fileSubChoices(p).filter((sub) => !(fileSubMatchesPreferred(sub) || embeddedSubIsForced(sub))).length;
+}
 function hiddenLocalSubtitleCount() {
-  return hiddenReleaseSubCount() + hiddenEmbeddedSubCount();
+  return hiddenReleaseSubCount() + hiddenEmbeddedSubCount() + hiddenFileSubCount();
 }
 function embeddedSubForRel(rel) {
   const idx = embeddedSubIndex(rel);

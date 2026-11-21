@@ -12787,3 +12787,24 @@ test('Other versions never offers a picture this screen cannot show, a lower pic
   assert.deepStrictEqual(fns.otherVersionRows(playing1080, list, { ...shield, dovi: true }).map((r) => r.pickKey), ['dv', 'hdr', 'low'],
     'a 1080p play may be offered 4K and 1080p');
 });
+
+test('the native menu offers "Show all subtitle languages" for file tracks in other languages (second check 3.5.6)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const src = grab('function fileSubChoices(', 'function fileSubForRel(')
+    + grab('function hiddenEmbeddedSubCount(', 'function embeddedSubForRel(');
+  let showAll = false, fileOn = true;
+  const subs = [
+    { rel: 0, lang: 'eng', codec: 'subrip' }, { rel: 1, lang: 'eng', codec: 'subrip', forced: true },
+    { rel: 2, lang: 'jpn', codec: 'subrip' }, { rel: 3, lang: 'spa', codec: 'subrip' },
+  ];
+  const S = { playing: { tracks: { subs } } };
+  const fns = new Function('S', 'showAllLocalSubtitles', 'nativeFileSubtitlesOn', 'fileSubMatchesPreferred', 'embeddedSubIsForced',
+    'hiddenReleaseSubCount', 'embeddedSubChoices', 'visibleEmbeddedSubChoices', `${src}\nreturn { hiddenLocalSubtitleCount };`)(
+    S, () => showAll, () => fileOn, (s) => s.lang === 'eng', (s) => !!s.forced, () => 0, () => [], () => []);
+  assert.strictEqual(fns.hiddenLocalSubtitleCount(), 2, 'Japanese and Spanish file tracks are behind "Show all"');
+  showAll = true;
+  assert.strictEqual(fns.hiddenLocalSubtitleCount(), 0, 'nothing hidden once shown');
+  showAll = false; fileOn = false;
+  assert.strictEqual(fns.hiddenLocalSubtitleCount(), 0, 'no file rows (browser, old app, remux): the count is as before');
+});
