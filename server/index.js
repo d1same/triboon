@@ -678,7 +678,10 @@ async function onDemandSubSync(vf, vtt, uid, atSec = 0, audioIndex = 0) {
 }
 // The sync engine the subtitle route calls. Tests swap in a stand-in (subSyncForTest) to count jobs
 // and hold an answer past the 30 s socket cut without alass or real audio.
-const subSyncEngine = { detect: () => detectSubSync(), run: onDemandSubSync };
+// cutGraceMs (brief 137, gate fault 6): how long a sync job keeps running after its last asker was
+// cut off. A reverse proxy cuts slow asks (often at 60-100 s); the page and the TV app ask again on
+// their next tick, so the retry rejoins the running job instead of pulling the audio again.
+const subSyncEngine = { detect: () => detectSubSync(), run: onDemandSubSync, cutGraceMs: 30000 };
 // Brief 135 Step 2b: the newest correction per file, subtitle row and audio track, across mounts. A page
 // reload plays the same file on a new mount; near the measured minute it keeps the synced words at
 // once instead of the raw ones while it measures again.
@@ -12184,22 +12187,50 @@ Object.assign(H, {
             .catch((e) => {
               if (e && !e.stopped) story.noteMount(vf.id, `subtitle sync verdict: gave up (${costLine()})`);
               else if (e && e.stopped) story.noteMount(vf.id, `subtitle sync stopped (${costLine()})`);
+              // A job stopped because nobody came back within the grace counts as a try toward the
+              // per-mount stop, so cut asks cannot pull audio again and again (gate fault 6).
+              if (e && e.stopped && work.cutStopped) {
+                const prev = vf._subSyncFail.get(syncKey) || { tries: 0, total: 0, timedOut: false, atSec };
+                if (prev.failedWork !== work) {
+                  vf._subSyncFail.set(syncKey, { ...prev, tries: (prev.tries || 0) + 1, total: (prev.total || 0) + 1,
+                    failedWork: work, at: Date.now(), atSec });
+                  capMap(vf._subSyncFail, 24);
+                }
+              }
               throw e;
             })
-            .finally(() => { if (vf._osInflight.get(syncKey) === work) vf._osInflight.delete(syncKey); });
+            .finally(() => {
+              clearTimeout(work.cutTimer);
+              if (vf._osInflight.get(syncKey) === work) vf._osInflight.delete(syncKey);
+            });
           work.waiters = 0;
           work.stop = () => stopper.abort();
+          // A cut ask stops the job only after a grace, so the asker's retry can rejoin it.
+          work.stopAfterGrace = () => {
+            clearTimeout(work.cutTimer);
+            work.cutTimer = setTimeout(() => {
+              if (work.waiters > 0) return;
+              work.cutStopped = true;
+              stopper.abort();
+            }, Math.max(0, Number(subSyncEngine.cutGraceMs) || 0));
+            if (work.cutTimer.unref) work.cutTimer.unref();
+          };
           vf._osInflight.set(syncKey, work);
         }
         const attempt = vf._osInflight.get(syncKey);
-        // A cut ask: when the last client waiting on this job leaves, the job stops.
+        // A cut ask: when the last client waiting on this job leaves, the job stops after a grace,
+        // unless an ask comes back in time and rejoins it (gate fault 6).
         attempt.waiters = (attempt.waiters || 0) + 1;
+        clearTimeout(attempt.cutTimer);
         let waiting = true;
         const leave = () => {
           if (!waiting) return;
           waiting = false;
           attempt.waiters -= 1;
-          if (attempt.waiters <= 0 && !ctx.res.writableEnded && attempt.stop) attempt.stop();
+          if (attempt.waiters <= 0 && !ctx.res.writableEnded) {
+            if (attempt.stopAfterGrace) attempt.stopAfterGrace();
+            else if (attempt.stop) attempt.stop();
+          }
         };
         ctx.res.once('close', leave);
         try { await attempt; } catch (e) {

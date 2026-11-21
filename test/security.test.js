@@ -2879,7 +2879,9 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
       assert.strictEqual(maxRunning, 1, 'never two sync jobs at once on this mount');
       const firstRes = await first;
       assert.strictEqual(firstRes.headers['x-triboon-subsync'], 'pending', 'the replaced ask is told to ask again');
-      // A cut ask (the player went away): its job stops too.
+      // A cut ask (a reverse proxy cut it, or the player went away): its job keeps running for a grace
+      // so a retry can rejoin it, and stops when nobody comes back (gate fault 6, lead-approved rule).
+      srv.subSyncForTest({ cutGraceMs: 600 });
       const cut = await new Promise((resolve) => {
         const req = http.get({ host: '127.0.0.1', port: srv.port, path: syncPath(300) });
         req.on('error', () => {});
@@ -2888,6 +2890,8 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
       await until(() => jobs.length === 3);
       assert.strictEqual(jobs[1].stopped, true, 'moving on again stopped the second job');
       cut.destroy();
+      await new Promise((r) => setTimeout(r, 250));
+      assert.strictEqual(jobs[2].stopped, false, 'within the grace the cut job keeps running');
       await until(() => jobs[2].stopped);
       await second.catch(() => {});
       // A slow answer (31 s) still reaches the player instead of dying at the 30 s cut.
@@ -2909,6 +2913,44 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
       assert.match(slowRes.body.toString('utf8'), /Hello synced/);
       assert.strictEqual(maxRunning, 1, 'one job at a time from first ask to last');
       assert.strictEqual(running, 0);
+
+      // Gate fault 6: a retry within the grace joins the same job and never pulls audio a second time.
+      const before = jobs.length;
+      const cut2 = await new Promise((resolve) => {
+        const req = http.get({ host: '127.0.0.1', port: srv.port, path: syncPath(600) });
+        req.on('error', () => {});
+        resolve(req);
+      });
+      await until(() => jobs.length === before + 1);
+      cut2.destroy();
+      await new Promise((r) => setTimeout(r, 200));
+      const retry = httpRaw(srv.port, syncPath(605));
+      await new Promise((r) => setTimeout(r, 700));
+      assert.strictEqual(jobs.length, before + 1, 'the retry rejoined the running job: no second audio pull');
+      assert.strictEqual(jobs[before].stopped, false, 'and the job was not stopped at the end of the grace');
+      jobs[before].finish(1500);
+      const retryRes = await retry;
+      assert.strictEqual(retryRes.headers['x-triboon-subsync'], 'corrected', 'the retry gets the job\'s answer');
+      assert.strictEqual(retryRes.headers['x-triboon-subsync-shift'], '1500');
+
+      // Cut asks that nobody retries each count toward the stop: three in a row and the mount says
+      // 'failed' instead of pulling audio a fourth time.
+      for (const at of [900, 905, 910]) {
+        const n = jobs.length;
+        const c = await new Promise((resolve) => {
+          const req = http.get({ host: '127.0.0.1', port: srv.port, path: syncPath(at) });
+          req.on('error', () => {});
+          resolve(req);
+        });
+        await until(() => jobs.length === n + 1);
+        c.destroy();
+        await until(() => jobs[n].stopped);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const afterCuts = jobs.length;
+      const fourth = await httpRaw(srv.port, syncPath(912));
+      assert.strictEqual(fourth.headers['x-triboon-subsync'], 'failed', 'three stopped cut jobs end the tries at this minute');
+      assert.strictEqual(jobs.length, afterCuts, 'and no fourth audio pull');
     } finally {
       restoreSync();
     }
