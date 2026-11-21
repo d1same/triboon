@@ -20531,6 +20531,14 @@ function fileHasViewerSubtitle(p = S.playing) {
   const want = subtitleViewerLang();
   return !!want && localSubtitleItems(p).some((x) => sameSubLang(x.lang, want) && !x.episode);
 }
+// When the online list is worth a lookup (second check 3.5.7). Building the TV/Windows payload at
+// every handoff, before the probe, used to look it up for viewers with Off or "Choose per title" and
+// with the built-in switch off (the provider's quota and a title lookup, unlike 3.5.6).
+function onlineListWanted(p) {
+  if (prefSubtitleMode() === 'always') return true; // an online start may need it
+  if (S.trackMenuKind === 'cc' && $('trackMenu').classList.contains('open')) return true; // the browser menu is open
+  return !!(p && p.tracks && builtInSubtitlesEnabled()); // probed: the file has none, so the menus list online rows
+}
 function onlineSubtitleRows(p, rows) {
   if (!(S.serverInfo && S.serverInfo.opensubs && p && p.mountId && subtitleCatalogAvailable(p.item))) return;
   const pref = prefLang('slang') && prefLang('slang') !== 'off' ? osLang(prefLang('slang')) : '';
@@ -20549,7 +20557,7 @@ function onlineSubtitleRows(p, rows) {
         if (rel === pick.rel || n > ONLINE_ROWS_PER_LANG || rows.some((r) => r.rel === rel)) return;
         rows.push({ rel, label: `${name} ${n++}`, lang: l, kind: 'online' });
       });
-    } else if (!(p._osVariantInflight && p._osVariantInflight[l])) {
+    } else if (!(p._osVariantInflight && p._osVariantInflight[l]) && onlineListWanted(p)) {
       ensureOnlineSubtitleVersions(p, l);
     }
     // The line on screen stays listed even when it is lower in the list.

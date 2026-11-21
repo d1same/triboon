@@ -5486,8 +5486,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'CC menu should show one obvious language row without Recommended wording');
   assert.match(ui, /const ONLINE_ROWS_PER_LANG = 5;[\s\S]+if \(rel === pick\.rel \|\| n > ONLINE_ROWS_PER_LANG \|\| rows\.some\(\(r\) => r\.rel === rel\)\) return;\s*rows\.push\(\{ rel, label: `\$\{name\} \$\{n\+\+\}`, lang: l, kind: 'online' \}\);/,
     'online rows list up to five versions with short names ("English 2"), no extra row to open them (brief 143)');
-  assert.match(ui, /\} else if \(!\(p\._osVariantInflight && p\._osVariantInflight\[l\]\)\) \{\s*ensureOnlineSubtitleVersions\(p, l\);\s*\}/,
-    'the online list loads by itself when a menu needs it (brief 143)');
+  assert.match(ui, /\} else if \(!\(p\._osVariantInflight && p\._osVariantInflight\[l\]\) && onlineListWanted\(p\)\) \{\s*ensureOnlineSubtitleVersions\(p, l\);\s*\}/,
+    'the online list loads by itself when a menu needs it (brief 143), and only then (second check 3.5.7)');
   assert.match(ui, /function ensureOnlineSubtitleVersions\(p, l\) \{[\s\S]+loadSubtitleVersions\(l\)\)\.then\(\(\) => \{[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+openTrackMenu\('cc'/,
     'and every menu redraws when it arrives');
   assert.doesNotMatch(ui, /Online - more \$\{name\} choices/, 'no separate row to open the online versions (brief 143)');
@@ -12996,4 +12996,34 @@ test('browser file lines: the read pace follows the lines near the picture, and 
   assert.match(start, /if \(Math\.abs\(now - lastNow\) > 20\) polls = 0;/, 'a jump of the picture starts the pace again');
   const swap = grab('p.tracks = null; p._tracksJob = null; p.subTrack = null; p.audioTrack = 0; p.forceAacRemux = false;', 'updatePlayerMeta();');
   assert.match(swap, /p\._fileSubFailed = false;/, 'a failure on the old release does not hide the new release\'s file track');
+});
+
+test('the online subtitle list is not looked up at every handoff: only in "Always show" or with the menu open (second check 3.5.7)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const i = ui.indexOf('function onlineListWanted(p) {');
+  const j = ui.indexOf('// The online list loads by itself when the menu needs it', i);
+  assert.ok(i >= 0 && j > i);
+  let mode = 'manual'; let menuOpen = false; let builtIn = true; const asked = [];
+  const S = { serverInfo: { opensubs: true }, trackMenuKind: '' };
+  const $ = () => ({ classList: { contains: () => menuOpen } });
+  const rowsFor = new Function('S', '$', 'prefLang', 'osLang', 'OS_LANG_NAMES', 'subtitleMiss', 'subtitleDefaultChoice', 'subtitleListConfident',
+    'osTrackRel', 'osTrackInfo', 'ONLINE_ROWS_PER_LANG', 'ensureOnlineSubtitleVersions', 'subtitleCatalogAvailable', 'prefSubtitleMode', 'builtInSubtitlesEnabled',
+    `${ui.slice(i, j)}\nreturn onlineSubtitleRows;`)(
+    S, $, () => '', (l) => l, { en: 'English' }, () => '', (l) => ({ rel: `os:${l}` }), () => true,
+    (l, v) => `os:${l}:${v}`, () => ({}), 3, (_p, l) => asked.push(l), () => true, () => mode, () => builtIn);
+  const p = { mountId: 'm', item: { tmdbId: 1 } };
+  rowsFor(p, []);
+  assert.deepStrictEqual(asked, [], '"Choose per title", menu closed: no lookup at the handoff');
+  mode = 'off'; rowsFor(p, []);
+  assert.deepStrictEqual(asked, [], 'Off: no lookup');
+  mode = 'always'; rowsFor(p, []);
+  assert.deepStrictEqual(asked, ['en'], '"Always show": the online start needs the list');
+  asked.length = 0; mode = 'manual'; S.trackMenuKind = 'cc'; menuOpen = true; rowsFor(p, []);
+  assert.deepStrictEqual(asked, ['en'], 'the browser menu open: the list fills in');
+  asked.length = 0; menuOpen = false; S.trackMenuKind = '';
+  const probed = { ...p, tracks: { subs: [] } };
+  rowsFor(probed, []);
+  assert.deepStrictEqual(asked, ['en'], 'probed, and the file has no track in the language: the native menus list online rows');
+  asked.length = 0; builtIn = false; rowsFor(probed, []);
+  assert.deepStrictEqual(asked, [], 'the built-in switch off and "Choose per title": no lookup, as in 3.5.6');
 });
