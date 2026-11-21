@@ -17485,8 +17485,12 @@ function recoverSamePlaybackSource(reason = '') {
   let at = currentTime();
   const key = `${p.mountId || p.sessionId || p.streamUrl || ''}:${kind}`;
   const now = appMs();
-  const decoderFailure = /decode|decoder|codec|renderer|format/i.test(String(reason || ''));
-  const sourceDead = /blocked|health|missing|no such article/i.test(String(reason || ''));
+  // The Android shell adds what it saw to a timeout: "ERROR_CODE_TIMEOUT (<wait>; audio decoded on
+  // the device, 6ch; text track on)". That detail is for the log. Its "decoded" made a timeout look
+  // like a decoder failure, which the same-spot ledger never counts, so the copy never changed.
+  const ruleReason = /^ERROR_CODE_TIMEOUT \(/.test(String(reason || '')) ? 'ERROR_CODE_TIMEOUT' : String(reason || '');
+  const decoderFailure = /decode|decoder|codec|renderer|format/i.test(ruleReason);
+  const sourceDead = /blocked|health|missing|no such article/i.test(ruleReason);
   const contentError = PLAYBACK_CONTENT_ERROR_RE.test(String(reason || ''));
   // Next-episode startup often wobbles once (new remux, new Exo). Remounting that
   // replayed the opening. Stay put unless the source is actually dead, or a direct file is unreadable.

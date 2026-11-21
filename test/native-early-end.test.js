@@ -266,3 +266,63 @@ test('a remux response that closes while ffmpeg still runs writes one line with 
     fs.rmSync(lib, { recursive: true, force: true });
   }
 });
+
+// Second check 3.5.8: the Android shell now sends a timeout with its detail, for example
+// "ERROR_CODE_TIMEOUT (Detaching surface timed out.; audio decoded on the device, 6ch; text track on)".
+// The word "decoded" in that detail made the page call it a decoder failure, so the same-spot ledger
+// never counted it and the remux was restarted at the same second forever instead of moving on to
+// another copy after the third failure, as plain ERROR_CODE_TIMEOUT does in 3.5.7.
+function realRecoverHarness(playing) {
+  const grab = (name) => {
+    const m = new RegExp(`\\n(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]+?\\n\\}`).exec(ui);
+    assert.ok(m, `${name} is extractable`);
+    return m[0];
+  };
+  const constLine = (name) => {
+    const m = new RegExp(`\\nconst ${name} = [^\\n]+`).exec(ui);
+    assert.ok(m, `${name} is extractable`);
+    return m[0];
+  };
+  const src = ['RESUME_IN_FLIGHT_MAX_MS', 'REPEAT_FAIL_WINDOW_MS', 'REPEAT_FAIL_RETURN_WINDOW_MS',
+    'REPEAT_FAIL_SPOT_SEC', 'PLAYBACK_CONTENT_ERROR_RE'].map(constLine).join('\n') + '\n' + ['playbackSourceSwapPending',
+    'markPlaybackSourceSwap', 'markPlaybackResuming', 'clearStaleResumeFlags', 'noteRecoveryDeclined',
+    'recoverSamePlaybackSource', 'noteSourceFailure', 'playbackRepeatFailure', 'positionBeforeRepeatFailure',
+    'failLedgerSource'].map(grab).join('\n');
+  const clock = { now: 1e9 };
+  const events = [];
+  const S = { playing, view: 'player', _sourceFailLedger: [] };
+  const stubs = {
+    S, appMs: () => clock.now, vodPlaybackStarted: () => true, currentPlayerKind: () => 'remux',
+    currentTime: () => Number(playing.nativePos) || 0, notePlaybackIssue: () => {}, notePlaybackTrace: () => {},
+    playbackServerGone: () => false, reMountAndResume: () => events.push('remount'), holdPlaybackAcrossRestart: () => {},
+    clientCaps: () => ({}), tryNextNativeKind: () => { events.push('next-kind'); return true; }, autoAdvance: () => events.push('advance'),
+    skipPastUnreadable: () => events.push('skip'), forwardRemuxResumeSec: (p, at) => ({ then: (f) => f(at) }),
+    canUseNativeVideoPlayer: () => true, tryNativeVideoPlayer: (kind, at) => { events.push(`reopen ${Math.round(at)}`); return true; },
+    startSource: () => true, showPlaybackInterrupted: () => {}, $: () => null, toast: () => {}, setTimeout: () => {},
+  };
+  const recover = new Function(...Object.keys(stubs), `${src}\nreturn recoverSamePlaybackSource;`)(...Object.values(stubs));
+  return { clock, events, fail: (reason) => {
+    playing._nativeResuming = false; playing._resumingSince = 0; // the previous restart played again
+    clock.now += 12000;
+    return recover(reason);
+  } };
+}
+
+test('a timeout with the shell\'s detail counts toward a switch like a plain timeout (second check 3.5.8)', () => {
+  const run = (reason) => {
+    const p = { usingNative: true, usingRemux: true, nativeAacAudio: true, item: { type: 'episode' }, nativePos: 3,
+      mountId: 'm9', sessionId: 's9', openedAt: 1, startedAt: 1 };
+    const h = realRecoverHarness(p);
+    for (let i = 0; i < 3; i++) h.fail(reason);
+    return h.events;
+  };
+  const plain = run('ERROR_CODE_TIMEOUT');
+  assert.ok(plain.includes('advance'), `three plain timeouts at one spot move on (${plain.join(', ')})`);
+  for (const detail of [
+    'ERROR_CODE_TIMEOUT (Detaching surface timed out.; audio decoded on the device, 6ch; text track on)',
+    'ERROR_CODE_TIMEOUT (Player release timed out.; audio passthrough E-AC3, 6ch; text track off)',
+    'ERROR_CODE_TIMEOUT (no cause given; audio not started; text track off)',
+  ]) {
+    assert.deepStrictEqual(run(detail), plain, `the same for "${detail}"`);
+  }
+});
