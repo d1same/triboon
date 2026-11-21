@@ -2033,25 +2033,40 @@ class Pipeline {
       .map((v) => String(v || '').trim().toLowerCase()).join('|');
   }
 
-  _noteDiedForTitle(params, candidate) {
+  // damaged: the byte check proved the file itself broken, so it is never a backup again.
+  _noteDiedForTitle(params, candidate, { damaged = false } = {}) {
     const id = this._titleIdentity(params || {});
     if (!candidate || !id || id === '||||') return;
     const now = Date.now();
     const list = (this.diedForTitle.get(id) || []).filter((d) => now - d.at < DIED_FOR_TITLE_MS);
-    list.push({ pickKey: candidate.pickKey || '', name: candidate.name ? normTitle(candidate.name) : '', at: now });
+    list.push({ pickKey: candidate.pickKey || '', name: candidate.name ? normTitle(candidate.name) : '', at: now, damaged: !!damaged });
     this.diedForTitle.delete(id);
     this.diedForTitle.set(id, list.slice(-8));
     while (this.diedForTitle.size > 200) this.diedForTitle.delete(this.diedForTitle.keys().next().value);
   }
 
+  // false, true (it died for this title) or 'damaged' (the byte check proved the file broken).
   _diedForTitle(params, candidate) {
     if (!candidate) return false;
     const list = this.diedForTitle.get(this._titleIdentity(params || {}));
     if (!list) return false;
     const now = Date.now();
     const name = candidate.name ? normTitle(candidate.name) : '';
-    return list.some((d) => now - d.at < DIED_FOR_TITLE_MS
+    const hits = list.filter((d) => now - d.at < DIED_FOR_TITLE_MS
       && ((d.pickKey && d.pickKey === candidate.pickKey) || (d.name && d.name === name)));
+    if (!hits.length) return false;
+    return hits.some((d) => d.damaged) ? 'damaged' : true;
+  }
+
+  // The byte check runs after the switch, so a backup may already be warming on the broken file.
+  _onByteCheckVerdict(params, policy, candidate, verdict) {
+    if (!verdict || verdict.fault !== 'file' || !candidate) return;
+    this._noteDiedForTitle(params, candidate, { damaged: true });
+    this._clearTitleStandby(params || {}, policy || {}, candidate.pickKey);
+    for (const s of this.sessions.values()) {
+      if (s && s.standby && s.standby.candidate && s.standby.candidate.pickKey === candidate.pickKey
+          && this._titleIdentity(s.query || {}) === this._titleIdentity(params || {})) s.standby = null;
+    }
   }
 
   // The same order with this title's dead files moved to the end, so they are tried only when
@@ -2178,10 +2193,12 @@ class Pipeline {
   _pickStandbyCandidate(playable, primaryPickKey, primary = null, died = null) {
     let rest = (playable || []).filter((c) => c && c.pickKey && c.pickKey !== primaryPickKey && c.score > -5000);
     if (!rest.length) return null;
-    // A file that just died for this title is the backup only when it is the only other copy.
+    // A file that just died for this title is the backup only when it is the only other copy, and
+    // a file the byte check proved damaged never is.
     if (died) {
       const alive = rest.filter((c) => !died(c));
-      if (alive.length) rest = alive;
+      rest = alive.length ? alive : rest.filter((c) => died(c) !== 'damaged');
+      if (!rest.length) return null;
     }
     const want = this._standbyResolutionRank(primary);
     if (want != null) {
@@ -4557,7 +4574,12 @@ class Pipeline {
       debug.fail('play', `file died — "${String(session.activeCandidate.name || '').slice(0, 90)}" — player: ${String(reason || cause || 'no reason given').replace(/\s+/g, ' ').slice(0, 120)}`
         + ` — server health: ${describeHealth(this.mounts.get(session.currentMountId))}`);
       if (UNREADABLE_REASON_RE.test(String(reason || ''))) {
-        runByteCheck(this.mounts.get(session.currentMountId), { name: session.activeCandidate.name }).catch(() => {});
+        const checked = session.activeCandidate;
+        const checkQuery = session.query || {};
+        const checkPolicy = session.policy || {};
+        runByteCheck(this.mounts.get(session.currentMountId), { name: checked.name })
+          .then((verdict) => this._onByteCheckVerdict(checkQuery, checkPolicy, checked, verdict))
+          .catch(() => {});
       }
       if (!stallOnly) this._recordPlaybackFailed(session.activeCandidate, { episodeScoped: !!_we });
       // For this title, whatever the cause: the walk, the backup and the prepared copy move past it.
@@ -4576,7 +4598,7 @@ class Pipeline {
     // Vision a TV cannot show turns the picture green, so it walks the screen-ordered list instead.
     const greenStandby = standby && warm.candidate && (session.policy || {}).dolbyVision === false
       && this._isDolbyVisionRelease(warm.candidate);
-    const diedStandby = standby && warm.candidate && this._diedForTitle(session.query, warm.candidate);
+    const diedStandby = !!(standby && warm.candidate && this._diedForTitle(session.query, warm.candidate));
     if (standby && standby.streamable && warm.candidate && standby.id !== session.currentMountId && !greenStandby && !diedStandby) {
       const committed = this._commitMount(session, warm.candidate, standby, [], nextOpts);
       session.standby = null;

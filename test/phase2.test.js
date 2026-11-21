@@ -7231,6 +7231,33 @@ test('pipeline: a file that died is not picked again for that title (backup, pre
 });
 
 
+test('pipeline: a file the byte check proved damaged is never the backup, even as the only other copy, and an armed backup of it is dropped', async () => {
+  const pipeline = new Pipeline({ pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(), performance: () => ({}) });
+  const query = { q: 'Show S04E04', season: 4, ep: 4 };
+  const broken = { nzbUrl: 'http://ix/getnzb/1', name: 'Show.S04E04.2160p.AMZN.WEB-DL.DDP5.1.H.265-GRP', pickKey: 'k1', score: 300 };
+  const next = { nzbUrl: 'http://ix/getnzb/2', name: 'Show.S04E04.2160p.WEB.H265-OTH', pickKey: 'k2', score: 250 };
+  const died = (c) => pipeline._diedForTitle(query, c);
+  pipeline._noteDiedForTitle(query, broken);
+  assert.strictEqual(pipeline._pickStandbyCandidate([broken, next], 'k2', next, died).pickKey, 'k1',
+    'a file that only died may still be the last backup');
+  // The backup was already armed before the byte check finished (the log: warming at 09:17:45, verdict at 09:17:45).
+  const vf = { id: 'm9', streamable: true };
+  pipeline.mounts.set('m9', vf);
+  pipeline._rememberTitleStandby(query, {}, vf, broken);
+  const session = { id: 's1', query, policy: {}, standby: { vf, candidate: broken } };
+  pipeline.sessions.set('s1', session);
+  pipeline._onByteCheckVerdict(query, {}, broken, { fault: 'file', text: 'FILE damaged: …' });
+  assert.strictEqual(pipeline._pickStandbyCandidate([broken, next], 'k2', next, died), null,
+    'once the byte check proves the file damaged it is never the backup');
+  assert.strictEqual(pipeline._findTitleStandby(query, {}), null, 'the backup already armed on it is dropped');
+  assert.strictEqual(session.standby, null, 'and the playing session no longer holds it');
+  assert.deepStrictEqual(pipeline._playableCandidates([broken, next], query).map((c) => c.pickKey), ['k2', 'k1'],
+    'the walk still ranks it last (it plays up to the damage)');
+  const other = { q: 'Show S04E05', season: 4, ep: 5 };
+  pipeline._onByteCheckVerdict(other, {}, next, { fault: 'triboon', text: 'TRIBOON likely' });
+  assert.strictEqual(pipeline._diedForTitle(other, next), false, 'a verdict that blames Triboon marks nothing');
+});
+
 test('subtitles: malformed SRT timestamps from old fan subs become valid VTT; dialogue digits are untouched', () => {
   const { srtToVtt } = require('../server/opensubs');
   const vtt = srtToVtt('1\r\n0:00:01,500 --> 00:00:04,5\r\nHello 1:23:45,6 world\r\n\r\n2\r\n00:00:05,000 --> 00:00:06.250\r\nok\r\n');
