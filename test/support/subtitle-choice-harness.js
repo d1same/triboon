@@ -21,6 +21,8 @@ const NAMES = [
   'forcedRideAlongRel', 'fileSubtitleIntentRel', 'fileSubIntentFromRel', 'fileSubForIntent', 'nativeStartSubtitlePlan',
   'subtitleIntentFromSaved', 'fileSubPayload', 'audioTrackLangName', 'fileSubLabel', 'sourceSubtitleLabel',
   'bestFileSubtitleRel', 'fileSubIntentRel', 'sameSubLang', 'fileSubMatchesPreferred', 'audioLangKey',
+  // Brief 143: the gate asks which way this play can show a file track.
+  'fileSubTransport', 'fileSubUsable', 'fileSubSideCodec', 'fileSubAll',
 ];
 function load(uiPath, env) {
   const ui = fs.readFileSync(uiPath, 'utf8');

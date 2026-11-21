@@ -3015,6 +3015,10 @@ public class MainActivity extends Activity {
             // Brief 137 step 4: this build shows a subtitle that is inside the file with ExoPlayer's own
             // text renderer (direct play only). Older builds lack it, so the web never sends them one.
             j.put("fileSubtitles", true);
+            // Brief 143: on the remux/transcode this build reads the file's subtitle from the server's
+            // side file (/api/filesub) and reads it again while it grows, so the web lists the file's
+            // own subtitles there too.
+            j.put("fileSubtitlesSide", true);
             j.put("sdk", Build.VERSION.SDK_INT);
             j.put("manufacturer", Build.MANUFACTURER == null ? "" : Build.MANUFACTURER);
             j.put("brand", Build.BRAND == null ? "" : Build.BRAND);
@@ -7061,19 +7065,33 @@ public class MainActivity extends Activity {
                     throw fail;
                 }
                 java.util.ArrayList<NativeCue> cues = parseNativeVtt(body);
+                final boolean growing = NativeSideSubtitle.isSideFile(cleanUrl);
                 runOnUiThread(() -> {
                     if (token != nativeSubtitleLoadToken) return;
+                    final boolean refresh = growing && subtitleOverlayKey(cleanUrl).equals(nativeSubtitleLoadedKey);
                     nativeSubtitleCues.clear();
                     nativeSubtitleCues.addAll(cues);
                     // A file that arrives mid-episode must follow the picture now.
                     // Leaving the clock at 0 makes the opening line show half an hour later.
-                    nativeSubtitleSlipMs = 0L;
-                    nativeSubtitleShownMs = -1L;
-                    nativeSubtitleShownWallMs = 0L;
+                    // A re-read of the same growing file keeps the clock it already has.
+                    if (!refresh) {
+                        nativeSubtitleSlipMs = 0L;
+                        nativeSubtitleShownMs = -1L;
+                        nativeSubtitleShownWallMs = 0L;
+                    }
                     nativeSubtitleLoadedKey = subtitleOverlayKey(cleanUrl);
                     nativeSubtitleHandler.removeCallbacks(nativeSubtitleTick);
                     updateNativeSubtitleOverlay();
                     if (!nativeSubtitleCues.isEmpty()) nativeSubtitleHandler.postDelayed(nativeSubtitleTick, 250);
+                    // Brief 143: the remux's side file grows as the remux reads ahead; read it again
+                    // while this track stays on (a new pick bumps the token and ends the chain).
+                    if (growing) {
+                        final int reads = attempt < 0 ? -attempt : 0;
+                        nativeSubtitleHandler.postDelayed(() -> {
+                            if (token != nativeSubtitleLoadToken) return;
+                            loadNativeSubtitleOverlayAttempt(subtitleUrl, cleanUrl, token, true, -(reads + 1));
+                        }, NativeSideSubtitle.nextReadMs(reads));
+                    }
                 });
             } catch (Exception e) {
                 if (token != nativeSubtitleLoadToken || nativeSubtitleFetchCancelled(e)) return;
@@ -7085,6 +7103,13 @@ public class MainActivity extends Activity {
                 final String reason = nativeSubtitleToastText(e.getMessage());
                 runOnUiThread(() -> {
                     if (token != nativeSubtitleLoadToken) return;
+                    if (attempt < 0 && !definitive) { // a re-read of a growing side file: try again later
+                        nativeSubtitleHandler.postDelayed(() -> {
+                            if (token != nativeSubtitleLoadToken) return;
+                            loadNativeSubtitleOverlayAttempt(subtitleUrl, cleanUrl, token, true, attempt);
+                        }, NativeSideSubtitle.nextReadMs(-attempt));
+                        return;
+                    }
                     if (!definitive && attempt < 2) { // 3 attempts total, 4s then 9s apart
                         nativeSubtitleHandler.postDelayed(() -> {
                             if (token != nativeSubtitleLoadToken) return;
@@ -8127,7 +8152,8 @@ public class MainActivity extends Activity {
         int syncEarlierIndex = -1;
         int resetIndex = -1;
         // Brief 137: ExoPlayer has no delay for a track inside the file, so a file row shows no timing rows.
-        if (trackType == C.TRACK_TYPE_TEXT && !nativeSubtitleRel.startsWith("fs:")) {
+        // Brief 143: a file track read from the remux's side file is drawn by our overlay, which can.
+        if (trackType == C.TRACK_TYPE_TEXT && nativeFileSubtitle == null) {
             labels.add("\u00a7Timing" + nativeSubShiftLabel()); // 3.5.1 option A: a quiet section label
             selected.add(false);
             syncEarlierIndex = labels.size();
@@ -8209,9 +8235,17 @@ public class MainActivity extends Activity {
             showNativeChrome(false);
             return;
         }
-        if (trackType == C.TRACK_TYPE_TEXT && choice.subtitleRel != null && choice.subtitleRel.startsWith("fs:")) {
-            org.json.JSONObject file = nativeFileForSubtitleRel(choice.subtitleRel);
-            if (file == null) { showNativeChrome(false); return; }
+        // Brief 143: a file row with a track payload is drawn by ExoPlayer from the file (direct play);
+        // one with an address (the remux's side file) goes through the overlay like online ones.
+        org.json.JSONObject fileChoice = trackType == C.TRACK_TYPE_TEXT && choice.subtitleRel != null
+                && choice.subtitleRel.startsWith("fs:") ? nativeFileForSubtitleRel(choice.subtitleRel) : null;
+        if (trackType == C.TRACK_TYPE_TEXT && choice.subtitleRel != null && choice.subtitleRel.startsWith("fs:")
+                && fileChoice == null && subtitleUrlForRel(choice.subtitleRel).isEmpty()) {
+            showNativeChrome(false);
+            return;
+        }
+        if (fileChoice != null) {
+            org.json.JSONObject file = fileChoice;
             nativeSubtitleRel = choice.subtitleRel;
             nativeSubtitleLabel = choice.label;
             nativeSubtitleShift = 0f;

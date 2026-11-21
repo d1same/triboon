@@ -3330,8 +3330,12 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'always-mode subtitles should be applied without waiting for the track probe to finish');
   assert.match(webHousekeeping, /await fetchPlayerTracks\(p, 1400\)[\s\S]+const episodePlay = !!\(ep && ep\.episode > 0\);[\s\S]+if \(!episodePlay && bestBuiltInSubtitleRel\(\) && prefSubtitleMode\(\) === 'always'\) \{[\s\S]+applyStartupSubtitlePref\(\);[\s\S]+return;[\s\S]+\}[\s\S]+if \(prefSubtitleMode\(\) === 'always' && applyStartupSubtitlePref\(\)\) return;[\s\S]+\/api\/ossubs/,
     'movies can still start on a built-in subtitle; a TV episode continues on to the online subtitle');
-  assert.match(ui, /const releaseSubs = visibleReleaseSubChoices\(\);[\s\S]+releaseSubs\.slice\(0, 6\)\.forEach[\s\S]+releaseSubLabel\(sub\)/,
-    'CC menu should list same-release subtitles ahead of online subtitle choices');
+  // Brief 143: one model for every menu. The file's own (and the release's own) subtitles in the
+  // viewer's language come first; online rows only when there is none.
+  assert.match(ui, /function subtitleMenuModel\(p = S\.playing\) \{[\s\S]+?const mine = items\.filter[\s\S]+?if \(mine\.length\) rows\.push\(\.\.\.localSubtitleRowsFor\(mine\)\);\s*else onlineSubtitleRows\(p, rows\);/,
+    'CC menu lists local subtitles first and online rows only when there is no local one in the viewer\'s language');
+  assert.match(ui, /mkRow\('Off', p\.subTrack === null, \(\) => setSubtitle\(null\)\);\s*\n[^\n]*\n\s*const rows = subtitleMenuModel\(p\);/,
+    'the web menu draws the shared model');
   assert.match(ui, /function releaseSubChoices\(\) \{\s+if \(!builtInSubtitlesEnabled\(\)\) return \[\];[\s\S]+return \(p && p\.tracks && Array\.isArray\(p\.tracks\.releaseSubs\)\) \? p\.tracks\.releaseSubs : \[\];[\s\S]+\}/,
     'same-release sidecar subtitle rows should be hidden while built-ins are disabled');
   assert.match(ui, /function releaseSubLabel\(sub\) \{[\s\S]+return builtInSubtitleLabel\(/,
@@ -3346,16 +3350,20 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'same-release subtitle rows should be filtered to the preferred subtitle language unless the user expands all languages');
   assert.match(ui, /function visibleEmbeddedSubChoices\(\) \{[\s\S]+showAllLocalSubtitles\(\) \? all : all\.filter\(\(s\) => subtitleChoiceMatchesPreferred\(s\)\);[\s\S]+\}/,
     'built-in subtitle rows should be filtered to the preferred subtitle language unless the user expands all languages');
-  assert.match(ui, /const embeddedSubs = visibleEmbeddedSubChoices\(\);[\s\S]+embeddedSubs\.slice\(0, 8\)\.forEach[\s\S]+embeddedSubLabel\(sub\)/,
-    'CC menu keeps the built-in row code available for when built-ins are re-enabled');
-  assert.match(ui, /hiddenLocalSubtitleCount\(\)[\s\S]+Show all subtitle languages[\s\S]+setShowAllLocalSubtitles\(true\)/,
-    'CC menu should offer an explicit way to reveal hidden local subtitle languages');
+  // Brief 143: the file's own tracks reach every menu through fileSubChoices (direct play or the
+  // remux's side file); the whole-file extraction rows stay off, and their code stays for later.
+  assert.match(ui, /function embeddedSubChoices\(\) \{[\s\S]{0,300}if \(!SERVER_SUBTITLE_EXTRACTION_ROWS\) return \[\];/,
+    'the whole-file extraction rows stay off');
+  assert.match(ui, /function localSubtitleItems\(p = S\.playing\) \{[\s\S]{0,300}fileSubChoices\(p\)\.map\(\(sub\) => \(\{ rel: fileSubRel\(sub\.rel\)/,
+    'the CC menu lists the file\'s own tracks');
+  assert.match(ui, /if \(!showAllLocalSubtitles\(\)\) rows\.push\(\{ action: 'local_all', label: 'Other languages' \}\);[\s\S]+else if \(row\.action === 'local_all'\) \{\s*mkRow\(row\.label, false, \(\) => setShowAllLocalSubtitles\(true\)/,
+    'CC menu reveals the other local subtitle languages under one row ("Other languages", brief 143)');
   assert.match(ui, /Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
     'startup auto-subtitle selection should mark the request so fallback behavior is explicit');
   assert.match(ui, /function onlineSubtitleLabel\(label\) \{[\s\S]+sourceSubtitleLabel\('Online'/,
     'online subtitle rows should be labeled as online');
-  assert.match(ui, /mkRow\(onlineSubtitleLabel\(pick\.label\), p\.subTrack === pick\.rel, \(\) => setSubtitle\(pick\.rel\)\)/,
-    'web CC menu should show online source labels for default online subtitles');
+  assert.match(ui, /const pick = subtitleDefaultChoice\(l\);\s*const mark = subtitleListConfident\(l\) \? 'best match' : 'other episodes only';\s*rows\.push\(\{ rel: pick\.rel, label: `\$\{name\} · \$\{mark\}`, lang: l, kind: 'online' \}\);/,
+    'online rows keep a short name, the top one marked "best match" (brief 143)');
   assert.match(ui, /const extractionMode = opts\.startup \? 'startup' : 'manual';[\s\S]+let url = subtitleUrlForRel\(p, rel, \{ mode: extractionMode \}\)/,
     'startup auto-subtitle selection should use the short startup wait instead of blocking on a full manual extraction');
   assert.match(ui, /function subtitleUrlForRel\(p, rel, opts = \{\}\) \{[\s\S]+rel\.startsWith\('em:'\)[\s\S]+embeddedSubUrl\(p, rel, opts\)/,
@@ -4710,32 +4718,32 @@ test('Android native player: direct source and native chrome stay out of the web
     'ExoPlayer should honor the server-selected fast path but let remux fall through to transcode when the device rejects the remuxed codec');
   assert.match(ui, /async function prepareNativeStartKindForAudio\(startKind\) \{[\s\S]+fetchPlayerTracks\(p, 1400\)[\s\S]+nativeDirectAudioNeedsSafeRemux\(selectedPlayerAudioTrack\(p\)\)[\s\S]+p\.forceAacRemux = true;[\s\S]+return 'remux';[\s\S]+nativeDirectAudioNameRisk\(p\)[\s\S]+return 'remux';[\s\S]+\}/,
     'Android direct playback should quickly probe risky audio and start a safe audio remux instead of silently direct-playing');
-  assert.match(ui, /function remuxPlaybackUrl\(p, seekStart = 0, opts = \{\}\) \{[\s\S]+p\.forceAacRemux && !opts\.native[\s\S]+'&audioSafe=1'[\s\S]+return `\$\{p\.remuxUrl\}&start=\$\{Math\.max\(0, Math\.round\(\(seekStart \|\| 0\) \* 1000\) \/ 1000\)\}&audio=\$\{audio\}\$\{safe\}`;/,
+  assert.match(ui, /function remuxPlaybackUrl\(p, seekStart = 0, opts = \{\}\) \{[\s\S]+p\.forceAacRemux && !opts\.native[\s\S]+'&audioSafe=1'[\s\S]+return `\$\{p\.remuxUrl\}&start=\$\{Math\.max\(0, Math\.round\(\(seekStart \|\| 0\) \* 1000\) \/ 1000\)\}&audio=\$\{audio\}\$\{safe\}\$\{fileSubSideParam\(p, opts\)\}`;/,
     'remux URL omits the stereo audioSafe flag for the native player (gets server-default 5.1) but keeps it for browser/MSE surfaces; video always copied');
   assert.match(server, /const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+const transcodeAudio = forceAudioSafe \|\| !audioCopyOk\(aud, vf\._caps\);/,
     'server remux should honor the audioSafe flag without forcing full video transcode');
   // audioSafe (multiview / any plain <video> MSE surface) must downmix to STEREO AAC — 5.1 AAC is
   // the least browser/WebView-decodable variant and plays as video-with-no-sound. The handler must
   // forward forceAudioSafe as safeStereo, and spawnRemux must pick 2 channels for it (6 otherwise).
-  assert.match(server, /spawnRemux\(selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}\)/,
+  assert.match(server, /spawnWithFileSubs\(spawnRemux, selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}, fileSubs\)/,
     'remux handler must forward the audio-safe flag so multiview audio is downmixed to stereo');
-  assert.match(transcode, /function spawnRemux\(streamUrl, \{ startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false \} = \{\}\)[\s\S]+transcodeAudio[\s\S]+'-ac', safeStereo \? '2' : '6'/,
+  assert.match(transcode, /function spawnRemux\(streamUrl, \{ startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, sideSubs = null \} = \{\}\)[\s\S]+transcodeAudio[\s\S]+'-ac', safeStereo \? '2' : '6'/,
     'spawnRemux must downmix the audio-safe path to stereo AAC (2ch) and keep 5.1 (6ch) for the normal transcode path');
   assert.match(transcode, /REMUX_MOVFLAGS = 'frag_keyframe\+empty_moov\+default_base_moof\+delay_moov\+negative_cts_offsets'/,
     'a copied movie must not hop the picture back about a second at each fragment');
   // The SAME 5.1-AAC-silent footgun hits the full transcode fallback: a browser must get stereo there too,
   // while the native ExoPlayer path (never sends audioSafe) keeps 5.1 surround.
-  assert.match(transcode, /function spawnTranscode\(streamUrl, \{ startSeconds = 0, audioTrack = 0, height = 1080, hdr = false, safeStereo = false \} = \{\}\)[\s\S]+'-c:a', 'aac', '-b:a', safeStereo \? '192k' : '256k', '-ac', safeStereo \? '2' : '6'/,
+  assert.match(transcode, /function spawnTranscode\(streamUrl, \{ startSeconds = 0, audioTrack = 0, height = 1080, hdr = false, safeStereo = false, sideSubs = null \} = \{\}\)[\s\S]+'-c:a', 'aac', '-b:a', safeStereo \? '192k' : '256k', '-ac', safeStereo \? '2' : '6'/,
     'spawnTranscode downmixes the audio-safe path to stereo AAC (2ch) and keeps 5.1 (6ch) otherwise');
   assert.match(server, /MAX_USER_FFMPEG_PIPES = 1;[\s\S]+function attachMountFfmpegPipe\(vf, ff, uid\) \{[\s\S]+old\.ff\.kill\('SIGKILL'\)[\s\S]+function closeMountFfmpegPipes\(vf\)/,
     'a remux/transcode skip-back must kill that viewer leftover ffmpeg without cutting another user on the same title');
   assert.match(server, /function releaseMountResources\(vf\) \{[\s\S]+closeMountHls\(vf\);[\s\S]+closeMountFfmpegPipes\(vf\);/,
     'sweeping a mount must reap remux/transcode ffmpeg, not only HLS sessions');
-  assert.match(server, /const ff = spawnRemux\(selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}\);\s*\n\s*attachMountFfmpegPipe\(vf, ff, ctx\.claims && ctx\.claims\.uid\);/,
+  assert.match(server, /const ff = spawnWithFileSubs\(spawnRemux, selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}, fileSubs\);\s*\n\s*attachMountFfmpegPipe\(vf, ff, ctx\.claims && ctx\.claims\.uid\);/,
     'every remux pipe is tracked against that viewer leftover cap');
-  assert.match(server, /transcode: async \(ctx\)[\s\S]+const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+spawnTranscode\(selfUrl, \{ startSeconds, audioTrack, height: LADDER\[height\] \? height : 1080, hdr, safeStereo: forceAudioSafe \}\)[\s\S]+attachMountFfmpegPipe\(vf, ff, ctx\.claims && ctx\.claims\.uid\)/,
+  assert.match(server, /transcode: async \(ctx\)[\s\S]+const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+spawnWithFileSubs\(spawnTranscode, selfUrl, \{ startSeconds, audioTrack, height: LADDER\[height\] \? height : 1080, hdr, safeStereo: forceAudioSafe \}, fileSubs\)[\s\S]+attachMountFfmpegPipe\(vf, ff, ctx\.claims && ctx\.claims\.uid\)/,
     'the /api/transcode handler honors audioSafe=1 (stereo) while the native path stays 5.1');
-  assert.match(ui, /kind === 'transcode'\) \{[\s\S]+v\.src = `\$\{p\.transcodeUrl\}&start=\$\{seekStart\}&audio=\$\{p\.audioTrack \|\| 0\}&height=\$\{p\.quality \|\| 1080\}\$\{p\.forceAacRemux \? '&audioSafe=1' : ''\}`/,
+  assert.match(ui, /kind === 'transcode'\) \{[\s\S]+v\.src = `\$\{p\.transcodeUrl\}&start=\$\{seekStart\}&audio=\$\{p\.audioTrack \|\| 0\}&height=\$\{p\.quality \|\| 1080\}\$\{p\.forceAacRemux \? '&audioSafe=1' : ''\}\$\{fileSubSideParam\(p\)\}`/,
     'the browser transcode fallback also requests stereo audio so an HEVC/10-bit source is not played silent');
   assert.match(ui, /function resolvePlaybackResume\(it\) \{[\s\S]+if \(it\._startOver\) return \{ \.\.\.it, resume: 0 \};[\s\S]+const pos = resumePositionForItem\(it\);[\s\S]+return pos > 0 \? \{ \.\.\.it, resume: pos \} : it;/,
     'Resume should be resolved from current watch state at click time, after quality changes');
@@ -5476,15 +5484,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'subtitle version lookup should remember title-level misses instead of keeping broken rows selectable');
   assert.match(ui, /function subtitleRecommendedLabel\(name, v\) \{[\s\S]+return detail \? `\$\{name\} \(\$\{detail\}\)` : name;/,
     'CC menu should show one obvious language row without Recommended wording');
-  assert.match(ui, /const pick = subtitleDefaultChoice\(l\);[\s\S]+mkRow\(onlineSubtitleLabel\(pick\.label\), p\.subTrack === pick\.rel, \(\) => setSubtitle\(pick\.rel\)\);[\s\S]+if \(variants && variants\.length && expanded\) \{/,
-    'web CC menu should keep advanced subtitle versions collapsed until the user asks for them');
-  assert.match(ui, /if \(!variants \|\| !variants\.length\) \{[\s\S]+addChoice\(\{ action: 'versions', lang: l, label: onlineSubtitleLabel\(name\) \}\);[\s\S]+return;[\s\S]+const pick = subtitleDefaultChoice\(l\);[\s\S]+addChoice\(\{ rel: pick\.rel, label: onlineSubtitleLabel\(pick\.label\) \}\);[\s\S]+if \(variants && variants\.length && expanded\) \{/,
-    'native CC choices should search before exposing a concrete subtitle URL');
-  assert.match(ui, /mkRow\(`Online - more \$\{name\} choices`/,
-    'CC menu should expose subtitle versions through a clear version-picker row');
-  assert.match(ui, /addChoice\(\{ action: 'versions', lang: l, label: `Online - more \$\{name\} choices` \}\)/,
-    'native Android CC should expose a lazy version-picker row when variants are collapsed');
-  assert.match(ui, /addChoice\(\{ action: 'missing', lang: l, label: miss \}\)/,
+  assert.match(ui, /const ONLINE_ROWS_PER_LANG = 5;[\s\S]+if \(rel === pick\.rel \|\| n > ONLINE_ROWS_PER_LANG \|\| rows\.some\(\(r\) => r\.rel === rel\)\) return;\s*rows\.push\(\{ rel, label: `\$\{name\} \$\{n\+\+\}`, lang: l, kind: 'online' \}\);/,
+    'online rows list up to five versions with short names ("English 2"), no extra row to open them (brief 143)');
+  assert.match(ui, /\} else if \(!\(p\._osVariantInflight && p\._osVariantInflight\[l\]\)\) \{\s*ensureOnlineSubtitleVersions\(p, l\);\s*\}/,
+    'the online list loads by itself when a menu needs it (brief 143)');
+  assert.match(ui, /function ensureOnlineSubtitleVersions\(p, l\) \{[\s\S]+loadSubtitleVersions\(l\)\)\.then\(\(\) => \{[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+openTrackMenu\('cc'/,
+    'and every menu redraws when it arrives');
+  assert.doesNotMatch(ui, /Online - more \$\{name\} choices/, 'no separate row to open the online versions (brief 143)');
+  assert.match(ui, /if \(miss\) \{ rows\.push\(\{ action: 'missing', lang: l, label: miss \}\); return; \}/,
     'native Android CC should show a clean no-subtitles row after a title-level miss');
   assert.match(ui, /window\.__tvNativeSubtitleVersions = async \(lang, pos, dur, token\) => \{[\s\S]+await loadSubtitleVersions\(lang\);[\s\S]+setSubtitleLangExpanded\(lang, true\);[\s\S]+refreshNativeSubtitleChoices\(\);/,
     'native Android CC version rows should fetch and expand subtitle variants without selecting a subtitle');
@@ -7134,7 +7141,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // Multiview VOD panes have no track-probe loop and the WebView can't decode AC3/EAC3/DTS, so
   // they must force AAC remux AND prefer remux over direct (even when the server picks 'direct'),
   // or such sources play with no sound.
-  assert.match(ui, /function multiViewVodUrl\(mount, item, startAt = 0\) \{[\s\S]+forceAacRemux: true,[\s\S]+forceAacRemux: true,[\s\S]+if \(mount\.remuxUrl\) return \{ \.\.\.media, kind: 'remux', url: remuxPlaybackUrl\(p, start\)/,
+  assert.match(ui, /function multiViewVodUrl\(mount, item, startAt = 0\) \{[\s\S]+forceAacRemux: true,[\s\S]+forceAacRemux: true,[\s\S]+if \(mount\.remuxUrl\) return \{ \.\.\.media, kind: 'remux', url: remuxPlaybackUrl\(p, start, \{ noFileSubs: true \}\)/,
     'multiview VOD should prefer remux+AAC over direct so non-AAC audio still plays in the pane');
   assert.match(ui, /function multiViewVodUrlFromSlot\([\s\S]+forceAacRemux: true,[\s\S]+if \(p\.remuxUrl\) return \{ \.\.\.p, kind: 'remux'/,
     'multiview VOD seek-rebuild should also prefer remux+AAC');
@@ -8445,7 +8452,7 @@ test('hls variant: spawnHls copies video, emits fMP4 HLS, and refuses without an
   // rounding, the same form as remuxPlaybackUrl (SUBG-1).
   assert.match(ui, /function hlsPlaybackUrl\(p, seekStart = 0\) \{[\s\S]+`\$\{p\.hlsUrl\}&start=\$\{Math\.max\(0, Math\.round\(\(seekStart \|\| 0\) \* 1000\) \/ 1000\)\}&audio=\$\{audio\}&audioSafe=1`/,
     'hlsPlaybackUrl builds a tokened HLS URL with a millisecond server-seek start and forced stereo AAC');
-  assert.match(ui, /kind === 'remux'\) \{[\s\S]+v\.src = \(\(iosWebkitVideo\(\) \|\| macSafariVideo\(\)\) && p\.hlsUrl\) \? hlsPlaybackUrl\(p, seekStart\) : remuxPlaybackUrl\(p, seekStart\);/,
+  assert.match(ui, /kind === 'remux'\) \{[\s\S]+p\._playsHls = !!\(\(iosWebkitVideo\(\) \|\| macSafariVideo\(\)\) && p\.hlsUrl\);\s*v\.src = p\._playsHls \? hlsPlaybackUrl\(p, seekStart\) : remuxPlaybackUrl\(p, seekStart\);/,
     'iOS AND Mac desktop Safari get the remux as native HLS; every other browser (incl. Chrome/FF on Mac) keeps the direct fMP4 remux');
   // Mac-Safari detection must be TIGHT: require the Apple vendor string and exclude every Chromium/Gecko UA,
   // so a non-Safari Mac browser (which can't play native HLS) is never routed to the m3u8.
@@ -12590,57 +12597,83 @@ test('Other versions: rows only for better sound this device plays as it is, nev
   assert.match(rust, /ControlAction::OtherVersion\(key\) => eval_callback\(\s*app,\s*"__tvNativeOtherVersion",/);
 });
 
-test('file subtitles: only a shell that draws them, only on direct play, and they fall back online off direct (brief 137 step 4)', () => {
+test('file subtitles: direct play draws them in the app, the remux and transcode carry them in a side file, and a failure goes online (brief 137 step 4, brief 143)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
-  const src = grab('function nativeFileSubtitlesOn(', 'function embeddedSubRel(')
+  const src = grab('// Text codecs the side file copies', 'function embeddedSubRel(')
     + grab('function embeddedSubIsForced(', 'function bestEmbeddedSubtitleRel(')
-    + grab('function audioTrackLangName(', 'function audioTrackRowLabel(')
-    + grab('function sourceSubtitleLabel(', 'function stripSubtitleSourceLabel(');
-  let builtIn = true; let caps = {};
-  const p = { item: { type: 'movie' }, tracks: { subs: [
+    + grab('function audioTrackLangName(', 'function audioTrackRowLabel(');
+  let builtIn = true; let caps = {}; let kind = 'direct';
+  const p = { item: { type: 'movie' }, mountId: 'm', tracks: { subs: [
     { rel: 0, lang: 'eng', codec: 'subrip', text: true, forced: true },
     { rel: 1, lang: 'eng', codec: 'subrip', text: true },
     { rel: 2, lang: 'eng', codec: 'hdmv_pgs_subtitle', text: false, sdh: true },
+    { rel: 3, lang: 'eng', codec: 'mov_text', text: true },
   ] } };
   const fns = new Function('S', 'clientCaps', 'builtInSubtitlesEnabled', 'currentPlayerKind', 'canAutoSubtitle', 'osLang', 'osTrackRel',
-    'preferredAutoSubtitleLang', 'langCode', 'langName',
-    `${src}\nreturn { nativeFileSubtitlesOn, fileSubLabel, fileSubPayload, fileSubForRel, fileSubOnlineFallbackRel };`)(
-    { playing: p }, () => caps, () => builtIn, () => 'direct', () => true, (l) => (String(l).startsWith('en') ? 'en' : l),
-    (l) => 'os:' + l, () => 'en', (l) => String(l || '').toLowerCase(), (l) => ({ eng: 'English' })[String(l).toLowerCase()] || l);
+    'preferredAutoSubtitleLang', 'langCode', 'langName', 'prefLang', 'prefCcStyle', 'audioLangKey', 'LANG_3TO2', 'LANG_NAMES',
+    'releaseSubChoices', 'releaseSubRel', 'episodeKeyParts', 'showAllLocalSubtitles', 'subtitleMiss', 'subtitleDefaultChoice',
+    'subtitleListConfident', 'osTrackInfo', 'subtitleCatalogAvailable', 'OS_LANG_NAMES', 'loadSubtitleVersions', 'refreshNativeSubtitleChoices',
+    '$', 'openTrackMenu', 'loadSubChoice', 'prefSubtitleMode',
+    `${src}\nreturn { nativeFileSubtitlesOn, fileSubTransport, fileSubChoices, fileSubLabel, fileSubPayload, fileSubForRel, fileSubOnlineFallbackRel };`)(
+    { playing: p }, () => caps, () => builtIn, () => kind, () => true, (l) => (String(l).startsWith('en') ? 'en' : l),
+    (l) => 'os:' + l, () => 'en', (l) => String(l || '').toLowerCase(), (l) => ({ eng: 'English' })[String(l).toLowerCase()] || l,
+    (k) => (k === 'slang' ? 'en' : ''), () => 'dialogue', (l) => String(l || '').slice(0, 2), { eng: 'en' }, { eng: 'English' },
+    () => [], (id) => `rs:${id}`, () => null, () => false, () => '', (l) => ({ rel: `os:${l}` }),
+    () => true, (rel) => ({ lang: String(rel).split(':')[1] || 'en', variant: '' }), () => true, { en: 'English' }, async () => [], () => {},
+    () => ({ classList: { contains: () => false } }), () => {}, () => '', () => 'always');
   const android = { native: true, source: 'exo-mediacodec', fileSubtitles: true };
+  const android357 = { ...android, fileSubtitlesSide: true };
+  const browser = { mkv: true };
   caps = android;
-  assert.strictEqual(fns.nativeFileSubtitlesOn(p, android, 'direct'), true);
-  assert.strictEqual(fns.nativeFileSubtitlesOn(p, android, 'remux'), false, 'the remux carries no subtitle stream');
-  assert.strictEqual(fns.nativeFileSubtitlesOn(p, android, 'transcode'), false);
-  assert.strictEqual(fns.nativeFileSubtitlesOn(p, { native: true, source: 'exo-mediacodec' }, 'direct'), false, 'an older APK never gets them');
-  assert.strictEqual(fns.nativeFileSubtitlesOn(p, { mkv: true }, 'direct'), false, 'the browser never gets them (no extraction at Play)');
+  assert.strictEqual(fns.fileSubTransport(p, android, 'direct'), 'track', 'direct play: the app draws the file track itself');
+  assert.strictEqual(fns.fileSubTransport(p, android, 'remux'), '', 'a 3.5.6 app cannot read the side file');
+  assert.strictEqual(fns.fileSubTransport(p, android357, 'remux'), 'side', 'a 3.5.7 app on the remux reads the side file');
+  assert.strictEqual(fns.fileSubTransport(p, android357, 'transcode'), 'side');
+  assert.strictEqual(fns.fileSubTransport(p, browser, 'remux'), 'side', 'the browser reads the side file');
+  assert.strictEqual(fns.fileSubTransport(p, browser, 'direct'), '', 'the browser on direct play has no side file');
+  assert.strictEqual(fns.fileSubTransport({ ...p, _playsHls: true }, browser, 'remux'), '', 'Safari HLS has no side file');
+  assert.strictEqual(fns.fileSubTransport(p, { native: true, source: 'exo-mediacodec' }, 'direct'), '', 'an older APK never gets them');
+  assert.strictEqual(fns.fileSubTransport({ ...p, item: { type: 'live' } }, browser, 'remux'), '', 'never Live TV');
   builtIn = false;
   assert.strictEqual(fns.nativeFileSubtitlesOn(p, android, 'direct'), false, 'the admin switch is a kill switch');
+  assert.strictEqual(fns.nativeFileSubtitlesOn(p, browser, 'remux'), false);
   builtIn = true;
-  assert.strictEqual(fns.fileSubLabel(p.tracks.subs[0]), 'In the file - English (forced)');
-  assert.strictEqual(fns.fileSubLabel(p.tracks.subs[2]), 'In the file - English (SDH) · picture', 'picture subtitles show on native players');
+  caps = browser; kind = 'remux';
+  assert.deepStrictEqual(fns.fileSubChoices(p).map((x) => x.rel), [0, 1], 'the side file: only text tracks Matroska copies (no picture, no mov_text)');
+  caps = android; kind = 'direct';
+  assert.deepStrictEqual(fns.fileSubChoices(p).map((x) => x.rel), [0, 1, 2, 3], 'direct play: every track');
+  // The plain names (brief 143): no "In the file", no "picture".
+  assert.strictEqual(fns.fileSubLabel(p.tracks.subs[1]), 'English');
+  assert.strictEqual(fns.fileSubLabel(p.tracks.subs[3]), 'English 2');
+  assert.strictEqual(fns.fileSubLabel(p.tracks.subs[2]), 'English SDH', 'SDH named only next to a plain track');
+  assert.strictEqual(fns.fileSubLabel(p.tracks.subs[0]), 'English, foreign lines only');
   assert.deepStrictEqual(fns.fileSubPayload(p.tracks.subs[1]), { ordinal: 1, lang: 'eng', codec: 'subrip', forced: false, sdh: false, picture: false });
-  assert.strictEqual(fns.fileSubOnlineFallbackRel(p, 'fs:2'), 'os:en', 'leaving direct continues online in that language');
+  assert.strictEqual(fns.fileSubOnlineFallbackRel(p, 'fs:2'), 'os:en', 'a file track that fails continues online in that language');
 
   // The payload, the handoff, the fallback and the native pushes.
+  assert.match(ui, /if \(chosen\.startsWith\('fs:'\) && fileSubTransport\(p\) === 'side'\) \{[\s\S]{0,400}url: sub \? new URL\(fileSideSubUrl\(p, chosen\), location\.origin\)\.href : '',[\s\S]{0,200}refresh: !!sub,/,
+    'on the side file the app gets an address it reads again');
   assert.match(ui, /if \(chosen\.startsWith\('fs:'\)\) \{[\s\S]{0,200}rel: sub \? chosen : '', url: '',[\s\S]{0,200}file: fileSubPayload\(sub\),/);
   assert.match(ui, /subtitleFile: subPayload\.file \|\| null,\s*\n[^\n]*\n\s*fileSubtitlesActive: nativeFileSubtitlesFlag\(p, kind\),/);
-  assert.match(ui, /if \(kind !== 'direct' && typeof sub\.rel === 'string' && sub\.rel\.startsWith\('fs:'\)\) \{\s*sub\.rel = fileSubOnlineFallbackRel\(p, sub\.rel\);/);
-  assert.match(ui, /window\.__tvNativeFileSubtitleFailed = \(rel, reason, token\) => \{[\s\S]{0,500}const next = fileSubOnlineFallbackRel\(p, rel\);[\s\S]{0,80}if \(next\) pushNativeActiveSubtitle\(p, next\);/);
-  assert.match(ui, /const fileRows = nativeFileSubtitlesOn\(p\);[\s\S]{0,200}if \(fileRows\) \{\s*fileSubChoices\(p\)[\s\S]{0,300}addChoice\(\{ rel: fileSubRel\(sub\.rel\), label: fileSubLabel\(sub\)/);
+  assert.match(ui, /p\.usingRemux = kind === 'remux';\s*p\.usingTranscode = kind === 'transcode';\s*const sub = nativeVideoSubtitleRel\(p\);/,
+    'the kind is set before the subtitle is chosen (142 fault 1: a resume read "direct")');
+  assert.match(ui, /if \(kind !== 'direct' && typeof sub\.rel === 'string' && sub\.rel\.startsWith\('fs:'\)\s*&& fileSubTransport\(p, clientCaps\(\), kind\) !== 'side'\) \{\s*sub\.rel = fileSubOnlineFallbackRel\(p, sub\.rel\);/);
+  assert.match(ui, /window\.__tvNativeFileSubtitleFailed = \(rel, reason, token\) => \{[\s\S]{0,600}p\._fileSubFailed = true;[\s\S]{0,200}const next = fileSubOnlineFallbackRel\(p, rel\);[\s\S]{0,80}if \(next\) pushNativeActiveSubtitle\(p, next\);/);
+  assert.match(ui, /function nativeSubtitleChoices\(\) \{[\s\S]{0,200}subtitleMenuModel\(p\)\.forEach/, 'the TV, phone and Windows rows come from the shared model');
   const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   assert.match(java, /j\.put\("fileSubtitles", true\);/);
+  assert.match(java, /j\.put\("fileSubtitlesSide", true\);/);
   assert.match(java, /NativeFileSubtitle\.Pick pick = NativeFileSubtitle\.find\(/);
   assert.match(java, /__tvNativeFileSubtitleFailed\(/);
-  assert.match(java, /if \(trackType == C\.TRACK_TYPE_TEXT && !nativeSubtitleRel\.startsWith\("fs:"\)\) \{\s*labels\.add\("\\u00a7Timing"/,
-    'ExoPlayer cannot delay a track in the file, so no Timing rows for it on Android');
+  assert.match(java, /if \(trackType == C\.TRACK_TYPE_TEXT && nativeFileSubtitle == null\) \{\s*labels\.add\("\\u00a7Timing"/,
+    'ExoPlayer cannot delay a track drawn from the file, so no Timing rows for it; the side file is our overlay, which can');
+  assert.match(java, /final boolean growing = NativeSideSubtitle\.isSideFile\(cleanUrl\);/, 'the side file is read again while it grows');
   const rust = fs.readFileSync(path.join(__dirname, '..', 'clients', 'windows-px8', 'src-tauri', 'src', 'player.rs'), 'utf8');
   assert.match(rust, /"fileSubtitles": true,/);
   assert.match(rust, /if let Some\(file\) = &subtitle\.file \{[\s\S]{0,300}mpv\.set_property\("sid", id\)/);
   assert.match(rust, /session\.subtitle_attached = session\.subtitle\.is_off\(\) && !session\.file_subtitles_active;/);
 });
-
 test('the admin switch set to off keeps today\'s subtitle choices exactly (brief 137 step 5)', () => {
   // The table was captured from the code before step 5 (1280 scenarios: subtitle mode, movie or
   // episode, saved pick, browser / old APK / new APK / Windows, direct or remux, probed or not,
@@ -12656,7 +12689,7 @@ test('the admin switch set to off keeps today\'s subtitle choices exactly (brief
   assert.deepStrictEqual(diffs.slice(0, 10), [], diffs.length + ' scenarios changed');
 });
 
-test('built-in subtitles on: file tracks first on the apps that draw them, never a wait or an extraction in the browser (brief 137 step 5)', () => {
+test('built-in subtitles on: file tracks first wherever the play can show them, never an extraction at Play (brief 137 step 5, brief 143)', () => {
   const { scenario } = require('./support/subtitle-choice-harness');
   const ui = path.join(__dirname, '..', 'web', 'index.html');
   const SUBS = [
@@ -12668,24 +12701,42 @@ test('built-in subtitles on: file tracks first on the apps that draw them, never
   const CAPS = {
     browser: { mkv: true }, oldApk: { native: true, source: 'exo-mediacodec' },
     newApk: { native: true, source: 'exo-mediacodec', fileSubtitles: true }, win: { native: true, source: 'libmpv', fileSubtitles: true },
+    // Brief 143: an app that reads the remux's side file.
+    sideApk: { native: true, source: 'exo-mediacodec', fileSubtitles: true, fileSubtitlesSide: true },
   };
   // The profile language is saved as 'en' (what a pick saves) while files say 'eng' (the TV emulator fault).
   const run = (o) => scenario(ui, { builtIn: true, mode: 'always', subs: SUBS, releaseSubs: [{ id: 'x', lang: 'en', name: 'a.en.srt' }], kind: 'direct', slang: 'en', ...o });
-  for (const caps of ['browser', 'oldApk']) for (const kind of ['direct', 'remux']) for (const tracks of [undefined, false]) {
+  // A play that cannot show a file track: the browser on direct play (no side file), and an app older
+  // than 3.5.6, or a 3.5.6 app on the remux (it cannot read the side file).
+  for (const [caps, kind] of [['browser', 'direct'], ['oldApk', 'direct'], ['oldApk', 'remux'], ['newApk', 'remux']]) for (const tracks of [undefined, false]) {
     const r = run({ caps: CAPS[caps], kind, tracks });
     assert.strictEqual(r.start, tracks === false ? 'os:en' : 'rs:x', `${caps} ${kind}: the release sidecar or online, never the whole-file extraction`);
-    assert.strictEqual(r.emRows, '', `${caps} ${kind}: no server-extracted rows until step 7`);
+    assert.strictEqual(r.emRows, '', `${caps} ${kind}: no server-extracted rows`);
     assert.strictEqual(r.auto, 'os:en', `${caps} ${kind}: online never waits for the probe`);
     assert.strictEqual(r.fileOn, false);
   }
-  assert.strictEqual(run({ caps: CAPS.newApk, kind: 'remux' }).start, 'rs:x', 'the remux carries no subtitle stream');
-  for (const caps of ['newApk', 'win']) {
+  // Brief 143: the browser and a 3.5.7 app on the remux/transcode read the file's own track from the
+  // side file, so the file's English comes first there too.
+  for (const caps of ['browser', 'sideApk']) for (const kind of ['remux', 'transcode']) {
+    const r = run({ caps: CAPS[caps], kind });
+    assert.strictEqual(r.start, 'fs:1', `${caps} ${kind}: the file's full English track`);
+    assert.strictEqual(r.fileOn, true);
+    assert.strictEqual(r.emRows, '', `${caps} ${kind}: still no whole-file extraction rows`);
+    assert.strictEqual(run({ caps: CAPS[caps], kind, tracks: false }).auto, '', `${caps} ${kind}: waits for the probe...`);
+    assert.strictEqual(run({ caps: CAPS[caps], kind, saved: 'os:en:abc' }).start, 'fs:1', `${caps} ${kind}: the file's English beats a saved online pick (owner rule)`);
+    const pictureOnly = [{ rel: 0, lang: 'eng', codec: 'hdmv_pgs_subtitle', text: false }];
+    assert.strictEqual(run({ caps: CAPS[caps], kind, subs: pictureOnly }).start, 'rs:x', `${caps} ${kind}: a picture track has no text for the side file`);
+  }
+  assert.strictEqual(run({ caps: CAPS.sideApk, kind: 'direct' }).start, 'fs:1', 'the same app on direct play draws it from the file');
+  for (const caps of ['newApk', 'win', 'sideApk']) {
     assert.strictEqual(run({ caps: CAPS[caps] }).start, 'fs:1', `${caps}: the full English track, never the forced one`);
     assert.strictEqual(run({ caps: CAPS[caps], ccStyle: 'sdh' }).start, 'fs:2', `${caps}: SDH under the SDH caption style`);
     assert.strictEqual(run({ caps: CAPS[caps], episode: true }).start, 'fs:1', `${caps}: a muxed track belongs to the episode`);
     assert.strictEqual(run({ caps: CAPS[caps], tracks: false }).auto, '', `${caps}: waits for the probe...`);
     assert.strictEqual(run({ caps: CAPS[caps], tracks: false, gaveUp: true }).auto, 'os:en', `${caps}: ...until it fails or runs late`);
-    assert.strictEqual(run({ caps: CAPS[caps], saved: 'os:en:abc' }).start, 'os:en:abc', `${caps}: a saved online hand pick still wins`);
+    assert.strictEqual(run({ caps: CAPS[caps], saved: 'os:en:abc' }).start, 'fs:1', `${caps}: the file's English beats a saved online pick (owner rule, brief 143)`);
+    assert.strictEqual(run({ caps: CAPS[caps], saved: 'os:en:abc', subs: [{ rel: 3, lang: 'jpn', codec: 'ass', text: true }] }).start, 'os:en:abc',
+      `${caps}: a saved online pick still wins when the file has no English`);
     assert.strictEqual(run({ caps: CAPS[caps], saved: 'fi:eng:0:1' }).start, 'fs:2', `${caps}: the saved intent maps onto this file`);
     assert.strictEqual(run({ caps: CAPS[caps], saved: 'em:5', label: 'Built-in - English (SDH)' }).start, 'fs:2', `${caps}: an index saved before 3.5.6 maps by its label`);
     assert.strictEqual(run({ caps: CAPS[caps], saved: 'off' }).start, '', `${caps}: Off is remembered`);
@@ -12788,27 +12839,66 @@ test('Other versions never offers a picture this screen cannot show, a lower pic
     'a 1080p play may be offered 4K and 1080p');
 });
 
-test('the native menu offers "Show all subtitle languages" for file tracks in other languages (second check 3.5.6)', () => {
+test('one subtitle menu for every app: the file first, no online rows when the file has the viewer\'s language, other languages under one row (brief 143)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
-  const src = grab('function fileSubChoices(', 'function fileSubForRel(')
-    + grab('function hiddenEmbeddedSubCount(', 'function embeddedSubForRel(');
-  let showAll = false, fileOn = true;
+  const src = grab('// Text codecs the side file copies', 'function embeddedSubRel(')
+    + grab('function embeddedSubIsForced(', 'function bestEmbeddedSubtitleRel(')
+    + grab('function audioTrackLangName(', 'function audioTrackRowLabel(');
+  let showAll = false; let caps = { native: true, source: 'exo-mediacodec', fileSubtitles: true, fileSubtitlesSide: true }; let kind = 'direct';
+  const loads = [];
+  const S = { playing: null, serverInfo: { opensubs: true }, trackMenuKind: '' };
+  const names = { eng: 'English', jpn: 'Japanese', spa: 'Spanish', fre: 'French' };
+  const model = (p) => {
+    S.playing = p;
+    return new Function('S', 'clientCaps', 'builtInSubtitlesEnabled', 'currentPlayerKind', 'canAutoSubtitle', 'osLang', 'osTrackRel',
+      'preferredAutoSubtitleLang', 'langCode', 'langName', 'prefLang', 'prefCcStyle', 'audioLangKey', 'LANG_3TO2', 'LANG_NAMES',
+      'releaseSubChoices', 'releaseSubRel', 'episodeKeyParts', 'showAllLocalSubtitles', 'subtitleMiss', 'subtitleDefaultChoice',
+      'subtitleListConfident', 'osTrackInfo', 'subtitleCatalogAvailable', 'OS_LANG_NAMES', 'loadSubtitleVersions', 'refreshNativeSubtitleChoices',
+      '$', 'openTrackMenu', 'loadSubChoice', 'prefSubtitleMode',
+      `${src}\nreturn subtitleMenuModel;`)(
+      S, () => caps, () => true, () => kind, () => true, (l) => ({ eng: 'en', en: 'en', jpn: 'ja', spa: 'es' })[l] || l,
+      (l, v) => (v ? `os:${l}:${v}` : `os:${l}`), () => 'en', (l) => String(l || '').toLowerCase(), (l) => names[String(l).toLowerCase()] || l,
+      (k) => (k === 'slang' ? 'en' : ''), () => 'dialogue', (l) => String(l || '').slice(0, 2), { eng: 'en', jpn: 'ja', spa: 'es', fre: 'fr' }, names,
+      () => [], (id) => `rs:${id}`, () => null, () => showAll, () => '', (l) => ({ rel: `os:${l}:v0` }),
+      () => true, (rel) => ({ lang: String(rel).split(':')[1] || 'en', variant: String(rel).split(':')[2] || '' }), () => true, { en: 'English' },
+      async (l) => { loads.push(l); return []; }, () => {}, () => ({ classList: { contains: () => false } }), () => {}, () => '', () => 'always')(p);
+  };
+  const online40 = Array.from({ length: 40 }, (_, i) => ({ id: `v${i}` }));
   const subs = [
-    { rel: 0, lang: 'eng', codec: 'subrip' }, { rel: 1, lang: 'eng', codec: 'subrip', forced: true },
-    { rel: 2, lang: 'jpn', codec: 'subrip' }, { rel: 3, lang: 'spa', codec: 'subrip' },
+    { rel: 0, lang: 'eng', codec: 'subrip', text: true }, { rel: 1, lang: 'eng', codec: 'subrip', text: true, sdh: true },
+    { rel: 2, lang: 'eng', codec: 'subrip', text: true, forced: true }, { rel: 3, lang: 'jpn', codec: 'subrip', text: true },
+    { rel: 4, lang: 'spa', codec: 'subrip', text: true },
   ];
-  const S = { playing: { tracks: { subs } } };
-  const fns = new Function('S', 'showAllLocalSubtitles', 'nativeFileSubtitlesOn', 'fileSubMatchesPreferred', 'embeddedSubIsForced',
-    'hiddenReleaseSubCount', 'embeddedSubChoices', 'visibleEmbeddedSubChoices', `${src}\nreturn { hiddenLocalSubtitleCount };`)(
-    S, () => showAll, () => fileOn, (s) => s.lang === 'eng', (s) => !!s.forced, () => 0, () => [], () => []);
-  assert.strictEqual(fns.hiddenLocalSubtitleCount(), 2, 'Japanese and Spanish file tracks are behind "Show all"');
-  showAll = true;
-  assert.strictEqual(fns.hiddenLocalSubtitleCount(), 0, 'nothing hidden once shown');
-  showAll = false; fileOn = false;
-  assert.strictEqual(fns.hiddenLocalSubtitleCount(), 0, 'no file rows (browser, old app, remux): the count is as before');
-});
+  const play = (o = {}) => ({ item: { type: 'movie' }, mountId: 'm', tracks: { subs: o.subs || subs }, _osVariants: { en: online40 }, ...o.extra });
+  const show = (rows) => rows.map((r) => (r.action ? `[${r.action}] ${r.label}` : `${r.rel} ${r.label}`));
 
+  // A file with English and a 40-row online list: no online row at all.
+  assert.deepStrictEqual(show(model(play())), ['fs:0 English', 'fs:1 English SDH', 'fs:2 English, foreign lines only', '[local_all] Other languages']);
+  showAll = true;
+  assert.deepStrictEqual(show(model(play())), ['fs:0 English', 'fs:1 English SDH', 'fs:2 English, foreign lines only',
+    '[section] Other languages', 'fs:3 Japanese', 'fs:4 Spanish'], 'other languages from the file, never online');
+  showAll = false;
+  // The file track failed: online on its own, and the menu shows the online rows.
+  assert.deepStrictEqual(show(model(play({ extra: { _fileSubFailed: true } }))).slice(0, 6),
+    ['os:en:v0 English · best match', 'os:en:v1 English 2', 'os:en:v2 English 3', 'os:en:v3 English 4', 'os:en:v4 English 5'], 'online with short names once the file track failed');
+  // A file without English shows the online rows, other file languages under one row.
+  assert.deepStrictEqual(show(model(play({ subs: subs.slice(3) }))),
+    ['os:en:v0 English · best match', 'os:en:v1 English 2', 'os:en:v2 English 3', 'os:en:v3 English 4', 'os:en:v4 English 5', '[local_all] Other languages']);
+  // The online list loads by itself when it is needed.
+  assert.deepStrictEqual(show(model(play({ subs: subs.slice(3), extra: { _osVariants: {} } }))), ['os:en:v0 English · best match', '[local_all] Other languages']);
+  // A forced track that is the language's only one is that film's whole subtitle; SDH alone is plain.
+  assert.deepStrictEqual(show(model(play({ subs: [{ rel: 0, lang: 'eng', codec: 'subrip', text: true, forced: true }] }))), ['fs:0 English']);
+  assert.deepStrictEqual(show(model(play({ subs: [{ rel: 0, lang: 'eng', codec: 'subrip', text: true, sdh: true }] }))), ['fs:0 English']);
+  // The browser on the remux: text tracks only, and a hint for picture tracks it cannot show.
+  caps = { mkv: true }; kind = 'remux'; showAll = true;
+  const withPicture = [...subs, { rel: 5, lang: 'fre', codec: 'hdmv_pgs_subtitle', text: false }];
+  assert.deepStrictEqual(show(model(play({ subs: withPicture }))), ['fs:0 English', 'fs:1 English SDH', 'fs:2 English, foreign lines only',
+    '[section] Other languages', 'fs:3 Japanese', 'fs:4 Spanish', '[note] Picture subtitles show in the TV and Windows apps']);
+  // A 3.5.6 app on the remux cannot read the side file: online rows, as it does today.
+  caps = { native: true, source: 'exo-mediacodec', fileSubtitles: true }; showAll = false;
+  assert.deepStrictEqual(show(model(play())).slice(0, 1), ['os:en:v0 English · best match']);
+});
 test('a saved hand pick of the release\'s own subtitle file still wins on the apps that draw file tracks (second check 3.5.6)', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const i = ui.indexOf('function startupSubtitleRelFor(p, saved = loadSubChoice()) {');
@@ -12824,7 +12914,7 @@ test('a saved hand pick of the release\'s own subtitle file still wins on the ap
   const p = { item: { type: 'movie' } };
   assert.strictEqual(fn(p, 'rs:sub1'), 'rs:sub1', 'a film: the sidecar the viewer picked, not the muxed track');
   assert.strictEqual(fn(p, 'rs:gone'), 'fs:0', 'a sidecar this release does not have: the saved intent maps onto the file');
-  assert.strictEqual(fn(p, 'os:en:42'), 'os:en:42', 'a saved online pick still wins');
+  assert.strictEqual(fn(p, 'os:en:42'), 'fs:0', 'the file\'s own English beats a saved online pick (owner rule, brief 143)');
   ep = { season: 1, episode: 3 };
   assert.strictEqual(fn({ item: { type: 'episode' } }, 'rs:sub1'), 'fs:0', 'an episode keeps the 3.5.5 rule: a remembered sidecar does not stick');
 });

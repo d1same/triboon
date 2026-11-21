@@ -14251,7 +14251,7 @@ function multiViewVodUrl(mount, item, startAt = 0) {
   // picked 'direct': the multiview pane has no audio-fallback loop, and this WebView can't decode
   // AC3/EAC3/DTS — a direct play of such a source is silent. remux+audioSafe guarantees AAC.
   if (kind === 'transcode' && mount.transcodeUrl) return { ...media, url: `${mount.transcodeUrl}&start=${start}&audio=0&height=1080`, startOffset: start, directSeek: 0 };
-  if (mount.remuxUrl) return { ...media, kind: 'remux', url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
+  if (mount.remuxUrl) return { ...media, kind: 'remux', url: remuxPlaybackUrl(p, start, { noFileSubs: true }), startOffset: start, directSeek: 0 };
   return { ...media, kind: 'direct', url: mount.streamUrl, startOffset: 0, directSeek: start };
 }
 function multiViewVodUrlFromSlot(slot, startAt = multiViewSlotPosition(slot, multiViewActiveSlot())) {
@@ -14267,7 +14267,7 @@ function multiViewVodUrlFromSlot(slot, startAt = multiViewSlotPosition(slot, mul
     forceAacRemux: true, // multiview always wants browser-decodable (AAC) audio on the remux path
   };
   if (slot.kind === 'transcode' && p.transcodeUrl) return { ...p, kind: 'transcode', url: `${p.transcodeUrl}&start=${start}&audio=${p.audioTrack}&height=${p.quality}`, startOffset: start, directSeek: 0 };
-  if (p.remuxUrl) return { ...p, kind: 'remux', url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
+  if (p.remuxUrl) return { ...p, kind: 'remux', url: remuxPlaybackUrl(p, start, { noFileSubs: true }), startOffset: start, directSeek: 0 };
   return { ...p, kind: 'direct', url: p.streamUrl, startOffset: 0, directSeek: start };
 }
 function multiViewVodDuration(i, slot) {
@@ -15275,6 +15275,7 @@ async function loadTracks() {
     if (S.playing !== p || p.tracks || p._fileSubProbeGaveUp) return;
     p._fileSubProbeGaveUp = true;
     if (p.usingNative && canUseNativeVideoPlayer()) applyNativeStartupSubtitleAfterTrackProbe(p).catch(() => {});
+    else applyStartupSubtitlePref(); // brief 143: the browser waits for the probe too, then goes online
   };
   const fileSubDeadline = nativeFileSubtitlesOn(p) ? setTimeout(releaseFileSubWait, 6000) : null;
   try {
@@ -15450,13 +15451,14 @@ function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
     // startSource is browser-only (it bails for the native player above), so forceAacRemux is true here
     // for every real browser → request stereo AAC on the full-transcode fallback too (an HEVC/10-bit
     // source that skips remux would otherwise hit the same silent-5.1-AAC bug).
-    v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${p.forceAacRemux ? '&audioSafe=1' : ''}`;
+    v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${p.forceAacRemux ? '&audioSafe=1' : ''}${fileSubSideParam(p)}`;
   } else if (kind === 'remux') {
     // Apple Safari (iOS AND Mac desktop) can't consume the 200-streamed remux pipe (no byte-range) →
     // deliver the SAME copy-remux as native HLS instead, which Safari plays. Every OTHER browser
     // (Chrome/Edge/Firefox, incl. on Mac) keeps the direct fMP4 remux — they play the pipe and do NOT play
     // native HLS. Seeks re-enter here (usingRemux stays true) so they re-spawn the HLS window at the offset.
-    v.src = ((iosWebkitVideo() || macSafariVideo()) && p.hlsUrl) ? hlsPlaybackUrl(p, seekStart) : remuxPlaybackUrl(p, seekStart);
+    p._playsHls = !!((iosWebkitVideo() || macSafariVideo()) && p.hlsUrl);
+    v.src = p._playsHls ? hlsPlaybackUrl(p, seekStart) : remuxPlaybackUrl(p, seekStart);
   } else {
     v.src = p.streamUrl;
   }
@@ -15507,11 +15509,21 @@ function pushNativeActiveSubtitle(p, rel, opts = {}) {
 }
 function nativeSubtitlePayload(p, rel, mode = 'startup') {
   const chosen = rel || '';
+  if (chosen.startsWith('fs:') && fileSubTransport(p) === 'side') {
+    // The remux/transcode's side file, read like an online subtitle (a growing WebVTT the app
+    // reads again while the picture plays: refresh).
+    const sub = fileSubForRel(chosen, p);
+    return {
+      rel: sub ? chosen : '', url: sub ? new URL(fileSideSubUrl(p, chosen), location.origin).href : '',
+      lang: sub ? subtitleLangForRel(chosen) : '', label: sub ? fileSubLabel(sub, p) : '',
+      shift: sub ? (loadSubShift(chosen) || 0) : 0, refresh: !!sub,
+    };
+  }
   if (chosen.startsWith('fs:')) {
     const sub = fileSubForRel(chosen, p);
     return {
       rel: sub ? chosen : '', url: '', lang: sub ? subtitleLangForRel(chosen) : '',
-      label: sub ? fileSubLabel(sub) : '', shift: sub ? (loadSubShift(chosen) || 0) : 0, file: fileSubPayload(sub),
+      label: sub ? fileSubLabel(sub, p) : '', shift: sub ? (loadSubShift(chosen) || 0) : 0, file: fileSubPayload(sub),
     };
   }
   return {
@@ -15522,7 +15534,41 @@ function nativeSubtitlePayload(p, rel, mode = 'startup') {
     shift: chosen ? (loadSubShift(chosen) || 0) : 0,
   };
 }
+// Brief 143: does the server hold this play's side file? 'ok', 'restart' (the remux started
+// before the track probe: ask it again at this second) or 'fail' (go online).
+async function fileSideState(p, rel) {
+  try {
+    const r = await fetch(fileSideSubUrl(p, rel));
+    if (r.ok) return 'ok';
+    const j = await r.json().catch(() => ({}));
+    return r.status === 404 && j && j.code === 'NO_SIDE' ? 'restart' : 'fail';
+  } catch { return 'fail'; }
+}
+// Once per play: the remux of this second again, now with the file's text tracks.
+function restartForFileSubtitles(p, rel) {
+  if (!p || p._fileSideRestarted || !(p.usingRemux || p.usingTranscode)) return false;
+  p._fileSideRestarted = true;
+  p.subTrack = rel;
+  p._subtitleDisabledThisSession = false;
+  const kind = currentPlayerKind(p);
+  const at = currentTime();
+  if (p.usingNative && canUseNativeVideoPlayer()) {
+    p.usingNative = false;
+    if (tryNativeVideoPlayer(kind, at, { quietSeek: true })) return true;
+    p.usingNative = true;
+    return false;
+  }
+  startSource(kind, at, { quietSeek: true });
+  return true;
+}
 async function nativeStartupSubtitleRelAfterPreflight(p, rel) {
+  if (typeof rel === 'string' && rel.startsWith('fs:') && fileSubTransport(p) === 'side') {
+    const state = await fileSideState(p, rel);
+    if (state === 'ok') return rel;
+    if (state === 'restart' && restartForFileSubtitles(p, rel)) return '';
+    p._fileSubFailed = true;
+    return canAutoSubtitle(p) ? fileSubOnlineFallbackRel(p, rel) : '';
+  }
   if (!(typeof rel === 'string' && rel.startsWith('em:'))) return rel || '';
   const payload = nativeSubtitlePayload(p, rel, 'startup');
   if (!payload.url) return '';
@@ -15534,6 +15580,7 @@ async function nativeStartupSubtitleRelAfterPreflight(p, rel) {
 }
 async function applyNativeStartupSubtitleAfterTrackProbe(p) {
   if (!p || !p.usingNative || !canUseNativeVideoPlayer()) return false;
+  if (fileTrackReplacesAutoOnline(p)) p.subTrack = null; // brief 143: the file's track takes over
   if (p.subTrack !== null && p.subTrack !== undefined) return false;
   const playbackToken = Number(p.playbackToken || 0);
   const sub = nativeVideoSubtitleRel(p);
@@ -15554,6 +15601,7 @@ async function applyNativeStartupSubtitleAfterTrackProbe(p) {
       subtitleStartup: true, // native side: fail silently + retry — never toast at play start
     }));
     p.subTrack = rel;
+    p._subAutoPick = rel;
     p._subShift = loadSubShift(rel);
     p._subtitleDisabledThisSession = false;
     refreshNativeSubtitleChoices();
@@ -15740,92 +15788,27 @@ function nativeSubtitleLabel(rel) {
 function nativeSubtitleChoices() {
   const p = S.playing;
   if (!p || !p.mountId) return [];
-  const saved = loadSubChoice();
-  const pref = prefLang('slang') && prefLang('slang') !== 'off' ? osLang(prefLang('slang')) : '';
-  const savedInfo = saved && saved !== 'off' && String(saved).startsWith('os:') ? osTrackInfo(saved) : null;
   const choices = [];
-  const seen = new Set();
-  const addChoice = (choice) => {
-    if (choice && choice.rel) {
-      if (String(choice.rel).startsWith('rs:')) {
-        const sub = releaseSubForRel(choice.rel);
-        choice.lang = choice.lang || (sub && sub.lang) || '';
-        choice.url = choice.url || new URL(releaseSubUrl(p, choice.rel), location.origin).href;
-      } else if (String(choice.rel).startsWith('em:')) {
-        const sub = embeddedSubForRel(choice.rel);
-        choice.lang = choice.lang || (sub && sub.lang) || '';
-        choice.url = choice.url || new URL(embeddedSubUrl(p, choice.rel, { mode: 'manual' }), location.origin).href;
-      } else if (String(choice.rel).startsWith('fs:')) {
-        choice.url = '';
-      } else {
-        const info = osTrackInfo(choice.rel);
-        choice.lang = choice.lang || info.lang || '';
-        choice.url = choice.url || new URL(osSubUrl(p, choice.rel), location.origin).href;
-      }
-      choice.shift = Number.isFinite(+choice.shift) ? +choice.shift : loadSubShift(choice.rel);
-      choice.size = choice.size || applySubSize();
+  subtitleMenuModel(p).forEach((row) => {
+    if (row.action === 'note') { choices.push({ action: 'missing', label: row.label }); return; }
+    if (row.action) { choices.push({ action: row.action, lang: row.lang || '', label: row.label }); return; }
+    const rel = row.rel;
+    const choice = { rel, label: row.label, lang: subtitleLangForRel(rel) || row.lang || '' };
+    if (rel.startsWith('fs:')) {
+      const payload = nativeSubtitlePayload(p, rel, 'manual');
+      choice.url = payload.url || '';
+      if (payload.file) choice.file = payload.file;
+      if (payload.refresh) choice.refresh = true;
+    } else if (rel.startsWith('rs:')) {
+      choice.url = new URL(releaseSubUrl(p, rel), location.origin).href;
+    } else {
+      choice.lang = osTrackInfo(rel).lang;
+      choice.url = new URL(osSubUrl(p, rel), location.origin).href;
     }
-    const key = choice.rel ? 'rel:' + choice.rel : `${choice.action || ''}:${choice.lang || ''}`;
-    if (!key || seen.has(key)) return;
-    seen.add(key);
+    choice.shift = loadSubShift(rel);
+    choice.size = applySubSize();
     choices.push(choice);
-  };
-  visibleReleaseSubChoices().slice(0, 6).forEach((sub) => {
-    const rel = releaseSubRel(sub.id);
-    addChoice({ rel, label: releaseSubLabel(sub) });
   });
-  const fileRows = nativeFileSubtitlesOn(p);
-  if (fileRows && fileSubChoices(p).length) addChoice({ action: 'section', label: 'From the file' });
-  if (fileRows) {
-    fileSubChoices(p).filter((sub) => showAllLocalSubtitles() || fileSubMatchesPreferred(sub) || embeddedSubIsForced(sub))
-      .slice(0, 12).forEach((sub) => {
-        addChoice({ rel: fileSubRel(sub.rel), label: fileSubLabel(sub), lang: subtitleLangForRel(fileSubRel(sub.rel)),
-          file: fileSubPayload(sub), url: '' });
-      });
-  } else {
-    visibleEmbeddedSubChoices().slice(0, 8).forEach((sub) => {
-      const rel = embeddedSubRel(sub.rel);
-      addChoice({ rel, label: embeddedSubLabel(sub) });
-    });
-  }
-  if (hiddenLocalSubtitleCount()) {
-    addChoice({ action: 'local_all', label: `Show all subtitle languages (${hiddenLocalSubtitleCount()} more)` });
-  }
-  if (fileRows && fileSubChoices(p).length && S.serverInfo && S.serverInfo.opensubs && subtitleCatalogAvailable(p.item)) {
-    addChoice({ action: 'section', label: 'Online' });
-  }
-  if (S.serverInfo && S.serverInfo.opensubs && subtitleCatalogAvailable(p.item)) [...new Set([savedInfo && savedInfo.lang, pref, 'en'].filter(Boolean))].forEach((l) => {
-    const name = OS_LANG_NAMES[l] || l.toUpperCase();
-    const variants = p._osVariants && p._osVariants[l];
-    const miss = subtitleMiss(l);
-    const expanded = subtitleLangExpanded(l);
-    if (miss) {
-      addChoice({ action: 'missing', lang: l, label: miss });
-      return;
-    }
-    if (!variants || !variants.length) {
-      addChoice({ action: 'versions', lang: l, label: onlineSubtitleLabel(name) });
-      return;
-    }
-    const pick = subtitleDefaultChoice(l);
-    addChoice({ rel: pick.rel, label: onlineSubtitleLabel(pick.label) });
-    if (variants && variants.length && expanded) {
-      variants.slice(0, 8).forEach((v) => {
-        const rel = osTrackRel(l, v.id);
-        if (rel !== pick.rel) addChoice({ rel, label: onlineSubtitleLabel(subtitleVariantRowLabel(name, v)) });
-      });
-    }
-    if (!expanded) addChoice({ action: 'versions', lang: l, label: `Online - more ${name} choices` });
-  });
-  if (saved && saved !== 'off') {
-    if (String(saved).startsWith('rs:')) addChoice({ rel: saved, label: nativeSubtitleLabel(saved) });
-    if (String(saved).startsWith('em:')) addChoice({ rel: saved, label: nativeSubtitleLabel(saved) });
-    const info = String(saved).startsWith('os:') ? osTrackInfo(saved) : null;
-    const rel = info && !info.variant ? bestSubtitleVariantRel(info.lang) : saved;
-    if (rel) addChoice({ rel, label: nativeSubtitleLabel(rel) });
-    else if (info && subtitleMiss(info.lang)) addChoice({ action: 'missing', lang: info.lang, label: subtitleMiss(info.lang) });
-    else if (info) addChoice({ action: 'versions', lang: info.lang, label: onlineSubtitleLabel(OS_LANG_NAMES[info.lang] || info.lang.toUpperCase()) });
-  }
   return choices;
 }
 function refreshNativeSubtitleChoices() {
@@ -16055,6 +16038,7 @@ function webSubtitleFetchUrl(url) {
   } catch { return url; }
 }
 function subtitleUrlForRel(p, rel, opts = {}) {
+  if (typeof rel === 'string' && rel.startsWith('fs:')) return fileSideSubUrl(p, rel);
   if (typeof rel === 'string' && rel.startsWith('rs:')) return releaseSubUrl(p, rel);
   if (typeof rel === 'string' && rel.startsWith('em:')) return embeddedSubUrl(p, rel, opts);
   return osSubUrl(p, rel);
@@ -16081,6 +16065,21 @@ function nativeKindAvailable(p, kind) {
   if (kind === 'transcode') return !!p.transcodeUrl;
   return false;
 }
+// Brief 143: one id per play, sent with every remux/transcode of the play, so the server keeps the
+// file's text subtitles of the newest one in a side file (/api/filesub). Not for Live TV.
+function fileSubPlayId(p) {
+  if (!p) return '';
+  if (!p._fsid) p._fsid = Math.random().toString(36).slice(2, 10).padEnd(8, '0') + Date.now().toString(36).slice(-4);
+  return p._fsid;
+}
+function fileSubSideParam(p, opts = {}) {
+  if (!p || opts.noFileSubs || !p.item || p.item.type === 'live' || !builtInSubtitlesEnabled()) return '';
+  return `&fs=${fileSubPlayId(p)}`;
+}
+function fileSideSubUrl(p, rel) {
+  const q = new URLSearchParams({ t: (p && p.streamToken) || '', fs: fileSubPlayId(p) });
+  return `/api/filesub/${p.mountId}/${Math.max(0, fileSubIndex(rel))}?${q.toString()}`;
+}
 function remuxPlaybackUrl(p, seekStart = 0, opts = {}) {
   const audio = p && Number.isFinite(Number(p.audioTrack)) ? Number(p.audioTrack) : 0;
   // audioSafe forces STEREO AAC — required for browser/MSE/<video> + multiview surfaces (5.1 AAC
@@ -16090,7 +16089,7 @@ function remuxPlaybackUrl(p, seekStart = 0, opts = {}) {
   // audioAac is the native rescue: ExoPlayer could not play this audio, so ask for 5.1 AAC outright.
   const rescue = (p && p.nativeAacAudio && opts.native) ? '&audioAac=1' : '';
   const safe = (p && p.forceAacRemux && !opts.native) ? '&audioSafe=1' : rescue;
-  return `${p.remuxUrl}&start=${Math.max(0, Math.round((seekStart || 0) * 1000) / 1000)}&audio=${audio}${safe}`;
+  return `${p.remuxUrl}&start=${Math.max(0, Math.round((seekStart || 0) * 1000) / 1000)}&audio=${audio}${safe}${fileSubSideParam(p, opts)}`;
 }
 // iOS Safari <video> plays HLS natively (application/vnd.apple.mpegurl); each fMP4 segment is a rangeable
 // file, which is what Safari demands and what the 200-streamed remux/transcode pipe can't provide. Always
@@ -16317,11 +16316,17 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   const serverSeek = kind === 'remux' || kind === 'transcode';
   const askedStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
   p._remuxStartSeq = (p._remuxStartSeq || 0) + 1; // any pending keyframe answer for an older ask is void
+  // Brief 143 (and 142 fault 1): the kind is known before anything asks which subtitles this play
+  // can show. A resume waiting for its keyframe used to read "direct" here and send a track the
+  // remux does not carry.
+  p.usingRemux = kind === 'remux';
+  p.usingTranscode = kind === 'transcode';
   const sub = nativeVideoSubtitleRel(p);
   if (sub.blocked) return false;
-  // Brief 137 step 4: the remux and transcode carry no subtitle stream, so a subtitle from the file
-  // continues online in its language (never "on" with nothing drawn).
-  if (kind !== 'direct' && typeof sub.rel === 'string' && sub.rel.startsWith('fs:')) {
+  // Brief 137 step 4: off direct play a subtitle from the file continues online in its language
+  // (never "on" with nothing drawn), unless the app reads the remux's side file (brief 143).
+  if (kind !== 'direct' && typeof sub.rel === 'string' && sub.rel.startsWith('fs:')
+    && fileSubTransport(p, clientCaps(), kind) !== 'side') {
     sub.rel = fileSubOnlineFallbackRel(p, sub.rel);
     if (p.subTrack && String(p.subTrack).startsWith('fs:')) p.subTrack = sub.rel || null;
   }
@@ -16351,7 +16356,7 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
   const serverSeek = kind === 'remux' || kind === 'transcode';
   let nativeUrl = baseUrl;
   if (kind === 'transcode') {
-    nativeUrl = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
+    nativeUrl = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${fileSubSideParam(p)}`;
   } else if (kind === 'remux') {
     nativeUrl = remuxPlaybackUrl(p, seekStart, { native: true }); // native ExoPlayer → 5.1, not the stereo audioSafe path
   }
@@ -16418,6 +16423,7 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
   // track in the saved one can start on another language's track (second check 3.5.5).
   if (kind === 'direct' && p._directTwinLang) payload.preferredAudioLanguage = p._directTwinLang;
   if (sub.rel) {
+    if (!(typeof p.subTrack === 'string' && p.subTrack)) p._subAutoPick = sub.rel; // the start-up pick (brief 143)
     p.subTrack = sub.rel;
     p._subShift = loadSubShift(sub.rel);
     p._subtitleDisabledThisSession = false;
@@ -17085,6 +17091,7 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur, token) => {
     }
   } else {
     p.subTrack = rel;
+    p._subAutoPick = ''; // a hand pick on the TV or phone
     p._subShift = loadSubShift(rel);
     p._subtitleDisabledThisSession = false;
     const lang = subtitleLangForRel(rel);
@@ -17094,6 +17101,15 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur, token) => {
     const fileSub = typeof rel === 'string' && rel.startsWith('fs:') ? fileSubForRel(rel, p) : null;
     if (fileSub) saveSubChoice(fileSubIntentRel(fileSub), subtitleDisplayName(rel));
     autoSyncNative(p, rel);
+    // Brief 143: a file row on the remux reads the side file. A remux that began before the track
+    // probe has none yet: ask it again at this second; anything else goes online by itself.
+    if (fileSub && fileSubTransport(p) === 'side') {
+      fileSideState(p, rel).then((state) => {
+        if (S.playing !== p || p.subTrack !== rel || state === 'ok') return;
+        if (state === 'restart' && restartForFileSubtitles(p, rel)) return;
+        window.__tvNativeFileSubtitleFailed(rel, 'the remux has no side file', p.playbackToken);
+      });
+    }
   }
   p.usingNative = true;
 };
@@ -17102,6 +17118,7 @@ window.__tvNativeFileSubtitleFailed = (rel, reason, token) => {
   if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   if (p.subTrack !== rel) return;
   notePlaybackIssue('subtitle', `subtitle in the file not shown (${String(reason || 'not found').slice(0, 80)}) — online instead`, 0);
+  p._fileSubFailed = true; // brief 143: the menu now shows the online rows
   const next = fileSubOnlineFallbackRel(p, rel);
   p.subTrack = next || null;
   if (next) pushNativeActiveSubtitle(p, next);
@@ -17319,7 +17336,7 @@ function currentPlaybackUrl(p, atSeconds = currentTime()) {
   if (!p) return '';
   const kind = currentPlayerKind(p);
   const start = Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000);
-  if (kind === 'transcode' && p.transcodeUrl) return `${p.transcodeUrl}&start=${start}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
+  if (kind === 'transcode' && p.transcodeUrl) return `${p.transcodeUrl}&start=${start}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${fileSubSideParam(p)}`;
   if (kind === 'remux' && p.remuxUrl) return remuxPlaybackUrl(p, start);
   return p.streamUrl || '';
 }
@@ -20332,12 +20349,34 @@ function hiddenReleaseSubCount() {
 }
 // Brief 137 step 4: a subtitle INSIDE the file, drawn by the native player itself on direct play
 // (ExoPlayer's text track, mpv's sid). No server extraction, no extra read, timing exact by
-// construction. Only a shell that says so (caps.fileSubtitles) gets them, and only while the stream
-// is the file itself: the remux and transcode carry no subtitle stream, so those fall back online.
+// construction. Only a shell that says so (caps.fileSubtitles) gets them on direct play.
+// Brief 143: the remux and transcode now carry the file's text tracks too, in a side file the
+// server reads out as WebVTT (/api/filesub). So the file's own subtitles reach the browser, and a
+// phone or TV on the remux (an app that says caps.fileSubtitlesSide), with the same rows.
 const SERVER_SUBTITLE_EXTRACTION_ROWS = false;
+// Text codecs the side file copies (Matroska takes them as they are; mov_text it does not).
+function fileSubSideCodec(codec) { return /^(subrip|srt|ass|ssa|webvtt)$/i.test(String(codec || '')); }
+// How this play shows a track from the file: 'track' = the native player draws it from the file
+// (direct play), 'side' = the side file of the remux/transcode, '' = not on this play.
+function fileSubTransport(p = S.playing, caps = clientCaps(), kind = currentPlayerKind(p)) {
+  if (!p || !p.item || p.item.type === 'live' || !builtInSubtitlesEnabled()) return '';
+  const viaServer = kind === 'remux' || kind === 'transcode';
+  if (caps && caps.native) {
+    if (kind === 'direct') return caps.fileSubtitles === true ? 'track' : '';
+    return viaServer && caps.fileSubtitlesSide === true ? 'side' : '';
+  }
+  // Safari plays the remux as HLS, which has no side file.
+  return viaServer && !p._playsHls ? 'side' : '';
+}
 function nativeFileSubtitlesOn(p = S.playing, caps = clientCaps(), kind = currentPlayerKind(p)) {
-  return !!(p && caps && caps.native && caps.fileSubtitles === true && builtInSubtitlesEnabled()
-    && kind === 'direct' && p.item && p.item.type !== 'live');
+  return !!fileSubTransport(p, caps, kind);
+}
+// A track this play can show: any on direct play; on the side file only the text tracks Matroska
+// copies (a picture track has no text to hand out).
+function fileSubUsable(sub, transport) {
+  if (!sub || !transport) return false;
+  if (transport === 'track') return true;
+  return sub.text === true && fileSubSideCodec(sub.codec);
 }
 function fileSubRel(n) {
   const k = parseInt(n, 10);
@@ -20348,18 +20387,24 @@ function fileSubIndex(rel) {
   const n = parseInt(rel.slice(3), 10);
   return Number.isFinite(n) && n >= 0 ? n : -1;
 }
-function fileSubChoices(p = S.playing) {
+function fileSubAll(p = S.playing) {
   const subs = p && p.tracks && Array.isArray(p.tracks.subs) ? p.tracks.subs : [];
   return subs.filter((sub) => sub && Number.isInteger(sub.rel));
 }
+function fileSubChoices(p = S.playing) {
+  const transport = fileSubTransport(p);
+  const all = fileSubAll(p);
+  return transport ? all.filter((sub) => fileSubUsable(sub, transport)) : all;
+}
 function fileSubForRel(rel, p = S.playing) {
   const i = fileSubIndex(rel);
-  return i < 0 ? null : (fileSubChoices(p).find((sub) => sub.rel === i) || null);
+  return i < 0 ? null : (fileSubAll(p).find((sub) => sub.rel === i) || null);
 }
-function fileSubLabel(sub) {
-  const lang = sub && sub.lang ? (audioTrackLangName(sub.lang) || String(sub.lang).toUpperCase()) : 'Unknown';
-  const flag = embeddedSubIsForced(sub) ? ' (forced)' : embeddedSubIsSdh(sub) ? ' (SDH)' : '';
-  return sourceSubtitleLabel('In the file', `${lang}${flag}${sub && sub.text !== true ? ' · picture' : ''}`);
+function fileSubLabel(sub, p = S.playing) {
+  if (!sub) return 'Subtitles';
+  const rel = fileSubRel(sub.rel);
+  const row = subtitleMenuModel(p).find((r) => r.rel === rel);
+  return row ? row.label : subtitleLangDisplay(sub.lang);
 }
 // What the native player needs to find the track: its place among the file's subtitle tracks
 // (ffprobe s:N; equal to mpv's sub order and Exo's text order on the files checked) plus the facts
@@ -20410,7 +20455,7 @@ function fileSubForIntent(p, intent) {
 // another language and the file has nothing else in this language (a foreign film whose only
 // English text is marked forced is that film's whole subtitle).
 function bestFileSubtitleRel(p) {
-  if (!nativeFileSubtitlesOn(p)) return '';
+  if (!nativeFileSubtitlesOn(p) || (p && p._fileSubFailed)) return '';
   const pref = prefLang('slang');
   const want = pref && pref !== 'off' ? pref : preferredAutoSubtitleLang();
   if (!want) return '';
@@ -20443,11 +20488,147 @@ function forcedRideAlongRel(p, saved = loadSubChoice(), rideMode = FORCED_RIDE_M
   const pick = forced.find((sub) => sub.text === true) || forced[0];
   return pick ? fileSubRel(pick.rel) : '';
 }
+// Brief 143 (owner rule): an online subtitle that started on its own because the track probe was
+// late gives way to the file's own track in the viewer's language once the probe is in. A hand pick,
+// Off, or a file track that already failed stays as it is.
+function fileTrackReplacesAutoOnline(p) {
+  if (!p || p._fileSubFailed || p._subtitleDisabledThisSession || !p.tracks) return '';
+  const cur = typeof p.subTrack === 'string' ? p.subTrack : '';
+  if (!cur.startsWith('os:') || !p._subAutoPick || p._subAutoPick !== cur) return '';
+  const rel = startupSubtitleRelFor(p);
+  return typeof rel === 'string' && rel.startsWith('fs:') ? rel : '';
+}
 function fileSubOnlineFallbackRel(p, rel) {
   const sub = fileSubForRel(rel, p);
   if (!canAutoSubtitle(p)) return '';
   const lang = sub && sub.lang ? osLang(sub.lang) : osLang(preferredAutoSubtitleLang());
   return osTrackRel(lang || 'en');
+}
+// ---- One subtitle menu for every app (brief 143, owner rule 2026-11-21) ----
+// Off, then the file's own subtitles in the viewer's language with plain names ("English",
+// "English SDH", "English, foreign lines only"). When the file has one, there are no online rows at
+// all: online is only the silent fallback when that track fails. When it has none, the online rows
+// show ("English · best match", "English 2", ...). Other languages from the file sit under one row.
+// The web menu, the Android TV/phone sheet and the Windows menu are all drawn from this list.
+const ONLINE_ROWS_PER_LANG = 5;
+const PICTURE_SUBS_NOTE = 'Picture subtitles show in the TV and Windows apps';
+function subtitleLangDisplay(lang) {
+  const code = String(lang || '').trim();
+  if (!code || /^(und|unk|mis|zxx)$/i.test(code)) return 'Unknown language';
+  return audioTrackLangName(code) || langName(code) || code.toUpperCase();
+}
+function subtitleViewerLang() {
+  const pref = prefLang('slang');
+  return pref && pref !== 'off' ? pref : preferredAutoSubtitleLang();
+}
+// Plain names for one language's local tracks: plain first, then SDH, then the forced one.
+function localSubtitleRowsFor(items) {
+  if (!items.length) return [];
+  const name = subtitleLangDisplay(items[0].lang);
+  const full = items.filter((x) => !x.forced);
+  const plain = full.filter((x) => !x.sdh);
+  const sdh = full.filter((x) => x.sdh);
+  const forced = items.filter((x) => x.forced);
+  const rows = [];
+  const add = (x, label) => rows.push({ rel: x.rel, label, lang: x.lang, kind: x.kind });
+  plain.forEach((x, i) => add(x, i ? `${name} ${i + 1}` : name));
+  sdh.forEach((x, i) => {
+    if (plain.length) add(x, i ? `${name} SDH ${i + 1}` : `${name} SDH`);
+    else add(x, i ? `${name} ${i + 1}` : name);
+  });
+  forced.forEach((x, i) => {
+    // A forced track that is the language's only track is that film's whole subtitle.
+    if (!full.length) add(x, i ? `${name} ${i + 1}` : name);
+    else add(x, i ? `${name}, foreign lines only ${i + 1}` : `${name}, foreign lines only`);
+  });
+  return rows;
+}
+function localSubtitleItems(p = S.playing) {
+  const transport = fileSubTransport(p);
+  const file = transport && !(p && p._fileSubFailed)
+    ? fileSubChoices(p).map((sub) => ({ rel: fileSubRel(sub.rel), lang: sub.lang, forced: embeddedSubIsForced(sub), sdh: embeddedSubIsSdh(sub), kind: 'file' }))
+    : [];
+  const episode = !!(p && p.item && episodeKeyParts(p.item) && episodeKeyParts(p.item).episode > 0);
+  const release = releaseSubChoices().map((sub) => ({ rel: releaseSubRel(sub.id), lang: sub.lang, forced: !!sub.forced, sdh: !!sub.sdh, kind: 'release', episode }));
+  return [...file, ...release];
+}
+// The file (or the release's own subtitle file) has the viewer's language: no online rows.
+function fileHasViewerSubtitle(p = S.playing) {
+  const want = subtitleViewerLang();
+  return !!want && localSubtitleItems(p).some((x) => sameSubLang(x.lang, want) && !x.episode);
+}
+function onlineSubtitleRows(p, rows) {
+  if (!(S.serverInfo && S.serverInfo.opensubs && p && p.mountId && subtitleCatalogAvailable(p.item))) return;
+  const pref = prefLang('slang') && prefLang('slang') !== 'off' ? osLang(prefLang('slang')) : '';
+  [...new Set([pref, 'en'].filter(Boolean))].forEach((l) => {
+    const name = OS_LANG_NAMES[l] || l.toUpperCase();
+    const miss = subtitleMiss(l);
+    if (miss) { rows.push({ action: 'missing', lang: l, label: miss }); return; }
+    const pick = subtitleDefaultChoice(l);
+    const mark = subtitleListConfident(l) ? 'best match' : 'other episodes only';
+    rows.push({ rel: pick.rel, label: `${name} · ${mark}`, lang: l, kind: 'online' });
+    let n = 2;
+    const variants = p._osVariants && p._osVariants[l];
+    if (variants && variants.length) {
+      variants.forEach((v) => {
+        const rel = osTrackRel(l, v.id);
+        if (rel === pick.rel || n > ONLINE_ROWS_PER_LANG || rows.some((r) => r.rel === rel)) return;
+        rows.push({ rel, label: `${name} ${n++}`, lang: l, kind: 'online' });
+      });
+    } else if (!(p._osVariantInflight && p._osVariantInflight[l])) {
+      ensureOnlineSubtitleVersions(p, l);
+    }
+    // The line on screen stays listed even when it is lower in the list.
+    const cur = typeof p.subTrack === 'string' && p.subTrack.startsWith('os:') ? p.subTrack : '';
+    if (cur && osTrackInfo(cur).lang === l && !rows.some((r) => r.rel === cur)) {
+      rows.push({ rel: cur, label: `${name} ${n++}`, lang: l, kind: 'online' });
+    }
+  });
+}
+// The online list loads by itself when the menu needs it, then every menu redraws.
+function ensureOnlineSubtitleVersions(p, l) {
+  if (!p || !p.mountId) return;
+  p._osAutoListed = p._osAutoListed || new Set();
+  if (p._osAutoListed.has(l)) return;
+  p._osAutoListed.add(l);
+  Promise.resolve().then(() => loadSubtitleVersions(l)).then(() => {
+    if (S.playing !== p) return;
+    refreshNativeSubtitleChoices();
+    if (S.trackMenuKind === 'cc' && $('trackMenu').classList.contains('open')) {
+      openTrackMenu('cc', { scrollTop: $('trackMenu').scrollTop });
+    }
+  }).catch(() => {
+    if (S.playing !== p) return;
+    refreshNativeSubtitleChoices();
+  });
+}
+function subtitleMenuModel(p = S.playing) {
+  const rows = [];
+  if (!p) return rows;
+  const want = subtitleViewerLang();
+  const items = localSubtitleItems(p);
+  const mine = items.filter((x) => sameSubLang(x.lang, want) && !x.episode);
+  const other = items.filter((x) => !mine.includes(x));
+  if (mine.length) rows.push(...localSubtitleRowsFor(mine));
+  else onlineSubtitleRows(p, rows);
+  const transport = fileSubTransport(p);
+  const pictureNote = transport === 'side' && fileSubAll(p).some((sub) => sub && sub.text !== true);
+  if (other.length || pictureNote) {
+    if (!showAllLocalSubtitles()) rows.push({ action: 'local_all', label: 'Other languages' });
+    else {
+      rows.push({ action: 'section', label: 'Other languages' });
+      const byLang = new Map();
+      other.forEach((x) => {
+        const key = langCode(x.lang) || 'und';
+        const k = Object.keys(LANG_3TO2).includes(key) ? LANG_3TO2[key] : key;
+        if (!byLang.has(k)) byLang.set(k, []);
+        byLang.get(k).push(x);
+      });
+      byLang.forEach((list) => rows.push(...localSubtitleRowsFor(list)));
+      if (pictureNote) rows.push({ action: 'note', label: PICTURE_SUBS_NOTE });
+    }
+  }
+  return rows;
 }
 function embeddedSubRel(rel) {
   const n = parseInt(rel, 10);
@@ -20624,7 +20805,8 @@ function startupSubtitleRelFor(p, saved = loadSubChoice()) {
   // file, then the file's own track (episodes too: a muxed track belongs to this file), then the
   // episode's online subtitle, then the release's sidecar, then online.
   const fileOn = nativeFileSubtitlesOn(p);
-  if (fileOn && typeof saved === 'string' && saved.startsWith('os:') && subtitleRelPlayable(p, saved)) return saved;
+  // Brief 143 (owner, 2026-11-21): the file's own subtitle in the viewer's language comes first,
+  // even over a saved online pick; a saved online pick still wins when the file has none (below).
   // A film's saved hand pick of this release's own subtitle file wins too, as in 3.5.5 (second
   // check 3.5.6); an episode keeps the rule that a remembered sidecar does not stick.
   if (fileOn && typeof saved === 'string' && saved.startsWith('rs:') && !episodePlay && subtitleRelPlayable(p, saved)) return saved;
@@ -20861,7 +21043,9 @@ function scheduleStartupSubtitleRetry(p) {
 function applyTrackPrefs() {
   const p = S.playing; if (!p) return;
   if (p.usingNative && canUseNativeVideoPlayer()) return;
-  applyStartupSubtitlePref();
+  const fileInstead = fileTrackReplacesAutoOnline(p);
+  if (fileInstead) setSubtitle(fileInstead, { startup: true });
+  else applyStartupSubtitlePref();
   if (!p.tracks) { updateSrndBtn(); return; }
   if (p._userPickedAudio) { updateSrndBtn(); return; }
   // Preferred language, and never an Audio Description track by default (brief 121).
@@ -21000,65 +21184,25 @@ function openTrackMenu(kind, restore = {}) {
   };
   if (kind === 'cc') {
     mkRow('Off', p.subTrack === null, () => setSubtitle(null));
-    const releaseSubs = visibleReleaseSubChoices();
-    let localRows = 0;
-    if (releaseSubs.length) {
-      const pickRel = bestReleaseSubtitleRel();
-      releaseSubs.slice(0, 6).forEach((sub) => {
-        const rel = releaseSubRel(sub.id);
-        mkRow(releaseSubLabel(sub), p.subTrack === rel || (!p.subTrack && rel === pickRel), () => setSubtitle(rel));
-        localRows++;
-      });
-    }
-    const embeddedSubs = visibleEmbeddedSubChoices();
-    if (embeddedSubs.length) {
-      embeddedSubs.slice(0, 8).forEach((sub) => {
-        const rel = embeddedSubRel(sub.rel);
-        mkRow(embeddedSubLabel(sub), p.subTrack === rel, () => setSubtitle(rel));
-        localRows++;
-      });
-    }
-    if (hiddenLocalSubtitleCount()) {
-      mkRow(`Show all subtitle languages (${hiddenLocalSubtitleCount()} more)`, false, () => {
-        setShowAllLocalSubtitles(true);
-      }, { keepOpen: true, key: 'subs-local-all' });
-    }
-    // Online subtitles remain the fallback for releases with no usable text sidecar
-    // or only bitmap embedded subtitles.
-    const onlineAvailable = !!(S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item));
-    if (onlineAvailable) {
-      const pref = prefLang('slang') && prefLang('slang') !== 'off' ? osLang(prefLang('slang')) : '';
-      const langs = [...new Set([pref, 'en'].filter(Boolean))];
-      langs.forEach((l) => {
-        const name = OS_LANG_NAMES[l] || l.toUpperCase();
-        const variants = p._osVariants && p._osVariants[l];
-        const miss = subtitleMiss(l);
-        const pick = subtitleDefaultChoice(l);
-        const expanded = subtitleLangExpanded(l);
-        if (miss) {
-          mkRow(miss, false, () => {}, { disabled: true, key: 'subs-missing-' + l });
-          return;
-        }
-        mkRow(onlineSubtitleLabel(pick.label), p.subTrack === pick.rel, () => setSubtitle(pick.rel));
-        if (variants && variants.length && expanded) {
-          variants.slice(0, 8).forEach((v) => {
-            const rel = osTrackRel(l, v.id);
-            if (rel !== pick.rel) mkRow(onlineSubtitleLabel(subtitleVariantRowLabel(name, v)), p.subTrack === rel, () => setSubtitle(rel));
-          });
-        }
-        if (!expanded) {
-          mkRow(`Online - more ${name} choices`, false, async () => {
-            let loaded = false;
-            try { await loadSubtitleVersions(l); loaded = true; }
-            catch (e) { toast(e.message || 'Could not load subtitle versions'); }
-            if (loaded) setSubtitleLangExpanded(l, true);
-          }, { keepOpen: true, key: 'subs-versions-' + l });
-        }
-      });
-    }
-    if (!localRows && !onlineAvailable) {
+    // Brief 143: the same rows as the TV, phone and Windows apps (subtitleMenuModel).
+    const rows = subtitleMenuModel(p);
+    rows.forEach((row) => {
+      if (row.action === 'section') {
+        const h = document.createElement('div');
+        h.className = 'tmHead tmSection';
+        h.textContent = row.label;
+        m.appendChild(h);
+      } else if (row.action === 'local_all') {
+        mkRow(row.label, false, () => setShowAllLocalSubtitles(true), { keepOpen: true, key: 'subs-local-all' });
+      } else if (row.action === 'missing' || row.action === 'note') {
+        mkRow(row.label, false, () => {}, { disabled: true, key: 'subs-note-' + (row.lang || 'x') });
+      } else {
+        mkRow(row.label, p.subTrack === row.rel, () => setSubtitle(row.rel), { key: 'subs-' + row.rel });
+      }
+    });
+    if (!rows.length) {
       const localStatus = builtInSubtitlesEnabled()
-        ? (ccProbePending ? 'Checking built-in subtitles...' : 'No built-in text subtitles found')
+        ? (ccProbePending ? 'Checking built-in subtitles...' : 'No subtitles found')
         : 'Built-in subtitles off in Settings';
       mkRow(localStatus, false, () => {}, {
         disabled: true,
@@ -21414,6 +21558,12 @@ async function setSubtitle(rel, opts = {}) {
   try {
     if (!manualChoice) await guardAutomaticOnlineStart(rel); // every automatic start (brief 134 S1)
     rel = await resolveOnlineSubtitleRel(rel);
+    // Brief 143 (owner rule): an automatic online start gives way to the file's own track in the
+    // viewer's language when the probe came in meanwhile.
+    if (!manualChoice && typeof rel === 'string' && rel.startsWith('os:') && p.tracks && !p._fileSubFailed) {
+      const own = startupSubtitleRelFor(p);
+      if (typeof own === 'string' && own.startsWith('fs:')) rel = own;
+    }
   } catch (e) {
     if (subtitleFetchAborted(e)) {
       if (subtitleAbortIsCurrent(p, subGen) && opts.startup) scheduleStartupSubtitleRetry(p);
@@ -21437,6 +21587,7 @@ async function setSubtitle(rel, opts = {}) {
     return;
   }
   p.subTrack = rel; p._subShift = rel ? loadSubShift(rel) : 0;
+  p._subAutoPick = manualChoice ? '' : rel; // brief 143: an automatic pick may give way to the file's track
   p._subVttText = '';
   p._subVttRel = '';
   $('ccBtn').classList.toggle('on', rel !== null);
@@ -21709,6 +21860,92 @@ function renderSubCues() {
   }
   while (box.scrollHeight > box.clientHeight && box.firstElementChild) box.removeChild(box.firstElementChild);
 }
+// Brief 143: the browser shows a track from the file through the remux's side file. The lines are
+// read again while the picture plays (the side file grows as the remux reads ahead) and added to
+// one text track per play, on the movie's own clock like every other subtitle. A failure goes
+// online on its own; a remux that started before the track probe is asked again at this second.
+function parseVttCues(text) {
+  const out = [];
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  const t = (x) => {
+    const m = String(x || '').trim().match(/^(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})$/);
+    return m ? (+(m[1] || 0)) * 3600 + (+m[2]) * 60 + (+m[3]) + (+m[4].padEnd(3, '0')) / 1000 : NaN;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes('-->')) continue;
+    const [a, b] = lines[i].split('-->');
+    const start = t(a); const end = t(String(b || '').trim().split(/\s+/)[0]);
+    const body = [];
+    while (i + 1 < lines.length && lines[i + 1].trim() !== '') body.push(lines[++i]);
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start && body.length) out.push({ start, end, text: body.join('\n') });
+  }
+  return out;
+}
+function fileSideTextTrack(p) {
+  const v = $('video');
+  if (p._fsTextTrack && [...(v.textTracks || [])].includes(p._fsTextTrack)) return p._fsTextTrack;
+  p._fsTextTrack = v.addTextTrack('subtitles', 'Subtitles (file)');
+  p._fsCueKeys = new Set();
+  return p._fsTextTrack;
+}
+function startFileSideSubtitles(p, rel, seq) {
+  const tt = fileSideTextTrack(p);
+  if (p._fsCueRel !== rel) {
+    for (const c of [...(tt.cues || [])]) { try { tt.removeCue(c); } catch {} }
+    p._fsCueKeys = new Set();
+    p._fsCueRel = rel;
+  }
+  try { for (const other of [...($('video').textTracks || [])]) if (other !== tt) other.mode = 'disabled'; } catch {}
+  tt.mode = 'hidden';
+  p._textTrack = tt;
+  tt.oncuechange = () => renderSubCues();
+  applySubShiftToCues(tt, p._subShift || 0); // a nudge or Reset reaches the lines already here
+  let fails = 0;
+  let polls = 0;
+  let noSide = 0;
+  const live = () => S.playing === p && p._subSeq === seq && p.subTrack === rel;
+  const poll = async () => {
+    if (!live()) return;
+    polls++;
+    let r = null;
+    try { r = await fetch(fileSideSubUrl(p, rel)); } catch {}
+    if (!live()) return;
+    if (r && r.ok) {
+      fails = 0; noSide = 0;
+      const shift = +(p._subShift || 0);
+      for (const c of parseVttCues(await r.text().catch(() => ''))) {
+        const key = `${c.start}|${c.end}|${c.text}`;
+        if (p._fsCueKeys.has(key)) continue;
+        p._fsCueKeys.add(key);
+        try {
+          const cue = new VTTCue(Math.max(0, c.start + shift), Math.max(0.1, c.end + shift), c.text);
+          cue._subShifted = shift;
+          tt.addCue(cue);
+        } catch {}
+      }
+      renderSubCues();
+    } else {
+      const j = r ? await r.json().catch(() => ({})) : {};
+      if (r && r.status === 404 && j.code === 'NO_SIDE') {
+        // The remux of this play started before the track probe. Ask it again once; while the new
+        // remux starts the address may still answer NO_SIDE for a moment.
+        if (!p._fileSideRestarted && restartForFileSubtitles(p, rel)) { setTimeout(poll, 1500); return; }
+        if (++noSide < 4) { setTimeout(poll, 1500); return; }
+      }
+      if (++fails >= 3 || (r && r.status === 404)) {
+        p._fileSubFailed = true;
+        notePlaybackIssue('subtitle', 'subtitle in the file not shown in the browser — online instead', 0);
+        const next = fileSubOnlineFallbackRel(p, rel);
+        p.subTrack = next || null;
+        if (!next) $('ccBtn').classList.remove('on');
+        applySubtitleTrack();
+        return;
+      }
+    }
+    setTimeout(poll, polls < 8 ? 3000 : 8000);
+  };
+  poll();
+}
 function applySubtitleTrack() {
   const v = $('video'); const p = S.playing; if (!p) return;
   const seq = (p._subSeq || 0) + 1; p._subSeq = seq;
@@ -21723,6 +21960,11 @@ function applySubtitleTrack() {
   if (p.subTrack === null || p.subTrack === undefined) { clearTimeout(_subPrepT); return; }
   const tr = document.createElement('track');
   tr.kind = 'subtitles'; tr.label = 'Subtitles'; tr.default = true;
+  if (typeof p.subTrack === 'string' && p.subTrack.startsWith('fs:') && fileSubTransport(p) === 'side') {
+    clearTimeout(_subPrepT);
+    startFileSideSubtitles(p, p.subTrack, seq);
+    return;
+  }
   if (!(typeof p.subTrack === 'string' && (p.subTrack.startsWith('os:') || p.subTrack.startsWith('rs:') || p.subTrack.startsWith('em:')))) {
     clearTimeout(_subPrepT);
     p.subTrack = null;
@@ -22062,7 +22304,7 @@ function currentCastStreamUrl() {
   const pos = Number.isFinite(p._castLoadPos) ? p._castLoadPos : Math.floor(currentTime() || 0);
   let path;
   if (p.usingTranscode) path = `${p.transcodeUrl}&start=${pos}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
-  else if (p.usingRemux) path = remuxPlaybackUrl(p, pos);
+  else if (p.usingRemux) path = remuxPlaybackUrl(p, pos, { noFileSubs: true });
   else path = p.streamUrl;
   try { return new URL(path, castPublicOrigin()).href; } catch { return null; }
 }

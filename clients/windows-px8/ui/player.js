@@ -612,10 +612,14 @@
         return;
       }
       const disabled = choice.action === 'missing';
-      items.push(menuItem(choice.label || 'Subtitle', {
+      // Brief 143: the same words as the TV, phone and browser: "English", "English SDH",
+      // "English · best match" (the part after " · " is the quieter detail). No language code.
+      const full = String(choice.label || 'Subtitle');
+      const cut = full.indexOf(' · ');
+      items.push(menuItem(cut > 0 ? full.slice(0, cut) : full, {
         selected: !!choice.rel && choice.rel === state.subtitleRel,
         disabled,
-        sub: choice.lang ? String(choice.lang).toUpperCase() : '',
+        sub: cut > 0 ? full.slice(cut + 3) : '',
       }, () => {
         closePanels();
         if (choice.action === 'local_all') send('subtitle_show_all');
