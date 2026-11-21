@@ -15,11 +15,13 @@ const ID = {
   EBML: 0x1A45DFA3, Segment: 0x18538067, SeekHead: 0x114D9B74, Info: 0x1549A966, TimecodeScale: 0x2AD7B1,
   Duration: 0x4489, Tracks: 0x1654AE6B, TrackEntry: 0xAE, TrackNumber: 0xD7, TrackType: 0x83, CodecID: 0x86,
   Language: 0x22B59C, Cluster: 0x1F43B675, Timecode: 0xE7, SimpleBlock: 0xA3, BlockGroup: 0xA0, Block: 0xA1,
-  BlockDuration: 0x9B, Cues: 0x1C53BB6B, Tags: 0x1254C367, Chapters: 0x1043A770, Attachments: 0x1941A469, Void: 0xEC, Crc32: 0xBF,
+  BlockDuration: 0x9B, ContentEncodings: 0x6D80, Cues: 0x1C53BB6B, Tags: 0x1254C367, Chapters: 0x1043A770, Attachments: 0x1941A469, Void: 0xEC, Crc32: 0xBF,
 };
 const LEVEL1 = new Set([ID.SeekHead, ID.Info, ID.Tracks, ID.Cluster, ID.Cues, ID.Tags, ID.Chapters, ID.Attachments]);
 const TEXT_CODECS = new Set(['S_TEXT/UTF8', 'S_TEXT/ASS', 'S_TEXT/SSA', 'S_TEXT/WEBVTT', 'S_TEXT/ASCII']);
 const MAX_CUES_PER_TRACK = 30000;
+// Lines are kept per mount for its life: capped by size too (one block can be 4 MB; second check 3.5.7).
+const MAX_CUE_BYTES_PER_TRACK = 8 * 1048576;
 const MAX_CURSORS = 6;
 const CLUSTER_MAGIC = Buffer.from([0x1F, 0x43, 0xB6, 0x75]);
 
@@ -95,7 +97,7 @@ function parseHeader(buf) {
           const tb = ts ? p + tid.len + ts.len : NaN;
           if (!childFits(tid, ts, tb, body + sz.value)) break;
           if (tid.value === ID.TrackEntry) {
-            const t = { number: 0, type: 0, codec: '', lang: 'eng' };
+            const t = { number: 0, type: 0, codec: '', lang: 'eng', encoded: false };
             for (let q = tb; q < tb + ts.value;) {
               const fid = readId(buf, q); const fs = fid && !fid.bad ? readSize(buf, q + fid.len) : null;
               const fb = fs ? q + fid.len + fs.len : NaN;
@@ -104,6 +106,8 @@ function parseHeader(buf) {
               else if (fid.value === ID.TrackType) t.type = readUint(buf, fb, fs.value);
               else if (fid.value === ID.CodecID) t.codec = buf.toString('latin1', fb, fb + fs.value).replace(/\0+$/, '');
               else if (fid.value === ID.Language) t.lang = buf.toString('latin1', fb, fb + fs.value).replace(/\0+$/, '');
+              // Compressed (zlib) or header-stripped blocks are not plain text: the client goes online.
+              else if (fid.value === ID.ContentEncodings) t.encoded = true;
               q = fb + fs.value;
             }
             tracks.push(t);
@@ -120,7 +124,7 @@ function parseHeader(buf) {
   return {
     scale, duration: duration * scale / 1e9,
     // ffmpeg's 0:s:N order is the order of the subtitle track entries.
-    subs: subs.map((t, i) => ({ index: i, number: t.number, codec: t.codec, lang: t.lang, text: TEXT_CODECS.has(t.codec) })),
+    subs: subs.map((t, i) => ({ index: i, number: t.number, codec: t.codec, lang: t.lang, text: TEXT_CODECS.has(t.codec) && !t.encoded })),
   };
 }
 
@@ -143,6 +147,7 @@ class MkvSubtitleTap {
     this.notMkv = false;
     this.head = Buffer.alloc(0);
     this.cues = new Map();   // subtitle index -> Map(key -> cue)
+    this.cueBytes = new Map(); // subtitle index -> text bytes kept
     this.cursors = [];       // contiguous readers: { next, buf, skip, inCluster, clusterEnd, tc, pending }
     this.maxTime = 0;        // the latest cluster time seen (for the local reader)
   }
@@ -286,8 +291,10 @@ class MkvSubtitleTap {
     let m = this.cues.get(idx);
     if (!m) { m = new Map(); this.cues.set(idx, m); }
     if (m.size >= MAX_CUES_PER_TRACK) return;
+    const bytes = this.cueBytes.get(idx) || 0;
+    if (bytes + text.length > MAX_CUE_BYTES_PER_TRACK) return;
     const key = `${start.toFixed(3)}|${text}`;
-    if (!m.has(key)) m.set(key, { start, end, text });
+    if (!m.has(key)) { m.set(key, { start, end, text }); this.cueBytes.set(idx, bytes + text.length); }
   }
   // The track's lines so far as WebVTT, on the movie's own clock.
   vtt(index) {

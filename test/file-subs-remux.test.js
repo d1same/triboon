@@ -201,3 +201,34 @@ test('/api/filesub: a local file seek back reads the lines at the new picture (s
     await srv.shutdown();
   }
 });
+
+test('a compressed subtitle track is not read as text, and a track keeps at most 8 MB of lines (second check 3.5.7)', () => {
+  const el = (id, body) => {
+    const len = body.length;
+    const size = len < 0x7F ? Buffer.from([0x80 | len]) : Buffer.from([0x40 | (len >> 8), len & 0xFF]);
+    return Buffer.concat([Buffer.from(id), size, body]);
+  };
+  const ebml = Buffer.from([0x1A, 0x45, 0xDF, 0xA3, 0x84, 0x42, 0x86, 0x81, 0x01]);
+  const seg = Buffer.from([0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+  const entry = (num, compressed) => el([0xAE], Buffer.concat([
+    el([0xD7], Buffer.from([num])), el([0x83], Buffer.from([0x11])), el([0x86], Buffer.from('S_TEXT/UTF8')),
+    ...(compressed ? [el([0x6D, 0x80], el([0x62, 0x40], el([0x50, 0x34], el([0x42, 0x54], Buffer.from([0x00])))))] : []),
+  ]));
+  const head = Buffer.concat([ebml, seg, el([0x15, 0x49, 0xA9, 0x66], el([0x2A, 0xD7, 0xB1], Buffer.from([0x0F, 0x42, 0x40]))),
+    el([0x16, 0x54, 0xAE, 0x6B], Buffer.concat([entry(1, false), entry(2, true)])), Buffer.from([0x1F, 0x43, 0xB6, 0x75, 0x80])]);
+  const h = parseHeader(head);
+  assert.ok(h && h.subs.length === 2);
+  assert.strictEqual(h.subs[0].text, true, 'a plain SRT track is text');
+  assert.strictEqual(h.subs[1].text, false, 'a zlib-compressed track goes online instead of showing junk');
+
+  // A track's lines are capped by size, not only by count: 200 lines of 100 KB stop near 8 MB.
+  const tap = new MkvSubtitleTap();
+  tap.header = { scale: 1000000, duration: 0, subs: [{ index: 0, number: 1, codec: 'S_TEXT/UTF8', lang: 'eng', text: true }] };
+  for (let i = 0; i < 200; i++) {
+    const block = Buffer.concat([Buffer.from([0x81, 0x00, 0x00, 0x00]), Buffer.from(`line ${i} `.padEnd(100 * 1024, 'x'))]);
+    tap._textBlock(0xA3, block, i * 1000, 0);
+  }
+  const kept = [...tap.cues.get(0).values()].reduce((n, c) => n + c.text.length, 0);
+  assert.ok(kept <= 8 * 1048576 + 100 * 1024, `kept ${kept} bytes`);
+  assert.ok(kept >= 7 * 1048576, 'and up to the cap');
+});
