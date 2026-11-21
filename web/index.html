@@ -15962,10 +15962,20 @@ function devicePlaysReleaseAudio(a, caps) {
 function otherVersionRows(p, list, caps = clientCaps()) {
   if (!p || !caps || !caps.native || !Array.isArray(list)) return [];
   const audio = p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
+  // Second check 3.5.6: unknown sound (a failed or late probe) is not "worse than everything".
+  if (!audio.length) return [];
   const cur = audio.find((a) => a && a.rel === p.audioTrack) || audio[0];
   const curRank = Math.max(trackAudioRank(cur), ...audio.filter((a) => !isAudioDescriptionTrack(a)).map(trackAudioRank), 0);
+  // Never a picture this screen cannot show (Dolby Vision turns green there) or a lower one.
+  const curRes = Number(p.sourceAttributes && p.sourceAttributes.resolution !== 'unknown' && p.sourceAttributes.resolutionRank) || 0;
+  const picOk = (a) => {
+    const f = new Set((a && a.features) || []);
+    if (f.has('dovi') && !caps.dovi) return false;
+    const r = Number(a && a.resolution !== 'unknown' && a.resolutionRank) || 0;
+    return !curRes || !r || r >= curRes;
+  };
   return list
-    .filter((c) => c && c.pickKey && c.pickKey !== p.sourcePickKey && (Number(c.score) || 0) > -5000)
+    .filter((c) => c && c.pickKey && c.pickKey !== p.sourcePickKey && (Number(c.score) || 0) > -5000 && picOk(c.attributes))
     .filter((c) => devicePlaysReleaseAudio(c.attributes, caps) && releaseAudioRank(c.attributes) > curRank + 0.05)
     .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0))
     .slice(0, 3)

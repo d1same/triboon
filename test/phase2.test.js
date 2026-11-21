@@ -8338,6 +8338,16 @@ test('pipeline: "Other versions" switches to the picked release without blaming 
   truehd.reasons = [...(savedReasons || []), 'over-admin-cap 2160p'];
   await assert.rejects(() => pipeline.switchTo(sid, truehd.pickKey), /picked source not found/, 'never over the admin cap');
   truehd.reasons = savedReasons;
+  // Second check 3.5.6: a screen that said it has no Dolby Vision is never switched onto it (the
+  // picture turns green), the same rule advance() keeps for its standby.
+  const savedPolicy = first.session.policy;
+  const savedAttrs = truehd.attributes;
+  first.session.policy = { ...(savedPolicy || {}), dolbyVision: false };
+  truehd.attributes = { ...(savedAttrs || {}), features: [...((savedAttrs && savedAttrs.features) || []), 'dovi'] };
+  await assert.rejects(() => pipeline.switchTo(sid, truehd.pickKey), /picked source not found/, 'never a Dolby Vision copy on a screen without it');
+  first.session.policy = { ...(savedPolicy || {}), dolbyVision: true };
+  truehd.attributes = savedAttrs;
+  first.session.policy = savedPolicy;
 
   // A dead pick fails and leaves the session on the copy that plays; nothing is demoted.
   const cursorBefore = first.session.cursor;

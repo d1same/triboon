@@ -12757,3 +12757,33 @@ test('Other versions is looked up only for a usenet play with a session, never a
   S.playing = usenet; await load(usenet);
   assert.strictEqual(asked.length, 1, 'a usenet play still looks up its other versions');
 });
+
+test('Other versions never offers a picture this screen cannot show, a lower picture, or a guess when the tracks are unknown (second check 3.5.6)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const src = grab('function isAudioDescriptionTrack(', 'function preferredAudioTrackForPlayer(')
+    + grab('function nativeDolbyPlaysDirect(', 'function nativeDirectAudioNeedsSafeRemux(')
+    + grab('function nativeDecodesAllAudio(', 'function nativeDirectAudioNeedsSafeRemux(')
+    + grab('function releaseAudioLabel(', 'async function loadOtherVersions(');
+  const fns = new Function('clientCaps', `${src}\nreturn { otherVersionRows };`)(() => ({}));
+  const { parseRelease } = require('../server/scoring');
+  const cand = (name, score, key) => ({ name, pickKey: key, score, attributes: parseRelease(name) });
+  const list = [
+    cand('Movie.2024.2160p.UHD.BluRay.DV.HDR10.TrueHD.Atmos.7.1.x265-DV', 300, 'dv'),
+    cand('Movie.2024.2160p.BluRay.HDR10.TrueHD.7.1.Atmos.x265-HDR', 290, 'hdr'),
+    cand('Movie.2024.1080p.BluRay.TrueHD.7.1.Atmos.x264-LOW', 280, 'low'),
+  ];
+  const playing4k = { sourcePickKey: 'playing', audioTrack: 0, sourceAttributes: parseRelease('Movie.2024.2160p.WEB-DL.DDP5.1.HDR.H.265-WEB'),
+    tracks: { audio: [{ rel: 0, codec: 'eac3', channels: 6 }] } };
+  const shield = { native: true, source: 'exo-mediacodec', ac3: true, eac3: true, passthrough: true, truehd: true };
+  assert.deepStrictEqual(fns.otherVersionRows(playing4k, list, shield).map((r) => r.pickKey), ['hdr'],
+    'a screen without Dolby Vision is never offered a Dolby Vision copy, and a 4K play is never offered 1080p');
+  assert.deepStrictEqual(fns.otherVersionRows(playing4k, list, { ...shield, dovi: true }).map((r) => r.pickKey), ['dv', 'hdr'],
+    'a Dolby Vision screen gets it');
+  const unknown = { ...playing4k, tracks: { audio: [] } };
+  assert.deepStrictEqual(fns.otherVersionRows(unknown, list, { ...shield, dovi: true }), [], 'with the playing file\'s sound unknown, nothing is offered as better');
+  assert.deepStrictEqual(fns.otherVersionRows({ ...playing4k, tracks: null }, list, { ...shield, dovi: true }), []);
+  const playing1080 = { ...playing4k, sourceAttributes: parseRelease('Movie.2024.1080p.WEB-DL.DDP5.1.H.264-WEB') };
+  assert.deepStrictEqual(fns.otherVersionRows(playing1080, list, { ...shield, dovi: true }).map((r) => r.pickKey), ['dv', 'hdr', 'low'],
+    'a 1080p play may be offered 4K and 1080p');
+});

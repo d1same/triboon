@@ -4424,7 +4424,10 @@ class Pipeline {
     const key = String(pickKey || '');
     const picked = key ? (session.candidates || []).find((c) => c && c.pickKey === key) : null;
     const overCap = !!(picked && (picked.reasons || []).some((r) => /^(over-cap |not-requested-resolution)/i.test(String(r))));
-    if (!picked || this._overAdminCap(picked) || this._hardDeadCandidate(picked) || overCap) {
+    // A screen that said it has no Dolby Vision is never switched onto it: the picture turns green
+    // (the rule advance() keeps for its standby; second check 3.5.6).
+    const greenPick = !!(picked && (session.policy || {}).dolbyVision === false && this._isDolbyVisionRelease(picked));
+    if (!picked || this._overAdminCap(picked) || this._hardDeadCandidate(picked) || overCap || greenPick) {
       throw new Error('picked source not found');
     }
     if (session.activeCandidate && session.activeCandidate.pickKey === key) throw new Error('already playing that source');
