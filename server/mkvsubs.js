@@ -136,6 +136,10 @@ function cueText(codec, payload) {
     for (let i = 0; i < 8 && cut >= 0; i++) cut = s.indexOf(',', cut) + 1 || -1;
     s = cut > 0 ? s.slice(cut) : s;
     s = s.replace(/\{[^}]*\}/g, '').replace(/\\N|\\n/g, '\n').replace(/\\h/g, ' ');
+  } else {
+    // SubRip often carries ASS override tags ("{\an8}" to place a line at the top) and a byte-order
+    // mark; players drop them, and the side file drew them as words (second check 3.5.7).
+    s = s.replace(/^\uFEFF/, '').replace(/\{\\[^}]*\}/g, '');
   }
   s = s.replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
   return s.replace(/-->/g, '→');

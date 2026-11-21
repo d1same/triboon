@@ -232,3 +232,12 @@ test('a compressed subtitle track is not read as text, and a track keeps at most
   assert.ok(kept <= 8 * 1048576 + 100 * 1024, `kept ${kept} bytes`);
   assert.ok(kept >= 7 * 1048576, 'and up to the cap');
 });
+
+test('a SubRip line with an ASS position tag or a byte-order mark shows only its words (second check 3.5.7)', () => {
+  // Seen on a real release: "{\an8}Hmm?" was drawn as it was written in the browser and the TV overlay.
+  assert.strictEqual(cueText('S_TEXT/UTF8', Buffer.from('{\\an8}Hmm?')), 'Hmm?');
+  assert.strictEqual(cueText('S_TEXT/UTF8', Buffer.from('{\\i1}Hello{\\i0} there')), 'Hello there');
+  assert.strictEqual(cueText('S_TEXT/UTF8', Buffer.from('\uFEFFFirst line')), 'First line');
+  assert.strictEqual(cueText('S_TEXT/UTF8', Buffer.from('A {note} in braces stays')), 'A {note} in braces stays', 'only override tags (starting with a backslash) go');
+  assert.strictEqual(cueText('S_TEXT/UTF8', Buffer.from('<i>Italic</i> stays')), '<i>Italic</i> stays');
+});
