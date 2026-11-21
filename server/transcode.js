@@ -478,7 +478,7 @@ const LADDER = { 1080: { h: 1080, vb: '8M', maxb: '12M' }, 720: { h: 720, vb: '4
 // Full transcode: H.264 + AAC fMP4 for clients that can't decode the source codec (the HEVC
 // wall). HDR sources get tone-mapped to SDR. Channels preserved up to 5.1 (browsers play
 // multichannel AAC fine).
-function spawnTranscode(streamUrl, { startSeconds = 0, audioTrack = 0, height = 1080, hdr = false, safeStereo = false } = {}) {
+function spawnTranscode(streamUrl, { startSeconds = 0, audioTrack = 0, height = 1080, hdr = false, safeStereo = false, sideSubs = null } = {}) {
   const ff = detectFfmpeg();
   const enc = detectEncoder();
   if (!ff || !enc) throw new Error('no H.264 encoder available');
@@ -503,8 +503,52 @@ function spawnTranscode(streamUrl, { startSeconds = 0, audioTrack = 0, height = 
     ...REMUX_SYNC_FLAGS,                                  // delay_moov compensates the H.264 encoder's own B-frame delay
     '-movflags', REMUX_MOVFLAGS,
     '-f', 'mp4', 'pipe:1',
+    ...sideSubtitleArgs(sideSubs, startSeconds),
   ];
   return spawn(ff.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+}
+
+// Brief 143: the file's own TEXT subtitles ride along a remux/transcode as a second ffmpeg output.
+// The same demuxer that feeds the picture copies every text subtitle track into a small side
+// Matroska file (copy, no encoder), with the times put back on the movie's own clock
+// (-output_ts_offset = the -ss second), so a reader can hand any track out as WebVTT at once and a
+// track switch needs no new remux. Only known TEXT tracks are mapped: an output with no stream, or a
+// bitmap track turned into text, would stop the whole process, picture included. The side output
+// never shares the video pipe; a slow disk can only slow its own few bytes.
+function sideSubtitleArgs(sideSubs, startSeconds = 0) {
+  if (!sideSubs || !sideSubs.file) return [];
+  const rels = (Array.isArray(sideSubs.rels) ? sideSubs.rels : [])
+    .map((r) => Number(r)).filter((r) => Number.isInteger(r) && r >= 0);
+  if (!rels.length) return [];
+  const maps = [];
+  for (const r of rels) maps.push('-map', `0:s:${r}`);
+  return [
+    ...maps, '-c', 'copy',
+    ...(startSeconds > 0 ? ['-output_ts_offset', String(startSeconds)] : []),
+    '-flush_packets', '1',
+    '-f', 'matroska', sideSubs.file,
+  ];
+}
+
+// One side track as WebVTT, on the movie's own clock (-copyts keeps the -output_ts_offset times).
+// The side file may still be growing: a half-written last cluster ends the read early, which only
+// drops the newest line until the next read. Resolves '' when nothing is there yet.
+function readSideSubtitleVtt(file, index, { timeoutMs = 10000 } = {}) {
+  const ff = detectFfmpeg();
+  if (!ff) return Promise.reject(new Error('ffmpeg not available'));
+  return new Promise((resolve) => {
+    let out = '';
+    let done = false;
+    const p = spawn(ff.path, [
+      '-hide_banner', '-loglevel', 'quiet', '-copyts', '-i', file,
+      '-map', `0:s:${Math.max(0, Number(index) || 0)}`, '-f', 'webvtt', 'pipe:1',
+    ], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(out); };
+    const timer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} finish(); }, timeoutMs);
+    p.stdout.on('data', (d) => { out += d; });
+    p.on('error', finish);
+    p.on('close', finish);
+  });
 }
 
 // Browser-decodable audio codecs (Chromium/WebView/Safari common ground). Everything else
@@ -583,7 +627,7 @@ const REMUX_MOVFLAGS = 'frag_keyframe+empty_moov+default_base_moof+delay_moov+ne
 // for browser/WebView MediaCodec decoders — it commonly plays as video-with-NO-audio, which is the
 // whole bug audioSafe exists to prevent. The main Android player uses native ExoPlayer (handles
 // 5.1 fine), so 5.1 stays the default for the normal transcodeAudio path.
-function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false } = {}) {
+function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, sideSubs = null } = {}) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
   const args = [
@@ -598,6 +642,7 @@ function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudi
     ...REMUX_SYNC_FLAGS,
     '-movflags', REMUX_MOVFLAGS,
     '-f', 'mp4', 'pipe:1',
+    ...sideSubtitleArgs(sideSubs, startSeconds),
   ];
   return spawn(ff.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 }
@@ -896,4 +941,4 @@ function probeCacheKey(name, size) {
   return `p2|${label}|${bytes}`;
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, parseProbeStreams, isAudioDescriptionTrack, defaultAudioTrack, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, LIVE_AUDIO_LAYOUTS };
+module.exports = { sideSubtitleArgs, readSideSubtitleVtt, detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, parseProbeStreams, isAudioDescriptionTrack, defaultAudioTrack, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, LIVE_AUDIO_LAYOUTS };

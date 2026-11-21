@@ -38,7 +38,7 @@ const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInW
 const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, audioHintFromName, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, defaultAudioTrack } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, readSideSubtitleVtt, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, audioHintFromName, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, defaultAudioTrack } = require('./transcode');
 const { spawn: spawnResumePad } = require('child_process');
 let resumePadReady = null;
 function ensureResumePad() {
@@ -4540,6 +4540,7 @@ const MEDIA_CORS_ROUTES = [
   /^\/api\/transcode\/\w+$/,
   /^\/api\/hls\/\w+(?:\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?(?:\/[\w.-]+)?$/,
   /^\/api\/subtitle\/\w+\/\d+$/,
+  /^\/api\/filesub\/\w+\/\d+$/,
   /^\/api\/releasesub\/\w+\/[a-z0-9_-]+$/,
   /^\/api\/ossubs\/\w+$/,
 ];
@@ -4835,6 +4836,104 @@ function closeMountFfmpegPipes(vf) {
   }
   vf._ffPipes = [];
 }
+// ---- The file's own subtitles on a remux/transcode (brief 143) ----
+// A client that sends `fs=<id>` with a remux/transcode ask gets every known TEXT subtitle track of
+// the file copied into a small side file by the same ffmpeg (transcode.sideSubtitleArgs). The phone
+// on the remux and the browser then read one track as WebVTT from /api/filesub on the movie's own
+// clock. Tracks must be known before the spawn (an output with no stream stops the picture too), so
+// a remux that starts before the track probe has no side file; the client asks again at that second.
+const FILE_SUB_DIR = path.join(require('os').tmpdir(), `triboon-filesub-${process.pid}`);
+const FILE_SUB_MAX_TRACKS = 24;
+const FILE_SUB_SESSIONS_PER_MOUNT = 3;
+// Codecs Matroska takes as a copy. mov_text (MP4 text) is not one: its side header would fail, and a
+// failed output ends the picture as well.
+const FILE_SUB_SIDE_CODECS = new Set(['subrip', 'srt', 'ass', 'ssa', 'webvtt']);
+function fileSubSessionId(raw) {
+  const s = String(raw || '');
+  return /^[A-Za-z0-9]{6,32}$/.test(s) ? s : '';
+}
+function fileSubTextRels(vf) {
+  const subs = vf && vf._tracks && Array.isArray(vf._tracks.subs) ? vf._tracks.subs : [];
+  return subs.filter((s) => s && s.text === true && FILE_SUB_SIDE_CODECS.has(String(s.codec || '').toLowerCase()) && Number.isInteger(Number(s.rel)))
+    .map((s) => Number(s.rel)).slice(0, FILE_SUB_MAX_TRACKS);
+}
+function dropFileSubSession(sess) {
+  if (!sess || sess.dropped) return;
+  sess.dropped = true;
+  try { fs.rmSync(sess.file, { force: true }); } catch {}
+}
+function closeMountFileSubs(vf) {
+  if (!vf || !vf._fileSubs) return;
+  for (const sess of vf._fileSubs.values()) dropFileSubSession(sess);
+  vf._fileSubs.clear();
+}
+// Returns { file, rels } for the spawn, or null (no ask, no known text track, or no disk).
+function openFileSubSession(vf, fsidRaw, startSeconds, uid) {
+  const fsid = fileSubSessionId(fsidRaw);
+  if (!vf || !fsid) return null;
+  const rels = fileSubTextRels(vf);
+  if (!rels.length) return null;
+  try { fs.mkdirSync(FILE_SUB_DIR, { recursive: true }); } catch { return null; }
+  vf._fileSubs = vf._fileSubs || new Map();
+  const old = vf._fileSubs.get(fsid);
+  if (old) { dropFileSubSession(old); vf._fileSubs.delete(fsid); }
+  while (vf._fileSubs.size >= FILE_SUB_SESSIONS_PER_MOUNT) {
+    const [k, sess] = vf._fileSubs.entries().next().value;
+    dropFileSubSession(sess);
+    vf._fileSubs.delete(k);
+  }
+  const file = path.join(FILE_SUB_DIR, `${vf.id}-${fsid}.mkv`);
+  try { fs.rmSync(file, { force: true }); } catch {}
+  const sess = { fsid, file, rels, start: Math.max(0, Number(startSeconds) || 0), uid: uid || null, done: false, at: Date.now(), cache: null };
+  vf._fileSubs.set(fsid, sess);
+  return sess;
+}
+function fileSubSession(vf, fsidRaw) {
+  const fsid = fileSubSessionId(fsidRaw);
+  return fsid && vf && vf._fileSubs ? vf._fileSubs.get(fsid) || null : null;
+}
+// Spawn a remux/transcode with the side subtitle output. A side output that fails before the first
+// picture byte (an odd track Matroska will not take) would end the whole process, so it is spawned
+// once more without the side file and the viewer never sees the difference. Looks like a
+// ChildProcess to the routes: stdout, stderr, kill, 'close', 'error'.
+function spawnWithFileSubs(spawnFn, url, opts, sess) {
+  if (!sess) return spawnFn(url, opts);
+  const { EventEmitter } = require('events');
+  const { PassThrough } = require('stream');
+  const proc = new EventEmitter();
+  proc.stdout = new PassThrough();
+  proc.stderr = new PassThrough();
+  let cur = null;
+  let killed = false;
+  proc.kill = (sig) => { killed = true; try { if (cur) cur.kill(sig); } catch {} return true; };
+  const run = (side) => {
+    let bytes = 0;
+    let child;
+    try { child = spawnFn(url, side ? { ...opts, sideSubs: sess } : opts); }
+    catch (e) { setImmediate(() => proc.emit('error', e)); return; }
+    cur = child;
+    child.stdout.on('data', (c) => { bytes += c.length; });
+    child.stdout.pipe(proc.stdout, { end: false });
+    child.stderr.pipe(proc.stderr, { end: false });
+    child.on('error', (e) => proc.emit('error', e));
+    child.on('close', (code) => {
+      if (side && code && !bytes && !killed) {
+        sess.failed = true;
+        dropFileSubSession(sess);
+        debug.log('remux', `file subtitles left out: the side output failed before the picture (code ${code})`);
+        run(false);
+        return;
+      }
+      sess.done = true;
+      proc.stdout.end();
+      proc.stderr.end();
+      proc.emit('close', code);
+    });
+  };
+  run(true);
+  return proc;
+}
+
 // Cancel only this mount's speculative warm jobs; their AbortSignals are independent consumers, so
 // eviction/supersession never aborts an active player sharing the same VFS article fetch.
 function releaseMountResources(vf) {
@@ -4842,6 +4941,7 @@ function releaseMountResources(vf) {
   try { pipeline.cancelPlaybackWarmups(vf); } catch {}
   closeMountHls(vf);
   closeMountFfmpegPipes(vf);
+  closeMountFileSubs(vf);
   // Callers delete the mount right after this; check retired pools once it is gone.
   if (retiredPools.size) setImmediate(() => { try { closeIdleRetiredPools(); } catch {} });
 }
@@ -11241,7 +11341,8 @@ Object.assign(H, {
         noteRuntimeCheck(vf);
       }).catch(() => { vf._probeFailedAt = Date.now(); }).finally(() => { vf._probing = false; });
     }
-    const ff = spawnRemux(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe });
+    const fileSubs = openFileSubSession(vf, ctx.url.searchParams.get('fs'), startSeconds, ctx.claims && ctx.claims.uid);
+    const ff = spawnWithFileSubs(spawnRemux, selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe }, fileSubs);
     attachMountFfmpegPipe(vf, ff, ctx.claims && ctx.claims.uid);
     if (STARTUP_TRACE) {
       // Measure the ffmpeg restart cost for BOTH the initial play (startSeconds 0, once) and every
@@ -11321,7 +11422,8 @@ Object.assign(H, {
     const height = parseInt(ctx.url.searchParams.get('height') || '1080', 10);
     const hdr = (vf._tracks && vf._tracks.video && vf._tracks.video[0] && vf._tracks.video[0].hdr) || false;
     const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
-    const ff = spawnTranscode(selfUrl, { startSeconds, audioTrack, height: LADDER[height] ? height : 1080, hdr, safeStereo: forceAudioSafe });
+    const fileSubs = openFileSubSession(vf, ctx.url.searchParams.get('fs'), startSeconds, ctx.claims && ctx.claims.uid);
+    const ff = spawnWithFileSubs(spawnTranscode, selfUrl, { startSeconds, audioTrack, height: LADDER[height] ? height : 1080, hdr, safeStereo: forceAudioSafe }, fileSubs);
     attachMountFfmpegPipe(vf, ff, ctx.claims && ctx.claims.uid);
     const audioMode = forceAudioSafe ? 'stereo-aac' : 'aac';
     debug.log('play', `transcode mount=${vf.id} start=${Math.round(startSeconds)}s track=${audioTrack} height=${LADDER[height] ? height : 1080} hdr=${!!hdr} audio=${audioMode}`);
@@ -12357,6 +12459,47 @@ Object.assign(H, {
     }
   },
 
+  // The file's own subtitle track, read from the side file the remux/transcode is writing (brief
+  // 143). WebVTT on the movie's own clock, so the browser and the phone place lines with the same
+  // clock they already use for online subtitles. The file grows while the picture plays: a client
+  // reads again until x-filesub-state says done. 404 means this play has no side file (the remux
+  // started before the track probe, or the track is not text) and the client asks the remux again.
+  filesub: async (ctx) => {
+    if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    const vf = mounts.get(ctx.m[1]);
+    if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
+    const sess = fileSubSession(vf, ctx.url.searchParams.get('fs'));
+    if (!sess || sess.dropped) return send(ctx.res, 404, { error: 'no file subtitles for this play', code: 'NO_SIDE' });
+    const rel = parseInt(ctx.m[2], 10);
+    const idx = sess.rels.indexOf(rel);
+    if (idx < 0) return send(ctx.res, 404, { error: 'track not carried', code: 'NO_TRACK' });
+    vf._touched = Date.now();
+    let size = 0;
+    try { size = fs.statSync(sess.file).size; } catch {}
+    sess.cache = sess.cache || new Map();
+    const hit = sess.cache.get(idx);
+    let vtt = '';
+    if (hit && !hit.job && hit.size === size && hit.done === sess.done) vtt = hit.vtt;
+    else if (hit && hit.job && hit.size === size) vtt = (await hit.job) || hit.vtt;
+    else if (size > 0) {
+      const done = sess.done;
+      const job = readSideSubtitleVtt(sess.file, idx).catch(() => '');
+      sess.cache.set(idx, { size, done, job, vtt: hit ? hit.vtt : '' });
+      const text = await job;
+      const keep = /^WEBVTT/.test(text) ? text : (hit && hit.vtt) || '';
+      sess.cache.set(idx, { size, done, vtt: keep });
+      vtt = keep;
+    }
+    if (!/^WEBVTT/.test(vtt)) vtt = 'WEBVTT\n\n';
+    send(ctx.res, 200, vtt, {
+      'content-type': 'text/vtt; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-filesub-state': sess.done ? 'done' : 'growing',
+      'x-filesub-start': String(sess.start),
+    });
+  },
+
   // ---- Music (YouTube Music via yt-dlp) ----
   musicHome: async (ctx) => {
     if (throttleUserRoute(ctx, 'music-home', { max: 40, windowMs: 60000, lockMs: 15000 })) return;
@@ -12980,6 +13123,7 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/audiobook\/chapters\/(\w+)$/, auth: 'user', h: H.audiobookChapters },
   { m: 'GET', re: /^\/api\/audio\/(\w+)\/(\d+)$/, auth: 'stream', h: H.audioTrack },
   { m: 'GET', re: /^\/api\/subtitle\/(\w+)\/(\d+)$/, auth: 'stream', h: H.subtitle },
+  { m: 'GET', re: /^\/api\/filesub\/(\w+)\/(\d+)$/, auth: 'stream', h: H.filesub },
   { m: 'GET', re: /^\/api\/thumb\/(\w+)$/, auth: 'stream', h: H.thumbAt },
   { m: 'GET', re: /^\/api\/releasesub\/(\w+)\/([a-z0-9_-]+)$/, auth: 'stream', h: H.releasesub },
   { m: 'GET', re: /^\/api\/ossubs\/(\w+)$/, auth: 'stream', h: H.ossubs },

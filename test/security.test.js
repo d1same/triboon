@@ -216,7 +216,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'], ['POST', '/api/settings/side-copy/dismiss'],
     ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
-    ['GET', '/api/users'], ['GET', '/api/libraries/search?q=x'], ['GET', '/api/libraries/local-lookup?key=tmdb:movie:1'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
+    ['GET', '/api/users'], ['GET', '/api/libraries/search?q=x'], ['GET', '/api/libraries/local-lookup?key=tmdb:movie:1'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'], ['GET', '/api/filesub/abc/0?fs=abcdef'],
     ['GET', '/api/transcode/abc'], ['GET', '/api/hls/abc'], ['GET', '/api/hls/abc/seg00001.m4s'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
     ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/home'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'], ['GET', '/api/music/radio/AAAAAAAAAAA'],
@@ -5228,7 +5228,7 @@ test('cast CORS: media routes reflect the request Origin and expose Range header
   const mediaPaths = [
     '/api/stream/deadbeef', '/api/remux/deadbeef', '/api/transcode/deadbeef',
     '/api/hls/deadbeef', '/api/hls/deadbeef/index.m3u8',
-    '/api/subtitle/deadbeef/0', '/api/releasesub/deadbeef/track-1', '/api/ossubs/deadbeef',
+    '/api/subtitle/deadbeef/0', '/api/filesub/deadbeef/0', '/api/releasesub/deadbeef/track-1', '/api/ossubs/deadbeef',
   ];
   for (const p of mediaPaths) {
     const r = await httpWithHeaders(srv.port, 'GET', p, { origin: RECEIVER });
