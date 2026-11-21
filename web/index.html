@@ -20286,9 +20286,15 @@ function releaseSubLabel(sub) {
 function preferredSubtitleLangCode() {
   return langCode(preferredAutoSubtitleLang() || 'eng') || 'eng';
 }
+// One language however it is written ("en" saved by a pick, "eng" in the file, "ger"/"deu"): a
+// 2-letter form only from the known table, never by cutting a code short (second check 3.5.6).
 function subtitleChoiceMatchesPreferred(sub, wanted = preferredSubtitleLangCode()) {
   const code = langCode(sub && sub.lang);
-  return !!code && code === wanted;
+  const want = langCode(wanted);
+  if (!code || code === 'und' || !want) return false;
+  if (code === want) return true;
+  const two = (c) => LANG_3TO2[c] || (c.length === 2 ? c : '');
+  return !!two(code) && two(code) === two(want);
 }
 function showAllLocalSubtitles() {
   const p = S.playing;

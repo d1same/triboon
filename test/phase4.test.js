@@ -12716,3 +12716,22 @@ test('forced ride-along follows the owner decision: only in "Always show" (brief
   assert.match(ui, /^const FORCED_RIDE_MODE = 'always';$/m, 'the owner said "No, keep it off" for "Choose per title"');
   assert.match(ui, /function forcedRideAlongRel\(p, saved = loadSubChoice\(\), rideMode = FORCED_RIDE_MODE\) \{[\s\S]{0,200}if \(rideMode === 'always' && prefSubtitleMode\(\) !== 'always'\) return '';/);
 });
+
+test('a release sidecar in "eng" shows for a profile language saved as "en" (second check 3.5.6)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const grab = (from, to) => { const i = ui.indexOf(from); const j = ui.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return ui.slice(i, j); };
+  const src = grab('const LANG_ALIAS = ', 'const LANG_NAMES = ')
+    + grab('function langCode(c) {', '// Online subtitle APIs speak')
+    + grab('const LANG_3TO2 = ', 'const LANG_2TO3 = ')
+    + grab('function subtitleChoiceMatchesPreferred(', 'function showAllLocalSubtitles(');
+  const match = new Function('preferredSubtitleLangCode', `${src}\nreturn subtitleChoiceMatchesPreferred;`)(() => 'en');
+  assert.strictEqual(match({ lang: 'eng' }, 'en'), true, 'a sidecar tagged "eng" for the profile language "en"');
+  assert.strictEqual(match({ lang: 'eng' }), true, 'the default wanted language "en" too');
+  assert.strictEqual(match({ lang: 'en' }, 'eng'), true, 'and the other way round');
+  assert.strictEqual(match({ lang: 'ger' }, 'deu'), true, 'both German codes');
+  assert.strictEqual(match({ lang: 'ger' }, 'de'), true);
+  assert.strictEqual(match({ lang: 'fre' }, 'eng'), false, 'another language stays hidden');
+  assert.strictEqual(match({ lang: 'mal' }, 'may'), false, 'two codes that only share their first letters are not one language');
+  assert.strictEqual(match({ lang: '' }, 'eng'), false, 'an untagged sidecar is not the wanted language');
+  assert.strictEqual(match({ lang: 'und' }, 'und'), false, '"und" is no language');
+});
