@@ -7763,6 +7763,53 @@ test('D-pad regression: Person and Detail restore exact work and cast positions'
     'Back from Person onto the origin title must not applyRoute and rebuild at Play');
 });
 
+test('Back from Details to Discover keeps the focused title info over the backdrop (3.5.8)', () => {
+  // 3.5.7 bug: Back rebuilt Discover's row view with hasHero = true, so every focus after Back
+  // painted the hidden Home hero and #bdInfo froze on the cache restore's row-0 title, or stayed
+  // empty when that paint was skipped (openDetail drops its .show).
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const slice = (name) => {
+    const start = ui.indexOf(`function ${name}(`);
+    assert.ok(start >= 0, `${name} must exist`);
+    const end = ui.indexOf('\nfunction ', start + 10);
+    return ui.slice(start, end);
+  };
+  const calls = [];
+  const homeRows = [{ items: [{ title: 'Home Title', type: 'movie' }] }];
+  const discoverRows = [{ items: [{ title: 'Trailer', type: 'movie' }] }, { items: [{ title: 'Discover A', type: 'movie' }, { title: 'Discover B', type: 'tv' }] }];
+  const roots = { rows: { id: 'rows', querySelector: () => null }, discoverRows: { id: 'discoverRows', querySelector: () => null }, grid: { id: 'grid' } };
+  const S = { rows: homeRows, discoverData: discoverRows, colIdx: {}, pointer: true };
+  const document = { body: { classList: { contains: () => false } } };
+  const factory = new Function('S', '$', 'document', 'cwMenuOwnsFocus', 'leaveRail', 'applyFocus', 'sizeRowsWindow', 'focusScrollBehavior',
+    'tmdbAdult', 'setHero', 'setBackdrop', 'setBdInfo', 'preparePlaybackSource', 'maybeLoadMoreHomeRow',
+    `function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }; }
+${slice('restoreDetailFocusRoots')}
+${slice('focusCard')}
+return { restoreDetailFocusRoots, focusCard };`);
+  const fns = factory(S, (id) => roots[id], document, () => false, () => {}, () => {}, () => {}, () => 'auto',
+    () => false, (it) => calls.push(['hero', it.title]), (url) => calls.push(['backdrop', url]),
+    (it) => calls.push(['bdInfo', it.title]), () => {}, () => {});
+
+  fns.restoreDetailFocusRoots({ view: 'discover' });
+  assert.equal(S.rowsView.root, roots.discoverRows);
+  assert.equal(S.rowsView.data, discoverRows, 'Discover Back must bind Discover rows, never Home rows');
+  assert.equal(S.rowsView.hasHero, false, 'Discover has no Home hero: Back must not mark its rows view hasHero');
+  fns.focusCard(1, 0);
+  fns.focusCard(1, 1);
+  assert.deepEqual(calls.filter((c) => c[0] !== 'backdrop'), [['bdInfo', 'Discover A'], ['bdInfo', 'Discover B']],
+    'every focus after Back onto Discover must paint #bdInfo, not the hidden Home hero');
+
+  // Discover with no rows yet must not borrow Home rows for its focus data.
+  S.discoverData = null;
+  fns.restoreDetailFocusRoots({ view: 'discover' });
+  assert.notEqual(S.rowsView.data, homeRows);
+
+  // Home keeps its hero.
+  fns.restoreDetailFocusRoots({ view: 'home' });
+  assert.equal(S.rowsView.hasHero, true);
+  assert.equal(S.rowsView.data, homeRows);
+});
+
 test('D-pad regression: Back from Details restores Discover, Calendar, Search, and library covers', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(ui, /function captureDetailReturn\(\) \{[\s\S]+S\.view === 'calendar' \? \$\('calList'\)[\s\S]+S\.view === 'discover' \? \$\('discoverRows'\)[\s\S]+#calList \.calItem/,

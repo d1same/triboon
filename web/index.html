@@ -11304,7 +11304,10 @@ function restoreDetailReturn() {
 function restoreDetailFocusRoots(ret) {
   if (!ret) return;
   if (ret.view === 'home') setRowsView($('rows'), S.rows || [], true);
-  else if (ret.view === 'discover') setRowsView($('discoverRows'), S.discoverData || S.rows || [], true);
+  // Discover has no Home hero: hasHero must stay false (as loadDiscover sets it), or every focus
+  // after Back paints the hidden Home hero and the #bdInfo title block freezes on whatever the
+  // cache restore painted (row 0's first title), or stays empty when that paint hid it (3.5.7 bug).
+  else if (ret.view === 'discover') setRowsView($('discoverRows'), S.discoverData || [], false);
   else if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv'].includes(ret.view)) S.gridRoot = $('grid');
 }
 function restoreDetailFocus(ret) {
