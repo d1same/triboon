@@ -11,7 +11,7 @@ const debug = require('./debug');
 // read-ahead window sizing below (_playbackWindowFor) runs on the hot streaming path, and
 // os.totalmem() was being re-read on every rebalance. ~20% is the cross-stream buffer budget.
 const TOTAL_MEM_MB = Math.floor(os.totalmem() / (1024 * 1024));
-const { fanout, fetchUrl, normTitle, stripSubjectWrapper } = require('./newznab');
+const { fanout, fetchUrl, normTitle, stripSubjectWrapper, searchIndexer, dedupe, indexerIsCooling } = require('./newznab');
 const { CAP_HIT_COOLDOWN_MS } = require('./nntp');
 const { getNzbStore } = require('./nzb-store');
 const { getSegmentDisk } = require('./segment-cache');
@@ -757,7 +757,7 @@ function episodeNumberEvidence(named, tmdbE) {
 function releaseQualifies(result, wanted, params) {
   return catalogIdentityMatches(result, params) && releaseMatches(result && result.name, wanted);
 }
-const { rankReleases, parseRelease, rankAudiobooks, unstreamableContainer } = require('./scoring');
+const { rankReleases, parseRelease, rankAudiobooks, unstreamableContainer, isCamCandidate } = require('./scoring');
 const { mountNzb, orderVolumes } = require('./archive');
 
 // ---- audiobook title verification ----
@@ -911,10 +911,39 @@ function summarizeUnplayable(candidates = []) {
     else if (/wrong|mismatch/.test(health)) bump('wrong title/episode');
     else if (/compressed|7z|unsupported|unstreamable/.test(health) || /compressed|7z|unsupported/.test(cls)) bump('unsupported format');
     else if (/sample|stub/.test(health) || /\bsample\b/i.test(name)) bump('incomplete/sample');
-    else if (Number(c && c.score) <= -50000) bump('disqualified by score');
-    else bump('below the quality cap or filtered');
+    else {
+      // Brief 148: name the scoring rule that took the release out, in plain words. Read from the
+      // reasons the scorer already wrote; which releases are playable does not change here.
+      const why = unplayableScoreReason(c);
+      if (why) bump(why);
+      else if (Number(c && c.score) <= -50000) bump('disqualified by score');
+      else bump('below the quality cap or filtered');
+    }
   }
-  return [...cats.entries()].map(([k, n]) => `${n} ${k}`).join(', ');
+  return [...cats.entries()].map(([k, n]) => `${n} ${plural(k, n)}`).join(', ');
+}
+
+// Labels that read differently for one release. Every other label is the same for 1 and for 8.
+const UNPLAYABLE_PLURAL = { 'cinema copies skipped until a home release': 'cinema copy skipped until a home release' };
+function plural(label, n) {
+  return n === 1 && UNPLAYABLE_PLURAL[label] ? UNPLAYABLE_PLURAL[label] : label;
+}
+
+// The hard rule behind an unplayable score, strongest first. '' when no known rule applies (the
+// catch-all keeps its old words). There is no minimum-quality rule in the scorer, so no such label.
+function unplayableScoreReason(c) {
+  const reasons = ((c && c.reasons) || []).map(String);
+  const has = (re) => reasons.some((r) => re.test(r));
+  const negative = (re) => reasons.some((r) => re.test(r) && /-\d+\s*$/.test(r));
+  if (has(/^over-cap |^over-admin-cap /)) return 'above your quality cap';
+  if (has(/^not-requested-resolution /)) return 'not the resolution you picked';
+  if (has(/^over-size-cap /)) return 'over the size limit';
+  if (has(/^not-the-movie:/)) return 'not the film itself (soundtrack or extras)';
+  if (has(/^unstreamable-container:/)) return 'unsupported format';
+  if (isCamCandidate(c)) return 'cinema copies skipped until a home release';
+  if (negative(/^custom:/) || has(/^group .*\(avoid·admin\)/)) return 'blocked by a filtered word or group';
+  if (has(/^foreign-dub |^foreign-dual /)) return 'in the wrong language';
+  return '';
 }
 
 // Is this mounted file too small to be the real feature it claims? Pure + exported so it can be unit-
@@ -1820,12 +1849,31 @@ class PlaySession {
 
 const SEARCH_PARTIAL_MS = 60 * 1000; // a hit missing an indexer's answer is retried after a minute
 const SEARCH_FRESH_MS = 2 * 60 * 60 * 1000; // a good search stays for an evening; a bad release is a separate 6h verdict
+// Brief 148: the normal per-indexer search budget, and the one longer budget a slow indexer gets
+// when the search ended with nothing playable. One shared deadline for the whole round.
+const INDEXER_SEARCH_MS = 2000;
+const SECOND_CHANCE_MS = 8000;
+// A round that found nothing new is not repeated for this long, so focus warm-ups of a title
+// that is not out yet do not spend more API hits on an indexer that is already struggling.
+const SECOND_CHANCE_QUIET_MS = 10 * 60 * 1000;
+// A round that did find releases may run again once its search hit has aged out.
+const SECOND_CHANCE_HELPED_MS = SEARCH_PARTIAL_MS;
+const SECOND_CHANCE_WIDTH = 3; // requests in flight per round, like the widen extras
+// Indexer health window for Settings → Indexers: the recent searches, kept in memory only.
+const INDEXER_HEALTH_WINDOW_MS = 24 * 60 * 60 * 1000;
+const INDEXER_HEALTH_MAX = 200;
+
+// fetchUrl's own deadline/idle texts. Cooling-down, HTTP errors and wrong keys are not timeouts.
+function isIndexerTimeoutError(text) {
+  return /deadline after \d+ms|deadline exceeded|timeout after \d+ms|\bETIMEDOUT\b/i.test(String(text || ''));
+}
 
 class Pipeline {
   constructor({
     pool, verdicts, mounts, indexers = () => [], usage = {}, performance = () => null,
     enforceFeatureSize = false, mountDeadlineMs = MOUNT_DEADLINE_MS, totalMemMb = TOTAL_MEM_MB,
     maxAdvanceMs = MAX_ADVANCE_MS,
+    indexerTimeoutMs = INDEXER_SEARCH_MS, secondChanceTimeoutMs = SECOND_CHANCE_MS,
   }) {
     this.pool = pool;             // () => NntpPool (lazy, settings-driven)
     this.verdicts = verdicts;     // VerdictCache
@@ -1838,7 +1886,14 @@ class Pipeline {
     // Indexer usage accounting (daily API/grab limits live in the HTTP layer's store):
     // onSearch fires per indexer per actual fan-out (cache hits are free); canGrab/onGrab
     // gate and count NZB downloads (cached NZBs and live-mount reuse never count).
-    this.usage = { onSearch: () => {}, canGrab: () => true, onGrab: () => {}, ...usage };
+    this.usage = { onSearch: () => {}, onSearchResult: () => {}, canGrab: () => true, onGrab: () => {}, ...usage };
+    // Constructor overrides exist so the second-chance tests run in under a second per round.
+    this.indexerTimeoutMs = Number.isFinite(indexerTimeoutMs) && indexerTimeoutMs > 0 ? indexerTimeoutMs : INDEXER_SEARCH_MS;
+    this.secondChanceTimeoutMs = Number.isFinite(secondChanceTimeoutMs) && secondChanceTimeoutMs > 0 ? secondChanceTimeoutMs : SECOND_CHANCE_MS;
+    this._secondChanceInflight = new Map(); // search key -> shared round { promise, consumers, controller }
+    this._secondChanceTried = new Map();    // search key -> retry-after time
+    this._indexerHealth = new Map();        // indexer name -> [{ at, outcome }]
+    this._nzbFailures = new Map();          // indexer name -> [{ at, code }] (NZB download failures)
     this.performance = performance; // admin streaming profile: connection fairness + buffers
     // Constructor override exists for deterministic timeout regression tests; production keeps the
     // canonical bounded deadline above.
@@ -1897,6 +1952,11 @@ class Pipeline {
       healthGateMaxMs: 0,
       windowRebalances: 0,
       titlePrepareJoins: 0,
+      secondChanceRounds: 0,
+      secondChanceJoins: 0,
+      secondChanceHelped: 0,
+      secondChanceCancelled: 0,
+      secondChanceInflight: 0,
     };
   }
 
@@ -1957,7 +2017,9 @@ class Pipeline {
       : ixs.length;
     const t0 = Date.now();
     try {
-      return await fanout(ixs, params, { ...opts, concurrency });
+      const out = await fanout(ixs, params, { ...opts, concurrency });
+      this._noteIndexerOutcomes(ixs, out);
+      return out;
     } finally {
       this._activeFanouts = Math.max(0, this._activeFanouts - 1);
       const ms = Date.now() - t0;
@@ -1965,6 +2027,208 @@ class Pipeline {
       this.metrics.searchFanoutMs += ms;
       this.metrics.searchFanoutMaxMs = Math.max(this.metrics.searchFanoutMaxMs, ms);
     }
+  }
+
+  // Per-indexer health for Settings → Indexers (brief 148). In memory only: no disk write on the
+  // Play path. "cooling down" is a skipped search, not an answer, so it is not counted.
+  _noteIndexerOutcome(name, outcome) {
+    if (!name) return;
+    const now = Date.now();
+    const list = this._indexerHealth.get(name) || [];
+    list.push({ at: now, outcome });
+    while (list.length > INDEXER_HEALTH_MAX || (list.length && now - list[0].at > INDEXER_HEALTH_WINDOW_MS)) list.shift();
+    this._indexerHealth.set(name, list);
+    try { this.usage.onSearchResult(name, outcome); } catch {}
+  }
+
+  _noteIndexerOutcomes(ixs, out) {
+    const failed = new Map();
+    for (const e of (out && out.errors) || []) if (e && e.indexer) failed.set(e.indexer, String(e.error || ''));
+    for (const ix of ixs || []) {
+      if (!ix || !ix.name) continue;
+      if (!failed.has(ix.name)) { this._noteIndexerOutcome(ix.name, 'ok'); continue; }
+      const text = failed.get(ix.name);
+      if (/cooling down after a rate limit/i.test(text)) continue;
+      this._noteIndexerOutcome(ix.name, isIndexerTimeoutError(text) ? 'timeout' : 'failed');
+    }
+  }
+
+  // One NZB download that failed, by its plain code ("HTTP 510", "timeout"), never its text: an
+  // error text or link can carry the indexer key. What a code means is the indexer's business.
+  _noteNzbFailure(name, e) {
+    if (!name) return;
+    const text = nzbFailText(e).replace(/^nzb:\s*/, '');
+    const now = Date.now();
+    const list = this._nzbFailures.get(name) || [];
+    list.push({ at: now, code: text.slice(0, 40) || 'failed' });
+    while (list.length > INDEXER_HEALTH_MAX || (list.length && now - list[0].at > INDEXER_HEALTH_WINDOW_MS)) list.shift();
+    this._nzbFailures.set(name, list);
+  }
+
+  indexerHealth(name) {
+    const now = Date.now();
+    const byCode = new Map();
+    for (const x of this._nzbFailures.get(name) || []) {
+      if (now - x.at <= INDEXER_HEALTH_WINDOW_MS) byCode.set(x.code, (byCode.get(x.code) || 0) + 1);
+    }
+    const nzbFailures = [...byCode.entries()].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count);
+    const list = (this._indexerHealth.get(name) || []).filter((x) => now - x.at <= INDEXER_HEALTH_WINDOW_MS);
+    let timeouts = 0, failures = 0;
+    for (const x of list) {
+      if (x.outcome === 'timeout') timeouts++;
+      else if (x.outcome === 'failed') failures++;
+    }
+    return { searches: list.length, timeouts, failures, nzbFailures };
+  }
+
+  // Brief 148: one second chance for a slow indexer. Called only at the very end of play() or
+  // prepare, when even the relaxed and widened searches left nothing playable, so a Play that has a
+  // playable result never waits here. `first` is that Play's first search() result. Resolves true
+  // when the slow indexers answered with new releases (the search cache now holds the merged hit),
+  // false when there is nothing to retry, the round already ran, it was cancelled, or nothing new came.
+  async _secondChance(first, { signal = null } = {}) {
+    const sc = first && first.secondChance;
+    if (!sc || (signal && signal.aborted)) return false;
+    const triedUntil = this._secondChanceTried.get(sc.key);
+    if (triedUntil && Date.now() < triedUntil) return false;
+    if (triedUntil) this._secondChanceTried.delete(sc.key);
+    let round = this._secondChanceInflight.get(sc.key);
+    if (round) {
+      this.metrics.secondChanceJoins++;
+    } else {
+      const names = new Set((first.errors || [])
+        .filter((e) => e && e.indexer && isIndexerTimeoutError(e.error))
+        .map((e) => String(e.indexer)));
+      if (!names.size) return false;
+      let ixs = [];
+      try { ixs = this.indexers() || []; } catch { ixs = []; }
+      // The 429/503 cooldown still holds: a limited indexer is not asked again.
+      const retry = ixs.filter((ix) => ix && names.has(ix.name) && !indexerIsCooling(ix.name));
+      if (!retry.length) return false;
+      round = this._startSecondChance(sc, retry);
+    }
+    round.consumers++;
+    let onAbort = null;
+    const cancelled = new Promise((resolve) => {
+      if (!signal) return;
+      onAbort = () => resolve('cancelled');
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+    let outcome = null;
+    try {
+      outcome = await Promise.race([round.promise, cancelled]);
+    } finally {
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+      round.consumers--;
+      // Several Plays can share one round. Only the last one leaving stops it.
+      if (outcome === 'cancelled' && round.consumers <= 0 && !round.settled) round.controller.abort();
+    }
+    if (outcome === 'cancelled') {
+      this.metrics.secondChanceCancelled++;
+      console.log('[search] second chance: cancelled with the Play');
+      return false;
+    }
+    return !!(outcome && outcome.newCount > 0);
+  }
+
+  _startSecondChance(sc, retry) {
+    const controller = new AbortController();
+    const round = { consumers: 0, controller, settled: false, promise: null };
+    this.metrics.secondChanceRounds++;
+    this.metrics.secondChanceInflight++;
+    this._secondChanceInflight.set(sc.key, round);
+    round.promise = this._runSecondChance(sc, retry, controller.signal)
+      .catch(() => ({ newCount: 0, aborted: controller.signal.aborted }))
+      .then((out) => {
+        // A cancelled round is not "tried": the next Play may run it.
+        if (!out.aborted) {
+          this._secondChanceTried.set(sc.key, Date.now() + (out.newCount > 0 ? SECOND_CHANCE_HELPED_MS : SECOND_CHANCE_QUIET_MS));
+          if (this._secondChanceTried.size > 200) this._secondChanceTried.delete(this._secondChanceTried.keys().next().value);
+        }
+        return out;
+      })
+      .finally(() => {
+        round.settled = true;
+        this.metrics.secondChanceInflight = Math.max(0, this.metrics.secondChanceInflight - 1);
+        if (this._secondChanceInflight.get(sc.key) === round) this._secondChanceInflight.delete(sc.key);
+      });
+    return round;
+  }
+
+  // The same queries as the first search (main, short-title alias, widen extras), only to the
+  // indexers that timed out, three at a time each, under ONE shared deadline. Deliberately not
+  // through _fanoutMeasured: a long round must not count as a competing fan-out and shrink the
+  // indexer width of another title's first search.
+  async _runSecondChance(sc, retry, signal) {
+    const { params, wanted, wantUhd, widenSearch, hit } = sc;
+    const deadlineAt = Date.now() + this.secondChanceTimeoutMs;
+    const qualifies = (r) => releaseQualifies(r, wanted, params);
+    const jobs = [params];
+    const titleQ = shortTitleQuery(params.q, wanted);
+    if (titleQ) jobs.push({ q: titleQ });
+    const extraJobs = widenSearch === false
+      ? (wantUhd && params.q && !/\b(2160p|4k|uhd)\b/i.test(params.q) ? [{ q: `${params.q} 2160p` }] : [])
+      : widenSearchJobs(params.q, wanted, { wantUhd, aliases: params.aliases });
+    for (const job of extraJobs) {
+      const p = { q: job.q };
+      if (job.sort) p.sort = job.sort;
+      if (job.order) p.order = job.order;
+      if (job.minsize) p.minsize = job.minsize;
+      jobs.push(p);
+    }
+    const perIndexer = await Promise.all(retry.map(async (ix) => {
+      const t0 = Date.now();
+      const rows = [];
+      let answered = false;
+      let lastError = '';
+      let next = 0;
+      const worker = async () => {
+        while (next < jobs.length && !signal.aborted) {
+          const job = jobs[next++];
+          const remaining = deadlineAt - Date.now();
+          if (remaining < 100) { lastError = lastError || 'deadline exceeded'; return; }
+          this.usage.onSearch(ix.name);
+          try {
+            rows.push(...await searchIndexer(ix, job, { timeoutMs: remaining, signal }));
+            answered = true;
+          } catch (e) {
+            if (signal.aborted) return;
+            lastError = String((e && e.message) || e || 'error');
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(SECOND_CHANCE_WIDTH, jobs.length) }, () => worker()));
+      return { ix, rows, answered, lastError, ms: Date.now() - t0 };
+    }));
+    if (signal.aborted) return { newCount: 0, aborted: true };
+    let list = (hit.results || []).slice();
+    const before = list.length;
+    const retried = new Set(retry.map((ix) => ix.name));
+    const errors = (hit.errors || []).filter((e) => !(e && retried.has(e.indexer)));
+    for (const r of perIndexer) {
+      this._noteIndexerOutcome(r.ix.name, r.answered ? 'ok' : (isIndexerTimeoutError(r.lastError) ? 'timeout' : 'failed'));
+      const n0 = list.length;
+      list = dedupe(mergeQualifiedResults(list, r.rows, qualifies));
+      const added = Math.max(0, list.length - n0);
+      const line = r.answered
+        ? `second chance: ${r.ix.name} answered in ${r.ms} ms, ${added} new release${added === 1 ? '' : 's'}`
+        : `second chance: ${r.ix.name} still no answer after ${r.ms} ms`;
+      console.log(`[search] ${line}`);
+      debug.log('search', line);
+      if (!r.answered) errors.push({ indexer: r.ix.name, error: `second chance: ${r.lastError || 'no answer'}` });
+    }
+    const newCount = Math.max(0, list.length - before);
+    if (newCount > 0) {
+      this.metrics.secondChanceHelped++;
+      const merged = {
+        ...hit, at: Date.now(), results: list, errors, skipCache: false,
+        partial: errors.some(isTransientSearchError),
+      };
+      this._rememberSearchHit(sc.key, merged);
+      this._rememberSearchHit(sc.titleKey, merged);
+    }
+    return { newCount, aborted: false };
   }
 
   _searchCacheKey(params, opts = {}) {
@@ -2300,7 +2564,12 @@ class Pipeline {
           if (src !== sources[0] && this.usage) this.usage.onGrab(src.indexer);
           this._rememberNzb(candidate.nzbUrl, xml);
           return xml;
-        } catch (e) { lastErr = e; }
+        } catch (e) {
+          lastErr = e;
+          // Settings -> Indexers health (lead addition to brief 148): count the failure and its
+          // code only. No retry or ranking change follows from it.
+          this._noteNzbFailure(src.indexer, e);
+        }
       }
       throw lastErr || new Error('nzb fetch failed');
     })().finally(() => this.nzbInflight.delete(candidate.nzbUrl));
@@ -2872,7 +3141,8 @@ class Pipeline {
   }
 
   // Search + rank only (powers the Sources drawer). Applies cached verdict adjustments.
-  async search(params, policy = {}, { timeoutMs = 2000, allowStale = false, widenSearch = true } = {}) {
+  async search(params, policy = {}, { timeoutMs, allowStale = false, widenSearch = true } = {}) {
+    if (!(Number.isFinite(timeoutMs) && timeoutMs > 0)) timeoutMs = this.indexerTimeoutMs;
     const ixs = this.indexers();
     if (!ixs.length) throw new Error('no indexers configured');
     // Scene names never carry punctuation — "Tom Clancy's Jack Ryan: Ghost War" must reach
@@ -3071,7 +3341,10 @@ class Pipeline {
       // and Play does not start them for this episode (it reports no source instead of a wrong one).
       if (evidence.strong) candidates = candidates.map((c) => ({ ...c, score: Math.min(c.score, -9000), reasons: [...(c.reasons || []), `episode-number names TMDB E${evidence.named}`] }));
     }
-    return { candidates, errors, confirmed, named };
+    // What a second-chance round needs to re-ask a slow indexer the same queries and merge the
+    // answer into this very hit (brief 148). In memory only; never sent to a client.
+    const secondChance = { key, titleKey, hit, params, wanted, wantUhd, widenSearch };
+    return { candidates, errors, confirmed, named, secondChance };
   }
 
   // The mounted file's probed duration does not fit this catalog title's runtime: remember it
@@ -3674,7 +3947,56 @@ class Pipeline {
   // params.pickKey front-loads the exact user-chosen source from the Sources drawer; the old
   // release-name pick stays as a fallback for older clients. The pick leads; if it is dead
   // (ISO / 7z / missing), auto-advance walks the remaining playable list in sourceSort order.
-  async play(params, policy = {}, mountOpts = {}) {
+  // The fallbacks a Play or a warm-up walks before it says "nothing playable": the soft exact-rank
+  // matches (Play only), the 4K lock relaxed to the best resolution, then the 1080 widen. Shared so
+  // a second-chance round (brief 148) re-runs exactly the same chain on the merged search.
+  async _playableWithFallbacks(params, policy, candidates, { softExact = true } = {}) {
+    const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
+    let playable = this._playableCandidates(candidates, params);
+    if (explicitPick) return { playable, candidates };
+    // Exact 4K (or any exact rank) with no playable match: try labelled matching-res releases
+    // that are only soft-penalized (probe-timeout, small short-film) before relaxing to 1080p.
+    // Hard disqualifies (−100000: missing, encrypted, sample <80MB, not-the-movie) stay out.
+    if (!playable.length && softExact && policy.exactResolutionRank != null) {
+      playable = (candidates || []).filter((c) => {
+        const rank = c.attributes && Number.isInteger(c.attributes.resolutionRank)
+          ? c.attributes.resolutionRank
+          : parseRelease(c.name).resolutionRank;
+        return rank === policy.exactResolutionRank && c.score > -50000;
+      });
+    }
+    // 4K toggle with no 4K source: exactResolutionRank disqualifies every non-4K release, which
+    // would fail the play entirely ("I toggled 4K and nothing plays"). Fall back to the best
+    // available resolution instead — keep the 4K preference so UHD still wins when it exists.
+    if (!playable.length && policy.exactResolutionRank != null) {
+      const relaxed = { ...policy };
+      delete relaxed.exactResolutionRank;
+      const retry = await this.search(params, relaxed);
+      playable = this._playableCandidates(retry.candidates, params);
+      if (playable.length) candidates = retry.candidates;
+    }
+    if (!playable.length) {
+      const wide = await this._widenPlayable(params, policy, playable, candidates);
+      playable = wide.playable;
+      if (wide.candidates && wide.candidates.length) candidates = wide.candidates;
+    }
+    return { playable, candidates };
+  }
+
+  // Nothing playable after every fallback, and an indexer missed the deadline: give it one
+  // second chance, then walk the same fallbacks on the merged search. Never reached by a Play
+  // that has a playable result. A Sources pick does not wait for it.
+  async _playableAfterSecondChance(params, policy, first, prior, { softExact = true, signal = null } = {}) {
+    const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
+    if (prior.playable.length || explicitPick) return null;
+    if (!(await this._secondChance(first, { signal }))) return null;
+    if (signal && signal.aborted) return null;
+    const again = await this.search(params, policy);
+    const next = await this._playableWithFallbacks(params, policy, again.candidates, { softExact });
+    return { ...next, errors: again.errors };
+  }
+
+  async play(params, policy = {}, mountOpts = {}, playOpts = {}) {
     const _we = wantedEpisodeOf(params);
     if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we }; // so a season pack mounts the wanted episode
     this.forgetMismatchedPrepared(params, policy);
@@ -3686,7 +4008,8 @@ class Pipeline {
     const ready = this._preparedForPlay(params, policy);
     if (ready) return this._joinPrepared(params, policy, mountOpts, ready);
     const searchT0 = Date.now();
-    let { candidates, errors: searchErrors } = await this.search(params, policy);
+    const first = await this.search(params, policy);
+    let { candidates, errors: searchErrors } = first;
     // Details warmup often lands while Play is still searching. Use it instead of
     // racing fresh mounts against the copy that is already open.
     const readyAfterSearch = this._preparedForPlay(params, policy);
@@ -3696,34 +4019,19 @@ class Pipeline {
       if (stale.candidates && stale.candidates.length) candidates = stale.candidates;
     }
     const searchMs = Date.now() - searchT0;
-    let playable = this._playableCandidates(candidates, params);
     const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
-    if (explicitPick && !playable.length) throw new Error('picked source not found');
-    // Exact 4K (or any exact rank) with no playable match: try labelled matching-res releases
-    // that are only soft-penalized (probe-timeout, small short-film) before relaxing to 1080p.
-    // Hard disqualifies (−100000: missing, encrypted, sample <80MB, not-the-movie) stay out.
-    if (!playable.length && policy.exactResolutionRank != null && !explicitPick) {
-      playable = candidates.filter((c) => {
-        const rank = c.attributes && Number.isInteger(c.attributes.resolutionRank)
-          ? c.attributes.resolutionRank
-          : parseRelease(c.name).resolutionRank;
-        return rank === policy.exactResolutionRank && c.score > -50000;
-      });
+    let chosen = await this._playableWithFallbacks(params, policy, candidates);
+    if (explicitPick && !chosen.playable.length) throw new Error('picked source not found');
+    const second = await this._playableAfterSecondChance(params, policy, first, chosen, { signal: playOpts && playOpts.signal });
+    if (second) {
+      chosen = second;
+      searchErrors = second.errors;
+      // A warm-up may have finished on the new releases while this Play waited.
+      const readyAfterSecond = this._preparedForPlay(params, policy);
+      if (readyAfterSecond) return this._joinPrepared(params, policy, mountOpts, readyAfterSecond);
     }
-    // 4K toggle with no 4K source: exactResolutionRank disqualifies every non-4K release, which
-    // would fail the play entirely ("I toggled 4K and nothing plays"). Fall back to the best
-    // available resolution instead — keep the 4K preference so UHD still wins when it exists.
-    if (!playable.length && policy.exactResolutionRank != null && !explicitPick) {
-      const relaxed = { ...policy };
-      delete relaxed.exactResolutionRank;
-      const retry = await this.search(params, relaxed);
-      playable = this._playableCandidates(retry.candidates, params);
-    }
-    if (!playable.length) {
-      const wide = await this._widenPlayable(params, policy, playable, candidates);
-      playable = wide.playable;
-      if (wide.candidates && wide.candidates.length) candidates = wide.candidates;
-    }
+    candidates = chosen.candidates;
+    let playable = chosen.playable;
     if (!playable.length) throw noPlayableError(candidates, searchErrors, this.indexers().length);
     if (!explicitPick) playable = this._orderForPipe(playable, policy);
     if (!explicitPick && !params.pinnedResume) playable = this._orderForPicture(playable, policy);
@@ -4040,24 +4348,19 @@ class Pipeline {
   }
 
   async _runPrepare(params, policy = {}, mountOpts = {}) {
-    let { candidates, errors: searchErrors } = await this.search(params, policy);
-    let playable = this._playableCandidates(candidates, params);
+    const first = await this.search(params, policy);
+    let searchErrors = first.errors;
     // Same fallback as play(): the 4K toggle on a title with no 4K release disqualified every
     // release, so the warm-up failed and was cached as failed ("House S04E06 — 33 disqualified by
     // score") and every episode then started cold. Play itself already fell back to 1080p.
-    const userPicked = (params.pickKey || params.pick) && !params.pinnedResume;
-    if (!playable.length && policy.exactResolutionRank != null && !userPicked) {
-      const relaxed = { ...policy };
-      delete relaxed.exactResolutionRank;
-      const retry = await this.search(params, relaxed);
-      playable = this._playableCandidates(retry.candidates, params);
-      if (playable.length) candidates = retry.candidates;
-    }
-    if (!playable.length) {
-      const wide = await this._widenPlayable(params, policy, playable, candidates);
-      playable = wide.playable;
-      if (wide.candidates && wide.candidates.length) candidates = wide.candidates;
-    }
+    // (The soft exact-rank pass is Play-only, as before.)
+    let chosen = await this._playableWithFallbacks(params, policy, first.candidates, { softExact: false });
+    // Brief 148: the owner's "prepare failed … NZBgeek: deadline after 2000ms (x4)" was a warm-up.
+    // A Play joining while this round runs shares it instead of asking the indexer again.
+    const second = await this._playableAfterSecondChance(params, policy, first, chosen, { softExact: false });
+    if (second) { chosen = second; searchErrors = second.errors; }
+    const candidates = chosen.candidates;
+    let playable = chosen.playable;
     if (!playable.length) throw noPlayableError(candidates, searchErrors, this.indexers().length);
     const userChose = (params.pickKey || params.pick) && !params.pinnedResume;
     if (!userChose) playable = this._orderForPipe(playable, policy);

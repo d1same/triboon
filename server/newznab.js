@@ -202,7 +202,7 @@ function parseNewznabRss(xml, indexerName) {
 }
 
 // One indexer search. params: { q, imdbid, tvdbid, season, ep, cat, limit }
-async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
+async function searchIndexer(indexer, params, { timeoutMs = 2000, signal = null } = {}) {
   if (indexerIsCooling(indexer.name)) {
     throw new Error(`${indexer.name}: cooling down after a rate limit`);
   }
@@ -231,7 +231,7 @@ async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
   // 100 (most indexers' max): the default sort is recency, so a tight limit silently
   // drops older releases — every big BluRay remux of a 15-year-old film, for instance.
   u.searchParams.set('limit', params.limit || 100);
-  const r = await fetchUrl(u.href, { timeoutMs, deadlineMs: timeoutMs }); // hard per-indexer budget
+  const r = await fetchUrl(u.href, { timeoutMs, deadlineMs: timeoutMs, signal }); // hard per-indexer budget
   if (r.status === 429 || r.status === 503) {
     markIndexerLimited(indexer.name);
     throw new Error(`${indexer.name}: HTTP ${r.status}`);
@@ -285,7 +285,7 @@ function dedupe(results) {
 // `concurrency` caps how many indexers one search hits at once. A single Play still
 // uses all indexers together. Two or three overlapping Plays pass a smaller number so
 // they share indexer sockets instead of one title occupying every HTTP slot.
-async function fanout(indexers, params, { timeoutMs = 2000, concurrency } = {}) {
+async function fanout(indexers, params, { timeoutMs = 2000, concurrency, signal = null } = {}) {
   const n = indexers.length;
   const limit = Math.max(1, Math.min(n, concurrency == null ? n : concurrency));
   const settled = new Array(n);
@@ -295,7 +295,7 @@ async function fanout(indexers, params, { timeoutMs = 2000, concurrency } = {}) 
       const i = next++;
       if (i >= n) return;
       try {
-        settled[i] = { status: 'fulfilled', value: await searchIndexer(indexers[i], params, { timeoutMs }) };
+        settled[i] = { status: 'fulfilled', value: await searchIndexer(indexers[i], params, { timeoutMs, signal }) };
       } catch (reason) {
         settled[i] = { status: 'rejected', reason };
       }
