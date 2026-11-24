@@ -142,7 +142,7 @@ fails to produce a playable stream. Budgets default to feels-local targets
   - **Windows client (`triboon-px8` 3.5.9):** `cargo test --no-default-features` 46/46 passed, 0 failed; `cargo check --features player` compiled cleanly.
 - Live verification (real provider & owner hardware):
   - **End-to-end live server (`http://127.0.0.1:7778`):** 11/11 PASS — TMDB multi-searches `62/2/1/1 ms`; local Persian search `9 ms` and local play `26 ms` / 45% seek `18 ms`; Usenet Play (*Inception 2010*) `ready=2389 ms`, `firstByte=4 ms`, `seek45=684 ms`, `remux=500 ms`, `resume=30 ms (reused=true)`; Live TV `9793 channels` in `27 ms`, native tune `5 ms`, web fMP4 `1358 ms`; Jellyfin API cross-platform + Persian search `200 OK`.
-  - **Owner NVIDIA Shield TV (`10.1.20.11`):** sideloaded debug APK pointed at local `http://10.1.20.120:7778` — owner verified live playback, Live TV retuning (`A&E`, `ANIMAL PLANET`, `CARIB: HOT 7`, `Paramount`), rapid seeking through Persian local TV (`Divar Defaei S01E01`), and instant prepared VOD startup (`WKRP in Cincinnati S01E01` `6 ms`, `Lizzie McGuire S01E02` `2533 ms`) with zero uncaught errors.
+  - **Owner NVIDIA Shield TV (local LAN):** sideloaded debug APK pointed at local LAN test server — owner verified live playback, Live TV retuning, rapid seeking through a local TV library episode, and instant prepared VOD startup (`6 ms` warm / `2533 ms` cold) with zero uncaught errors.
   - **Live Browser UI (`http://localhost:7778`, `1280x800` + `390x844`):** verified Home, Discover, Calendar, Live TV, Audiobooks, Search, Detail, Mobile layout, and Settings with zero uncaught JS exceptions.
 - NOT verified locally (covered by CI or owner follow-up):
   - Windows `libmpv` runtime GPU decode (`hwdec-current`) and Windows ARM64.
