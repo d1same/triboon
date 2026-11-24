@@ -18,8 +18,13 @@ canonical reference.
 - UI: `web/index.html`, one web app with TV D-pad navigation and browser support.
 - Android TV: Java WebView shell with native Media3/ExoPlayer for video and Live TV.
 - Jellyfin apps: optional door in `server/jellyfin-api.js`, off until Settings
-  → Jellyfin apps. Same Triboon accounts. Catalog and disk libraries. Playback
-  is short HLS pieces capped at 1080p. Continue Watching and Play Next use the
+  → Jellyfin apps. Same Triboon accounts. Catalog, disk libraries, and optional
+  Live TV + XMLTV guide (`jellyfinLiveTv`, off by default). Direct play runs
+  original files (including Infuse Direct Mode and optional 4K direct play via
+  `jellyfinAllow4k`, respecting per-user Triboon quality caps while keeping
+  transcoded HLS capped at 1080p); incompatible streams fall back to short HLS
+  pieces, and Live TV supports direct shared TS/HLS plus rolling MPEG-TS Live
+  HLS (`/api/iptv/hls/:idx/index.m3u8`). Continue Watching and Play Next use the
   same account watch rows as the Triboon app (unrestricted profiles), and a resume warms that
   minute. While the picture is not ready the player shows a Loading card.
   The Triboon web, Android, and Windows clients do not use this door.

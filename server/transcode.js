@@ -667,6 +667,33 @@ function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio 
   return spawn(ff.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 }
 
+// Rolling Live TV HLS (MPEG-TS segments + stereo AAC) fed from Triboon's local shared IPTV hub.
+// MPEG-TS segments play natively on Roku, Apple TV AVPlayer, iOS Safari, Samsung Tizen, LG webOS,
+// and Jellyfin Web without requiring MSE or raw endless fMP4 pipes.
+function spawnLiveHls(inputUrl, { outDir, transcodeVideo = false, segmentTime = 2 } = {}) {
+  const ff = detectFfmpeg();
+  if (!ff) throw new Error('ffmpeg not available');
+  if (!outDir) throw new Error('spawnLiveHls requires an output directory');
+  const args = [
+    '-hide_banner', '-loglevel', 'error',
+    '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3',
+    '-analyzeduration', '500000', '-probesize', '1000000',
+    '-i', inputUrl,
+    '-map', '0:v:0?', '-map', '0:a:0?',
+    ...liveVideoArgs(transcodeVideo),
+    '-c:a', 'aac', '-ar', '48000', '-b:a', '192k', '-ac', '2',
+    '-fflags', '+genpts',
+    '-f', 'hls',
+    '-hls_time', String(segmentTime),
+    '-hls_list_size', '6',
+    '-hls_flags', 'delete_segments+independent_segments+temp_file',
+    '-hls_segment_type', 'mpegts',
+    '-hls_segment_filename', `${outDir.replace(/\\/g, '/')}/seg%05d.ts`,
+    `${outDir.replace(/\\/g, '/')}/index.m3u8`,
+  ];
+  return spawn(ff.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+}
+
 // Live IPTV ingest (HLS / raw MPEG-TS over HTTP) → fragmented MP4 the browser can play.
 // Differs from file remux on three points learned from real providers:
 //  - a browser-like User-Agent (providers block ffmpeg's default "Lavf"),
@@ -905,4 +932,4 @@ function probeCacheKey(name, size) {
   return `p2|${label}|${bytes}`;
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, parseProbeStreams, isAudioDescriptionTrack, defaultAudioTrack, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, LIVE_AUDIO_LAYOUTS };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, allowSoftware4k, canTranscode4k, decidePlayback, probeTracks, parseProbeStreams, isAudioDescriptionTrack, defaultAudioTrack, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, audioHintFromName, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, LIVE_AUDIO_LAYOUTS };

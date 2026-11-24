@@ -13148,3 +13148,50 @@ test('a player timeout right after the picture on the direct file plays the same
   assert.strictEqual(r.usingNative, true);
   assert.deepStrictEqual(calls.at(-1), ['same-source', 'ERROR_CODE_TIMEOUT'], 'and the normal recovery runs');
 });
+
+test('Settings & Admin icons are unique, Apps separates Jellyfin/Trakt from Libraries, advanced folds support D-pad, and mobile drawer/Settings stay aligned', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8').replace(/\r\n/g, '\n');
+
+  // 1. Every kept tab across #prefTabs and #setTabs (Appearance is dropped at boot) has a unique SVG icon.
+  const prefBlock = ui.slice(ui.indexOf('<div id="prefTabs">'), ui.indexOf('</div>', ui.indexOf('<div id="prefTabs">')));
+  const setBlock = ui.slice(ui.indexOf('<div id="setTabs">'), ui.indexOf('</div>', ui.indexOf('<div id="setTabs">')));
+  const tabRe = /<button[^>]*data-tab="([^"]+)"[^>]*>(<svg[\s\S]*?<\/svg>)\s*<span>([^<]+)<\/span><\/button>/g;
+  const seenSvg = new Map();
+  for (const [scope, block] of [['pref', prefBlock], ['set', setBlock]]) {
+    let m;
+    while ((m = tabRe.exec(block)) !== null) {
+      const [, key, svg, label] = m;
+      if (scope === 'set' && key === 'display') continue; // dropped by mergeServerSettingsIntoPrefs
+      const norm = svg.replace(/\s+/g, ' ').trim();
+      assert.ok(!seenSvg.has(norm), `duplicate icon between ${seenSvg.get(norm)} and ${scope}:${key} (${label})`);
+      seenSvg.set(norm, `${scope}:${key} (${label})`);
+    }
+  }
+  assert.ok(seenSvg.size >= 18, `expected at least 18 unique Settings/Admin tab icons, found ${seenSvg.size}`);
+
+  // 2. Apps tab owns Jellyfin apps & Trakt; Libraries stays focused on Local libraries & Audiobooks.
+  assert.match(setBlock, /data-tab="apps"[\s\S]+<span>Apps<\/span>/);
+  const rulesPanel = ui.slice(ui.indexOf('<div class="setGrid" data-stab="rules"'), ui.indexOf('<div class="setGrid" data-stab="apps"'));
+  const appsPanel = ui.slice(ui.indexOf('<div class="setGrid" data-stab="apps"'), ui.indexOf('<div class="setGrid" data-stab="catalog"'));
+  assert.ok(rulesPanel.includes('<h2>Local libraries</h2>') && rulesPanel.includes('<h2>Audiobooks</h2>') && !rulesPanel.includes('id="jellyfinAppsEnabled"'),
+    'Libraries holds Local libraries and Audiobooks without Jellyfin apps');
+  assert.ok(appsPanel.includes('<h2>Jellyfin apps</h2>') && appsPanel.includes('id="jellyfinAppsEnabled"') && appsPanel.includes('<h2>Trakt</h2>') && appsPanel.includes('id="traktSave"'),
+    'Apps holds Jellyfin apps and Trakt server app setup');
+
+  // 3. Collapsible advanced folds in Performance & Scoring + TV D-pad <summary> support.
+  assert.match(ui, /<details class="advFold" id="perfAdvFold">[\s\S]+<summary class="advFoldHead focusable">[\s\S]+id="perfPipeline"/);
+  assert.match(ui, /<details class="advFold" id="scoringAdvFold">[\s\S]+<summary class="advFoldHead focusable">[\s\S]+id="scSave"/);
+  assert.match(ui, /function formCtls\(scope\) \{[\s\S]+querySelectorAll\('button, input, select, a, summary'\)/);
+  assert.match(ui, /function formActivate\(el\) \{[\s\S]+BUTTON\|A\|SUMMARY/);
+
+  // 4. Mobile Settings drill-down, 2-step Back, landscape 2-column split, and IPTV category filter.
+  assert.ok(ui.includes('id="prefMobileBar"') && ui.includes('id="prefMobileBack"') && ui.includes('id="prefCatFilter"'));
+  assert.match(ui, /function leaveSettingsPanelToTabs\(\) \{\s*if \(typeof isPhoneSettingsDrilldown === 'function' && isPhoneSettingsDrilldown\(\)\) \{\s*return closeMobilePrefsDetail\(\);/);
+  assert.match(ui, /@media \(min-width:761px\) and \(max-width:900px\)\{[\s\S]+grid-template-columns:192px minmax\(0,1fr\)!important/);
+
+  // 5. Mobile burger drawer profile row alignment (safe-area burger + centered #railUser + left-aligned label).
+  assert.match(ui, /#burger\{position:fixed;top:calc\(14px \+ var\(--safeT\)\);left:calc\(14px \+ var\(--safeL\)\);/);
+  assert.ok(ui.includes('body.mobileNav #railUser .rlabel{max-width:146px;flex:1 1 auto;min-width:0;text-align:left}')
+    && ui.includes('body.mobileShell.mobileNav #railUser .rlabel{max-width:146px;flex:1 1 auto;min-width:0;text-align:left}'),
+    'open mobile drawer left-aligns the user profile name beside the avatar instead of centering it');
+});

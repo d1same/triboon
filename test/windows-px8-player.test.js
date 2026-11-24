@@ -609,3 +609,87 @@ test('Windows client: LGPL runtime and honest hardware verification are document
   assert.doesNotMatch(readme, /Dolby Vision[^\n]+guarantee/i,
     'hardware-chain-dependent Dolby Vision is not promised universally');
 });
+
+test('Desktop Live TV: Browser and Windows players expose Ch-/Ch+ buttons, [/] shortcuts, and debounced surfing', () => {
+  const winHtml = read('clients/windows-px8/ui/player.html');
+  const winCss = read('clients/windows-px8/ui/player.css');
+  const winJs = read('clients/windows-px8/ui/player.js');
+  const webHtml = read('web/index.html');
+
+  // Windows native player bar + shortcuts
+  assert.match(winHtml, /id="chPrev"[\s\S]+id="playPause"[\s\S]+id="chNext"/,
+    'Windows Live TV transport bar places Ch- and Ch+ around Play/Pause');
+  assert.match(winCss, /body:not\(\.live\)\s+#chPrev,\s*body:not\(\.live\)\s+#chNext\s*\{\s*display:\s*none !important;\s*\}/,
+    'Windows Ch-/Ch+ buttons stay hidden during VOD playback');
+  assert.match(winJs, /\$\('chPrev'\)\)\.addEventListener|\$\('chPrev'\)\.addEventListener\('click', \(\) => send\('live_zap', \{ direction: -1 \}\)\)/,
+    'Windows Ch- button dispatches live_zap -1');
+  assert.match(winJs, /\$\('chNext'\)\.addEventListener\('click', \(\) => send\('live_zap', \{ direction: 1 \}\)\)/,
+    'Windows Ch+ button dispatches live_zap +1');
+  assert.match(winJs, /event\.key === '\['[\s\S]+send\('live_zap', \{ direction: -1 \}\)/,
+    'Windows [ shortcut zaps to previous channel');
+  assert.match(winJs, /event\.key === '\]'[\s\S]+send\('live_zap', \{ direction: 1 \}\)/,
+    'Windows ] shortcut zaps to next channel');
+
+  // Web player bar + shortcuts
+  assert.match(webHtml, /id="chPrevBtn"[\s\S]+id="playPause"[\s\S]+id="chNextBtn"/,
+    'Browser Live TV transport bar places Ch- and Ch+ around Play/Pause');
+  assert.match(webHtml, /k === 'PageUp' \|\| k === 'PageDown' \|\| k === '\[' \|\| k === '\]'/,
+    'Browser Live TV supports [, ], PageUp, and PageDown channel shortcuts');
+
+  // Behavioral check: rapid zapping debounces into ONE playChannel call on the final target
+  const start = webHtml.indexOf('function cancelPendingLiveZap()');
+  const end = webHtml.indexOf('window.__tvNativeLiveZap =', start);
+  assert.ok(start >= 0 && end > start, 'debounced zapChannel helper is extractable');
+  const prevBtn = { hidden: false, title: '' };
+  const nextBtn = { hidden: false, title: '' };
+  const toasts = [];
+  const tuned = [];
+  const timers = [];
+  const list = [
+    { _channel: 10, title: 'US: CNN HD' },
+    { _channel: 11, title: 'US: FOX NEWS' },
+    { _channel: 12, title: 'US: ESPN' },
+    { _channel: 13, title: 'US: HBO' },
+  ];
+  const S = {
+    liveList: list,
+    liveCur: 10,
+    playing: { item: { type: 'live' }, usingNative: false },
+  };
+  const api = new Function(
+    'S', '$', 'window', 'toast', 'liveNameParts', 'liveSplitEnabled', 'activeLiveChannelIdx',
+    'playLiveSplitChannel', 'liveSplitActivePane', 'playChannel', 'markGuideCur', 'setTimeout', 'clearTimeout',
+    `${webHtml.slice(start, end)}\nreturn { zapChannel, cancelPendingLiveZap, updateLiveZapButtons };`,
+  )(
+    S,
+    (id) => (id === 'chPrevBtn' ? prevBtn : (id === 'chNextBtn' ? nextBtn : null)),
+    {},
+    (m) => toasts.push(m),
+    (raw) => ({ name: String(raw || '').replace(/^[A-Z]+:\s*/, '') }),
+    () => false,
+    () => S.liveCur,
+    () => Promise.resolve(),
+    () => 0,
+    (ch) => { S.liveCur = ch._channel; tuned.push(ch._channel); },
+    () => {},
+    (fn, ms) => { const h = { fn, ms, cleared: false }; timers.push(h); return h; },
+    (h) => { if (h) h.cleared = true; },
+  );
+
+  // 3 rapid Ch+ clicks: previews 2/4, 3/4, 4/4 and tunes ONLY #13 once the timer fires
+  api.zapChannel(1);
+  api.zapChannel(1);
+  api.zapChannel(1);
+  assert.strictEqual(tuned.length, 0, 'rapid clicks must not tune intermediate channels');
+  assert.deepStrictEqual(toasts, ['2/4 · FOX NEWS', '3/4 · ESPN', '4/4 · HBO']);
+  assert.strictEqual(timers.filter((t) => !t.cleared).length, 1, 'only one surf timer remains active');
+  timers.find((t) => !t.cleared).fn();
+  assert.deepStrictEqual(tuned, [13], 'debounce tunes the final landed channel once');
+
+  // Wrap backwards from index 0 -> last channel (#13), and cancelPendingLiveZap prevents tune
+  S.liveCur = 10;
+  api.zapChannel(-1);
+  assert.strictEqual(toasts[toasts.length - 1], '4/4 · HBO');
+  api.cancelPendingLiveZap();
+  assert.strictEqual(timers.filter((t) => !t.cleared).length, 0, 'cancelPendingLiveZap clears pending tune');
+});

@@ -1,0 +1,24 @@
+{
+  "name": "Triboon",
+  "short_name": "Triboon",
+  "description": "Self-hosted streaming for Movies, Shows, Live TV, Music, and Audiobooks.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0B0812",
+  "theme_color": "#0B0812",
+  "icons": [
+    {
+      "src": "triboon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "T-Logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

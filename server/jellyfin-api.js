@@ -242,6 +242,7 @@ function userFromJellyfinId(id) {
 }
 
 function userDto(user) {
+  const liveTv = !!(deps && typeof deps.jellyfinLiveTvEnabled === 'function' && deps.jellyfinLiveTvEnabled(user));
   return {
     Name: user.name,
     ServerId: doorServerId(),
@@ -275,7 +276,7 @@ function userDto(user) {
       EnableSharedDeviceControl: false,
       EnableRemoteAccess: true,
       EnableLiveTvManagement: false,
-      EnableLiveTvAccess: false,
+      EnableLiveTvAccess: liveTv,
       EnableMediaPlayback: true,
       EnableAudioPlaybackTranscoding: true,
       EnableVideoPlaybackTranscoding: true,
@@ -286,7 +287,7 @@ function userDto(user) {
       EnableSyncTranscoding: false,
       EnableMediaConversion: false,
       EnableAllDevices: true,
-      EnableAllChannels: false,
+      EnableAllChannels: liveTv,
       EnableAllFolders: true,
       InvalidLoginAttemptCount: 0,
       LoginAttemptsBeforeLockout: 10,
@@ -297,6 +298,39 @@ function userDto(user) {
       PasswordResetProviderId: '',
       SyncPlayAccess: 'None',
     },
+  };
+}
+
+function sessionInfoDto(ctx, user) {
+  const now = new Date().toISOString();
+  return {
+    PlayState: { CanSeek: false, IsPaused: false, IsMuted: false, RepeatMode: 'RepeatNone', PlaybackOrder: 'Default' },
+    AdditionalUsers: [],
+    Capabilities: {
+      PlayableMediaTypes: ['Video', 'Audio'],
+      SupportedCommands: [],
+      SupportsMediaControl: false,
+      SupportsPersistentIdentifier: true,
+    },
+    RemoteEndPoint: (deps && typeof deps.clientIp === 'function' ? deps.clientIp(ctx) : '') || '',
+    PlayableMediaTypes: ['Video', 'Audio'],
+    Id: `triboon-${user.id}`,
+    UserId: jellyfinUserId(user),
+    UserName: user.username || user.name || '',
+    Client: authQuoted(ctx, 'Client') || 'Jellyfin',
+    LastActivityDate: now,
+    LastPlaybackCheckIn: now,
+    DeviceName: authQuoted(ctx, 'Device') || 'Device',
+    DeviceId: authQuoted(ctx, 'DeviceId') || '',
+    ApplicationVersion: authQuoted(ctx, 'Version') || '1.0',
+    IsActive: true,
+    SupportsMediaControl: false,
+    SupportsRemoteControl: false,
+    NowPlayingQueue: [],
+    NowPlayingQueueFullItems: [],
+    HasCustomDeviceName: false,
+    ServerId: doorServerId(),
+    SupportedCommands: [],
   };
 }
 
@@ -342,6 +376,7 @@ function publicItemId(short) {
   };
   if (id === 'viewmovies') buf[0] = 1;
   else if (id === 'viewshows') buf[0] = 2;
+  else if (id === 'viewlivetv') buf[0] = 11;
   else if ((m = /^m(\d+)$/.exec(id)) && tmdb(3, m[1])) { /* movie */ }
   else if ((m = /^t(\d+)$/.exec(id)) && tmdb(4, m[1])) { /* series */ }
   else if ((m = /^n(\d+)s(\d+)$/.exec(id)) && tmdb(5, m[1]) && u16(m[2]) != null) buf.writeUInt16BE(u16(m[2]), 5);
@@ -370,7 +405,7 @@ function publicItemId(short) {
 }
 
 function internalItemId(incoming) {
-  const id = String(incoming || '');
+  const id = stripVersionSuffix(incoming);
   if (!ITEM_UUID.test(id)) return id;
   const buf = Buffer.from(id.replace(/-/g, ''), 'hex');
   const kind = buf[0];
@@ -378,6 +413,7 @@ function internalItemId(incoming) {
   const lib = buf.subarray(1, 6).toString('hex');
   if (kind === 1) return 'viewmovies';
   if (kind === 2) return 'viewshows';
+  if (kind === 11) return 'viewlivetv';
   if (kind === 3) return `m${n}`;
   if (kind === 4) return `t${n}`;
   if (kind === 5) return `n${n}s${buf.readUInt16BE(5)}`;
@@ -403,7 +439,7 @@ function stampItem(item) {
       item.UserData.ItemId = item.Id;
     }
   }
-  for (const key of ['ParentId', 'SeriesId', 'SeasonId']) {
+  for (const key of ['ParentId', 'SeriesId', 'SeasonId', 'ParentBackdropItemId', 'ParentThumbItemId']) {
     if (typeof item[key] === 'string' && item[key]) item[key] = publicItemId(item[key]);
   }
   if (Array.isArray(item.People)) item.People.forEach(stampItem);
@@ -438,16 +474,43 @@ function rokuDetailLists(item) {
   }
 }
 
-function placeholderSource(id, runTimeTicks) {
+function stripVersionSuffix(id) {
+  return String(id || '').replace(/-(?:4k|1080p)$/i, '');
+}
+
+function requestedVersionQuality(sentId) {
+  const s = String(sentId || '');
+  if (/-4k$/i.test(s)) return '4k';
+  if (/-1080p$/i.test(s)) return '1080p';
+  return '';
+}
+
+function placeholderSource(id, runTimeTicks, opts = {}) {
+  const name = opts.name || '1080p';
+  const width = opts.width || 1920;
+  const height = opts.height || 1080;
+  const videoTitle = opts.videoTitle || (height >= 2000 ? '4K UHD' : '1080p HD');
   return completeSource({
     Id: id,
+    Name: name,
     IsRemote: false,
     RunTimeTicks: runTimeTicks || null,
     MediaStreams: [
-      completeStream({ Index: 0, Type: 'Video', IsDefault: true, DisplayTitle: 'Video' }),
-      completeStream({ Index: 1, Type: 'Audio', IsDefault: true, DisplayTitle: 'Audio' }),
+      completeStream({ Index: 0, Type: 'Video', IsDefault: true, Width: width, Height: height, DisplayTitle: videoTitle }),
+      completeStream({ Index: 1, Type: 'Audio', IsDefault: true, DisplayTitle: 'Auto (Original)' }),
     ],
   });
+}
+
+function attachCatalogVersions(ctx, item, parsed) {
+  if (!item || !item.Id || !parsed || (parsed.type !== 'movie' && parsed.type !== 'episode')) return;
+  if (!jellyfinAllows4kForRequest(ctx, null)) return;
+  const baseId = publicItemId(item.Id);
+  item.MediaSources = [
+    placeholderSource(`${baseId}-1080p`, item.RunTimeTicks, { name: '1080p', videoTitle: '1080p HD', width: 1920, height: 1080 }),
+    placeholderSource(`${baseId}-4k`, item.RunTimeTicks, { name: '4K', videoTitle: '4K UHD', width: 3840, height: 2160 }),
+  ];
+  item.MediaStreams = item.MediaSources[0].MediaStreams;
 }
 
 // Item ids are short and stable. A movie is m550, a show is t1396, a season is
@@ -643,19 +706,67 @@ function progressSeconds(uid, itemId, reported) {
   return pos;
 }
 
-function posterUrl(file, kind) {
+function posterUrl(file, kind, reqSize = 0) {
   const p = String(file || '');
   if (!p.startsWith('/')) return '';
-  const size = kind === 'backdrop' ? 'w1280' : 'w500';
+  const n = Number(reqSize) || 0;
+  const size = kind === 'backdrop'
+    ? (n > 0 && n <= 780 ? 'w780' : 'w1280')
+    : (n > 0 && n <= 342 ? 'w342' : 'w500');
   const loc = `https://image.tmdb.org/t/p/${size}${p}`;
   // Only the picture host. A folder name must not become a fetch to somewhere else.
   if (!/^https:\/\/image\.tmdb\.org\/t\/p\/w\d+\/[A-Za-z0-9._~/-]+$/.test(loc)) return '';
   return loc;
 }
 
+const posterAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 24 });
 const posterCache = new Map();
 const posterInflight = new Map();
 const POSTER_BYTES_MAX = 2 * 1024 * 1024;
+const POSTER_CACHE_CAP = 500;
+const POSTER_CACHE_BYTES_MAX = 32 * 1024 * 1024;
+let posterCacheBytes = 0;
+
+function posterCacheGet(loc) {
+  const hit = posterCache.get(loc);
+  if (!hit) return null;
+  posterCache.delete(loc);
+  posterCache.set(loc, hit);
+  return hit;
+}
+
+function posterCacheSet(loc, entry) {
+  if (!entry || !entry.body) return;
+  const prev = posterCache.get(loc);
+  if (prev) {
+    posterCacheBytes = Math.max(0, posterCacheBytes - prev.body.length);
+    posterCache.delete(loc);
+  }
+  posterCache.set(loc, entry);
+  posterCacheBytes += entry.body.length;
+  while (posterCache.size > POSTER_CACHE_CAP || posterCacheBytes > POSTER_CACHE_BYTES_MAX) {
+    const oldestKey = posterCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const old = posterCache.get(oldestKey);
+    posterCache.delete(oldestKey);
+    if (old && old.body) posterCacheBytes = Math.max(0, posterCacheBytes - old.body.length);
+  }
+}
+
+const tmdbArtCache = new Map();
+const TMDB_ART_CAP = 4000;
+function rememberTmdbArt(key, patch) {
+  if (!key || !patch) return;
+  const prev = tmdbArtCache.get(key) || {};
+  const next = {
+    poster: (typeof patch.poster === 'string' && patch.poster.startsWith('/')) ? patch.poster : (prev.poster || ''),
+    backdrop: (typeof patch.backdrop === 'string' && patch.backdrop.startsWith('/')) ? patch.backdrop : (prev.backdrop || ''),
+  };
+  if (!next.poster && !next.backdrop) return;
+  tmdbArtCache.delete(key);
+  tmdbArtCache.set(key, next);
+  while (tmdbArtCache.size > TMDB_ART_CAP) tmdbArtCache.delete(tmdbArtCache.keys().next().value);
+}
 
 function imageType(buf) {
   if (!buf || buf.length < 12) return '';
@@ -668,7 +779,7 @@ function imageType(buf) {
 function fetchPosterBytes(loc, hops = 0) {
   return new Promise((resolve) => {
     if (!loc || hops > 2) return resolve(null);
-    const req = https.get(loc, { headers: { 'user-agent': 'Triboon', accept: 'image/*' }, timeout: 8000 }, (res) => {
+    const req = https.get(loc, { agent: posterAgent, headers: { 'user-agent': 'Triboon', accept: 'image/*' }, timeout: 8000 }, (res) => {
       const next = res.statusCode >= 300 && res.statusCode < 400 ? String(res.headers.location || '') : '';
       if (next) {
         res.resume();
@@ -696,11 +807,26 @@ function fetchPosterBytes(loc, hops = 0) {
   });
 }
 
+function jellyfinDefaultDisplayCustomPrefs() {
+  return {
+    useEpisodeImagesInNextUpAndResume: 'true',
+    enableNextVideoInfoOverlay: 'true',
+    enableVideoRemainingTime: 'true',
+  };
+}
+
 // The TV asked this server for the picture. Hand back the bytes. A jump to
 // image.tmdb.org is a different site, and the house Wi-Fi app leaves it blank.
 async function sendPoster(ctx, cors, file, wide) {
   const { send } = deps;
-  const loc = posterUrl(file, wide ? 'backdrop' : 'poster');
+  const q = ctx && ctx.url && ctx.url.searchParams;
+  const askW = Math.max(
+    parseInt((q && (q.get('fillWidth') || q.get('maxWidth'))) || '0', 10) || 0,
+    !wide && (parseInt((q && (q.get('fillHeight') || q.get('maxHeight'))) || '0', 10) || 0) > 0
+      ? Math.round((parseInt(q.get('fillHeight') || q.get('maxHeight'), 10) || 0) * 0.67)
+      : 0,
+  );
+  const loc = posterUrl(file, wide ? 'backdrop' : 'poster', askW);
   if (!loc) return send(ctx.res, 404, { error: 'not found' }, cors);
   if (process.env.TRIBOON_POSTER_STUB === '1') {
     const body = Buffer.from([0xFF, 0xD8, 0xFF, 0xD9]);
@@ -713,7 +839,7 @@ async function sendPoster(ctx, cors, file, wide) {
     });
     return ctx.req.method === 'HEAD' ? ctx.res.end() : ctx.res.end(body);
   }
-  let fetched = posterCache.get(loc);
+  let fetched = posterCacheGet(loc);
   if (!fetched) {
     let job = posterInflight.get(loc);
     if (!job) {
@@ -721,10 +847,7 @@ async function sendPoster(ctx, cors, file, wide) {
       posterInflight.set(loc, job);
     }
     fetched = await job;
-    if (fetched) {
-      if (posterCache.size > 100) posterCache.delete(posterCache.keys().next().value);
-      posterCache.set(loc, fetched);
-    }
+    if (fetched) posterCacheSet(loc, fetched);
   }
   if (!fetched) return send(ctx.res, 404, { error: 'not found' }, cors);
   ctx.res.writeHead(200, {
@@ -830,13 +953,22 @@ function baseItem(fields) {
   const shelfTag = (homeArt || extraArt) ? coverArtTag(fields.poster, fields.cover) : '';
   if (fields.poster) imageTags.Primary = shelfTag || (episodeArt ? 'still1' : fields.poster === 'local' ? 'disk2' : 'p');
   if (fields.thumb) imageTags.Thumb = shelfTag || (episodeArt ? 'still1' : 't');
+  const seriesId = fields.extra && fields.extra.SeriesId;
+  const episodeParentArt = episodeArt && seriesId ? {
+    SeriesPrimaryImageTag: fields.poster === 'local' ? 'disk2' : 'p',
+    ParentBackdropItemId: seriesId,
+    ParentBackdropImageTags: ['b'],
+  } : {};
   return stampItem({
     ServerId: doorServerId(),
     ImageTags: imageTags,
     BackdropImageTags: fields.backdrop ? [episodeArt ? 'still1' : 'b'] : [],
     PrimaryImageAspectRatio: fields.aspect || (fields.poster ? 0.6666667 : null),
     UserData: { PlaybackPositionTicks: 0, PlayCount: 0, IsFavorite: false, Played: false },
-    ChildCount: fields.childCount || 0,
+    // Never emit ChildCount: 0 on Episodes — jellyfin-web's cardBuilder skips ImageTags.Primary
+    // whenever Type === "Episode" && ChildCount === 0, hiding every episode thumbnail.
+    ...(episodeArt ? {} : { ChildCount: fields.childCount || 0 }),
+    ...episodeParentArt,
     ...fields.extra,
     Name: fields.name || '',
     Id: fields.id,
@@ -867,7 +999,10 @@ function certification(row, kind) {
 function personDto(row, type, role) {
   if (!row || !row.id || !row.name) return null;
   const person = { Name: row.name, Id: `p${row.id}`, Type: type, Role: role || type };
-  if (row.profile_path) person.PrimaryImageTag = 'p';
+  if (row.profile_path) {
+    person.PrimaryImageTag = 'p';
+    rememberTmdbArt(`p${row.id}`, { poster: row.profile_path });
+  }
   return stampItem(person);
 }
 
@@ -915,6 +1050,7 @@ function detailExtra(row, kind) {
 
 function movieItem(row) {
   const year = Number(String(row.release_date || '').slice(0, 4)) || null;
+  rememberTmdbArt(`m${row.id}`, { poster: row.poster_path, backdrop: row.backdrop_path });
   return baseItem({
     id: `m${row.id}`, name: row.title || row.name || '', type: 'Movie',
     overview: row.overview || '', year, premiere: row.release_date || null,
@@ -925,6 +1061,7 @@ function movieItem(row) {
 
 function seriesItem(row) {
   const year = Number(String(row.first_air_date || '').slice(0, 4)) || null;
+  rememberTmdbArt(`t${row.id}`, { poster: row.poster_path, backdrop: row.backdrop_path });
   return baseItem({
     id: `t${row.id}`, name: row.name || row.title || '', type: 'Series',
     overview: row.overview || '', year, premiere: row.first_air_date || null,
@@ -1085,6 +1222,7 @@ function completeSource(row) {
     SupportsProbing: true,
     TranscodingSubProtocol: 'http',
     HasSegments: false,
+    RequiredHttpHeaders: {},
     ...row,
   };
 }
@@ -1128,8 +1266,19 @@ const CONTAINER_NAMES = {
 const CODEC_NAMES = {
   hevc: ['hevc', 'h265'],
   h264: ['h264', 'avc'],
-  dts: ['dts', 'dca'],
+  av1: ['av1', 'av01'],
+  vp9: ['vp9'],
   mpeg2video: ['mpeg2video', 'mpeg2'],
+  mpeg4: ['mpeg4', 'mp4v'],
+  vc1: ['vc1'],
+  aac: ['aac'],
+  ac3: ['ac3'],
+  eac3: ['eac3', 'ec3'],
+  dts: ['dts', 'dca', 'dtshd'],
+  truehd: ['truehd'],
+  flac: ['flac'],
+  opus: ['opus'],
+  mp3: ['mp3'],
 };
 
 function sourceContainer(probe, fileName) {
@@ -1253,14 +1402,72 @@ function jellyfinAppLabel(ctx) {
   return [client, version].filter(Boolean).join(' ') || String(hdr['user-agent'] || 'unknown app').slice(0, 60);
 }
 
+function infuseClient(ctx) {
+  const hdr = (ctx && ctx.req && ctx.req.headers) || {};
+  const blob = `${hdr['user-agent'] || ''} ${hdr.authorization || ''} ${hdr['x-emby-authorization'] || ''}`;
+  return /\bInfuse\b/i.test(blob);
+}
+
+const RANK_MAX_HEIGHT = [520, 620, 800, 1200, Infinity];
+function userMaxResolutionRank(ctx) {
+  const rank = ctx && ctx.user && ctx.user.policy && ctx.user.policy.maxResolutionRank;
+  return Number.isInteger(rank) ? Math.max(0, Math.min(4, rank)) : 4;
+}
+
+// Allow 4K source selection only when the admin enabled jellyfinAllow4k, the user's own
+// Triboon quality cap allows 4K, AND this client can reasonably direct play 4K (never for web
+// browsers, disabled DirectPlay, low bitrate caps, or 1080p-only DeviceProfiles — so a weak
+// device never triggers a 4K software HLS transcode).
+function jellyfinAllows4kForRequest(ctx, body) {
+  if (settingsPeek().jellyfinAllow4k !== true) return false;
+  if (userMaxResolutionRank(ctx) < 4) return false;
+  if (desktopWebPlayer(ctx)) return false;
+  const off = (v) => v === false || String(v).toLowerCase() === 'false';
+  if (off(queryField(ctx, body, 'EnableDirectPlay'))) return false;
+  const profile = queryField(ctx, body, 'DeviceProfile');
+  const maxRate = Number(queryField(ctx, body, 'MaxStreamingBitrate'))
+    || Number(profile && profile.MaxStreamingBitrate) || 0;
+  if (maxRate > 0 && maxRate < 12 * 1000 * 1000) return false;
+  if (profile && typeof profile === 'object') {
+    if (Array.isArray(profile.DirectPlayProfiles) && !profile.DirectPlayProfiles.some((p) => p && String(p.Type || 'Video') === 'Video')) {
+      return false;
+    }
+    const videoCodecs = (Array.isArray(profile.CodecProfiles) ? profile.CodecProfiles : [])
+      .filter((p) => p && String(p.Type || '') === 'Video' && Array.isArray(p.Conditions) && p.Conditions.length);
+    if (videoCodecs.length) {
+      const cappedUnder4k = videoCodecs.every((p) => p.Conditions.some((c) => {
+        if (!c || String(c.Condition || '') !== 'LessThanEqual') return false;
+        const n = Number(c.Value);
+        if (!Number.isFinite(n)) return false;
+        return (c.Property === 'Width' && n < 3000) || (c.Property === 'Height' && n < 1800);
+      }));
+      if (cappedUnder4k) return false;
+    }
+  }
+  return true;
+}
+
 // ok only when the app said it can play this exact file. `why` goes to the log.
 function directPlayCheck(ctx, body, probe, file) {
   const no = (why) => ({ ok: false, why });
   if (!file || !file.streamUrl) return no('no ranged file');
-  if (!probe) return no('tracks not read yet');
   const off = (v) => v === false || String(v).toLowerCase() === 'false';
   if (off(queryField(ctx, body, 'EnableDirectPlay'))) return no('app asked for the encoded copy');
+  const capRank = userMaxResolutionRank(ctx);
+  const probedHeight = Number(probe && probe.video && probe.video[0] && probe.video[0].height) || 0;
+  if (capRank < 4 && probedHeight > (RANK_MAX_HEIGHT[capRank] || 1200)) {
+    return no(`file ${probedHeight}p is over user resolution cap`);
+  }
   const profile = queryField(ctx, body, 'DeviceProfile');
+  // Infuse in Jellyfin Direct Mode frequently calls GET /PlaybackInfo or omits DirectPlayProfiles
+  // because its native player decodes MKV/MP4/HEVC/AV1/HDR/Dolby/DTS directly.
+  if (infuseClient(ctx) && (!profile || typeof profile !== 'object' || !Array.isArray(profile.DirectPlayProfiles) || !profile.DirectPlayProfiles.length)) {
+    const max = Number(queryField(ctx, body, 'MaxStreamingBitrate')) || Number(profile && profile.MaxStreamingBitrate) || 0;
+    const bitRate = sourceBitRate(probe, file.size) || 0;
+    if (max > 0 && bitRate > max) return no(`infuse file at ${Math.round(bitRate / 1e6)} Mbps is over the app limit ${Math.round(max / 1e6)} Mbps`);
+    return { ok: true, why: 'infuse direct play' };
+  }
+  if (!probe) return no('tracks not read yet');
   if (!profile || typeof profile !== 'object') return no('app sent no player list');
   const container = sourceContainer(probe, file.name);
   if (!container) return no('unknown container');
@@ -1362,9 +1569,9 @@ function vttToSrt(vtt) {
     if (/^(WEBVTT|NOTE\b|STYLE\b|REGION\b)/i.test(lines[0])) continue;
     const ti = lines.findIndex((l) => l.includes('-->'));
     if (ti < 0) continue;
-    const time = lines[ti].replace(/(\d{2}:\d{2}:\d{2})\.(\d{3})/g, '$1,$2')
+    const time = lines[ti].replace(/(\d{2,}:\d{2}:\d{2})\.(\d{3})/g, '$1,$2')
       .replace(/(^|\s)(\d{2}:\d{2})\.(\d{3})/g, '$100:$2,$3')
-      .replace(/(\d{2}:\d{2}:\d{2},\d{3})\s+.*$/, '$1');
+      .replace(/(-->\s*\d{2,}:\d{2}:\d{2},\d{3})\s+.*$/, '$1');
     const text = lines.slice(ti + 1).join('\n').replace(/<\/?c(?:\.[^>]*)?>/gi, '').trim();
     if (!text) continue;
     n += 1;
@@ -1528,9 +1735,184 @@ function fullPageOf(items, ctx) {
   return { Items: rows, TotalRecordCount: list.length, StartIndex: start };
 }
 
+const liveChannelUuidCache = new Map();
+function liveChannelItemId(chId) {
+  const key = String(chId || '');
+  const hit = liveChannelUuidCache.get(key);
+  if (hit) return hit;
+  const hash = crypto.createHash('sha256').update(`triboon-jf-ch:${key}`).digest().subarray(0, 16);
+  hash[0] = 12;
+  const uuid = uuidFromBytes(hash);
+  if (liveChannelUuidCache.size > 20000) liveChannelUuidCache.clear();
+  liveChannelUuidCache.set(key, uuid);
+  return uuid;
+}
+
+function liveProgramItemId(chId, startMs) {
+  const hash = crypto.createHash('sha256').update(`triboon-jf-epg:${String(chId || '')}:${Math.round(Number(startMs) || 0)}`).digest().subarray(0, 16);
+  hash[0] = 13;
+  return uuidFromBytes(hash);
+}
+
+function isLiveChannelUuid(id) {
+  const s = String(id || '').toLowerCase();
+  return ITEM_UUID.test(s) && s.startsWith('0c');
+}
+
+function isLiveProgramUuid(id) {
+  const s = String(id || '').toLowerCase();
+  return ITEM_UUID.test(s) && s.startsWith('0d');
+}
+
+const recentLivePrograms = new Map();
+const LIVE_PROGRAM_CACHE_CAP = 500;
+function rememberLiveProgram(item) {
+  if (!item || !item.Id) return item;
+  const key = String(item.Id).toLowerCase();
+  recentLivePrograms.delete(key);
+  recentLivePrograms.set(key, item);
+  while (recentLivePrograms.size > LIVE_PROGRAM_CACHE_CAP) {
+    recentLivePrograms.delete(recentLivePrograms.keys().next().value);
+  }
+  return item;
+}
+
+function defaultLiveStreams() {
+  return [
+    completeStream({ Index: 0, Type: 'Video', Codec: 'h264', Width: 1920, Height: 1080, IsDefault: true }),
+    completeStream({ Index: 1, Type: 'Audio', Codec: 'aac', Channels: 2, IsDefault: true }),
+  ];
+}
+
+function liveLogoTag(ch) {
+  return ch && ch.logo ? crypto.createHash('sha256').update(String(ch.logo)).digest('hex').slice(0, 12) : '';
+}
+
+function tvProgramItem(ch, prog) {
+  const chUuid = liveChannelItemId(ch.id);
+  const startMs = Number(prog && prog.start) || Date.now();
+  const stopMs = Math.max(startMs + 60000, Number(prog && prog.stop) || (startMs + 3600000));
+  const logoTag = liveLogoTag(ch);
+  return rememberLiveProgram({
+    Name: (prog && prog.title) || ch.name || 'Live',
+    ServerId: doorServerId(),
+    Id: liveProgramItemId(ch.id, startMs),
+    ChannelId: chUuid,
+    ChannelName: ch.name || '',
+    ChannelNumber: String(ch.number || ''),
+    ChannelPrimaryImageTag: logoTag || undefined,
+    Type: 'Program',
+    MediaType: 'Video',
+    Overview: (prog && prog.desc) || '',
+    StartDate: new Date(startMs).toISOString(),
+    EndDate: new Date(stopMs).toISOString(),
+    RunTimeTicks: Math.round((stopMs - startMs) * 10000),
+    IsLive: true,
+    IsSeries: false,
+    IsFolder: false,
+    Genres: prog && prog.category ? [prog.category] : (ch.group ? [ch.group] : []),
+    ImageTags: logoTag ? { Primary: logoTag } : {},
+    BackdropImageTags: [],
+    PrimaryImageAspectRatio: logoTag ? 1 : null,
+  });
+}
+
+function tvChannelItem(ch, curProg) {
+  const uuid = liveChannelItemId(ch.id);
+  const logoTag = liveLogoTag(ch);
+  const item = {
+    Name: ch.name || 'Channel',
+    ServerId: doorServerId(),
+    Id: uuid,
+    Number: String(ch.number || ''),
+    ChannelNumber: String(ch.number || ''),
+    ChannelType: 'TV',
+    Type: 'TvChannel',
+    MediaType: 'Video',
+    IsLive: true,
+    IsFolder: false,
+    Genres: ch.group ? [ch.group] : [],
+    ImageTags: logoTag ? { Primary: logoTag } : {},
+    BackdropImageTags: [],
+    MediaSources: [completeSource({
+      Id: uuid,
+      Protocol: 'Http',
+      Container: /mpegurl/i.test(String(ch.nativeMime || '')) ? 'hls' : 'mpegts',
+      Name: ch.name || 'Channel',
+      IsInfiniteStream: true,
+      IsRemote: false,
+      SupportsDirectPlay: true,
+      SupportsDirectStream: true,
+      SupportsTranscoding: true,
+      RequiresOpening: false,
+      RequiresClosing: false,
+      MediaStreams: defaultLiveStreams(),
+    })],
+    UserData: {
+      PlaybackPositionTicks: 0,
+      PlayCount: 0,
+      IsFavorite: !!ch.fav,
+      Played: false,
+      Key: String(ch.id || uuid),
+      ItemId: uuid,
+    },
+  };
+  if (curProg) item.CurrentProgram = tvProgramItem(ch, curProg);
+  return item;
+}
+
+function liveChannelMediaSource(ctx, ch, body) {
+  const urls = typeof deps.jellyfinLivePlayUrls === 'function' ? deps.jellyfinLivePlayUrls(ctx, ch) : null;
+  if (!urls) return null;
+  const uuid = liveChannelItemId(ch.id);
+  const isNativeHls = /mpegurl/i.test(String(urls.nativeMime || ''));
+  const hdr = (ctx && ctx.req && ctx.req.headers) || {};
+  const blob = `${hdr['user-agent'] || ''} ${hdr.authorization || ''} ${hdr['x-emby-authorization'] || ''}`;
+  const roku = /\bRoku\b/i.test(blob);
+  const tizenOrWebOs = /\b(?:Tizen|web0s|webos|SMART-TV)\b/i.test(blob);
+  const desktop = desktopWebPlayer(ctx);
+  const off = (v) => v === false || String(v).toLowerCase() === 'false';
+  const directDisallowed = desktop || roku || tizenOrWebOs || off(queryField(ctx, body, 'EnableDirectPlay'));
+  const canDirect = !directDisallowed || isNativeHls;
+  const canTranscode = !!(urls.hasFfmpeg || isNativeHls);
+  const transcodeUrl = isNativeHls ? urls.nativeUrl : (urls.hasFfmpeg ? urls.hlsUrl : '');
+  const source = completeSource({
+    Id: uuid,
+    Protocol: 'Http',
+    Container: isNativeHls ? 'hls' : 'mpegts',
+    Name: ch.name || 'Channel',
+    IsInfiniteStream: true,
+    IsRemote: desktop,
+    SupportsDirectPlay: canDirect,
+    SupportsDirectStream: canDirect,
+    SupportsTranscoding: canTranscode,
+    RequiresOpening: false,
+    RequiresClosing: false,
+    MediaStreams: defaultLiveStreams(),
+  });
+  if (canDirect) {
+    source.Path = /^https?:\/\//i.test(urls.nativeUrl) ? urls.nativeUrl : `${clientAddress(ctx)}${urls.nativeUrl}`;
+    source.DirectStreamUrl = urls.nativeUrl;
+  }
+  if (transcodeUrl) {
+    source.TranscodingUrl = transcodeUrl;
+    source.TranscodingSubProtocol = 'hls';
+    source.TranscodingContainer = 'ts';
+  }
+  return source;
+}
+
+async function findLiveChannel(ctx, itemId) {
+  if (!isLiveChannelUuid(itemId) || typeof deps.jellyfinLiveChannels !== 'function') return null;
+  const target = String(itemId).toLowerCase();
+  const chans = await deps.jellyfinLiveChannels(ctx);
+  return (chans || []).find((ch) => liveChannelItemId(ch.id) === target) || null;
+}
+
 function libraryFolder(id) {
   if (id === 'viewmovies') return baseItem({ id, name: 'Movies', type: 'CollectionFolder', poster: 'shelf', thumb: 'shelf', cover: 'movies', aspect: 0.6666667, extra: { CollectionType: 'movies', IsFolder: true } });
   if (id === 'viewshows') return baseItem({ id, name: 'Shows', type: 'CollectionFolder', poster: 'shelf', thumb: 'shelf', cover: 'shows', aspect: 0.6666667, extra: { CollectionType: 'tvshows', IsFolder: true } });
+  if (id === 'viewlivetv') return baseItem({ id, name: 'Live TV', type: 'CollectionFolder', poster: 'shelf', thumb: 'shelf', cover: 'library', aspect: 0.6666667, extra: { CollectionType: 'livetv', IsFolder: true } });
   return null;
 }
 
@@ -2052,74 +2434,89 @@ async function searchShelf(ctx, types, start, limit, view) {
 async function seasonsFor(tmdbId) {
   const data = await tmdbGet(`/tv/${tmdbId}`);
   const seasons = data && Array.isArray(data.seasons) ? data.seasons : [];
-  return seasons.filter((s) => s && Number(s.season_number) > 0).map((s) => baseItem({
-    id: `n${tmdbId}s${s.season_number}`,
-    name: s.name || `Season ${s.season_number}`,
-    type: 'Season',
-    overview: s.overview || '',
-    year: Number(String(s.air_date || '').slice(0, 4)) || null,
-    premiere: s.air_date || null,
-    poster: s.poster_path,
-    backdrop: data && data.backdrop_path,
-    aspect: 0.6666667,
-    childCount: Number(s.episode_count) || 0,
-    extra: { IsFolder: true, SeriesId: `t${tmdbId}`, SeriesName: data.name || '', IndexNumber: s.season_number },
-  }));
+  if (data) rememberTmdbArt(`t${tmdbId}`, { poster: data.poster_path, backdrop: data.backdrop_path });
+  return seasons.filter((s) => s && Number(s.season_number) > 0).map((s) => {
+    const seasonPoster = s.poster_path || (data && data.poster_path);
+    rememberTmdbArt(`n${tmdbId}s${s.season_number}`, { poster: seasonPoster, backdrop: data && data.backdrop_path });
+    return baseItem({
+      id: `n${tmdbId}s${s.season_number}`,
+      name: s.name || `Season ${s.season_number}`,
+      type: 'Season',
+      overview: s.overview || '',
+      year: Number(String(s.air_date || '').slice(0, 4)) || null,
+      premiere: s.air_date || null,
+      poster: seasonPoster,
+      backdrop: data && data.backdrop_path,
+      aspect: 0.6666667,
+      childCount: Number(s.episode_count) || 0,
+      extra: { IsFolder: true, SeriesId: `t${tmdbId}`, SeriesName: data.name || '', IndexNumber: s.season_number },
+    });
+  });
 }
 
 async function episodesFor(tmdbId, season, preloadedShow = null) {
   const show = preloadedShow || await tmdbGet(`/tv/${tmdbId}`);
   const data = await tmdbGet(`/tv/${tmdbId}/season/${season}`);
   const eps = data && Array.isArray(data.episodes) ? data.episodes : [];
-  return eps.filter((ep) => ep && ep.episode_number).map((ep) => baseItem({
-    id: `e${tmdbId}s${season}e${ep.episode_number}`,
-    name: ep.name || `Episode ${ep.episode_number}`,
-    type: 'Episode',
-    overview: ep.overview || '',
-    year: Number(String(ep.air_date || '').slice(0, 4)) || null,
-    premiere: ep.air_date || null,
-    runtime: ep.runtime,
-    poster: ep.still_path || (show && show.poster_path),
-    backdrop: (show && show.backdrop_path) || ep.still_path,
-    aspect: ep.still_path ? 1.7777778 : 0.6666667,
-    extra: {
-      MediaType: 'Video',
-      LocationType: 'Remote',
-      SeriesId: `t${tmdbId}`,
-      SeriesName: (show && show.name) || '',
-      SeasonId: `n${tmdbId}s${season}`,
-      SeasonName: (data && data.name) || `Season ${season}`,
-      ParentIndexNumber: season,
-      IndexNumber: ep.episode_number,
-      ...detailExtra({ vote_average: ep.vote_average, credits: { cast: ep.guest_stars, crew: ep.crew } }, 'tv'),
-    },
-  }));
+  if (show) rememberTmdbArt(`t${tmdbId}`, { poster: show.poster_path, backdrop: show.backdrop_path });
+  return eps.filter((ep) => ep && ep.episode_number).map((ep) => {
+    const epPoster = ep.still_path || (show && show.backdrop_path) || (show && show.poster_path);
+    const epBackdrop = ep.still_path || (show && show.backdrop_path);
+    rememberTmdbArt(`e${tmdbId}s${season}e${ep.episode_number}`, { poster: epPoster, backdrop: epBackdrop });
+    return baseItem({
+      id: `e${tmdbId}s${season}e${ep.episode_number}`,
+      name: ep.name || `Episode ${ep.episode_number}`,
+      type: 'Episode',
+      overview: ep.overview || '',
+      year: Number(String(ep.air_date || '').slice(0, 4)) || null,
+      premiere: ep.air_date || null,
+      runtime: ep.runtime,
+      poster: epPoster,
+      thumb: epPoster,
+      backdrop: epBackdrop,
+      aspect: ep.still_path || (show && show.backdrop_path) ? 1.7777778 : 0.6666667,
+      extra: {
+        MediaType: 'Video',
+        LocationType: 'Remote',
+        SeriesId: `t${tmdbId}`,
+        SeriesName: (show && show.name) || '',
+        SeasonId: `n${tmdbId}s${season}`,
+        SeasonName: (data && data.name) || `Season ${season}`,
+        ParentIndexNumber: season,
+        IndexNumber: ep.episode_number,
+        ...detailExtra({ vote_average: ep.vote_average, credits: { cast: ep.guest_stars, crew: ep.crew } }, 'tv'),
+      },
+    });
+  });
 }
 
 function warmJellyfinPlay(ctx, itemId, parsed) {
   if (!parsed || (parsed.type !== 'movie' && parsed.type !== 'episode')) return;
+  if (requestedVersionQuality(itemId)) return;
   if (typeof deps.jellyfinPrepare !== 'function') return;
-  // The details page starts the file search. Play joins it instead of starting over.
+  // The details page starts the file search for the default 1080p version so pressing Play
+  // joins the warm mount immediately; picking 4K in the Version dropdown mounts 4K on demand.
   playSpec(parsed).then((spec) => {
     if (!spec) return;
     spec.resumeFrac = resumeFracFor(resumeStartSeconds(ctx, itemId, null, spec.runtime), spec.runtime);
+    spec.allow4k = false;
     deps.jellyfinPrepare(ctx, spec);
   }).catch(() => {});
 }
 
 // Android TV and Roku send the movie id as MediaSourceId, never our mount id.
-// Remember the mount each person last played for each movie, so a second
-// PlaybackInfo (audio switch, seek, replay) reuses it instead of a new search.
+// Remember the mount each person last played for each movie + version quality, so a second
+// PlaybackInfo (audio switch, seek, replay) reuses it while switching 1080p <-> 4K mounts fresh.
 const lastMount = new Map();
 const LAST_MOUNT_CAP = 500;
 
-function lastMountKey(uid, itemId) {
-  return `${uid}:${internalItemId(itemId).toLowerCase()}`;
+function lastMountKey(uid, itemId, quality = '') {
+  return `${uid}:${internalItemId(itemId).toLowerCase()}:${quality || 'default'}`;
 }
 
-function rememberMount(uid, itemId, mountId) {
+function rememberMount(uid, itemId, mountId, quality = '') {
   if (!uid || !itemId || !mountId) return;
-  const key = lastMountKey(uid, itemId);
+  const key = lastMountKey(uid, itemId, quality);
   lastMount.delete(key);
   lastMount.set(key, String(mountId));
   while (lastMount.size > LAST_MOUNT_CAP) lastMount.delete(lastMount.keys().next().value);
@@ -2134,8 +2531,9 @@ function liveStream(mountId, uid) {
 function reusableMount(uid, itemId, sentId) {
   const direct = liveStream(sentId, uid);
   if (direct) return { id: sentId, stream: direct };
-  if (!sentId || internalItemId(sentId).toLowerCase() !== internalItemId(itemId).toLowerCase()) return null;
-  const key = lastMountKey(uid, itemId);
+  const baseSent = stripVersionSuffix(sentId);
+  if (!sentId || internalItemId(baseSent).toLowerCase() !== internalItemId(itemId).toLowerCase()) return null;
+  const key = lastMountKey(uid, itemId, requestedVersionQuality(sentId) || requestedVersionQuality(itemId));
   const remembered = lastMount.get(key);
   const stream = liveStream(remembered, uid);
   if (stream) return { id: remembered, stream };
@@ -2312,9 +2710,10 @@ const qcExchange = new Map();
 function desktopWebPlayer(ctx) {
   const hdr = (ctx && ctx.req && ctx.req.headers) || {};
   const blob = `${hdr['user-agent'] || ''} ${hdr.authorization || ''} ${hdr['x-emby-authorization'] || ''}`;
-  if (/Android|Tizen|Web0S|web0s|iPhone|iPad|iPod|Swiftfin|Jellyfin Mobile/i.test(blob)) return false;
+  // Native players (including Jellyfin Desktop / Jellyfin Media Player which embed libmpv on
+  // Windows, macOS, and Linux) must evaluate direct play instead of being forced onto transcoded HLS.
+  if (/Android|Tizen|Web0S|web0s|iPhone|iPad|iPod|Swiftfin|Infuse|Roku|Jellyfin Mobile|JellyfinDesktop|Jellyfin(?:%20|\s+)Desktop|Jellyfin(?:%20|\s+)Media(?:%20|\s+)Player/i.test(blob)) return false;
   if (/Emby/i.test(blob) && /Windows/i.test(blob)) return true;
-  if (/JellyfinDesktop/i.test(blob)) return true;
   return /Chrome\/|Edg\/|Firefox\/|Safari\//i.test(blob);
 }
 
@@ -2446,17 +2845,7 @@ async function handleKind(kind, ctx) {
     if (!user) return send(ctx.res, 401, { error: 'unknown user' }, cors);
     return send(ctx.res, 200, {
       User: userDto(user),
-      SessionInfo: {
-        Id: `triboon-${user.id}`,
-        UserId: jellyfinUserId(user),
-        UserName: user.username,
-        Client: authQuoted(ctx, 'Client') || 'Jellyfin',
-        DeviceName: authQuoted(ctx, 'Device') || 'Device',
-        DeviceId: authQuoted(ctx, 'DeviceId') || '',
-        ApplicationVersion: authQuoted(ctx, 'Version') || '1.0',
-        ServerId: doorServerId(),
-        IsActive: true,
-      },
+      SessionInfo: sessionInfoDto(ctx, user),
       AccessToken: token,
       ServerId: doorServerId(),
     }, cors);
@@ -2502,8 +2891,9 @@ async function handleKind(kind, ctx) {
   if (kind === 'displayPrefs') {
     // The phone player requires every one of these. A missing field closes play.
     // Android TV also asks for "livetv" by that name. A 404 there is the error it shows.
+    const prefId = (ctx.m && ctx.m[1]) || 'usersettings';
     return send(ctx.res, 200, {
-      Id: (ctx.m && ctx.m[1]) || 'usersettings',
+      Id: prefId,
       Client: 'emby',
       SortBy: 'SortName',
       SortOrder: 'Ascending',
@@ -2514,7 +2904,7 @@ async function handleKind(kind, ctx) {
       ShowSidebar: false,
       PrimaryImageHeight: 0,
       PrimaryImageWidth: 0,
-      CustomPrefs: {},
+      CustomPrefs: prefId.toLowerCase() === 'usersettings' ? jellyfinDefaultDisplayCustomPrefs() : {},
     }, cors);
   }
   if (kind === 'sessions' || kind === 'plugins') return send(ctx.res, 200, [], cors);
@@ -2644,6 +3034,9 @@ async function handleKind(kind, ctx) {
     if (!owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
     const libs = typeof deps.localLibraries === 'function' ? deps.localLibraries(ctx) : [];
     const items = [libraryFolder('viewmovies'), libraryFolder('viewshows'), ...libs.map(localFolder)];
+    if (typeof deps.jellyfinLiveTvEnabled === 'function' && deps.jellyfinLiveTvEnabled(ctx.user)) {
+      items.push(libraryFolder('viewlivetv'));
+    }
     return send(ctx.res, 200, {
       Items: items,
       TotalRecordCount: items.length,
@@ -2654,10 +3047,44 @@ async function handleKind(kind, ctx) {
     const userId = ctx.m[2] ? ctx.m[1] : '';
     const itemId = ctx.m[2] || ctx.m[1];
     if (userId && !owns(ctx, userId)) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
+    if (isLiveChannelUuid(itemId)) {
+      const ch = await findLiveChannel(ctx, itemId);
+      if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
+      const now = Date.now();
+      const map = typeof deps.jellyfinLivePrograms === 'function'
+        ? deps.jellyfinLivePrograms(ctx, [ch], { from: now - 3600000, to: now + 3600000 })
+        : new Map();
+      const cur = ((map && map.get(ch.id)) || []).find((p) => p.start <= now && p.stop > now) || null;
+      return send(ctx.res, 200, tvChannelItem(ch, cur), cors);
+    }
+    if (isLiveProgramUuid(itemId)) {
+      const key = String(itemId).toLowerCase();
+      let cached = recentLivePrograms.get(key);
+      if (!cached && typeof deps.jellyfinLiveChannels === 'function' && typeof deps.jellyfinLivePrograms === 'function') {
+        const chans = await deps.jellyfinLiveChannels(ctx);
+        const slice = (chans || []).slice(0, 200);
+        const now = Date.now();
+        const progMap = deps.jellyfinLivePrograms(ctx, slice, { from: now - 3600000, to: now + 6 * 3600000 });
+        for (const ch of slice) {
+          for (const p of (progMap && progMap.get(ch.id)) || []) {
+            if (liveProgramItemId(ch.id, p.start) === key) {
+              cached = tvProgramItem(ch, p);
+              break;
+            }
+          }
+          if (cached) break;
+        }
+      }
+      if (!cached || !(await findLiveChannel(ctx, cached.ChannelId))) {
+        return send(ctx.res, 404, { error: 'not found' }, cors);
+      }
+      return send(ctx.res, 200, cached, cors);
+    }
     const item = await itemById(itemId, ctx);
     if (!item) return send(ctx.res, 404, { error: 'not found' }, cors);
     const parsedItem = parseItemId(itemId);
     await attachLocalMedia(ctx, item, parsedItem);
+    attachCatalogVersions(ctx, item, parsedItem);
     warmJellyfinPlay(ctx, itemId, parsedItem);
     return send(ctx.res, 200, paintWatch(ctx, item), cors);
   }
@@ -2685,6 +3112,27 @@ async function handleKind(kind, ctx) {
   }
   if (kind === 'shelf' || kind === 'latest') {
     if (ctx.m && ctx.m[1] && !owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
+    const q = ctx.url && ctx.url.searchParams;
+    const parentRaw = internalItemId(String((q && (q.get('ParentId') || q.get('parentId'))) || ''));
+    const incTypes = String((q && (q.get('IncludeItemTypes') || q.get('includeItemTypes'))) || '').toLowerCase();
+    if (parentRaw === 'viewlivetv' || incTypes.split(',').map((s) => s.trim()).includes('tvchannel')) {
+      const all = typeof deps.jellyfinLiveChannels === 'function' ? await deps.jellyfinLiveChannels(ctx) : [];
+      const wantFav = /^true$/i.test(String((q && (q.get('IsFavorite') || q.get('isFavorite'))) || ''));
+      const list = wantFav ? all.filter((c) => c.fav) : all;
+      const start = Math.max(0, queryInt(q, ['StartIndex', 'startIndex'], 0));
+      const limit = Math.min(500, Math.max(0, queryInt(q, ['Limit', 'limit'], kind === 'latest' ? 16 : 100)));
+      const slice = limit > 0 ? list.slice(start, start + limit) : list.slice(start);
+      const now = Date.now();
+      const progMap = typeof deps.jellyfinLivePrograms === 'function'
+        ? deps.jellyfinLivePrograms(ctx, slice, { from: now - 3600000, to: now + 3600000 })
+        : new Map();
+      const chItems = slice.map((ch) => {
+        const cur = ((progMap && progMap.get(ch.id)) || []).find((p) => p.start <= now && p.stop > now) || null;
+        return tvChannelItem(ch, cur);
+      });
+      if (kind === 'latest') return send(ctx.res, 200, chItems, cors);
+      return send(ctx.res, 200, { Items: chItems, TotalRecordCount: list.length, StartIndex: start }, cors);
+    }
     const items = await itemsFor(ctx, { latest: kind === 'latest' });
     if (kind === 'latest') {
       const list = items && items.paged ? items.items : items;
@@ -2766,9 +3214,9 @@ async function handleKind(kind, ctx) {
     const imageKind = String(ctx.m[2] || 'primary');
     const wide = imageKind === 'backdrop';
     let file = '';
-    const pipeFile = (imgFile) => {
+    const pipeFile = async (imgFile) => {
       let stat;
-      try { stat = fs.statSync(imgFile); } catch { return false; }
+      try { stat = await fs.promises.stat(imgFile); } catch { return false; }
       const type = imageMime(imgFile, Math.floor(stat.mtimeMs || 0));
       ctx.res.writeHead(200, { ...cors, 'content-type': type, 'content-length': stat.size, 'cache-control': 'private, max-age=86400' });
       if (ctx.req.method === 'HEAD') { ctx.res.end(); return true; }
@@ -2778,48 +3226,96 @@ async function handleKind(kind, ctx) {
       return true;
     };
     const short = internalItemId(ctx.m[1]);
-    if (short === 'viewmovies' || short === 'viewshows') {
-      const cover = shelfCoverFile(short === 'viewshows' ? 'shows' : 'movies');
-      if (cover && pipeFile(cover)) return;
+    if (short === 'viewmovies' || short === 'viewshows' || short === 'viewlivetv') {
+      const cover = shelfCoverFile(short === 'viewshows' ? 'shows' : (short === 'viewlivetv' ? 'library' : 'movies'));
+      if (cover && await pipeFile(cover)) return;
+    } else if ((isLiveChannelUuid(ctx.m[1]) || isLiveProgramUuid(ctx.m[1])) && typeof deps.jellyfinLiveLogo === 'function') {
+      let chUuid = ctx.m[1];
+      if (isLiveProgramUuid(chUuid)) {
+        const prog = recentLivePrograms.get(String(chUuid).toLowerCase());
+        chUuid = prog && prog.ChannelId ? prog.ChannelId : '';
+      }
+      const logo = chUuid ? await deps.jellyfinLiveLogo(chUuid, liveChannelItemId) : null;
+      if (!logo || !logo.buf) return send(ctx.res, 404, { error: 'not found' }, cors);
+      ctx.res.writeHead(200, {
+        ...cors,
+        'content-type': logo.type || 'image/png',
+        'content-length': String(logo.buf.length),
+        'cache-control': 'private, max-age=86400',
+      });
+      return ctx.req.method === 'HEAD' ? ctx.res.end() : ctx.res.end(logo.buf);
     } else if (parsed && parsed.type === 'locallib') {
       const libs = typeof deps.localLibraries === 'function' ? deps.localLibraries(ctx) : [];
       const lib = libs.find((row) => row.id === parsed.libId);
       const cover = shelfCoverFile(shelfCoverForKind(lib && lib.kind));
-      if (cover && pipeFile(cover)) return;
+      if (cover && await pipeFile(cover)) return;
       if (typeof deps.localPage === 'function' && typeof deps.localImage === 'function') {
         const page = deps.localPage(ctx, parsed.libId, 0, 24, null, { sort: 'title.asc' });
         for (const row of (page && page.items) || []) {
           const img = deps.localImage(ctx, parsed.libId, row.idx, wide);
           if (img && img.tmdb) { file = img.tmdb; break; }
-          if (img && img.file && pipeFile(img.file)) return;
+          if (img && img.file && await pipeFile(img.file)) return;
         }
       }
     } else if (parsed && parsed.type === 'movie') {
-      const d = await tmdbGet(`/movie/${parsed.tmdbId}`);
-      file = d && (wide ? d.backdrop_path : d.poster_path);
-    } else if (parsed && parsed.type === 'series') {
-      const d = await tmdbGet(`/tv/${parsed.tmdbId}`);
-      file = d && (wide ? d.backdrop_path : d.poster_path);
-    } else if (parsed && parsed.type === 'season') {
-      const d = await tmdbGet(`/tv/${parsed.tmdbId}/season/${parsed.season}`);
-      if (wide) {
-        const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
-        file = show && show.backdrop_path;
-      } else file = d && d.poster_path;
-    } else if (parsed && parsed.type === 'episode') {
-      const season = await tmdbGet(`/tv/${parsed.tmdbId}/season/${parsed.season}`);
-      const ep = season && Array.isArray(season.episodes) && season.episodes.find((row) => row.episode_number === parsed.episode);
-      file = (ep && ep.still_path) || '';
+      const cached = tmdbArtCache.get(`m${parsed.tmdbId}`);
+      file = cached && (wide ? cached.backdrop : cached.poster);
       if (!file) {
-        const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
-        const landscape = wide || imageKind === 'thumb';
-        file = (show && (landscape ? (show.backdrop_path || show.poster_path) : (show.poster_path || show.backdrop_path)))
-          || (season && season.poster_path)
-          || '';
+        const d = await tmdbGet(`/movie/${parsed.tmdbId}`);
+        if (d) rememberTmdbArt(`m${parsed.tmdbId}`, { poster: d.poster_path, backdrop: d.backdrop_path });
+        file = d && (wide ? d.backdrop_path : d.poster_path);
+      }
+    } else if (parsed && parsed.type === 'series') {
+      const cached = tmdbArtCache.get(`t${parsed.tmdbId}`);
+      file = cached && (wide ? cached.backdrop : cached.poster);
+      if (!file) {
+        const d = await tmdbGet(`/tv/${parsed.tmdbId}`);
+        if (d) rememberTmdbArt(`t${parsed.tmdbId}`, { poster: d.poster_path, backdrop: d.backdrop_path });
+        file = d && (wide ? d.backdrop_path : d.poster_path);
+      }
+    } else if (parsed && parsed.type === 'season') {
+      const cached = tmdbArtCache.get(`n${parsed.tmdbId}s${parsed.season}`);
+      file = cached && (wide ? cached.backdrop : cached.poster);
+      if (!file) {
+        const d = await tmdbGet(`/tv/${parsed.tmdbId}/season/${parsed.season}`);
+        if (wide) {
+          const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
+          if (show) rememberTmdbArt(`t${parsed.tmdbId}`, { poster: show.poster_path, backdrop: show.backdrop_path });
+          file = show && show.backdrop_path;
+        } else {
+          file = d && d.poster_path;
+          if (!file) {
+            const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
+            if (show) rememberTmdbArt(`t${parsed.tmdbId}`, { poster: show.poster_path, backdrop: show.backdrop_path });
+            file = show && show.poster_path;
+          }
+        }
+        if (file) rememberTmdbArt(`n${parsed.tmdbId}s${parsed.season}`, wide ? { backdrop: file } : { poster: file });
+      }
+    } else if (parsed && parsed.type === 'episode') {
+      const cached = tmdbArtCache.get(`e${parsed.tmdbId}s${parsed.season}e${parsed.episode}`);
+      file = cached && (wide ? cached.backdrop : cached.poster);
+      if (!file) {
+        const season = await tmdbGet(`/tv/${parsed.tmdbId}/season/${parsed.season}`);
+        const ep = season && Array.isArray(season.episodes) && season.episodes.find((row) => row.episode_number === parsed.episode);
+        file = (ep && ep.still_path) || '';
+        if (!file) {
+          const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
+          const landscape = wide || imageKind === 'thumb';
+          file = (show && (landscape ? (show.backdrop_path || show.poster_path) : (show.poster_path || show.backdrop_path)))
+            || (season && season.poster_path)
+            || '';
+        }
+        if (file) rememberTmdbArt(`e${parsed.tmdbId}s${parsed.season}e${parsed.episode}`, wide ? { backdrop: file } : { poster: file });
       }
     } else if (parsed && parsed.type === 'person') {
-      const d = await tmdbGet(`/person/${parsed.tmdbId}`);
-      file = d && d.profile_path;
+      const cached = tmdbArtCache.get(`p${parsed.tmdbId}`);
+      file = cached && cached.poster;
+      if (!file) {
+        const d = await tmdbGet(`/person/${parsed.tmdbId}`);
+        if (d && d.profile_path) rememberTmdbArt(`p${parsed.tmdbId}`, { poster: d.profile_path });
+        file = d && d.profile_path;
+      }
     } else if (parsed && (parsed.type === 'local' || parsed.type === 'localseason') && typeof deps.localImage === 'function') {
       // Poster tags are loaded by the picture itself, which cannot send the login header.
       // An episode often has no still of its own. Use the show's picture so Continue
@@ -2829,11 +3325,24 @@ async function handleKind(kind, ctx) {
         : localPicture(ctx, parsed.libId, parsed.idx, wide);
       if (img && img.tmdb) file = img.tmdb;
       else if (img && img.file) {
-        if (!pipeFile(img.file)) return send(ctx.res, 404, { error: 'not found' }, cors);
+        if (!(await pipeFile(img.file))) return send(ctx.res, 404, { error: 'not found' }, cors);
         return;
       }
     }
     return sendPoster(ctx, cors, file, wide || imageKind === 'thumb');
+  }
+  if (kind === 'video' && isLiveChannelUuid(ctx.m[1])) {
+    const ch = await findLiveChannel(ctx, ctx.m[1]);
+    if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
+    const urls = typeof deps.jellyfinLivePlayUrls === 'function' ? deps.jellyfinLivePlayUrls(ctx, ch) : null;
+    if (!urls) return send(ctx.res, 503, { error: 'live stream unavailable' }, cors);
+    const wantStatic = /^true$/i.test(String(queryField(ctx, null, 'static') || ''));
+    const isNativeHls = /mpegurl/i.test(String(urls.nativeMime || ''));
+    const rel = wantStatic || isNativeHls ? urls.nativeUrl : (urls.hasFfmpeg ? urls.hlsUrl : urls.nativeUrl);
+    if (!rel) return send(ctx.res, 503, { error: 'live stream unavailable' }, cors);
+    const location = /^https?:\/\//i.test(rel) ? rel : `${clientAddress(ctx)}${rel}`;
+    ctx.res.writeHead(302, { ...cors, location, 'cache-control': 'no-store' });
+    return ctx.res.end();
   }
   if (kind === 'video' && /^true$/i.test(String(queryField(ctx, null, 'static') || ''))) {
     // Direct play: the app wants the original bytes. Hand it our ranged file
@@ -2852,6 +3361,7 @@ async function handleKind(kind, ctx) {
         const spec = await playSpec(parsed);
         if (!spec || typeof deps.jellyfinPlay !== 'function') return send(ctx.res, 404, { error: 'not found' }, cors);
         spec.resumeFrac = resumeFracFor(resumeStartSeconds(ctx, ctx.m[1], null, spec.runtime), spec.runtime);
+        spec.allow4k = jellyfinAllows4kForRequest(ctx, null);
         played = await deps.jellyfinPlay(ctx, spec);
       }
       if (played && played.sent) return;
@@ -2946,9 +3456,17 @@ async function handleKind(kind, ctx) {
     const parsed = parseItemId(ctx.m[1]);
     const sentId = String(queryField(ctx, body, 'MediaSourceId') || '');
     const playSessId = String(queryField(ctx, body, 'PlaySessionId') || '');
+    if (isLiveChannelUuid(ctx.m[1])) {
+      const ch = await findLiveChannel(ctx, ctx.m[1]);
+      if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
+      const source = liveChannelMediaSource(ctx, ch, body);
+      if (!source) return send(ctx.res, 503, { error: 'live stream unavailable' }, cors);
+      return send(ctx.res, 200, { PlaySessionId: playSessId || source.Id, MediaSources: [source] }, cors);
+    }
     const isPlaybackRaw = queryField(ctx, body, 'IsPlayback');
     const isProbeOnly = isPlaybackRaw === false || /^false$/i.test(String(isPlaybackRaw ?? ''));
     const uid = ctx.user && ctx.user.id;
+    const versionQuality = requestedVersionQuality(sentId) || requestedVersionQuality(ctx.m[1]);
     const reused = reusableMount(uid, ctx.m[1], sentId);
     // Detail-page track-picker probes pass IsPlayback=false; avoid mounting Usenet or evicting
     // an active session until Play is actually pressed.
@@ -2969,6 +3487,16 @@ async function handleKind(kind, ctx) {
         if (!s) return send(ctx.res, 404, { error: 'not found' }, cors);
         if (s.runtime) runtimeTicks = ticks(s.runtime);
         name = s.q || '';
+        if (!versionQuality && jellyfinAllows4kForRequest(ctx, body)) {
+          const baseId = publicItemId(ctx.m[1]);
+          return send(ctx.res, 200, {
+            PlaySessionId: playSessId || ctx.m[1],
+            MediaSources: [
+              placeholderSource(`${baseId}-1080p`, runtimeTicks, { name: '1080p', videoTitle: '1080p HD', width: 1920, height: 1080 }),
+              placeholderSource(`${baseId}-4k`, runtimeTicks, { name: '4K', videoTitle: '4K UHD', width: 3840, height: 2160 }),
+            ],
+          }, cors);
+        }
       }
       const streams = streamsWithSubtitles(probe, sidecars).streams;
       const source = completeSource({
@@ -3010,6 +3538,14 @@ async function handleKind(kind, ctx) {
       if (!spec) return send(ctx.res, 404, { error: 'not found' }, cors);
       if (typeof deps.jellyfinPlay !== 'function') return send(ctx.res, 404, { error: 'not found' }, cors);
       spec.resumeFrac = resumeFracFor(resumeStartSeconds(ctx, ctx.m[1], body, spec.runtime), spec.runtime);
+      if (versionQuality === '1080p') {
+        spec.allow4k = false;
+      } else if (versionQuality === '4k') {
+        spec.allow4k = jellyfinAllows4kForRequest(ctx, body);
+        if (spec.allow4k) spec.preferResolutionRank = 4;
+      } else {
+        spec.allow4k = jellyfinAllows4kForRequest(ctx, body);
+      }
       // No waiting on the details warm-up here: play joins a ready or
       // in-flight warm-up itself and races the rest, while the warm-up walks
       // one source at a time in the background lane.
@@ -3020,7 +3556,7 @@ async function handleKind(kind, ctx) {
       }
       playedBody = played.body;
     }
-    rememberMount(uid, ctx.m[1], playedBody && playedBody.id);
+    rememberMount(uid, ctx.m[1], playedBody && playedBody.id, versionQuality);
     let probe = null;
     if (parsed && parsed.type === 'local' && typeof deps.localMediaInfo === 'function') {
       const info = await deps.localMediaInfo(ctx, parsed.libId, parsed.idx);
@@ -3089,6 +3625,104 @@ async function handleKind(kind, ctx) {
     if (direct && typeof deps.directGrantAddress === 'function' && grantAddr) issueDirectGrant(grantAddr, uid, (ctx.user && ctx.user.sessionEpoch) || 0, ctx.m[1]);
     return send(ctx.res, 200, { PlaySessionId: playedBody.sessionId, MediaSources: [source] }, cors);
   }
+  if (kind === 'liveTvInfo') {
+    const enabled = !!(typeof deps.jellyfinLiveTvEnabled === 'function' && deps.jellyfinLiveTvEnabled(ctx.user));
+    return send(ctx.res, 200, {
+      Services: enabled ? [{ Name: 'Triboon Live TV', Status: 'Ok', IsVisible: true }] : [],
+      IsEnabled: enabled,
+      EnabledUsers: enabled && ctx.user ? [jellyfinUserId(ctx.user)] : [],
+    }, cors);
+  }
+  if (kind === 'liveTvGuideInfo') {
+    const now = Date.now();
+    return send(ctx.res, 200, {
+      StartDate: new Date(now - 3600000).toISOString(),
+      EndDate: new Date(now + 24 * 3600000).toISOString(),
+    }, cors);
+  }
+  if (kind === 'liveTvChannels') {
+    const q = ctx.url && ctx.url.searchParams;
+    const all = typeof deps.jellyfinLiveChannels === 'function' ? await deps.jellyfinLiveChannels(ctx) : [];
+    const wantFav = /^true$/i.test(String((q && (q.get('IsFavorite') || q.get('isFavorite'))) || ''));
+    const term = String((q && (q.get('SearchTerm') || q.get('searchTerm'))) || '').trim().toLowerCase();
+    let list = all;
+    if (wantFav) list = list.filter((c) => c.fav);
+    if (term) list = list.filter((c) => String(c.name || '').toLowerCase().includes(term) || String(c.group || '').toLowerCase().includes(term));
+    const start = Math.max(0, queryInt(q, ['StartIndex', 'startIndex'], 0));
+    const limit = Math.min(500, Math.max(0, queryInt(q, ['Limit', 'limit'], 100)));
+    const slice = limit > 0 ? list.slice(start, start + limit) : list.slice(start);
+    const addCur = !/^false$/i.test(String((q && (q.get('AddCurrentProgram') || q.get('addCurrentProgram'))) || 'true'));
+    const now = Date.now();
+    const progMap = addCur && typeof deps.jellyfinLivePrograms === 'function'
+      ? deps.jellyfinLivePrograms(ctx, slice, { from: now - 3600000, to: now + 3600000 })
+      : new Map();
+    const items = slice.map((ch) => {
+      const cur = ((progMap && progMap.get(ch.id)) || []).find((p) => p.start <= now && p.stop > now) || null;
+      return tvChannelItem(ch, cur);
+    });
+    return send(ctx.res, 200, { Items: items, TotalRecordCount: list.length, StartIndex: start }, cors);
+  }
+  if (kind === 'liveTvChannel') {
+    const ch = await findLiveChannel(ctx, ctx.m[1]);
+    if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
+    const now = Date.now();
+    const map = typeof deps.jellyfinLivePrograms === 'function'
+      ? deps.jellyfinLivePrograms(ctx, [ch], { from: now - 3600000, to: now + 3600000 })
+      : new Map();
+    const cur = ((map && map.get(ch.id)) || []).find((p) => p.start <= now && p.stop > now) || null;
+    return send(ctx.res, 200, tvChannelItem(ch, cur), cors);
+  }
+  if (kind === 'liveTvPrograms' || kind === 'liveTvRecommended') {
+    if (!(typeof deps.jellyfinLiveTvEnabled === 'function' && deps.jellyfinLiveTvEnabled(ctx.user))) {
+      return send(ctx.res, 200, emptyPage(), cors);
+    }
+    let body = {};
+    if (ctx.req.method === 'POST') {
+      try { body = (await readJson(ctx.req)) || {}; } catch { body = {}; }
+    }
+    const q = ctx.url && ctx.url.searchParams;
+    const rawIds = body.ChannelIds || (q && (q.get('ChannelIds') || q.get('channelIds'))) || '';
+    const wantIds = new Set(
+      (Array.isArray(rawIds) ? rawIds : String(rawIds).split(','))
+        .map((s) => String(s || '').trim().toLowerCase())
+        .filter(Boolean),
+    );
+    const all = typeof deps.jellyfinLiveChannels === 'function' ? await deps.jellyfinLiveChannels(ctx) : [];
+    const targetChans = wantIds.size
+      ? all.filter((c) => wantIds.has(liveChannelItemId(c.id)))
+      : (kind === 'liveTvRecommended'
+        ? [...all.filter((c) => c.fav), ...all.filter((c) => !c.fav)].slice(0, 24)
+        : all.slice(0, 48));
+    const now = Date.now();
+    const minEnd = Date.parse(String(queryField(ctx, body, 'MinEndDate') || '')) || (now - 30 * 60000);
+    const maxStart = Date.parse(String(queryField(ctx, body, 'MaxStartDate') || '')) || (now + 6 * 3600000);
+    const isAiring = /^true$/i.test(String(queryField(ctx, body, 'IsAiring') || '')) || kind === 'liveTvRecommended';
+    const progMap = typeof deps.jellyfinLivePrograms === 'function'
+      ? deps.jellyfinLivePrograms(ctx, targetChans, { from: minEnd, to: maxStart })
+      : new Map();
+    const rows = [];
+    for (const ch of targetChans) {
+      for (const p of (progMap && progMap.get(ch.id)) || []) {
+        if (isAiring && !(p.start <= now && p.stop > now)) continue;
+        if (p.stop <= minEnd || p.start >= maxStart) continue;
+        rows.push(tvProgramItem(ch, p));
+      }
+    }
+    const start = Math.max(0, Number(queryField(ctx, body, 'StartIndex')) || 0);
+    const limit = Math.min(500, Math.max(0, Number(queryField(ctx, body, 'Limit')) || 0));
+    const items = limit > 0 ? rows.slice(start, start + limit) : rows.slice(start);
+    return send(ctx.res, 200, { Items: items, TotalRecordCount: rows.length, StartIndex: start }, cors);
+  }
+  if (kind === 'liveTvStreamOpen') {
+    let body = {};
+    try { body = (await readJson(ctx.req)) || {}; } catch { body = {}; }
+    const itemId = String(queryField(ctx, body, 'ItemId') || queryField(ctx, body, 'OpenToken') || '');
+    const ch = await findLiveChannel(ctx, itemId);
+    if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
+    const source = liveChannelMediaSource(ctx, ch, body);
+    if (!source) return send(ctx.res, 503, { error: 'live stream unavailable' }, cors);
+    return send(ctx.res, 200, { MediaSource: source }, cors);
+  }
   if (kind === 'segments') {
     // The phone requires the page counts. A list with only Items makes it
     // throw, and the movie page closes.
@@ -3138,6 +3772,22 @@ async function handleKind(kind, ctx) {
       if (kind === 'unfavorite') want.favorite = false;
       if (kind === 'played') want.watched = true;
       if (kind === 'unplayed') want.watched = false;
+    }
+    if (isLiveChannelUuid(itemId)) {
+      const ch = await findLiveChannel(ctx, itemId);
+      if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
+      let fav = !!ch.fav;
+      if (want.favorite !== undefined && typeof deps.jellyfinLiveFavorite === 'function') {
+        fav = deps.jellyfinLiveFavorite(ctx, ch, want.favorite);
+      }
+      return send(ctx.res, 200, {
+        PlaybackPositionTicks: 0,
+        PlayCount: 0,
+        IsFavorite: !!fav,
+        Played: false,
+        Key: String(ch.id),
+        ItemId: liveChannelItemId(ch.id),
+      }, cors);
     }
     const fallback = {
       position: 0,
@@ -3212,17 +3862,7 @@ async function handleKind(kind, ctx) {
     const user = auth.getUser(result.user.id);
     return send(ctx.res, 200, {
       User: userDto(user),
-      SessionInfo: {
-        Id: `triboon-${user.id}`,
-        UserId: jellyfinUserId(user),
-        UserName: user.username,
-        Client: authQuoted(ctx, 'Client') || 'Jellyfin',
-        DeviceName: authQuoted(ctx, 'Device') || 'Device',
-        DeviceId: authQuoted(ctx, 'DeviceId') || '',
-        ApplicationVersion: authQuoted(ctx, 'Version') || '1.0',
-        ServerId: doorServerId(),
-        IsActive: true,
-      },
+      SessionInfo: sessionInfoDto(ctx, user),
       AccessToken: result.token,
       ServerId: doorServerId(),
     }, cors);
@@ -3314,6 +3954,7 @@ function attachJellyfinSocket(server) {
 }
 
 function closeJellyfinSockets() {
+  try { posterAgent.destroy(); } catch {}
   const pending = [];
   for (const live of jellyfinSockets) {
     pending.push(new Promise((resolve) => {
@@ -3508,8 +4149,18 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/shows\/([a-z0-9-]{1,64})\/seasons$/, auth: 'user', kind: 'seasons', h: serveJellyfin },
   { m: 'GET', re: /^\/shows\/([a-z0-9-]{1,64})\/episodes$/, auth: 'user', kind: 'episodes', h: serveJellyfin },
   { m: 'GET', re: /^\/shows\/nextup$/, auth: 'user', kind: 'nextup', h: serveJellyfin },
-  { m: 'GET', re: /^\/livetv\/programs\/recommended$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
-  { m: 'GET', re: /^\/livetv\/programs$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/livetv\/info$/, auth: 'user', kind: 'liveTvInfo', h: serveJellyfin },
+  { m: 'GET', re: /^\/livetv\/guideinfo$/, auth: 'user', kind: 'liveTvGuideInfo', h: serveJellyfin },
+  { m: 'GET', re: /^\/livetv\/channels$/, auth: 'user', kind: 'liveTvChannels', h: serveJellyfin },
+  { m: 'GET', re: /^\/livetv\/channels\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'liveTvChannel', h: serveJellyfin },
+  { m: 'GET', re: /^\/livetv\/programs\/recommended$/, auth: 'user', kind: 'liveTvRecommended', h: serveJellyfin },
+  { m: 'GET', re: /^\/livetv\/programs$/, auth: 'user', kind: 'liveTvPrograms', h: serveJellyfin },
+  { m: 'POST', re: /^\/livetv\/programs$/, auth: 'user', kind: 'liveTvPrograms', h: serveJellyfin },
+  { m: 'GET', re: /^\/livetv\/recordings$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/livetv\/timers$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/livetv\/seriestimers$/, auth: 'user', kind: 'emptyPage', h: serveJellyfin },
+  { m: 'POST', re: /^\/livetv\/livestreams\/open$/, auth: 'user', kind: 'liveTvStreamOpen', h: serveJellyfin },
+  { m: 'POST', re: /^\/livetv\/livestreams\/close$/, auth: 'user', kind: 'ack', h: serveJellyfin },
   { m: 'GET', re: /^\/displaypreferences\/([a-z0-9][a-z0-9-]{0,63})$/, auth: 'user', kind: 'displayPrefs', h: serveJellyfin },
   { m: 'POST', re: /^\/displaypreferences\/([a-z0-9][a-z0-9-]{0,63})$/, auth: 'user', kind: 'ack', h: serveJellyfin },
   { m: 'GET', re: /^\/sessions$/, auth: 'user', kind: 'sessions', h: serveJellyfin },

@@ -248,6 +248,34 @@ class LibraryDb {
     return !!row;
   }
 
+  // Indexed lookup for a movie or specific episode in the user's allowed local libraries.
+  findByTmdb(tmdbId, mediaType, libIds = [], season = 0, episode = 0) {
+    if (!this.available || !this.db || !libIds.length) return null;
+    const id = parseInt(tmdbId, 10);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const marks = libIds.map(() => '?').join(',');
+    const ids = libIds.map(String);
+    if (mediaType === 'tv') {
+      const s = parseInt(season, 10);
+      const e = parseInt(episode, 10);
+      if (!(s > 0 && e > 0)) return null;
+      const shows = this.db.prepare(
+        `SELECT lib_id, idx FROM library_items WHERE tmdb_id = ? AND kind = 'show' AND lib_id IN (${marks}) LIMIT 5`
+      ).all(id, ...ids);
+      for (const show of shows) {
+        const ep = this.db.prepare(
+          `SELECT idx FROM library_items WHERE lib_id = ? AND kind = 'episode' AND show_idx = ? AND season = ? AND episode = ? AND file IS NOT NULL AND file != '' LIMIT 1`
+        ).get(show.lib_id, show.idx, s, e);
+        if (ep) return { libId: show.lib_id, idx: ep.idx };
+      }
+      return null;
+    }
+    const mov = this.db.prepare(
+      `SELECT lib_id, idx FROM library_items WHERE tmdb_id = ? AND kind = 'movie' AND lib_id IN (${marks}) AND file IS NOT NULL AND file != '' LIMIT 1`
+    ).get(id, ...ids);
+    return mov ? { libId: mov.lib_id, idx: mov.idx } : null;
+  }
+
   // One episode file for a show cover. Never readLibrary() — a 20K catalog on every
   // poster used to stall the server while the grid kept asking for more pages.
   firstEpisodeFile(libId, showIdx) {

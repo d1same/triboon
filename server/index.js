@@ -39,7 +39,7 @@ const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
 const { MkvSubtitleTap } = require('./mkvsubs');
-const { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, audioHintFromName, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, defaultAudioTrack } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, warmEncoder, encoderIsHardware, setAllowSoftware4k, canTranscode4k, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, audioHintFromName, ffprobeKeyframeAtOrAfter, ffprobeKeyframeAtOrBefore, recallProbe, rememberProbe, probeCacheKey, defaultAudioTrack } = require('./transcode');
 const { spawn: spawnResumePad } = require('child_process');
 let resumePadReady = null;
 function ensureResumePad() {
@@ -2037,7 +2037,21 @@ function beginIptvLiveSlot(ctx, meta = {}, shareKey = '') {
   activeIptvLiveStreams.set(key, entry);
   return entry;
 }
+const liveHlsSessions = new Map();
+function closeLiveHlsSession(sess) {
+  if (!sess || sess.closed) return;
+  sess.closed = true;
+  if (sess.idleTimer) { clearInterval(sess.idleTimer); sess.idleTimer = null; }
+  if (sess.key && liveHlsSessions.get(sess.key) === sess) liveHlsSessions.delete(sess.key);
+  try { if (sess.ff && !sess.ff.killed) sess.ff.kill('SIGKILL'); } catch {}
+  if (sess.dir) fs.promises.rm(sess.dir, { recursive: true, force: true }).catch(() => {});
+}
+function closeAllLiveHlsSessions() {
+  for (const sess of [...liveHlsSessions.values()]) closeLiveHlsSession(sess);
+  liveHlsSessions.clear();
+}
 function closeAllIptvLiveStreams(reason = 'shutdown') {
+  closeAllLiveHlsSessions();
   for (const slot of [...activeIptvLiveStreams.values()]) {
     if (slot && typeof slot.close === 'function') slot.close(reason);
   }
@@ -4621,6 +4635,7 @@ const MEDIA_CORS_ROUTES = [
   /^\/api\/remux\/\w+$/,
   /^\/api\/transcode\/\w+$/,
   /^\/api\/hls\/\w+(?:\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?(?:\/[\w.-]+)?$/,
+  /^\/api\/iptv\/(?:native|hls|media)\/\d+(?:\/[\w.-]+)?$/,
   /^\/api\/subtitle\/\w+\/\d+$/,
   /^\/api\/filesub\/\w+\/\d+$/,
   /^\/api\/releasesub\/\w+\/[a-z0-9_-]+$/,
@@ -8241,6 +8256,7 @@ const H = {
             nativeFallbackMime,
             streamUrl: `/api/iptv/stream/${c.idx}?cid=${cid}&t=${token}`,
             nativeUrl: `/api/iptv/native/${c.idx}?cid=${cid}&t=${token}`,
+            hlsUrl: `/api/iptv/hls/${c.idx}/index.m3u8?cid=${cid}&t=${token}`,
             nativeFallbackUrl: _nfu ? `/api/iptv/native/${c.idx}?alt=1&cid=${cid}&t=${token}` : undefined,
           };
         }),
@@ -8275,6 +8291,7 @@ const H = {
         group: ch.group || 'Other',
         streamUrl: `/api/iptv/stream/${ch.idx}?cid=${cid}&t=${token}`,
         nativeUrl: `/api/iptv/native/${ch.idx}?cid=${cid}&t=${token}`,
+        hlsUrl: `/api/iptv/hls/${ch.idx}/index.m3u8?cid=${cid}&t=${token}`,
         nativeMime,
         nativeFallbackUrl: ch.nativeFallbackUrl ? `/api/iptv/native/${ch.idx}?alt=1&cid=${cid}&t=${token}` : undefined,
         nativeFallbackMime,
@@ -8635,6 +8652,114 @@ const H = {
     const ch = iptvCache.channels && iptvCache.channels[idx];
     if (!ch || (cid && String(ch.id) !== cid) || iptvChannelHiddenFor(user, ch)) return send(ctx.res, 404, { error: 'channel not found' });
     return proxyIptvMedia(ctx, ref.url, iptvMediaUriFor(ctx, user, ch));
+  },
+
+  // Rolling Live TV HLS (MPEG-TS segments + stereo AAC) fed from Triboon's local shared IPTV hub.
+  // Works universally across Roku, Apple TV AVPlayer, iOS Safari, Samsung Tizen, LG webOS, and web.
+  iptvHls: async (ctx) => {
+    const idx = parseInt(ctx.m[1], 10);
+    const cid = ctx.url.searchParams.get('cid') || '';
+    if (!streamScopeOk(ctx, cid ? `iptv:${idx}:${cid}` : `iptv:${idx}`)) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    const user = ctx.user || auth.getUser(ctx.claims.uid);
+    if (!user) return send(ctx.res, 401, { error: 'authentication required' });
+    try { await ensureIptvChannelStateForUser(user); } catch {}
+    const ch = iptvCache.channels && iptvCache.channels[idx];
+    if (!ch) return send(ctx.res, 404, { error: 'channel not found — open Live TV first' });
+    if (cid && String(ch.id) !== cid) return send(ctx.res, 404, { error: 'channel changed - reopen Live TV' });
+    if (iptvChannelHiddenFor(user, ch)) return send(ctx.res, 404, { error: 'channel not found' });
+    if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg required for Live TV' });
+
+    const fileReq = ctx.m[2] ? String(ctx.m[2]) : '';
+    const isPlaylist = !fileReq || fileReq === 'index.m3u8';
+    if (!isPlaylist && !/^seg\d{1,7}\.ts$/.test(fileReq)) {
+      return send(ctx.res, 404, { error: 'not found' });
+    }
+
+    const key = String(ch.id || `idx:${idx}`);
+    if (!isPlaylist) {
+      const sess = liveHlsSessions.get(key);
+      if (!sess || sess.closed) return send(ctx.res, 404, { error: 'live session expired' });
+      sess.lastAccess = Date.now();
+      const full = path.join(sess.dir, fileReq);
+      if (!full.startsWith(sess.dir)) return send(ctx.res, 403, { error: 'forbidden' });
+      let stat;
+      try { stat = await fs.promises.stat(full); } catch { stat = null; }
+      if (!stat || !stat.size) return send(ctx.res, 404, { error: 'segment not found' });
+      ctx.res.writeHead(200, {
+        'content-type': 'video/mp2t',
+        'content-length': String(stat.size),
+        'cache-control': 'no-store',
+      });
+      if (ctx.req.method === 'HEAD') return ctx.res.end();
+      const rs = fs.createReadStream(full);
+      rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
+      return rs.pipe(ctx.res);
+    }
+
+    let sess = liveHlsSessions.get(key);
+    if (!sess || sess.closed) {
+      const dir = await fs.promises.mkdtemp(path.join(require('os').tmpdir(), 'triboon-livehls-'));
+      const raced = liveHlsSessions.get(key);
+      if (raced && !raced.closed) {
+        fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+        sess = raced;
+      } else {
+        // Close any previous live HLS channel owned by this viewer so 1-connection IPTV retunes cleanly.
+        for (const prev of [...liveHlsSessions.values()]) {
+          if (prev && prev.uid === user.id && prev.key !== key) closeLiveHlsSession(prev);
+        }
+        const channelScope = `iptv:${ch.idx}:${ch.id}`;
+        const localToken = auth.streamToken(user.id, channelScope);
+        const selfUrl = `http://127.0.0.1:${server.address().port}/api/iptv/native/${ch.idx}?cid=${encodeURIComponent(ch.id)}&t=${encodeURIComponent(localToken)}`;
+        let ff;
+        try { ff = spawnLiveHls(selfUrl, { outDir: dir, segmentTime: 2 }); }
+        catch (e) {
+          fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+          return send(ctx.res, 503, { error: e.message });
+        }
+        sess = { key, uid: user.id, dir, ff, createdAt: Date.now(), lastAccess: Date.now(), closed: false, exitCode: null };
+        let err = '';
+        ff.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
+        ff.on('error', () => { sess.exitCode = 1; closeLiveHlsSession(sess); });
+        ff.on('close', (codeNum) => {
+          sess.exitCode = codeNum == null ? 0 : codeNum;
+          if (codeNum && !sess.closed) debug.fail('iptv', `live hls "${ch.name}" exited ${codeNum}: ${err.trim().slice(-240)}`);
+          closeLiveHlsSession(sess);
+        });
+        sess.idleTimer = setInterval(() => {
+          if (Date.now() - sess.lastAccess > 25000) closeLiveHlsSession(sess);
+        }, 10000);
+        if (sess.idleTimer.unref) sess.idleTimer.unref();
+        liveHlsSessions.set(key, sess);
+        while (liveHlsSessions.size > 8) {
+          const oldest = [...liveHlsSessions.values()].sort((a, b) => a.lastAccess - b.lastAccess)[0];
+          if (!oldest || oldest === sess) break;
+          closeLiveHlsSession(oldest);
+        }
+      }
+    }
+    sess.lastAccess = Date.now();
+    const playlistPath = path.join(sess.dir, 'index.m3u8');
+    let raw = '';
+    for (let i = 0; i < 65; i += 1) {
+      if (ctx.req.destroyed || ctx.req.aborted) return;
+      if (sess.closed) break;
+      try {
+        const text = await fs.promises.readFile(playlistPath, 'utf8');
+        if (/seg\d+\.ts/.test(text)) { raw = text; break; }
+      } catch {}
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    if (!raw) return send(ctx.res, 502, { error: 'live hls stream unavailable' });
+    const reqToken = ctx.url.searchParams.get('t') || auth.streamToken(user.id, `iptv:${ch.idx}:${ch.id}`);
+    const segQ = `?cid=${encodeURIComponent(ch.id)}&t=${encodeURIComponent(reqToken)}`;
+    const body = raw.replace(/^(seg\d+\.ts)$/gm, `$1${segQ}`);
+    ctx.res.writeHead(200, {
+      'content-type': 'application/vnd.apple.mpegurl',
+      'content-length': String(Buffer.byteLength(body)),
+      'cache-control': 'no-store',
+    });
+    return ctx.req.method === 'HEAD' ? ctx.res.end() : ctx.res.end(body);
   },
 
   iptvStream: async (ctx) => {
@@ -10959,6 +11084,8 @@ Object.assign(H, {
       jellyfinApps: s.jellyfinApps === true, // default OFF — Jellyfin apps stay dark until an admin opts in
       jellyfinServerName: jellyfinServerName(s.jellyfinServerName),
       jellyfinQuickConnect: s.jellyfinQuickConnect !== false,
+      jellyfinAllow4k: s.jellyfinAllow4k === true, // default OFF — opt-in 4K direct play for native Jellyfin apps
+      jellyfinLiveTv: s.jellyfinLiveTv === true, // default OFF — opt-in Live TV & EPG over the Jellyfin door
       jellyfinCovers: Object.fromEntries(Object.keys(JELLYFIN_COVER_FILES).map((slot) => [slot, !!jellyfinCoverCustom(slot)])),
       audiobooksUsers: Array.isArray(s.audiobooksUsers) ? s.audiobooksUsers : [],
       sizeCapMode: s.sizeCapMode || 'auto',
@@ -11171,6 +11298,12 @@ Object.assign(H, {
         jellyfinQuickConnect: b.jellyfinQuickConnect !== undefined
           ? b.jellyfinQuickConnect !== false
           : s.jellyfinQuickConnect !== false,
+        jellyfinAllow4k: b.jellyfinAllow4k !== undefined
+          ? b.jellyfinAllow4k === true
+          : s.jellyfinAllow4k === true,
+        jellyfinLiveTv: b.jellyfinLiveTv !== undefined
+          ? b.jellyfinLiveTv === true
+          : s.jellyfinLiveTv === true,
         audiobooksUsers: b.audiobooksUsers !== undefined
           ? (Array.isArray(b.audiobooksUsers) ? b.audiobooksUsers.map(String).slice(0, 100) : [])
           : (s.audiobooksUsers || []),
@@ -13375,6 +13508,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/iptv\/groups$/, auth: 'user', h: H.iptvGroups },
   { m: 'GET', re: /^\/api\/iptv\/native\/(\d+)$/, auth: 'stream', h: H.iptvNative },
   { m: 'GET', re: /^\/api\/iptv\/stream\/(\d+)$/, auth: 'stream', h: H.iptvStream },
+  { m: 'GET', re: /^\/api\/iptv\/hls\/(\d+)(?:\/([\w.-]+))?$/, auth: 'stream', h: H.iptvHls },
   { m: 'GET', re: /^\/api\/iptv\/media\/(\d+)\/([a-f0-9]{32})(?:\.[a-z0-9]{1,5})?$/, auth: 'stream', h: H.iptvMedia },
   { m: 'GET', re: /^\/api\/watchlist$/, auth: 'user', h: H.watchlistList },
   { m: 'POST', re: /^\/api\/watchlist$/, auth: 'user', h: H.watchlistToggle },
@@ -13459,10 +13593,13 @@ async function jellyfinPlay(ctx, body) {
   const t0 = Date.now();
   try {
     Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType, body.season, body.ep));
-    // Jellyfin apps stay at 1080p. A lower account cap still wins. 4K on this
-    // player copied every frame into memory until the computer filled up.
-    const policy = playbackPolicyFor(ctx.user, { ...body, maxResolutionRank: JELLYFIN_MAX_RANK });
-    policy.noResolutionWiden = true;
+    // Jellyfin apps default to 1080p unless the admin enables jellyfinAllow4k and the client
+    // can direct play 4K. Even when 4K is enabled, the user's own Triboon quality cap still wins.
+    const allow4k = settings.peek().jellyfinAllow4k === true && body.allow4k === true;
+    const policy = allow4k
+      ? playbackPolicyFor(ctx.user, body)
+      : playbackPolicyFor(ctx.user, { ...body, maxResolutionRank: JELLYFIN_MAX_RANK });
+    if (!allow4k) policy.noResolutionWiden = true;
     const { session, vf, candidate, attempts, searchMs } = await pipeline.play(
       { ...playSearchParams(body), resumeFrac: Math.max(0, Math.min(0.98, Number(body.resumeFrac) || 0)) },
       policy
@@ -13502,6 +13639,16 @@ async function jellyfinPlay(ctx, body) {
     };
   } catch (e) {
     if (!(await maturityAllowed)) return { status: 403, body: { error: 'restricted' } };
+    // If Usenet had no playable releases, fall back to a matching local file in the user's allowed libraries
+    // (e.g. a Persian/local show clicked via a TMDB Continue Watching or search card).
+    if (body.tmdbId && libraryDb.available) {
+      const allowedLibIds = jellyfinLocalLibraries(ctx).map((lib) => lib.id);
+      const localHit = libraryDb.findByTmdb(body.tmdbId, body.mediaType, allowedLibIds, body.season, body.ep);
+      if (localHit) {
+        const localPlayed = jellyfinLocalPlay(ctx, localHit.libId, localHit.idx);
+        if (localPlayed && localPlayed.status === 200) return localPlayed;
+      }
+    }
     return { status: 502, body: { error: e.message || 'play failed' } };
   }
 }
@@ -13512,8 +13659,11 @@ function jellyfinPrepare(ctx, body) {
   return (async () => {
     const spec = { ...body };
     Object.assign(spec, await catalogFactsFor(spec.year, spec.tmdbId, spec.mediaType, spec.season, spec.ep));
-    const policy = playbackPolicyFor(ctx.user, { ...spec, maxResolutionRank: JELLYFIN_MAX_RANK });
-    policy.noResolutionWiden = true;
+    const allow4k = settings.peek().jellyfinAllow4k === true && spec.allow4k === true;
+    const policy = allow4k
+      ? playbackPolicyFor(ctx.user, spec)
+      : playbackPolicyFor(ctx.user, { ...spec, maxResolutionRank: JELLYFIN_MAX_RANK });
+    if (!allow4k) policy.noResolutionWiden = true;
     const prepared = await pipeline.prepare(
       { ...playSearchParams(spec), resumeFrac: Math.max(0, Math.min(0.98, Number(spec.resumeFrac) || 0)) },
       policy
@@ -13788,9 +13938,9 @@ function jellyfinLocalPage(ctx, libId, start, limit, showIdx, view) {
 
 function jellyfinLocalOne(ctx, libId, idx) {
   if (!jellyfinLocalAllowed(ctx, libId)) return null;
-  const found = localLibraryItemFor(ctx, libId, idx);
-  if (found.error || !found.item) return null;
-  return unboundLibraryItem(found.item);
+  const item = libraryItemByIndex(libId, idx);
+  if (!item) return null;
+  return unboundLibraryItem(item);
 }
 
 function jellyfinLocalPlay(ctx, libId, idx) {
@@ -13920,26 +14070,50 @@ function jellyfinWatchResume(ctx) {
   return out;
 }
 
+const jellyfinLocalImageCache = new Map();
+const JELLYFIN_LOCAL_IMG_CAP = 2000;
 function jellyfinLocalImage(ctx, libId, idx, wide) {
-  const found = localLibraryItemFor(ctx, libId, idx, { publicArt: true });
-  if (found.error || !found.item) return null;
-  const item = unboundLibraryItem(found.item);
+  const lib = store.read('libraries', { list: [] }).list.find((l) => l.id === libId);
+  if (!lib || !lib.path) return null;
+  const raw = libraryItemByIndex(libId, idx);
+  if (!raw) return null;
+  // Fast path: check TMDB art directly from SQLite/RAM before touching the filesystem
+  // or SMB/registry drive-letter resolution (which otherwise blocks the event loop).
+  const item = unboundLibraryItem(raw);
   const tmdb = wide ? item.backdrop : item.poster;
   if (typeof tmdb === 'string' && tmdb.startsWith('/')) return { tmdb };
-  const stored = found.item.artFile && existingMediaPath(found.item.artFile);
-  if (stored && fs.existsSync(stored)) return { file: stored };
-  const videoBase = found.item.file ? path.parse(found.item.file).name : '';
+  const cacheKey = `${libId}:${idx}:${wide ? 'w' : 'p'}:${raw.artFile || ''}:${raw.file || ''}`;
+  const now = Date.now();
+  const cached = jellyfinLocalImageCache.get(cacheKey);
+  if (cached && cached.exp > now) {
+    jellyfinLocalImageCache.delete(cacheKey);
+    jellyfinLocalImageCache.set(cacheKey, cached);
+    return cached.val;
+  }
+  const cacheSet = (val) => {
+    jellyfinLocalImageCache.delete(cacheKey);
+    jellyfinLocalImageCache.set(cacheKey, { val, exp: now + (val ? 300000 : 120000) });
+    while (jellyfinLocalImageCache.size > JELLYFIN_LOCAL_IMG_CAP) {
+      jellyfinLocalImageCache.delete(jellyfinLocalImageCache.keys().next().value);
+    }
+    return val;
+  };
+  const stored = raw.artFile && existingMediaPath(raw.artFile);
+  if (stored && fs.existsSync(stored)) return cacheSet({ file: stored });
+  const filePath = raw.file ? existingMediaPath(raw.file) : '';
+  const dirPath = raw.dir ? existingMediaPath(raw.dir) : '';
+  const videoBase = filePath ? path.parse(filePath).name : '';
   const dirs = [];
-  if (found.item.dir) dirs.push(found.item.dir);
-  if (found.item.file) {
-    const folder = path.dirname(found.item.file);
+  if (dirPath) dirs.push(dirPath);
+  if (filePath) {
+    const folder = path.dirname(filePath);
     dirs.push(folder, path.dirname(folder));
   }
   for (const dir of dirs) {
     const beside = dir && findLibraryArt(dir, { videoBase, wide });
-    if (beside && fs.existsSync(beside)) return { file: beside };
+    if (beside && fs.existsSync(beside)) return cacheSet({ file: beside });
   }
-  return null;
+  return cacheSet(null);
 }
 
 const localProbeCache = new Map();
@@ -14067,10 +14241,198 @@ function jellyfinStopPlayback(ctx, mountId) {
   }
 }
 
+function jellyfinLiveTvEnabled(user) {
+  const s = settings.peek();
+  if (s.jellyfinLiveTv !== true || !user) return false;
+  return iptvSourcesForUser(user, s).length > 0;
+}
+
+async function jellyfinLiveChannels(ctx) {
+  if (!ctx || !ctx.user || !jellyfinLiveTvEnabled(ctx.user)) return [];
+  const s = settings.peek();
+  let state;
+  try { state = await ensureIptvChannelStateForUser(ctx.user); } catch { return []; }
+  const favs = new Set((store.read('iptvfavs', {})[ctx.user.id]) || []);
+  const out = [];
+  for (const ch of (state && state.channels) || []) {
+    if (!ch || iptvChannelHiddenFor(ctx.user, ch, s)) continue;
+    const nativeMime = ch.nativeMime || iptvNativeMime(ch.nativeUrl || ch.url);
+    out.push({
+      idx: ch.idx,
+      id: ch.id,
+      name: ch.name || `Channel ${ch.idx + 1}`,
+      group: ch.group || 'Other',
+      logo: ch.logo || '',
+      number: String(out.length + 1),
+      fav: favs.has(ch.id),
+      nativeMime,
+      sourceId: ch.sourceId || '',
+      tvgId: ch.tvgId || '',
+      tvgName: ch.tvgName || '',
+      xtreamId: ch.xtreamId || '',
+    });
+  }
+  return out;
+}
+
+function jellyfinLivePrograms(ctx, channels, { from, to } = {}) {
+  const byId = new Map();
+  if (!ctx || !ctx.user || !Array.isArray(channels) || !channels.length) return byId;
+  const startMs = Number(from) || (Date.now() - 60 * 60000);
+  const endMs = Number(to) || (Date.now() + 6 * 3600000);
+  const warmedSources = new Set();
+  for (const ch of channels) {
+    const src = sourceForIptvChannel(ch);
+    const ramEpg = warmXmltvFromRam(src);
+    let progs = [];
+    if (ramEpg) {
+      progs = xmltvListFor(ramEpg, ch).filter((p) => p.stop > startMs && p.start < endMs);
+    } else if (src && xmltvGuideUrl(src) && !warmedSources.has(src.id)) {
+      warmedSources.add(src.id);
+      const srcChans = (iptvSourceCaches.get(cleanIptvSourceId(src.id)) || {}).channels || [];
+      ensureXmltv(src, srcChans).catch(() => {});
+    }
+    if (!progs.length) {
+      const fb = fallbackProgramme(ch, startMs, endMs);
+      if (fb) progs = [fb];
+    }
+    if (progs.length) byId.set(ch.id, progs.slice(0, 24));
+  }
+  return byId;
+}
+
+function jellyfinLivePlayUrls(ctx, ch) {
+  if (!ctx || !ctx.user || !ch) return null;
+  const channelScope = `iptv:${ch.idx}:${ch.id}`;
+  const token = auth.streamToken(ctx.user.id, channelScope);
+  const cid = encodeURIComponent(ch.id);
+  const t = encodeURIComponent(token);
+  const nativeUrl = `/api/iptv/native/${ch.idx}?cid=${cid}&t=${t}`;
+  const hlsUrl = `/api/iptv/hls/${ch.idx}/index.m3u8?cid=${cid}&t=${t}`;
+  return {
+    nativeUrl,
+    nativeMime: ch.nativeMime || 'video/mp2t',
+    hlsUrl,
+    hasFfmpeg: !!detectFfmpeg(),
+  };
+}
+
+function jellyfinLiveFavorite(ctx, ch, wantFav) {
+  if (!ctx || !ctx.user || !ch || !ch.id) return false;
+  let on = false;
+  store.update('iptvfavs', {}, (all) => {
+    const list = new Set(all[ctx.user.id] || []);
+    if (wantFav) { list.add(ch.id); on = true; }
+    else { list.delete(ch.id); on = false; }
+    all[ctx.user.id] = [...list];
+    return all;
+  });
+  return on;
+}
+
+const jellyfinLiveLogoCache = new Map();
+const jellyfinLiveLogoInflight = new Map();
+const jellyfinLiveLogoIndex = new WeakMap();
+const JELLYFIN_LOGO_CAP = 500;
+const JELLYFIN_LOGO_BYTES_MAX = 16 * 1024 * 1024;
+let jellyfinLiveLogoBytes = 0;
+
+function jellyfinLiveLogoChannelByUuid(chans, target, idForChannel) {
+  if (!Array.isArray(chans) || !chans.length) return null;
+  let idx = jellyfinLiveLogoIndex.get(chans);
+  if (!idx) {
+    idx = new Map();
+    for (const c of chans) {
+      if (c && c.logo) idx.set(String(idForChannel(c.id)).toLowerCase(), c);
+    }
+    jellyfinLiveLogoIndex.set(chans, idx);
+  }
+  return idx.get(target) || null;
+}
+
+function jellyfinLiveLogoCacheSet(url, val, ttlMs) {
+  const prev = jellyfinLiveLogoCache.get(url);
+  if (prev && prev.val && prev.val.buf) {
+    jellyfinLiveLogoBytes = Math.max(0, jellyfinLiveLogoBytes - prev.val.buf.length);
+  }
+  jellyfinLiveLogoCache.delete(url);
+  jellyfinLiveLogoCache.set(url, { val, exp: Date.now() + ttlMs });
+  if (val && val.buf) jellyfinLiveLogoBytes += val.buf.length;
+  while (jellyfinLiveLogoCache.size > JELLYFIN_LOGO_CAP || jellyfinLiveLogoBytes > JELLYFIN_LOGO_BYTES_MAX) {
+    const oldestKey = jellyfinLiveLogoCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const old = jellyfinLiveLogoCache.get(oldestKey);
+    jellyfinLiveLogoCache.delete(oldestKey);
+    if (old && old.val && old.val.buf) {
+      jellyfinLiveLogoBytes = Math.max(0, jellyfinLiveLogoBytes - old.val.buf.length);
+    }
+  }
+}
+
+async function jellyfinLiveLogo(uuid, idForChannel) {
+  const s = settings.peek();
+  if (s.jellyfinApps !== true || s.jellyfinLiveTv !== true) return null;
+  const target = String(uuid || '').toLowerCase();
+  const chans = (iptvCache && iptvCache.channels) || [];
+  const ch = jellyfinLiveLogoChannelByUuid(chans, target, idForChannel);
+  if (!ch || !ch.logo) return null;
+  const logoUrl = String(ch.logo);
+  const now = Date.now();
+  const cached = jellyfinLiveLogoCache.get(logoUrl);
+  if (cached && cached.exp > now) {
+    jellyfinLiveLogoCache.delete(logoUrl);
+    jellyfinLiveLogoCache.set(logoUrl, cached);
+    return cached.val;
+  }
+  let job = jellyfinLiveLogoInflight.get(logoUrl);
+  if (!job) {
+    job = (async () => {
+      let pin;
+      try { pin = await validateAndPinIptvUrl(logoUrl, 'Live TV logo'); }
+      catch { return null; }
+      return await new Promise((resolve) => {
+        const u = new URL(pin.href);
+        const mod = u.protocol === 'https:' ? https : http;
+        const req = mod.get({
+          hostname: u.hostname,
+          port: u.port || undefined,
+          path: `${u.pathname}${u.search}`,
+          headers: { 'user-agent': 'Triboon/1.0' },
+          lookup: pin.lookup,
+          timeout: 4000,
+        }, (res) => {
+          if (res.statusCode !== 200) { res.resume(); return resolve(null); }
+          const type = String(res.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+          if (!type.startsWith('image/')) { res.resume(); return resolve(null); }
+          const chunks = [];
+          let bytes = 0;
+          res.on('data', (chunk) => {
+            bytes += chunk.length;
+            if (bytes > 2 * 1024 * 1024) { req.destroy(); return resolve(null); }
+            chunks.push(chunk);
+          });
+          res.on('end', () => resolve({ type, buf: Buffer.concat(chunks) }));
+          res.on('error', () => resolve(null));
+        });
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.on('error', () => resolve(null));
+      });
+    })().then((val) => {
+      jellyfinLiveLogoCacheSet(logoUrl, val, val ? 30 * 60000 : 2 * 60000);
+      return val;
+    }).finally(() => {
+      jellyfinLiveLogoInflight.delete(logoUrl);
+    });
+    jellyfinLiveLogoInflight.set(logoUrl, job);
+  }
+  return await job;
+}
+
 const mediaAppDeps = {
   auth, settings, send, readJson, throttled, clientIp, tmdb, loginIpLocked, noteLoginFailure, directGrantAddress,
   jellyfinPlay, jellyfinPrepare, jellyfinStream, jellyfinLocalPlay, jellyfinNextCatalog, jellyfinCoverFile: jellyfinCoverCustom,
   jellyfinSubtitleStreams, jellyfinSubtitleBody, jellyfinSubtitleWarm, jellyfinTracks, jellyfinStopPlayback,
+  jellyfinLiveTvEnabled, jellyfinLiveChannels, jellyfinLivePrograms, jellyfinLivePlayUrls, jellyfinLiveFavorite, jellyfinLiveLogo,
   localLibraries: jellyfinLocalLibraries,
   localPage: jellyfinLocalPage,
   localOne: jellyfinLocalOne,

@@ -128,6 +128,30 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-11-24, v3.5.10 — Jellyfin cross-platform & Apple playback upgrades, fast Jellyfin browsing & Live TV logos, desktop Live TV channel surfing, and UI polish:
+- What changed:
+  - **Jellyfin apps & cross-platform playback (`server/jellyfin-api.js`, `server/index.js`, `server/library-db.js`, `server/transcode.js`, `web/index.html`):**
+    - Added opt-in Settings → Jellyfin apps toggles for 4K (`jellyfinAllow4k`, default off) and Live TV (`jellyfinLiveTv`, default off), plus 1080p (default) / 4K version selection on Details pages respecting per-user Triboon quality caps; version-suffixed IDs (`-1080p`/`-4k`) resolve cleanly across item detail, `PlaybackInfo`, stream, warm-up, and mount reuse.
+    - Improved Direct Play matching across Infuse Direct Mode, Swiftfin, Jellyfin Desktop (`libmpv`), Roku, Samsung Tizen, and LG webOS (including AV1/E-AC3/TrueHD/DTS); populated full `SessionInfoDto` fields in password and Quick Connect auth responses for strict Kotlin/Swift SDK deserialization (Android TV 0.20+ and Swiftfin); fixed SRT end-timestamp conversion in `vttToSrt()`.
+    - Added Jellyfin Live TV + XMLTV guide + favorites sync + channel logos on both channels and program cards (O(1) lookup, bounded 500-entry/16 MB cache, in-flight dedup), on-demand program fallback, and rolling MPEG-TS Live HLS (`/api/iptv/hls/:idx/index.m3u8`) for Tizen/webOS/Roku/iOS with instant retune cleanup.
+    - Eliminated Jellyfin browsing stalls with SQLite TMDB art fast-path + 2,000-entry TTL cache in local library image serving, metadata-only item lookup, 4,000-entry TMDB art cache, keep-alive HTTPS agent + bounded 500-entry/32 MB poster cache with thumbnail sizing (`w342`/`w780`), and async `fs.promises.stat` in `pipeFile`; fixed hidden episode thumbnails (omitted `ChildCount: 0` on episodes, exposed per-episode `still_path` and series/parent backdrop tags, season poster fallback, and `DisplayPreferences` defaults); added local library fallback (`LibraryDb.findByTmdb`) in `jellyfinPlay()` respecting per-user library permissions.
+  - **Apple Web PWA (`web/manifest.webmanifest`, `web/index.html`):** added PWA manifest, iOS/iPadOS meta tags and safe-area polish, 1-tap external player handoff (Infuse/Outplayer/VLC/IINA), native iOS fullscreen captions, and iOS HLS Live TV fallback.
+  - **Desktop Live TV surfing & UI polish (`clients/windows-px8/ui/player.{html,css,js}`, `web/index.html`):** added `Ch-`/`Ch+` buttons around Play/Pause and `[`/`]` shortcuts in Browser and Windows native Live TV players with 350 ms debounced rapid channel surfing; mobile drawer/profile layout and Settings/Admin UI polish.
+- Automated verification:
+  - **Node test suites:** 59/59 suites passing, 1419/1419 tests passing, 0 failures (`npm.cmd test` passed 1416/1419 and caught 3 missing harness stubs in `test/live-ok-release.test.js` for the new `playChannel` helpers `cancelPendingLiveZap`/`updateLiveZapButtons`; adding those stubs made `test/live-ok-release.test.js` pass 3/3 with zero production changes). Includes `test/jellyfin-api.test.js` (30/30), new desktop Live TV surfing tests in `test/windows-px8-player.test.js`, mobile rail test in `test/phase4.test.js`, and `test/release-contract.test.js` with `GITHUB_REF_NAME=v3.5.10` (11/11).
+  - **Syntax, whitespace & startup smoke:** `git diff --check` clean; 101/101 `server/*.js` and `test/*.js` pass `node --check`; `web/manifest.webmanifest` valid JSON; inline scripts in `web/index.html` parse via `vm.Script`; isolated `/api/server` smoke reported `version=3.5.10 phase=4`.
+  - **Android (3.5.10 / versionCode 455):** `gradlew.bat --no-daemon lintDebug testDebugUnitTest assembleDebug --console=plain` — `BUILD SUCCESSFUL`.
+  - **Windows client (`triboon-px8` 3.5.10):** `cargo test --no-default-features` 46/46 passed, 0 failed; `cargo check --features player` compiled cleanly.
+- Live verification (owner hardware against local LAN test server):
+  - **Samsung Smart TV (Jellyfin for Tizen 1.1.0):** verified 1080p and 4K HEVC direct play, closed captions, local library fallback playback, Live TV "On Now" + rolling HLS playback/progress/stop, and Continue Watching/Resume.
+  - **NVIDIA Shield TV (Jellyfin for Android TV 0.20.0):** verified clean sign-in after `SessionInfoDto` fix, Home/Continue Watching/Local Libraries/Live TV browsing, and warm-mount direct play (`16 ms`).
+  - **Windows Jellyfin Desktop 2.1.0-pre2:** verified direct play, closed captions, 1080p/4K version dropdown, Live TV + single-connection retune, and fast cached image loading (`0–53 ms`).
+- NOT verified locally (covered by CI or owner follow-up):
+  - Automated household `verify:full` live CLI + native Android TV ADB stress against a running configured server (temporary dev server cleaned up; owner's running server left untouched).
+  - Physical Apple (iOS/tvOS Infuse/Swiftfin/Safari) and Roku hardware.
+  - Windows `libmpv` runtime GPU decode (`hwdec-current`) and Windows ARM64.
+- Version contract: `package.json` 3.5.10; Android `versionName` 3.5.10 / `versionCode` 455; Windows client `package.json` / `package-lock.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` 3.5.10.
+
 2026-11-24, v3.5.9 — End-to-end performance, resume, source accuracy, and cross-platform polish across VOD, Live TV, Music, Audiobooks, Local Libraries, and Admin:
 - What changed:
   - **VOD startup, seeking, and resume (Waves 1–3):** faster NNTP/VFS/RAR/MKV segment startup and seek paths; background track probing after `/api/prepare`; improved source-finding and ranking accuracy (wrong-title/remake/audio/container checks); smoother TV D-pad navigation (disabled continuous backdrop drift and card transitions on `body.tv`, debounced ambient tint, parallel `/search/movie` + `/search/tv`); Android ExoPlayer atomic start-position handoff (`setMediaItem(item, startMs)`), faster side-subtitle 404 retry, and deduplicated loading overlay; Windows `libmpv` pre-spawn in loading state and faster startup polling.

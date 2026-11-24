@@ -301,6 +301,10 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
   assert.deepStrictEqual(login.json.User.Configuration.GroupedFolders, []);
   assert.strictEqual(login.json.User.Name, 'owner');
   assert.match(login.json.User.Id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  // Android TV 0.20+ (Jellyfin Kotlin SDK) strictly requires these SessionInfoDto fields.
+  for (const field of ['PlayableMediaTypes', 'LastActivityDate', 'LastPlaybackCheckIn', 'SupportsMediaControl', 'SupportsRemoteControl', 'HasCustomDeviceName', 'SupportedCommands']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(login.json.SessionInfo, field), `SessionInfo must include ${field}`);
+  }
   assert.doesNotMatch(JSON.stringify(login.json), /salt|hash|hunter22/);
   const token = login.json.AccessToken;
   const authz = `MediaBrowser Client="Test", Device="PC", DeviceId="pc1", Version="1", Token="${token}"`;
@@ -1089,6 +1093,38 @@ test('jellyfin lists every episode of a long local show, in season and episode o
   }
 });
 
+test('apple PWA manifest, safe-area tags, jellyfin 4K/Live TV settings, and /api/iptv/hls security boundaries', async () => {
+  const before = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(before.json.jellyfinAllow4k, false);
+  assert.strictEqual(before.json.jellyfinLiveTv, false);
+  await httpJson(srv.port, 'POST', '/api/settings', { jellyfinAllow4k: true, jellyfinLiveTv: true }, admin);
+  const after = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(after.json.jellyfinAllow4k, true);
+  assert.strictEqual(after.json.jellyfinLiveTv, true);
+  await httpJson(srv.port, 'POST', '/api/settings', { jellyfinAllow4k: false, jellyfinLiveTv: false }, admin);
+
+  const manifest = await httpSend(srv.port, 'GET', '/manifest.webmanifest');
+  assert.strictEqual(manifest.status, 200);
+  assert.match(manifest.headers['content-type'], /application\/manifest\+json/);
+  const mJson = JSON.parse(manifest.raw);
+  assert.strictEqual(mJson.name, 'Triboon');
+  assert.strictEqual(mJson.display, 'standalone');
+
+  const home = await httpSend(srv.port, 'GET', '/');
+  assert.strictEqual(home.status, 200);
+  assert.match(home.raw, /apple-mobile-web-app-capable/);
+  assert.match(home.raw, /apple-touch-icon/);
+  assert.match(home.raw, /manifest\.webmanifest/);
+  assert.match(home.raw, /viewport-fit=cover/);
+  assert.match(home.raw, /id="extPlayBtn"/);
+  assert.match(home.raw, /syncNativeIosFullscreenCaptions/);
+
+  const anonHls = await httpSend(srv.port, 'GET', '/api/iptv/hls/0/index.m3u8');
+  assert.strictEqual(anonHls.status, 401);
+  const badFile = await httpSend(srv.port, 'GET', `/api/iptv/hls/0/..%2F..%2Fetc%2Fpasswd?t=${encodeURIComponent(admin)}`);
+  assert.ok([401, 404].includes(badFile.status));
+});
+
 test('jellyfin door closes with the server', async () => {
   if (srv) await srv.shutdown();
   // The live line finishes closing a moment later. Quitting in that moment
@@ -1099,11 +1135,12 @@ test('jellyfin door closes with the server', async () => {
 // Drives the door with stand-in helpers, so a usenet play needs no provider.
 let fakeMounts = 0;
 function fakeDoor(extra = {}) {
-  const calls = { play: 0, prepare: 0, saved: [], order: [] };
+  const calls = { play: 0, prepare: 0, saved: [], order: [], specs: [] };
   const live = new Set(extra.live || []);
   const shows = extra.shows || {};
+  const doorSettings = { jellyfinApps: true, ...(extra.settings || {}) };
   bindJellyfin({
-    settings: { get: () => ({ jellyfinApps: true }) },
+    settings: { get: () => doorSettings, peek: () => doorSettings },
     auth: {},
     send: (res, status, body, headers) => { res.status = status; res.body = body; res.headers = headers; },
     readJson: async (req) => req.body || {},
@@ -1111,7 +1148,7 @@ function fakeDoor(extra = {}) {
     clientIp: () => '127.0.0.1',
     tmdb: {
       get: async (p) => {
-        if (p === '/movie/550') return { title: 'Fight Club', release_date: '1999-10-15', runtime: 139 };
+        if (p.startsWith('/movie/550')) return { id: 550, title: 'Fight Club', release_date: '1999-10-15', runtime: 139 };
         if (shows[p]) return shows[p];
         return null;
       },
@@ -1120,14 +1157,16 @@ function fakeDoor(extra = {}) {
       hlsUrl: `/api/hls/${id}?t=x`, remuxUrl: '', streamUrl: `/api/stream/${id}?t=x`, name: 'Movie.1080p.mkv', size: 2e9,
     } : null),
     jellyfinMarkDirect: (id, on) => { calls.direct = { id, on }; },
-    jellyfinPrepare: async () => {
+    jellyfinPrepare: async (_ctx, spec) => {
       calls.prepare += 1;
+      calls.specs.push({ kind: 'prepare', ...(spec || {}) });
       calls.order.push('prepare');
       if (extra.prepareMs) await new Promise((r) => setTimeout(r, extra.prepareMs));
       calls.order.push('prepared');
     },
-    jellyfinPlay: async () => {
+    jellyfinPlay: async (_ctx, spec) => {
       calls.play += 1;
+      calls.specs.push({ kind: 'play', ...(spec || {}) });
       calls.order.push('play');
       fakeMounts += 1;
       const id = `mount${fakeMounts}`;
@@ -1142,6 +1181,7 @@ function fakeDoor(extra = {}) {
     jellyfinTracks: extra.tracks,
     jellyfinWatchGet: () => ({}),
     jellyfinWatchSave: (_ctx, key, patch) => calls.saved.push({ key, ...patch }),
+    ...(extra.deps || {}),
   });
   const call = async (kind, method, p, { body, headers } = {}) => {
     const url = new URL(`http://x${p}`);
@@ -1159,7 +1199,7 @@ function fakeDoor(extra = {}) {
       url,
       m: route.re.exec(url.pathname.toLowerCase()),
       kind,
-      user: { id: 'u1', role: 'user' },
+      user: { id: 'u1', role: 'user', ...(extra.user || {}) },
     };
     await route.h(ctx);
     return res;
@@ -1438,6 +1478,8 @@ test('jellyfin cross-platform: ping, branding css, transcoding policy, query Pla
   const css = await door.call('brandingCss', 'GET', '/Branding/Css');
   assert.strictEqual(css.status, 200);
   assert.match(css.headers['content-type'], /text\/css/);
+  const defaultPrefs = await door.call('displayPrefs', 'GET', '/DisplayPreferences/usersettings');
+  assert.strictEqual(defaultPrefs.body.CustomPrefs.useEpisodeImagesInNextUpAndResume, 'true');
 
   // User.Policy enables transcoding & remuxing for Tizen/Web/iOS/Roku fallback
   const me = await door.call('me', 'GET', '/Users/Me');
@@ -1464,10 +1506,26 @@ test('jellyfin cross-platform: ping, branding css, transcoding policy, query Pla
   assert.strictEqual(rSub.Codec, 'srt', 'Roku SRT-only profile gets srt codec');
   assert.match(rSub.DeliveryUrl, /\/stream\.srt(?:\?|$)/, 'Roku SRT-only profile gets .srt delivery url');
 
-  // Tizen and iOS Swiftfin evaluate Direct Play instead of being misclassified as desktop browsers
+  // SRT conversion must preserve the end timestamp after "-->" while stripping trailing VTT cue settings
+  const srtDoor = fakeDoor({
+    subs: true,
+    tracks: async () => H264_FILE,
+    deps: {
+      jellyfinSubtitleBody: async () => 'WEBVTT\n\n00:00:01.000 --> 00:00:04.500 align:start position:10%\nHello world\n\n01:02.250 --> 01:05.750\nShort format\n',
+    },
+  });
+  const srtRes = await srtDoor.call('subtitle', 'GET', '/videos/m550/mount1/subtitles/2/stream.srt');
+  assert.strictEqual(srtRes.status, 200);
+  assert.match(srtRes.raw, /1\n00:00:01,000 --> 00:00:04,500\nHello world/);
+  assert.match(srtRes.raw, /2\n00:01:02,250 --> 00:01:05,750\nShort format/);
+  assert.doesNotMatch(srtRes.raw, /align:start/);
+
+  // Tizen, iOS Swiftfin, and Jellyfin Desktop (Windows/Mac libmpv) evaluate Direct Play instead of being misclassified as desktop browsers
   for (const ua of [
     'Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.5) AppleWebKit/537.36 Chrome/85.0 Safari/537.36',
     'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1',
+    'JellyfinDesktop/2.1.0-pre2 (Winnt; x86_64) Chrome/130.0.0.0',
+    'JellyfinDesktop/2.1.0 (Darwin; arm64) Chrome/130.0.0.0',
   ]) {
     const dp = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
       headers: { 'user-agent': ua },
@@ -1488,4 +1546,365 @@ test('jellyfin cross-platform: ping, branding css, transcoding policy, query Pla
   assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'POST' && r.re.test('/sessions/playing/stopped') && r.kind === 'stopped'));
   assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'GET' && r.re.test('/users/1234/items/m550/similar') && r.auth === 'user'));
   assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'GET' && r.re.test('/users/1234/items/m550/thememedia') && r.auth === 'user'));
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'GET' && r.re.test('/livetv/info') && r.auth === 'user'));
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'GET' && r.re.test('/livetv/guideinfo') && r.auth === 'user'));
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'GET' && r.re.test('/livetv/channels') && r.auth === 'user'));
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'POST' && r.re.test('/livetv/programs') && r.auth === 'user'));
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'POST' && r.re.test('/livetv/livestreams/open') && r.auth === 'user'));
+});
+
+test('jellyfin 4K opt-in respects client capability, Infuse Direct Mode, and AV1/TrueHD/EAC3 matching', async () => {
+  const uhdTracks = {
+    format: 'matroska,webm',
+    video: [{ codec: 'av1', height: 2160, width: 3840, bitDepth: 10, rangeType: 'HDR10' }],
+    audio: [{ codec: 'eac3', lang: 'eng', channels: 6 }],
+  };
+  const fourKProfile = {
+    MaxStreamingBitrate: 120000000,
+    DirectPlayProfiles: [{ Type: 'Video', Container: 'mkv,mp4', VideoCodec: 'h264,hevc,av01', AudioCodec: 'aac,ac3,ec3,truehd,dtshd' }],
+    CodecProfiles: [{ Type: 'Video', Codec: 'av1', Conditions: [{ Condition: 'LessThanEqual', Property: 'Width', Value: '3840' }] }],
+  };
+  const hdOnlyProfile = {
+    MaxStreamingBitrate: 40000000,
+    DirectPlayProfiles: [{ Type: 'Video', Container: 'mkv,mp4', VideoCodec: 'h264,hevc', AudioCodec: 'aac,ac3' }],
+    CodecProfiles: [{ Type: 'Video', Codec: 'h264,hevc', Conditions: [{ Condition: 'LessThanEqual', Property: 'Width', Value: '1920' }] }],
+  };
+
+  // Default OFF: even a 4K Apple TV Swiftfin profile gets allow4k: false
+  const offDoor = fakeDoor({ tracks: async () => uhdTracks });
+  await offDoor.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
+    headers: { 'user-agent': 'Swiftfin/1.2 (AppleTV)' },
+    body: { DeviceProfile: fourKProfile },
+  });
+  assert.strictEqual(offDoor.calls.specs.at(-1).allow4k, false, '4K stays off until jellyfinAllow4k is enabled');
+
+  // Opted ON: 4K native client gets allow4k: true and AV1/EAC3 direct play
+  const onDoor = fakeDoor({ settings: { jellyfinAllow4k: true }, tracks: async () => uhdTracks });
+  const swift = await onDoor.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
+    headers: { 'user-agent': 'Swiftfin/1.2 (AppleTV)' },
+    body: { DeviceProfile: fourKProfile },
+  });
+  assert.strictEqual(onDoor.calls.specs.at(-1).allow4k, true, '4K Apple TV Swiftfin gets allow4k when enabled');
+  assert.strictEqual(swift.body.MediaSources[0].SupportsDirectPlay, true, 'AV1/EAC3 aliases match DirectPlayProfiles');
+
+  // Infuse on macOS / Apple TV Direct Mode (GET PlaybackInfo without DeviceProfile) still direct plays 4K
+  const infuseDoor = fakeDoor({ settings: { jellyfinAllow4k: true }, tracks: async () => null });
+  const infuse = await infuseDoor.call('playback', 'GET', '/Items/m550/PlaybackInfo', {
+    headers: {
+      'user-agent': 'Infuse/8.0 (Macintosh; Mac OS X 15_0) AppleWebKit/605.1.15 Safari/605.1.15',
+      'x-emby-authorization': 'MediaBrowser Client="Infuse", Version="8.0"',
+    },
+  });
+  assert.strictEqual(infuseDoor.calls.specs.at(-1).allow4k, true, 'Infuse on macOS is never misclassified as desktop browser');
+  assert.strictEqual(infuse.body.MediaSources[0].SupportsDirectPlay, true, 'Infuse Direct Mode gets direct play without DeviceProfile');
+
+  // Guards: desktop web browser, EnableDirectPlay=false, low bitrate, and 1080p-only profile stay capped at 1080p
+  const guardDoor = fakeDoor({ settings: { jellyfinAllow4k: true }, tracks: async () => uhdTracks });
+  await guardDoor.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
+    headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0) Chrome/130.0' },
+    body: { DeviceProfile: fourKProfile },
+  });
+  assert.strictEqual(guardDoor.calls.specs.at(-1).allow4k, false, 'desktop web browser never requests 4K');
+
+  const hdDoor = fakeDoor({ settings: { jellyfinAllow4k: true }, tracks: async () => uhdTracks });
+  await hdDoor.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
+    headers: { 'user-agent': 'Roku/DVP-12.5' },
+    body: { DeviceProfile: hdOnlyProfile },
+  });
+  assert.strictEqual(hdDoor.calls.specs.at(-1).allow4k, false, '1080p-only Roku profile stays capped at 1080p');
+
+  const lowBitrateDoor = fakeDoor({ settings: { jellyfinAllow4k: true }, tracks: async () => uhdTracks });
+  await lowBitrateDoor.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
+    headers: { 'user-agent': 'Swiftfin/1.2' },
+    body: { MaxStreamingBitrate: 6000000, DeviceProfile: fourKProfile },
+  });
+  assert.strictEqual(lowBitrateDoor.calls.specs.at(-1).allow4k, false, 'low MaxStreamingBitrate stays capped at 1080p');
+
+  // Per-user account quality cap ALWAYS wins (for both Usenet selection and local 4K files, even on Infuse/Swiftfin)
+  const cappedUserDoor = fakeDoor({
+    settings: { jellyfinAllow4k: true },
+    user: { policy: { maxResolutionRank: 3 } },
+    tracks: async () => uhdTracks,
+  });
+  const cappedSwift = await cappedUserDoor.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
+    headers: { 'user-agent': 'Swiftfin/1.2 (AppleTV)' },
+    body: { DeviceProfile: fourKProfile },
+  });
+  assert.strictEqual(cappedUserDoor.calls.specs.at(-1).allow4k, false, 'user capped at 1080p cannot request 4K');
+  assert.strictEqual(cappedSwift.body.MediaSources[0].SupportsDirectPlay, false, 'user capped at 1080p cannot direct-play a 4K file');
+  const cappedDetail = await cappedUserDoor.call('item', 'GET', '/Items/m550', {
+    headers: { 'user-agent': 'JellyfinDesktop/2.1.0-pre2 (Winnt; x86_64) Chrome/130.0.0.0' },
+  });
+  assert.strictEqual(cappedDetail.body.MediaSources.length, 1, '1080p-capped user sees only 1 version (no 4K dropdown)');
+
+  // Details page Version dropdown: 1080p first (default), 4K selectable; switching 1080p -> 4K mounts fresh 4K
+  const verDoor = fakeDoor({ settings: { jellyfinAllow4k: true }, tracks: async () => uhdTracks });
+  const detail = await verDoor.call('item', 'GET', '/Items/m550', {
+    headers: { 'user-agent': 'JellyfinDesktop/2.1.0-pre2 (Winnt; x86_64) Chrome/130.0.0.0' },
+  });
+  assert.strictEqual(detail.body.MediaSources.length, 2, '4K-allowed user sees 1080p and 4K versions');
+  assert.strictEqual(detail.body.MediaSources[0].Name, '1080p', '1080p is always the default first version');
+  assert.strictEqual(detail.body.MediaSources[1].Name, '4K', '4K is selectable in the Version dropdown');
+  const id1080 = detail.body.MediaSources[0].Id;
+  const id4k = detail.body.MediaSources[1].Id;
+  // Tizen/jellyfin-web calls GET /Users/{uid}/Items/{mediaSourceId} right before PlaybackInfo
+  const tizen1080Item = await verDoor.call('item', 'GET', `/Items/${id1080}`, {
+    headers: { 'user-agent': 'Mozilla/5.0 (SMART-TV; LINUX; Tizen 9.0)' },
+  });
+  assert.strictEqual(tizen1080Item.status, 200, 'version-suffixed 1080p item id resolves for Tizen/Web playback');
+  assert.ok(Array.isArray(tizen1080Item.body.MediaStreams) && tizen1080Item.body.MediaStreams.length > 0);
+  const tizen4kItem = await verDoor.call('item', 'GET', `/Items/${id4k}`, {
+    headers: { 'user-agent': 'Mozilla/5.0 (SMART-TV; LINUX; Tizen 9.0)' },
+  });
+  assert.strictEqual(tizen4kItem.status, 200, 'version-suffixed 4k item id resolves for Tizen/Web playback');
+  await verDoor.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
+    headers: { 'user-agent': 'JellyfinDesktop/2.1.0-pre2 (Winnt; x86_64) Chrome/130.0.0.0' },
+    body: { MediaSourceId: id1080, DeviceProfile: fourKProfile },
+  });
+  assert.strictEqual(verDoor.calls.specs.at(-1).allow4k, false, 'selecting 1080p version requests 1080p');
+  await verDoor.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
+    headers: { 'user-agent': 'JellyfinDesktop/2.1.0-pre2 (Winnt; x86_64) Chrome/130.0.0.0' },
+    body: { MediaSourceId: id4k, DeviceProfile: fourKProfile },
+  });
+  assert.strictEqual(verDoor.calls.play, 2, 'switching from 1080p to 4K mounts a fresh 4K stream');
+  assert.strictEqual(verDoor.calls.specs.at(-1).allow4k, true, 'selecting 4K version requests 4K');
+  assert.strictEqual(verDoor.calls.specs.at(-1).preferResolutionRank, 4, 'selecting 4K sets preferResolutionRank=4');
+});
+
+test('jellyfin Live TV & EPG opt-in exposes channels, XMLTV guide, favorites, logos, and client-safe streams', async () => {
+  const now = Date.now();
+  const favSet = new Set(['src1:ch1']);
+  const channels = [
+    { idx: 0, id: 'src1:ch1', name: 'News HD', group: 'News', logo: 'https://example.com/news.png', number: '1', nativeMime: 'video/mp2t', sourceId: 'src1' },
+    { idx: 1, id: 'src1:ch2', name: 'Sports 4K', group: 'Sports', logo: '', number: '2', nativeMime: 'application/x-mpegURL', sourceId: 'src1' },
+  ];
+  const door = fakeDoor({
+    settings: { jellyfinLiveTv: true },
+    deps: {
+      jellyfinLiveTvEnabled: () => true,
+      jellyfinLiveChannels: async () => channels.map((c) => ({ ...c, fav: favSet.has(c.id) })),
+      jellyfinLivePrograms: (_ctx, list) => new Map(list.map((c) => [c.id, [
+        { title: `${c.name} Live Show`, desc: 'Current broadcast', start: now - 15 * 60000, stop: now + 45 * 60000, category: c.group },
+      ]])),
+      jellyfinLivePlayUrls: (_ctx, ch) => ({
+        nativeUrl: `/api/iptv/native/${ch.idx}?cid=${encodeURIComponent(ch.id)}&t=tok123`,
+        nativeMime: ch.nativeMime,
+        hlsUrl: `/api/iptv/hls/${ch.idx}/index.m3u8?cid=${encodeURIComponent(ch.id)}&t=tok123`,
+        hasFfmpeg: true,
+      }),
+      jellyfinLiveFavorite: (_ctx, ch, on) => {
+        if (on) favSet.add(ch.id); else favSet.delete(ch.id);
+        return favSet.has(ch.id);
+      },
+      jellyfinLiveLogo: async () => ({ type: 'image/png', buf: Buffer.from([137, 80, 78, 71]) }),
+    },
+  });
+
+  // Policy + Views expose Live TV
+  const me = await door.call('me', 'GET', '/Users/Me');
+  assert.strictEqual(me.body.Policy.EnableLiveTvAccess, true);
+  assert.strictEqual(me.body.Policy.EnableAllChannels, true);
+
+  const views = await door.call('views', 'GET', '/UserViews');
+  const liveView = views.body.Items.find((v) => v.CollectionType === 'livetv');
+  assert.ok(liveView, 'Live TV view appears when jellyfinLiveTv is enabled');
+
+  // Info + GuideInfo + Channels
+  const info = await door.call('liveTvInfo', 'GET', '/LiveTv/Info');
+  assert.strictEqual(info.body.IsEnabled, true);
+  const guideInfo = await door.call('liveTvGuideInfo', 'GET', '/LiveTv/GuideInfo');
+  assert.ok(guideInfo.body.StartDate && guideInfo.body.EndDate);
+
+  const chList = await door.call('liveTvChannels', 'GET', '/LiveTv/Channels');
+  assert.strictEqual(chList.body.TotalRecordCount, 2);
+  const ch1 = chList.body.Items[0];
+  assert.strictEqual(ch1.Type, 'TvChannel');
+  assert.strictEqual(ch1.Name, 'News HD');
+  assert.strictEqual(ch1.UserData.IsFavorite, true);
+  assert.strictEqual(ch1.CurrentProgram.Name, 'News HD Live Show');
+
+  // Shelf fallback for apps opening Live TV folder via /Items?ParentId=...
+  const shelf = await door.call('shelf', 'GET', `/Items?ParentId=${liveView.Id}`);
+  assert.strictEqual(shelf.body.Items.length, 2);
+
+  // POST /LiveTv/Programs with ChannelIds + clicking a program item resolves cleanly
+  const progs = await door.call('liveTvPrograms', 'POST', '/LiveTv/Programs', { body: { ChannelIds: [ch1.Id] } });
+  assert.strictEqual(progs.body.Items.length, 1);
+  assert.strictEqual(progs.body.Items[0].ChannelId, ch1.Id);
+  const progDetail = await door.call('item', 'GET', `/Items/${progs.body.Items[0].Id}`);
+  assert.strictEqual(progDetail.status, 200);
+  assert.strictEqual(progDetail.body.ChannelId, ch1.Id);
+
+  // Swiftfin (Apple TV) gets direct native TS + HLS fallback; Roku gets HLS transcoding URL; never leaks credentials
+  const swiftLive = await door.call('playback', 'POST', `/Items/${ch1.Id}/PlaybackInfo`, {
+    headers: { 'user-agent': 'Swiftfin/1.2 (AppleTV)' },
+    body: {},
+  });
+  const sSrc = swiftLive.body.MediaSources[0];
+  assert.strictEqual(sSrc.SupportsDirectPlay, true);
+  assert.deepStrictEqual(sSrc.RequiredHttpHeaders, {}, 'RequiredHttpHeaders must be present for Http sources');
+  assert.match(sSrc.Path, /^https?:\/\/[^/]+\/api\/iptv\/native\/0\?cid=src1%3Ach1&t=tok123$/);
+  assert.match(sSrc.DirectStreamUrl, /^\/api\/iptv\/native\/0\?cid=src1%3Ach1&t=tok123$/);
+  assert.match(sSrc.TranscodingUrl, /^\/api\/iptv\/hls\/0\/index\.m3u8\?cid=src1%3Ach1&t=tok123$/);
+  assert.strictEqual(sSrc.IsInfiniteStream, true);
+
+  const rokuLive = await door.call('playback', 'POST', `/Items/${ch1.Id}/PlaybackInfo`, {
+    headers: { 'user-agent': 'Roku/DVP-12.5' },
+    body: {},
+  });
+  assert.strictEqual(rokuLive.body.MediaSources[0].SupportsDirectPlay, false, 'Roku TS channel prefers rolling HLS');
+  assert.match(rokuLive.body.MediaSources[0].TranscodingUrl, /^\/api\/iptv\/hls\/0\/index\.m3u8/);
+
+  const tizenLive = await door.call('playback', 'POST', `/Items/${ch1.Id}/PlaybackInfo`, {
+    headers: { 'user-agent': 'Mozilla/5.0 (SMART-TV; LINUX; Tizen 9.0) AppleWebKit/537.36' },
+    body: {},
+  });
+  assert.strictEqual(tizenLive.body.MediaSources[0].SupportsDirectPlay, false, 'Samsung Tizen TS channel prefers rolling HLS');
+  assert.match(tizenLive.body.MediaSources[0].TranscodingUrl, /^\/api\/iptv\/hls\/0\/index\.m3u8/);
+
+  // OpenLiveStream + Channel favorite sync + Channel logo proxy
+  const opened = await door.call('liveTvStreamOpen', 'POST', '/LiveTv/LiveStreams/Open', { body: { ItemId: ch1.Id } });
+  assert.strictEqual(opened.status, 200);
+  assert.strictEqual(opened.body.MediaSource.Id, ch1.Id);
+
+  const unfav = await door.call('unfavorite', 'DELETE', `/UserFavoriteItems/${ch1.Id}`);
+  assert.strictEqual(unfav.body.IsFavorite, false);
+  assert.strictEqual(favSet.has('src1:ch1'), false, 'unfavoriting in Jellyfin updates Triboon IPTV favorites');
+
+  const logo = await door.call('image', 'GET', `/Items/${ch1.Id}/Images/Primary`);
+  assert.strictEqual(logo.status, 200);
+  assert.strictEqual(logo.headers['content-type'], 'image/png');
+  const progCard = progs.body.Items.find((p) => p.ChannelId === ch1.Id);
+  assert.ok(progCard && progCard.ImageTags && progCard.ImageTags.Primary, 'Live TV program cards expose channel logo tag');
+  const progLogo = await door.call('image', 'GET', `/Items/${progCard.Id}/Images/Primary`);
+  assert.strictEqual(progLogo.status, 200);
+  assert.strictEqual(progLogo.headers['content-type'], 'image/png');
+});
+
+test('jellyfin image requests reuse remembered TMDB art paths without re-querying TMDB', async () => {
+  const prevStub = process.env.TRIBOON_POSTER_STUB;
+  process.env.TRIBOON_POSTER_STUB = '1';
+  try {
+    const tmdbCalls = [];
+    const door = fakeDoor({
+      deps: {
+        tmdb: {
+          get: async (p) => {
+          tmdbCalls.push(p);
+          if (p.startsWith('/discover/movie')) {
+            return {
+              total_results: 1,
+              total_pages: 1,
+              results: [{
+                id: 987654,
+                title: 'Fast Poster Movie',
+                release_date: '2026-01-01',
+                poster_path: '/fast-poster.jpg',
+                backdrop_path: '/fast-backdrop.jpg',
+              }],
+            };
+          }
+          if (p.startsWith('/movie/987654')) {
+            return {
+              id: 987654,
+              title: 'Fast Poster Movie',
+              release_date: '2026-01-01',
+              poster_path: '/fast-poster.jpg',
+              backdrop_path: '/fast-backdrop.jpg',
+              credits: {
+                cast: [{ id: 554433, name: 'Star Actor', character: 'Lead', profile_path: '/star-actor.jpg' }],
+                crew: [],
+              },
+            };
+          }
+          throw new Error(`unexpected tmdb.get(${p})`);
+        },
+        },
+      },
+    });
+    const grid = await door.call('shelf', 'GET', '/Items?ParentId=01000000-0000-0000-0000-000000000000&Limit=10');
+    assert.strictEqual(grid.status, 200);
+    const movie = grid.body.Items[0];
+    const callsAfterGrid = tmdbCalls.length;
+    const posterRes = await door.call('image', 'GET', `/Items/${movie.Id}/Images/Primary?fillWidth=240&fillHeight=360`);
+    assert.strictEqual(posterRes.status, 200);
+    assert.strictEqual(posterRes.headers['x-triboon-poster'], '/fast-poster.jpg');
+    const bgRes = await door.call('image', 'GET', `/Items/${movie.Id}/Images/Backdrop/0?maxWidth=780`);
+    assert.strictEqual(bgRes.status, 200);
+    assert.strictEqual(bgRes.headers['x-triboon-poster'], '/fast-backdrop.jpg');
+    assert.strictEqual(tmdbCalls.length, callsAfterGrid, 'poster & backdrop must reuse cached TMDB paths from grid');
+
+    const detail = await door.call('item', 'GET', `/Items/${movie.Id}`);
+    assert.strictEqual(detail.status, 200);
+    const actor = detail.body.People[0];
+    const callsAfterDetail = tmdbCalls.length;
+    const actorImg = await door.call('image', 'GET', `/Items/${actor.Id}/Images/Primary?maxWidth=200`);
+    assert.strictEqual(actorImg.status, 200);
+    assert.strictEqual(actorImg.headers['x-triboon-poster'], '/star-actor.jpg');
+    assert.strictEqual(tmdbCalls.length, callsAfterDetail, 'cast headshots must reuse cached profile_path from details');
+  } finally {
+    if (prevStub === undefined) delete process.env.TRIBOON_POSTER_STUB;
+    else process.env.TRIBOON_POSTER_STUB = prevStub;
+  }
+});
+
+test('jellyfin episodes expose own still thumbnails without ChildCount:0 and seasons fall back to show poster', async () => {
+  const prevStub = process.env.TRIBOON_POSTER_STUB;
+  process.env.TRIBOON_POSTER_STUB = '1';
+  try {
+    const door = fakeDoor({
+      deps: {
+        tmdb: {
+          get: async (p) => {
+            if (p === '/tv/424242') {
+              return {
+                id: 424242,
+                name: 'Still Show',
+                poster_path: '/show-poster.jpg',
+                backdrop_path: '/show-bg.jpg',
+                seasons: [{ season_number: 1, name: 'Season 1', episode_count: 2, poster_path: null }],
+              };
+            }
+            if (p === '/tv/424242/season/1') {
+              return {
+                name: 'Season 1',
+                poster_path: null,
+                episodes: [
+                  { episode_number: 1, name: 'Pilot', still_path: '/ep1-still.jpg' },
+                  { episode_number: 2, name: 'Second', still_path: null },
+                ],
+              };
+            }
+            return null;
+          },
+        },
+      },
+    });
+    const seasons = await door.call('seasons', 'GET', '/Shows/t424242/Seasons');
+    assert.strictEqual(seasons.status, 200);
+    assert.strictEqual(seasons.body.Items[0].ImageTags.Primary, 'p', 'season without own poster falls back to show poster');
+    const seasonCover = await door.call('image', 'GET', `/Items/${seasons.body.Items[0].Id}/Images/Primary`);
+    assert.strictEqual(seasonCover.headers['x-triboon-poster'], '/show-poster.jpg');
+
+    const eps = await door.call('episodes', 'GET', `/Shows/t424242/Episodes?SeasonId=${seasons.body.Items[0].Id}`);
+    assert.strictEqual(eps.status, 200);
+    const ep1 = eps.body.Items[0];
+    const ep2 = eps.body.Items[1];
+    assert.strictEqual(ep1.ChildCount, undefined, 'episodes must not send ChildCount:0 (hides Primary still in jellyfin-web)');
+    assert.strictEqual(ep1.ImageTags.Primary, 'still1');
+    assert.strictEqual(ep1.ImageTags.Thumb, 'still1');
+    assert.strictEqual(ep1.SeriesPrimaryImageTag, 'p');
+    assert.strictEqual(ep1.ParentBackdropItemId, ep1.SeriesId);
+    assert.deepStrictEqual(ep1.ParentBackdropImageTags, ['b']);
+
+    const ep1Primary = await door.call('image', 'GET', `/Items/${ep1.Id}/Images/Primary`);
+    assert.strictEqual(ep1Primary.headers['x-triboon-poster'], '/ep1-still.jpg');
+    const ep1Backdrop = await door.call('image', 'GET', `/Items/${ep1.Id}/Images/Backdrop`);
+    assert.strictEqual(ep1Backdrop.headers['x-triboon-poster'], '/ep1-still.jpg');
+    const ep2Primary = await door.call('image', 'GET', `/Items/${ep2.Id}/Images/Primary`);
+    assert.strictEqual(ep2Primary.headers['x-triboon-poster'], '/show-bg.jpg', 'episode without still falls back to show backdrop');
+  } finally {
+    if (prevStub === undefined) delete process.env.TRIBOON_POSTER_STUB;
+    else process.env.TRIBOON_POSTER_STUB = prevStub;
+  }
 });

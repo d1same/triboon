@@ -2,12 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B0812">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Triboon">
 <!-- yt3.googleusercontent.com album/playlist art REJECTS a full-URL referrer (covers came up blank);
      send origin-only cross-origin so those thumbnails load. Same-origin requests keep the full referrer. -->
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Triboon</title>
 <script src="/main.triboon.bundle.js" defer></script>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="triboon.png">
 <link rel="icon" href="T-Logo.svg"><link rel="alternate icon" href="T-Logo.png">
 <link rel="preload" href="fonts/Sora.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/AlbertSans.woff2" as="font" type="font/woff2" crossorigin>
@@ -289,7 +296,7 @@ body.tv #rail:hover,#rail.expanded,body.railOpen #rail{width:var(--railExpandedW
   transition:opacity .2s ease,max-width .32s cubic-bezier(.22,1,.36,1)}
 body.tv #rail:hover .logo .wordmark,#rail.expanded .logo .wordmark,body.railOpen .logo .wordmark{max-width:120px;opacity:1}
 /* Burger (phones): the rail is off-canvas; this toggles it as an overlay. */
-#burger{position:fixed;top:14px;left:14px;z-index:60;display:none;width:42px;height:42px;border-radius:12px;
+#burger{position:fixed;top:calc(14px + var(--safeT));left:calc(14px + var(--safeL));z-index:60;display:none;width:42px;height:42px;border-radius:12px;
   place-items:center;background:var(--panel);border:1px solid var(--line);color:var(--text);
   pointer-events:auto;touch-action:manipulation;-webkit-user-select:none;user-select:none}
 body.tv #rail:hover .rlabel,#rail.expanded .rlabel,body.railOpen .rlabel,
@@ -1482,6 +1489,13 @@ body.screensaverOn{cursor:none}
 #vlcPanel .gateCard{text-align:center;margin-left:0;width:min(520px,calc(100vw - 48px))}
 body.tv #vlcCopy{display:none}
 #vlcUrl{font:500 12px "JetBrains Mono";word-break:break-all;background:var(--field);border:1px solid var(--line);border-radius:10px;padding:12px;margin:14px 0;user-select:all}
+#vlcApps{display:none;flex-wrap:wrap;gap:8px;margin:0 0 12px;justify-content:center}
+#vlcApps.show{display:flex}
+#vlcApps .btn{flex:1 1 120px;justify-content:center;text-decoration:none}
+@media (display-mode: standalone){
+  body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+  #player .osd{padding-bottom:calc(18px + env(safe-area-inset-bottom,0px))}
+}
 
 /* ---------- toast ---------- */
 #toast{position:fixed;z-index:60;left:50%;bottom:36px;transform:translate(-50%,80px);opacity:0;background:var(--panel);color:var(--text);
@@ -2146,13 +2160,19 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
   #colorGlow{opacity:.72}
   #burger{display:grid}
   nav#rail{transform:translateX(-110%);transition:transform .28s cubic-bezier(.22,1,.36,1);
-    width:248px!important;z-index:40;box-shadow:18px 0 50px rgba(0,0,0,.5)}
+    width:248px!important;z-index:40;box-shadow:18px 0 50px rgba(0,0,0,.5);
+    left:0!important;top:0!important;bottom:0!important;
+    padding:calc(11px + var(--safeT)) 8px calc(18px + var(--safeB)) calc(8px + var(--safeL))!important}
   nav#rail::after{display:none}
   body.mobileNav nav#rail{transform:translateX(0);background:var(--panel);backdrop-filter:blur(8px)}
   body.mobileNav nav#rail .rlabel,body.mobileNav nav#rail .wordmark{max-width:150px;opacity:1}
   /* Burger stays at top-left as the close control. Slide the profile row right so the
      avatar + name are not under it (owner: burger sat on "owner"). */
   body.mobileNav #railUser{padding-left:52px}
+  body.mobileNav #railUser{position:sticky;top:0;z-index:4;background:var(--panel);padding-right:10px;margin-bottom:4px}
+  body.mobileNav #railUser .av{width:28px;height:28px;flex:0 0 28px;margin:0 10px 0 4px}
+  body.mobileNav #railUser .rlabel{max-width:146px;flex:1 1 auto;min-width:0;text-align:left}
+  body.mobileNav #railUser.focusable::before{left:4px;right:4px;bottom:-4px}
   :root{--rail:0px}
   body.railOpen{--rail:0px}
   #home,#discover,#browse,#detail,#person,#settings,#prefs,#music{padding-left:16px!important;padding-right:16px!important}
@@ -2207,16 +2227,19 @@ body.mobileShell #burger{display:grid}
 body.mobileShell nav#rail{transform:translateX(-110%);transition:transform .28s cubic-bezier(.22,1,.36,1);
   width:248px!important;z-index:40;box-shadow:18px 0 50px rgba(0,0,0,.5);
   /* Full-height drawer on the phone: the panel spans the whole viewport edge-to-edge (no
-     safe-area/overscan inset on the panel itself, unlike the TV rail). The notch/home-indicator
-     clearance moves into internal padding so the logo + nav list stay clear of the status bar
-     and home indicator while the panel background still reaches the top and bottom edges. */
-  top:0!important;bottom:0!important;
-  padding-top:calc(24px + var(--safeT))!important;padding-bottom:calc(18px + var(--safeB))!important}
+     safe-area/overscan inset on the panel itself, unlike the TV rail). Top padding of 11px + safeT
+     centers the 48px #railUser row on the exact same 35px + safeT centerline as the 42px #burger. */
+  left:0!important;top:0!important;bottom:0!important;
+  padding:calc(11px + var(--safeT)) 8px calc(18px + var(--safeB)) calc(8px + var(--safeL))!important}
 body.mobileShell nav#rail::after{display:none}
 body.mobileShell.mobileNav nav#rail{transform:translateX(0);background:var(--panel);backdrop-filter:blur(8px)}
 body.mobileShell.mobileNav nav#rail .rlabel,
 body.mobileShell.mobileNav nav#rail .wordmark{max-width:150px;opacity:1}
 body.mobileShell.mobileNav #railUser{padding-left:52px}
+body.mobileShell.mobileNav #railUser{position:sticky;top:0;z-index:4;background:var(--panel);padding-right:10px;margin-bottom:4px}
+body.mobileShell.mobileNav #railUser .av{width:28px;height:28px;flex:0 0 28px;margin:0 10px 0 4px}
+body.mobileShell.mobileNav #railUser .rlabel{max-width:146px;flex:1 1 auto;min-width:0;text-align:left}
+body.mobileShell.mobileNav #railUser.focusable::before{left:4px;right:4px;bottom:-4px}
 body.mobileShell{--rail:0px}
 body.mobileShell.railOpen{--rail:0px}
 body.mobileShell #home,body.mobileShell #discover,body.mobileShell #browse,body.mobileShell #detail,
@@ -4099,6 +4122,97 @@ body.mobileShell #detail .detailHero{padding-top:calc(12px + var(--safeT));min-h
 body.tv #dTitle{font-size:var(--ctDetailTitle)}
 body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
 
+/* Settings & Admin polish: collapsible advanced folds, crisp section labels, and phone drill-down. */
+#prefMyDivider{margin-top:0;padding-top:2px}
+#prefServerDivider{margin-top:14px}
+#prefs .hint:not(#invLink):not(#traktUri){word-break:normal;overflow-wrap:break-word}
+.advFold{margin:16px 0 6px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}
+.advFoldHead{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  min-height:44px;padding:10px 14px;border-radius:11px;font:600 13.5px "Sora",system-ui,sans-serif;color:var(--text);user-select:none}
+.advFoldHead::-webkit-details-marker{display:none}
+.advFoldHead small{font:400 12px "Albert Sans",system-ui,sans-serif;color:var(--muted);margin-left:auto;text-align:right}
+.advFoldHead::after{content:"";width:7px;height:7px;border-right:1.8px solid currentColor;border-bottom:1.8px solid currentColor;
+  transform:rotate(-45deg);transition:transform .16s ease;opacity:.65;flex:none;margin-right:2px}
+.advFold[open]>.advFoldHead::after{transform:rotate(45deg)}
+.advFoldHead:hover,.advFoldHead.focus,.advFoldHead:focus,.advFoldHead:focus-visible{
+  outline:none;background:var(--btnHover);color:var(--btnFocusText)}
+.advFoldHead:hover small,.advFoldHead.focus small,.advFoldHead:focus small,.advFoldHead:focus-visible small,
+.advFoldHead:hover::after,.advFoldHead.focus::after,.advFoldHead:focus::after,.advFoldHead:focus-visible::after{color:inherit;opacity:.85}
+.advFoldBody{padding:6px 14px 14px;border-top:1px solid rgba(255,255,255,.06)}
+#prefCatFilter{width:100%;max-width:340px;margin-bottom:10px}
+#prefMobileBar{display:none;align-items:center;gap:10px;position:sticky;top:0;z-index:5;
+  margin:0 -16px 12px;padding:10px 92px 10px 66px;background:var(--ink,#0b0c10);
+  border-bottom:1px solid rgba(255,255,255,.08)}
+#prefMobileBack{display:inline-flex;align-items:center;gap:6px;min-height:38px;padding:6px 12px 6px 8px;
+  border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);
+  color:var(--text);font:600 13px "Albert Sans",system-ui,sans-serif;cursor:pointer;flex:none}
+#prefMobileBack:active{background:rgba(255,255,255,.12)}
+#prefMobileTitle{font:700 16px "Sora",system-ui,sans-serif;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:760px){
+  body:not(.tv) #prefs.open{display:block;padding-top:calc(12px + var(--safeT))!important;padding-bottom:calc(32px + var(--safeB))!important}
+  body:not(.tv) #prefs:not(.mobileDetailOpen){padding-top:calc(62px + var(--safeT))!important}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) #prefTabs{
+    display:flex;flex-direction:column;overflow:visible;gap:2px;margin:0 0 24px;padding:0}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) .prefTabDivider{
+    display:block;border:0;margin:16px 0 6px;padding:4px 8px 2px}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) #prefMyDivider{margin-top:0}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) .prefTabDivider span{
+    display:inline-block;font:700 12px "Sora",system-ui,sans-serif;letter-spacing:.02em;color:var(--muted)}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) #prefTabs button{
+    width:100%!important;min-width:0;flex:0 0 auto!important;min-height:48px;padding:11px 12px;border-radius:12px;
+    grid-template-columns:22px minmax(0,1fr) 16px;gap:12px;opacity:1;color:var(--text)!important;
+    border-bottom:1px solid rgba(255,255,255,.05)!important}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) #prefTabs button::after{
+    content:"\203A";justify-self:end;font:600 20px/1 "Albert Sans",sans-serif;color:rgba(var(--fg),.42)}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) #prefTabs button.on{background:rgba(255,255,255,.06)!important}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) .setGrid{display:none!important}
+  body:not(.tv) #prefs.mobileDetailOpen #prefTabs{display:none!important}
+  body:not(.tv) #prefs.mobileDetailOpen #prefMobileBar{display:flex}
+  body:not(.tv) #prefs .setGrid{border-left:0!important;border-top:0!important;padding:4px 0 0!important}
+  body:not(.tv) #prefs .field{flex-wrap:wrap}
+  body:not(.tv) #prefs .field>:is(input:not([type=checkbox]):not([type=radio]),select){flex:1 1 100%!important;min-width:0;width:100%;max-width:none!important}
+  body:not(.tv) #prefs #playbackStory{max-height:50vh}
+  body:not(.tv) #prefs .advFoldHead small{display:none}
+}
+@media (min-width:761px) and (max-width:900px){
+  body:not(.tv) #prefs.open{
+    display:grid!important;grid-template-columns:192px minmax(0,1fr)!important;gap:0 20px!important;
+    padding-top:calc(56px + var(--safeT))!important;padding-right:20px!important;
+    overflow:hidden!important;align-content:stretch!important}
+  body:not(.tv) #prefs #prefMobileBar{display:none!important}
+  body:not(.tv) #prefs #prefTabs{
+    display:flex!important;flex-direction:column!important;position:relative;top:auto;
+    overflow-x:hidden;overflow-y:auto;max-height:100%;margin:0;padding-bottom:24px}
+  body:not(.tv) #prefs .prefTabDivider{border:0!important;margin:12px 0 4px!important;padding:4px 10px 2px!important}
+  body:not(.tv) #prefs #prefMyDivider{margin-top:0!important}
+  body:not(.tv) #prefs .prefTabDivider span{display:inline-block!important}
+  body:not(.tv) #prefs #prefTabs button{width:100%!important;min-width:0!important;white-space:nowrap}
+  body:not(.tv) #prefs>.setGrid{
+    grid-column:2!important;grid-row:1!important;min-height:0;max-height:100%;
+    overflow-y:auto;border-left:1px solid rgba(255,255,255,.08)!important;border-top:0!important;
+    padding:0 4px 28px 20px!important}
+  body:not(.tv) #prefs #playbackStory{max-height:52vh}
+}
+@media (orientation:landscape) and (min-width:680px){
+  body.mobileShell:not(.tv) #prefs.open{
+    display:grid!important;grid-template-columns:196px minmax(0,1fr)!important;gap:0 20px!important;
+    padding-top:calc(60px + var(--safeT))!important;padding-left:calc(16px + var(--safeL))!important;
+    padding-right:calc(16px + var(--safeR))!important;overflow:hidden!important;align-content:stretch!important}
+  body.mobileShell:not(.tv) #prefs #prefMobileBar{display:none!important}
+  body.mobileShell:not(.tv) #prefs #prefTabs{
+    display:flex!important;flex-direction:column!important;position:relative;top:auto;
+    overflow-x:hidden;overflow-y:auto;max-height:100%;margin:0;padding-bottom:24px}
+  body.mobileShell:not(.tv) #prefs .prefTabDivider{border:0!important;margin:12px 0 4px!important;padding:4px 10px 2px!important}
+  body.mobileShell:not(.tv) #prefs #prefMyDivider{margin-top:0!important}
+  body.mobileShell:not(.tv) #prefs .prefTabDivider span{display:inline-block!important}
+  body.mobileShell:not(.tv) #prefs #prefTabs button{width:100%!important;min-width:0!important;white-space:nowrap}
+  body.mobileShell:not(.tv) #prefs>.setGrid{
+    grid-column:2!important;grid-row:1!important;min-height:0;max-height:100%;
+    overflow-y:auto;border-left:1px solid rgba(255,255,255,.08)!important;border-top:0!important;
+    padding:0 4px 28px 20px!important}
+  body.mobileShell:not(.tv) #prefs #playbackStory{max-height:52vh}
+}
+
 /* ===== Quiet Graphite (3.5.0, owner pick 2026-11-17) =====
    Look only: no layout, order or remote behaviour changes. Scoped to the Graphite theme so the
    other themes look exactly as before. Flat: no glows, no blurred shadows, no zoom on focus. */
@@ -5221,14 +5335,19 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 <section id="prefs">
   <h1>Preferences</h1>
 
+  <div id="prefMobileBar">
+    <button type="button" id="prefMobileBack" aria-label="Back to settings"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg><span>Settings</span></button>
+    <span id="prefMobileTitle">Dashboard</span>
+  </div>
+
   <div id="prefTabs">
-    <button data-tab="dash" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 18V11M10 18V7M15 18v-5M20 18H4"/></svg><span>Dashboard</span></button>
-    <button data-tab="profiles" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="3"/><path d="M4 20c.8-3 2.5-5 5-5s4.2 2 5 5"/><path d="M17 10v4M15 12h4"/></svg><span>Profile &amp; Pins</span></button>
-    <button data-tab="display" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Display</span></button>
-    <button data-tab="playback" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4V8Z" fill="currentColor" stroke="none"/></svg><span>Playback</span></button>
-    <button data-tab="menu" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7h14M5 12h14M5 17h14"/></svg><span>Menu</span></button>
-    <button data-tab="livetv" class="focusable" id="prefTabLive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>Live TV</span></button>
-    <button data-tab="connect" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12a3 3 0 0 1 3-3h3a3 3 0 1 1 0 6h-2"/><path d="M15 12a3 3 0 0 1-3 3H9a3 3 0 1 1 0-6h2"/></svg><span>Connections</span></button>
+    <button data-tab="dash" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19V11M10 19V6M15 19v-5M20 19H4"/></svg><span>Dashboard</span></button>
+    <button data-tab="profiles" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.9-3.2 2.9-5 5.5-5s4.6 1.8 5.5 5"/><rect x="15.5" y="11" width="5.5" height="4.5" rx="1.2"/><path d="M17 11V9.5a1.25 1.25 0 0 1 2.5 0V11"/></svg><span>Profile &amp; Pins</span></button>
+    <button data-tab="display" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><path d="M8 20.5h8M12 17v3.5"/></svg><span>Display</span></button>
+    <button data-tab="playback" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5 16 12l-6 3.5V8.5Z"/></svg><span>Playback</span></button>
+    <button data-tab="menu" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15M13 9h4M13 13h4"/></svg><span>Menu</span></button>
+    <button data-tab="livetv" class="focusable" id="prefTabLive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8.5 3.5 12 7l3.5-3.5"/></svg><span>Live TV</span></button>
+    <button data-tab="connect" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l1.41-1.41a4 4 0 0 0-5.66-5.66L11.5 7.25"/><path d="M14 11a5 5 0 0 0-7.07 0l-1.41 1.41a4 4 0 0 0 5.66 5.66l1.32-1.32"/></svg><span>Connections</span></button>
     <!-- Admin Server-settings tabs are folded in here at boot (mergeServerSettingsIntoPrefs), after a
          divider, so the avatar opens ONE menu: Preferences group · divider · Server settings group. -->
   </div>
@@ -5263,11 +5382,11 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <div class="setGrid" data-ptab="display" hidden>
     <div class="panel">
       <h2>Size on this device</h2>
-      <p>Posters and landscape thumbs (Continue Watching, episodes) plus the title under each. Small is 7 posters / 5 thumbs, Medium is 6 / 4, Large is 5 / 3 — the same 1080p counts Plex and Jellyfin use.</p>
+      <p>Choose poster size for Home, Movies, Shows, and Libraries.</p>
       <div class="sizePick" id="prefCoverSize">
         <button data-sz="S">Small</button><button data-sz="M">Medium</button><button data-sz="L">Large</button>
       </div>
-      <p style="margin-top:18px">Text size for the backdrop title and plot, plus movies, shows, music, Live TV, library pages, and Settings labels. The left menu stays fixed.</p>
+      <p style="margin-top:18px">Text size for titles, descriptions, Live TV, and Settings labels.</p>
       <div class="sizePick" id="prefContentTextSize">
         <button data-ts="S">Compact</button><button data-ts="M">Standard</button><button data-ts="L">Larger</button>
       </div>
@@ -5378,10 +5497,11 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
           <option value="all">Apply to: EVERYONE (admin — users can&rsquo;t re-enable)</option>
         </select>
       </div>
-      <div style="display:flex;gap:8px;margin-bottom:10px">
+      <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
         <button class="ghostMini focusable" id="prefCatAll" style="margin-left:0">Select all</button>
         <button class="ghostMini focusable" id="prefCatNone" style="margin-left:0">Select none</button>
       </div>
+      <div class="field"><input id="prefCatFilter" placeholder="Filter categories…" autocomplete="off"></div>
       <div id="prefCatList"><div class="hint">loading…</div></div>
     </div>
   </div>
@@ -5509,17 +5629,18 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <div class="sub">Admin-only. Users of this server never see this screen.</div>
 
   <div id="setTabs">
-    <button data-tab="server" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg><span>Status</span></button>
-    <button data-tab="activity" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h4l2-5 4 10 2-5h4"/><circle cx="19" cy="6" r="2"/></svg><span>Watching</span></button>
-    <button data-tab="logs" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg><span>Logs</span></button>
-    <button data-tab="performance" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14a8 8 0 1 1 16 0"/><path d="M12 14l4-4"/><path d="M8 18h8"/></svg><span>Performance</span></button>
-    <button data-tab="sources" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="2"/></svg><span>Providers</span></button>
-    <button data-tab="rules" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5h12M6 12h12M6 19h12"/><path d="M9 5v14"/></svg><span>Libraries</span></button>
-    <button data-tab="livetv" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>House TV</span></button>
-    <button data-tab="catalog" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><span>Catalog</span></button>
-    <button data-tab="users" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M4 19c.9-3.2 2.6-5 5-5s4.1 1.8 5 5"/><path d="M17 10v6M14 13h6"/></svg><span>Users</span></button>
-    <button data-tab="security" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 19 6v5c0 4.4-2.8 7.7-7 9.4-4.2-1.7-7-5-7-9.4V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg><span>Security</span></button>
-    <button data-tab="display" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Appearance</span></button>
+    <button data-tab="server" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01M11 7.5h6M11 16.5h4"/></svg><span>Status</span></button>
+    <button data-tab="activity" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"/><circle cx="19.5" cy="6" r="1.8"/></svg><span>Watching</span></button>
+    <button data-tab="logs" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 10 3 2.5-3 2.5M12.5 15h4"/></svg><span>Logs</span></button>
+    <button data-tab="performance" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l4-4.5"/><circle cx="12" cy="15" r="1.2"/><path d="M8 19h8"/></svg><span>Performance</span></button>
+    <button data-tab="sources" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 17H6a4 4 0 0 1-.4-7.98A5.5 5.5 0 0 1 16.3 7.5 3.8 3.8 0 0 1 18 15h-1.5"/><path d="M12 11.5v7.5m0 0-3-3m3 3 3-3"/></svg><span>Providers</span></button>
+    <button data-tab="rules" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-10Z"/></svg><span>Libraries</span></button>
+    <button data-tab="apps" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg><span>Apps</span></button>
+    <button data-tab="livetv" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="11" r="1.6"/><path d="M12 12.6V20M9 20h6"/><path d="M8.5 14.5a5 5 0 0 1 0-7M15.5 7.5a5 5 0 0 1 0 7"/><path d="M5.7 17.3a9 9 0 0 1 0-12.6M18.3 4.7a9 9 0 0 1 0 12.6"/></svg><span>House TV</span></button>
+    <button data-tab="catalog" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z"/><path d="M19 16.5v3M17.5 18h3"/></svg><span>Catalog</span></button>
+    <button data-tab="users" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.8-3 2.7-4.8 5.5-4.8s4.7 1.8 5.5 4.8"/><circle cx="16.5" cy="9" r="2.4"/><path d="M16.5 14.5c2 0 3.5 1.3 4 3.8"/></svg><span>Users</span></button>
+    <button data-tab="security" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 19 6v5c0 4.4-2.8 7.7-7 9.4-4.2-1.7-7-5-7-9.4V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg><span>Security</span></button>
+    <button data-tab="display" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><path d="M8 20.5h8M12 17v3.5"/></svg><span>Appearance</span></button>
   </div>
 
   <div class="setGrid" data-stab="server">
@@ -5550,9 +5671,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
   <div class="setGrid" data-stab="performance" hidden>
   <div class="panel"><h2>Streaming performance</h2>
-    <p>Triboon sizes connections from your provider, this server's network, and how many people watch
-       at once. Speeds are <strong>Mbps</strong>. Auto grows a slow stream and gives extra sockets away
-       from a well-buffered one. Custom always splits evenly.</p>
+    <p>Sizes Usenet connections for your internet speed (<strong>Mbps</strong>) and how many people watch at once.</p>
     <div class="perfSummary" id="perfSummary" aria-live="polite">
       <div class="perfCard"><div class="k">Providers</div><div class="v">--</div><small>waiting for server</small></div>
       <div class="perfCard"><div class="k">Playback pool</div><div class="v">--</div><small>available articles</small></div>
@@ -5579,25 +5698,6 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
           <option value="custom">Custom</option>
         </select></label>
       </div>
-      <div class="settingsRow two">
-        <label class="settingsControl"><span>1080p read-ahead goal</span><input id="perfBuf1080" type="number" min="30" max="600" inputmode="numeric" placeholder="seconds"></label>
-        <label class="settingsControl"><span>4K read-ahead goal</span><input id="perfBuf4k" type="number" min="30" max="360" inputmode="numeric" placeholder="seconds"></label>
-      </div>
-      <div class="settingsRow two">
-        <label class="settingsControl"><span>Device preload</span><input id="perfPreload" type="number" min="0" max="64" inputmode="numeric" placeholder="MB, 0 = off"></label>
-        <label class="settingsControl"><span>NNTP pipelining</span><input id="perfPipeline" type="number" min="0" max="4" inputmode="numeric" placeholder="0 = off, up to 4"></label>
-      </div>
-      <div class="settingsRow">
-        <label class="settingsControl"><span>Connections</span><select id="perfConnMode">
-          <option value="auto">Auto — grow and give away</option>
-          <option value="custom">Custom — use my numbers</option>
-        </select></label>
-        <label class="settingsControl"><span>Max 1080p connections</span><input id="perfConn1080" type="number" min="4" max="60" inputmode="numeric" placeholder="per stream"></label>
-        <label class="settingsControl"><span>Max 4K connections</span><input id="perfConn4k" type="number" min="6" max="80" inputmode="numeric" placeholder="per stream"></label>
-      </div>
-      <div class="settingsRow">
-        <label class="settingsControl"><span>Start/seek reserve</span><input id="perfReserve" type="number" min="10" max="50" inputmode="numeric" placeholder="% of connections"></label>
-      </div>
       <div class="settingsRow">
         <label class="settingsControl"><span>Segment cache</span><select id="perfSegCache">
           <option value="off">Off</option>
@@ -5605,22 +5705,44 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         </select></label>
         <label class="settingsControl"><span>Cache size GB</span><input id="perfSegGb" type="number" min="1" max="200" inputmode="numeric" placeholder="10"></label>
       </div>
-      <p class="hint">Off until you turn it on. Opening a movie then saves the start, the end, and where you left off, up to this size, in the appdata folder. The spot you stopped stays even when the folder fills. The next seconds of the movie still live in memory. Example: you stop at 40:00 and come back tomorrow. Play reads the disk copy instead of asking Usenet again.</p>
-      <p class="hint" id="perfConnHint">Auto uses only as many sockets as the movie needs for the current Usenet speed. Slow evening sockets add more; a full home download pipe does not. Cache stays inside about 20% of this box's RAM.</p>
+      <p class="hint">Optional disk cache for instant resume on movies you pause and finish later.</p>
+      <details class="advFold" id="perfAdvFold">
+        <summary class="advFoldHead focusable"><span>Advanced tuning</span><small>Read-ahead, pipelining, connection caps</small></summary>
+        <div class="advFoldBody">
+          <div class="settingsRow two">
+            <label class="settingsControl"><span>1080p read-ahead goal</span><input id="perfBuf1080" type="number" min="30" max="600" inputmode="numeric" placeholder="seconds"></label>
+            <label class="settingsControl"><span>4K read-ahead goal</span><input id="perfBuf4k" type="number" min="30" max="360" inputmode="numeric" placeholder="seconds"></label>
+          </div>
+          <div class="settingsRow two">
+            <label class="settingsControl"><span>Device preload</span><input id="perfPreload" type="number" min="0" max="64" inputmode="numeric" placeholder="MB, 0 = off"></label>
+            <label class="settingsControl"><span>NNTP pipelining</span><input id="perfPipeline" type="number" min="0" max="4" inputmode="numeric" placeholder="0 = off, up to 4"></label>
+          </div>
+          <div class="settingsRow">
+            <label class="settingsControl"><span>Connections</span><select id="perfConnMode">
+              <option value="auto">Auto — grow and give away</option>
+              <option value="custom">Custom — use my numbers</option>
+            </select></label>
+            <label class="settingsControl"><span>Max 1080p connections</span><input id="perfConn1080" type="number" min="4" max="60" inputmode="numeric" placeholder="per stream"></label>
+            <label class="settingsControl"><span>Max 4K connections</span><input id="perfConn4k" type="number" min="6" max="80" inputmode="numeric" placeholder="per stream"></label>
+          </div>
+          <div class="settingsRow">
+            <label class="settingsControl"><span>Start/seek reserve</span><input id="perfReserve" type="number" min="10" max="50" inputmode="numeric" placeholder="% of connections"></label>
+          </div>
+          <p class="hint" id="perfConnHint">Auto uses only the connections a stream needs and stays within ~20% of RAM.</p>
+        </div>
+      </details>
     </div>
     <div class="settingsActions">
       <button class="btn primary" id="perfTest">Calculate recommendation</button>
-      <button class="btn ghost" id="perfSpeed" title="Measures real per-connection speed and your provider's connection cap. Best run when nobody is watching.">Test provider speed</button>
       <button class="btn ghost" id="perfApply" disabled>Apply recommendation</button>
       <button class="btn ghost" id="perfSave">Save custom</button>
+      <button class="btn ghost" id="perfSpeed" title="Measures real per-connection speed and your provider's connection cap. Best run when nobody is watching.">Test provider speed</button>
       <button class="btn ghost" id="perfSegClear" type="button">Clear segment cache</button>
     </div>
     <div class="hint settingsStatus" id="perfStatus"></div>
     <div class="hint settingsStatus" id="perfSpeedResult"></div>
     <h3 style="font:800 15px 'Sora';margin:22px 0 2px;color:var(--text)">Max release size</h3>
-    <p><b>Auto</b> sets no hard limit — ranking simply prefers sizes that start fast, while every
-       release stays in Sources. <b>Manual</b> hides releases above your GB caps from Sources and
-       auto-play entirely. Smaller caps mean lower bitrate per stream, so more simultaneous viewers fit.</p>
+    <p><b>Auto</b> prefers fast-starting sizes without hiding anything. <b>Manual</b> hides releases over your GB caps.</p>
     <div class="field">
       <select id="szMode" style="max-width:280px">
         <option value="auto">Auto — rank smaller first, hide nothing</option>
@@ -5713,10 +5835,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
   <div class="setGrid" data-stab="sources" hidden>
   <div class="panel"><h2>Usenet providers</h2>
-    <p>Add one or more NNTP providers — pieces are spread across the accounts with room, and a missing
-       or damaged piece fails over to the next one. Mark an account <b>Backup only</b> to keep it out of
-       the rotation until every other account fails. Each has its own connection limit. Credentials
-       are encrypted at rest and never sent to clients.</p>
+    <p>Add one or more NNTP providers (encrypted on the server). Missing pieces fail over automatically; mark block plans <b>Backup only</b>.</p>
     <div id="npList" style="margin-bottom:14px"></div>
     <div class="field">
       <select id="npPreset" style="max-width:170px">
@@ -5773,9 +5892,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
   <div class="setGrid" data-stab="rules" hidden>
   <div class="panel"><h2>Local libraries</h2>
-    <p>Library folders are re-checked automatically for new movies and episodes. Add a folder from
-       <b>Add library</b> in the menu. Known items keep their cached TMDB match, so a no-change pass
-       is one disk walk. Scan now and refresh metadata live in each library's Edit panel.</p>
+    <p>Re-check local folders automatically for new movies and shows. Add folders from <b>Add library</b> in the sidebar.</p>
     <div class="field">
       <select id="libScanMin" style="max-width:280px">
         <option value="0">Off — scan manually only</option>
@@ -5791,67 +5908,59 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   </div>
 
   <div class="panel"><h2>Audiobooks</h2>
-    <p>Show the Audiobooks section. Turn it off to hide it for everyone, or share it with only specific users.</p>
+    <p>Enable Audiobooks in the sidebar for everyone or selected users.</p>
     <label class="catRow" style="margin-bottom:10px"><input type="checkbox" id="abEnabled" checked><span class="cgN">Enable Audiobooks</span></label>
     <p style="margin:10px 0 6px">Share with <span style="color:var(--muted)">(nobody ticked = everyone)</span></p>
     <div id="audiobooksUsers" style="max-height:130px;overflow-y:auto;margin-bottom:12px"></div>
     <button class="btn primary focusable" id="abSaveSettings">Save</button>
     <div class="hint" id="abSettingsStatus"></div>
   </div>
+  </div>
 
+  <div class="setGrid" data-stab="apps" hidden>
   <div class="panel"><h2>Jellyfin apps</h2>
-    <p>Official Jellyfin apps can sign in with a Triboon name and play movies and shows from this server. They keep Jellyfin’s own screens. Leave this off until you want that.</p>
+    <p>Let official Jellyfin apps (Apple TV, Roku, Samsung, mobile) sign in and stream from this server.</p>
     <label class="catRow" style="margin-bottom:10px"><input type="checkbox" id="jellyfinAppsEnabled"><span class="cgN">Allow Jellyfin apps</span></label>
     <div id="jellyfinAppsOptions" hidden>
-      <p>These change the Jellyfin app on a TV or phone. Triboon itself stays the same.</p>
+      <p>These options apply to external Jellyfin apps only.</p>
       <div class="field"><input id="jellyfinServerName" maxlength="40" placeholder="Name on the TV (Triboon)"></div>
-      <label class="catRow" style="margin-bottom:12px"><input type="checkbox" id="jellyfinQuickConnect" checked><span class="cgN">Let a TV sign in with a code</span></label>
+      <label class="catRow" style="margin-bottom:8px"><input type="checkbox" id="jellyfinQuickConnect" checked><span class="cgN">Let a TV sign in with a code</span></label>
+      <label class="catRow" style="margin-bottom:8px"><input type="checkbox" id="jellyfinAllow4k"><span class="cgN">Allow 4K direct play (respects each user's quality cap; transcoded streams stay 1080p)</span></label>
+      <label class="catRow" style="margin-bottom:12px"><input type="checkbox" id="jellyfinLiveTv"><span class="cgN">Include Live TV &amp; guide (for Apple TV, Roku, Samsung, and other Jellyfin apps)</span></label>
       <p style="margin:4px 0 8px"><b>Home pictures</b></p>
-      <p class="hint" style="margin-top:0;word-break:normal">Click a poster to change it. The TV shows the new one after you leave the app and open it again.</p>
+      <p class="hint" style="margin-top:0;word-break:normal">Click a poster to change it. Reopen the Jellyfin app to see the new picture.</p>
       <div id="jellyfinCovers"></div>
     </div>
     <button class="btn primary focusable" id="jellyfinAppsSave">Save</button>
     <div class="hint" id="jellyfinAppsStatus"></div>
   </div>
 
+  <div class="panel"><h2>Trakt</h2>
+    <p>Server API app so users can link their own Trakt account for scrobbling and watchlist sync. Create a free app on <a class="focusable" href="https://docs.trakt.tv/docs/create-an-app" target="_blank" rel="noopener noreferrer">Trakt</a> using this <b>Redirect URI</b> (click to copy):</p>
+    <button class="hint focusable" id="traktUri" style="cursor:pointer;text-align:left;margin-bottom:12px;color:var(--amber)">urn:ietf:wg:oauth:2.0:oob</button>
+    <div class="field"><input id="traktId" placeholder="Trakt client id"></div>
+    <div class="field"><input id="traktSecret" type="password" placeholder="Trakt client secret"></div>
+    <div class="settingsActions"><button class="btn primary" id="traktSave">Save Trakt app</button></div>
+    <div class="hint" id="traktStatus"></div>
+  </div>
   </div>
 
   <div class="setGrid" data-stab="catalog" hidden>
   <div class="panel"><h2>TMDB metadata</h2>
-    <p>Server-side TMDB key — clients browse through the server proxy and never see it.</p>
+    <p>Server-side TMDB API key (v3) for posters, descriptions, and search.</p>
     <div class="field"><input id="tmdbKey" placeholder="TMDB API key (v3)"></div>
     <div class="settingsActions"><button class="btn primary" id="tmdbSave">Save key</button></div>
     <div class="hint" id="tmdbStatus"></div>
   </div>
 
-  <div class="panel"><h2>Scoring</h2>
-    <p>Releases are ranked for instant streaming. These boxes show Triboon's defaults — edit them, then Save.
-       Delete the <b>CAM</b> line if you want theater rips in Sources. Reset puts our list back.</p>
-    <div class="field"><input id="scTrusted" placeholder="Trusted groups"></div>
-    <div class="field"><input id="scAvoid" placeholder="Avoid groups"></div>
-    <div class="field"><textarea id="scKeywords" rows="6" placeholder="keyword = score (one per line)"></textarea></div>
-    <div class="settingsActions">
-      <button class="btn primary" id="scSave">Save scoring</button>
-      <button class="btn ghost" id="scReset">Reset to defaults</button>
-    </div>
-    <div class="hint" id="scStatus"></div>
-  </div>
-
   <div class="panel"><h2>Subtitles</h2>
-    <p><b>Wyzie Subs</b> — API key required; the current free tier includes 1,000 requests per day.
-       Paste your Wyzie key here; Triboon keeps it encrypted server-side and caches results per title.</p>
+    <p><b>Wyzie Subs</b> (the current free tier includes 1,000 requests per day) and optional <b>OpenSubtitles</b> for hash-exact sync.</p>
     <div class="field"><input id="osKey" placeholder="Wyzie Subs API key"></div>
-    <p style="margin-top:-4px"><b>OpenSubtitles</b> — adds hash-exact matching (perfectly-synced subs for the
-       exact file you stream). Needs ALL THREE: the free API key (opensubtitles.com → account → API consumers)
-       finds subtitles; your username + password are required to download them (per-account quota).
-       Stored encrypted server-side.</p>
-    <div class="field"><input id="osApiKey" placeholder="OpenSubtitles API key"></div>
+    <div class="field"><input id="osApiKey" placeholder="OpenSubtitles API key (optional)"></div>
     <div class="settingsRow two">
       <label class="settingsControl"><span>OpenSubtitles user</span><input id="osUser" placeholder="opensubtitles.com username"></label>
       <label class="settingsControl"><span>OpenSubtitles pass</span><input id="osPass" type="password" placeholder="opensubtitles.com password"></label>
     </div>
-    <p style="margin-top:-4px">Which source runs, and which wins when results are comparable. Exact-match
-       signals (file hash, exact release, right episode) always beat the preference.</p>
     <div class="field">
       <select id="subSourceMode" style="max-width:360px">
         <option value="wyzie-first">Wyzie first (+ OpenSubtitles for exact matches)</option>
@@ -5870,16 +5979,21 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <div class="hint" id="osStatus"></div>
   </div>
 
-  <div class="panel"><h2>Trakt</h2>
-    <p>Lets every user link their own Trakt account (scrobbling + watchlist sync). Create a free
-       API app using Trakt's <a class="focusable" href="https://docs.trakt.tv/docs/create-an-app"
-       target="_blank" rel="noopener noreferrer">Create an App guide</a>, then paste its id + secret. When the form asks for a
-       <b>Redirect URI</b>, use this (click to copy):</p>
-    <button class="hint focusable" id="traktUri" style="cursor:pointer;text-align:left;margin-bottom:12px;color:var(--amber)">urn:ietf:wg:oauth:2.0:oob</button>
-    <div class="field"><input id="traktId" placeholder="Trakt client id"></div>
-    <div class="field"><input id="traktSecret" type="password" placeholder="Trakt client secret"></div>
-    <div class="settingsActions"><button class="btn primary" id="traktSave">Save Trakt app</button></div>
-    <div class="hint" id="traktStatus"></div>
+  <div class="panel"><h2>Scoring</h2>
+    <p>Controls how Usenet releases are ranked for fast playback. Delete the <b>CAM</b> line if you want theater rips in Sources.</p>
+    <details class="advFold" id="scoringAdvFold">
+      <summary class="advFoldHead focusable"><span>Edit ranking rules</span><small>Trusted groups, avoid list, keyword weights</small></summary>
+      <div class="advFoldBody">
+        <div class="field"><input id="scTrusted" placeholder="Trusted groups"></div>
+        <div class="field"><input id="scAvoid" placeholder="Avoid groups"></div>
+        <div class="field"><textarea id="scKeywords" rows="6" placeholder="keyword = score (one per line)"></textarea></div>
+        <div class="settingsActions">
+          <button class="btn primary" id="scSave">Save scoring</button>
+          <button class="btn ghost" id="scReset">Reset to defaults</button>
+        </div>
+      </div>
+    </details>
+    <div class="hint" id="scStatus"></div>
   </div>
   </div>
 
@@ -6080,8 +6194,10 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         </div>
         <div class="ctlGroup ctlCenter">
           <button class="cbtn focusable" id="back10" title="Back 10s" aria-label="Back 10 seconds" data-label="Back 10s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
+          <button class="cbtn focusable liveOnly" id="chPrevBtn" title="Previous channel ([, PageDown)" aria-label="Previous channel" data-label="Prev ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
           <button class="cbtn big focusable" id="playPause" aria-label="Play / pause"><svg id="ppIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
           <button class="cbtn focusable liveOnly" id="liveBtn" title="Go to live" data-label="Live"><span class="liveBtnDot"></span><span class="liveBtnTxt">LIVE</span></button>
+          <button class="cbtn focusable liveOnly" id="chNextBtn" title="Next channel (], PageUp)" aria-label="Next channel" data-label="Next ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>
           <button class="cbtn focusable" id="fwd30" title="Forward 30s" aria-label="Forward 30 seconds" data-label="Forward 30s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
           <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none" data-label="Next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(12 12) scale(0.78) translate(-12 -12)"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></g></svg></button>
         </div>
@@ -6098,6 +6214,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
             <button class="cbtn focusable" id="muteBtn" title="Mute" data-label="Mute"><svg id="volIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 9a4 4 0 0 1 0 6"/></svg></button>
             <input type="range" id="volSlider" min="0" max="100" value="100" title="Volume">
           </div>
+          <button class="cbtn focusable" id="extPlayBtn" title="Open in external player (Infuse / IINA / VLC)" aria-label="External player" data-label="Open in app" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 14L20 4"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
           <button class="cbtn focusable" id="fsBtn" title="Fullscreen (F)" aria-label="Fullscreen" data-label="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
           <button class="cbtn focusable" id="statsBtn" title="Playback stats" aria-label="Playback stats" data-label="Stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg></button>
         </div>
@@ -6130,6 +6247,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <h1 id="vlcTitle">Open in a video player</h1>
     <div class="sub">This browser can't decode the file. Paste the stream URL into VLC (Media → Open Network Stream) — seeking works.</div>
     <div id="vlcUrl"></div>
+    <div id="vlcApps"></div>
     <button class="btn primary focusable" id="vlcRetry" style="justify-content:center;width:100%;display:none">Try again</button>
     <button class="btn primary focusable" id="vlcCopy" style="justify-content:center;width:100%">Copy stream URL</button>
     <div class="alt"><button class="focusable" id="vlcClose">Close player</button></div>
@@ -7407,10 +7525,15 @@ $('qcSheetNo').addEventListener('click', closeQcSheet);
 // (Switch profile / Sign out) is one Down if they want it.
 $('railUser').addEventListener('click', () => {
   collapseRailAfterClick();
+  S._prefsMenuLanding = true;
   switchView('prefs');
   S.settingsZone = 'tabs';
   const t = document.querySelector('#prefTabs button[data-tab="dash"]');
   if (t) t.click();
+  S._prefsMenuLanding = false;
+  if (typeof closeMobilePrefsDetail === 'function' && typeof isPhoneSettingsDrilldown === 'function' && isPhoneSettingsDrilldown()) {
+    closeMobilePrefsDetail();
+  }
 });
 $('prefSwitchProfile').addEventListener('click', showProfilePicker);
 $('prefSignOut').addEventListener('click', signOutAccount);
@@ -10366,6 +10489,53 @@ function macSafariVideo() {
     && navigator.vendor === 'Apple Computer, Inc.'                     // real Safari (Chrome=Google Inc., Firefox='')
     && !/\b(CriOS|FxiOS|Chrome|Chromium|Edg|EdgA|OPR|Opera|Android)\b/i.test(ua)
     && !((navigator.maxTouchPoints || 0) > 1);                        // exclude iPadOS-as-Mac (iosWebkitVideo handles it)
+}
+function isAppleMacWeb() {
+  const ua = navigator.userAgent || '';
+  return /Macintosh|Mac OS X/.test(ua)
+    && !iosWebkitVideo()
+    && window.__triboonWindowsBridge !== true
+    && !canUseNativeVideoPlayer();
+}
+function externalPlayerLinks(streamAbsUrl) {
+  if (!streamAbsUrl) return [];
+  const enc = encodeURIComponent(streamAbsUrl);
+  if (iosWebkitVideo()) {
+    return [
+      { name: 'Infuse', href: `infuse://x-callback-url/play?url=${enc}` },
+      { name: 'Outplayer', href: `outplayer://${streamAbsUrl}` },
+      { name: 'VLC', href: `vlc-x-callback://x-callback-url/stream?url=${enc}` },
+    ];
+  }
+  if (isAppleMacWeb()) {
+    return [
+      { name: 'IINA', href: `iina://weblink?url=${enc}` },
+      { name: 'Infuse', href: `infuse://x-callback-url/play?url=${enc}` },
+      { name: 'VLC', href: `vlc://${streamAbsUrl}` },
+    ];
+  }
+  return [];
+}
+function renderExternalPlayerButtons(streamAbsUrl) {
+  const box = $('vlcApps');
+  if (!box) return;
+  const links = externalPlayerLinks(streamAbsUrl);
+  if (!links.length) {
+    box.innerHTML = '';
+    box.classList.remove('show');
+    return;
+  }
+  box.innerHTML = links.map((l) =>
+    `<a class="btn focusable" href="${esc(l.href)}" rel="noopener">Open in ${esc(l.name)}</a>`
+  ).join('');
+  box.classList.add('show');
+}
+function syncExternalPlayerButton() {
+  const btn = $('extPlayBtn');
+  if (!btn) return;
+  const p = S.playing;
+  const eligible = !!(p && p.streamUrl && (iosWebkitVideo() || isAppleMacWeb()) && !(p.item && p.item.type === 'live'));
+  btn.style.display = eligible ? '' : 'none';
 }
 
 // Parental playback gate: kid/teen profiles can't play titles rated above their level.
@@ -13474,6 +13644,7 @@ function updateLiveSplitHud() {
     el.classList.toggle('active', enabled && +el.dataset.livePane === liveSplitActivePane());
   });
   updateLiveFavoriteButton();
+  updateLiveZapButtons();
 }
 async function openLiveSplitChannelPicker() {
   if (!liveSplitEnabled()) return false;
@@ -13726,7 +13897,8 @@ async function toggleLiveFavorite() {
       if (String(it._channel) === String(idx)) it.fav = !!ch.fav;
   });
   updateLiveSplitHud();
-  updateLiveFavoriteButton(); // refresh web button + push the new state to the native star
+  updateLiveFavoriteButton();
+  updateLiveZapButtons(); // refresh web button + push the new state to the native star
 }
 // Native live chrome's favorite star → web (web owns the favorites store).
 window.__tvLiveFavToggle = () => { toggleLiveFavorite(); };
@@ -15526,6 +15698,19 @@ function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
       // iOS 17+ Managed Media Source can take the same fMP4 remux desktop uses.
       // Provider "HLS" through /api/iptv/native is often TS and will not play.
       if (startLiveMseSource(p.streamUrl)) return true;
+      // Fallback for iOS without MSE or providers with TS-only streams: server rolling MPEG-TS HLS.
+      const srvHls = (p.hlsUrl || (p.item && p.item._hlsUrl))
+        || (p.streamUrl && p.streamUrl.includes('/api/iptv/stream/')
+          ? p.streamUrl.replace('/api/iptv/stream/', '/api/iptv/hls/').replace('?', '/index.m3u8?')
+          : '');
+      if (srvHls) {
+        p.usingLiveHls = true;
+        v.src = srvHls;
+        applySubtitleTrack();
+        applyVolume();
+        requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); }).catch(() => showLivePlayPrompt());
+        return true;
+      }
       showLiveProviderError('This channel has no iPhone-playable stream');
       return true;
     }
@@ -15554,6 +15739,7 @@ function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
   }
   applySubtitleTrack(); // re-attach CC after the src swap
   applyVolume();
+  syncExternalPlayerButton();
   requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); hideSeekHoldFrame(); if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());
   return true;
 }
@@ -18085,6 +18271,7 @@ function showLiveProviderError(reason) {
   }
   $('vlcUrl').textContent = '';
   $('vlcUrl').style.display = 'none';
+  renderExternalPlayerButtons('');
   $('vlcCopy').style.display = 'none';
   $('vlcPanel').classList.add('show');
   focusVlcPanel();
@@ -18103,6 +18290,19 @@ function showVlcPanel() {
     return;
   }
   $('vlcUrl').textContent = location.origin + p.streamUrl;
+  renderExternalPlayerButtons($('vlcUrl').textContent);
+  $('vlcPanel').classList.add('show');
+  focusVlcPanel();
+}
+function openExternalPlayerPanel() {
+  const p = S.playing; if (!p || !p.streamUrl || (p.item && p.item.type === 'live')) return;
+  resetVlcPanel();
+  const abs = location.origin + p.streamUrl;
+  const msg = document.querySelector('#vlcPanel .sub');
+  if ($('vlcTitle')) $('vlcTitle').textContent = 'Open in an external player';
+  if (msg) msg.textContent = 'Direct-play the original stream in a native Apple player (4K HDR, Dolby/DTS, seeking) or copy the URL.';
+  $('vlcUrl').textContent = abs;
+  renderExternalPlayerButtons(abs);
   $('vlcPanel').classList.add('show');
   focusVlcPanel();
 }
@@ -18973,7 +19173,18 @@ window.__upNextDismissNative = () => dismissUpNext();
 $('vlcCopy').addEventListener('click', () => {
   navigator.clipboard.writeText($('vlcUrl').textContent).then(() => toast('Stream URL copied — paste into VLC'));
 });
-$('vlcClose').addEventListener('click', closePlayer);
+$('extPlayBtn') && $('extPlayBtn').addEventListener('click', () => {
+  const v = $('video');
+  try { if (v && !v.paused) v.pause(); } catch {}
+  openExternalPlayerPanel();
+});
+$('vlcClose').addEventListener('click', () => {
+  if ($('vlcTitle') && $('vlcTitle').textContent === 'Open in an external player') {
+    $('vlcPanel').classList.remove('show');
+    return;
+  }
+  closePlayer();
+});
 $('vlcRetry').addEventListener('click', retryInterruptedPlayback);
 $('playerBackBtn').addEventListener('click', closePlayer);
 function flushPlaybackCheckpoints() {
@@ -19526,6 +19737,7 @@ async function closePlayer(opts = {}) {
   S._playLock = null;
   clearPlayHandoffWatchdog();
   clearPlayStartWatchdog();
+  cancelPendingLiveZap();
   cancelLiveTune('main');
   cancelLiveTune('split:0');
   cancelLiveTune('split:1');
@@ -21252,6 +21464,7 @@ function updatePlayerControlAvailability() {
   setPlayerControlEnabled('splitBtn', false);
   setPlayerControlEnabled('nextEpBtn', !!(S.nextEp && S.view === 'player'));
   updateLiveFavoriteButton();
+  updateLiveZapButtons();
   if (!p) ['ccBtn', 'audBtn', 'qualBtn', 'favBtn', 'splitBtn', 'nextEpBtn'].forEach((id) => setPlayerControlEnabled(id, false));
 }
 function closeTrackMenu(opts = {}) {
@@ -22170,6 +22383,7 @@ function applySubtitleTrack() {
       applySubShiftToCues(tt, p._subShift || 0);
       tt.oncuechange = () => renderSubCues();
       renderSubCues();
+      syncNativeIosFullscreenCaptions();
     } catch {}
   };
   tr.addEventListener('load', arm);
@@ -22211,6 +22425,8 @@ $('audBtn').addEventListener('click', () => tmToggle('audio'));
 $('srndBtn').addEventListener('click', () => tmToggle('surround'));
 $('qualBtn').addEventListener('click', () => tmToggle('quality'));
 $('favBtn').addEventListener('click', () => { toggleLiveFavorite(); showOsd(); });
+$('chPrevBtn').addEventListener('click', () => { zapChannel(-1); showOsd(); });
+$('chNextBtn').addEventListener('click', () => { zapChannel(1); showOsd(); });
 $('splitBtn').addEventListener('click', () => { toggleLiveSplitMode(); showOsd(); });
 function handleLiveSplitPick(e) {
   e.preventDefault();
@@ -22311,8 +22527,21 @@ function isPlayerFullscreen() {
   return !!(document.fullscreenElement || document.webkitFullscreenElement
     || (v && v.webkitDisplayingFullscreen));
 }
+function syncNativeIosFullscreenCaptions() {
+  const v = $('video');
+  const p = S.playing;
+  if (!v || !p || !p._textTrack || !iosWebkitVideo()) return;
+  try {
+    // Native iOS <video> fullscreen hides Triboon's custom HTML #subOverlay. Switch the WebVTT
+    // TextTrack to 'showing' during native fullscreen (and AirPlay) so captions stay visible,
+    // then return to 'hidden' on exit so custom captions never double-render.
+    p._textTrack.mode = v.webkitDisplayingFullscreen ? 'showing' : 'hidden';
+    if (!v.webkitDisplayingFullscreen) renderSubCues();
+  } catch {}
+}
 function syncFullscreenButton() {
   $('fsBtn').classList.toggle('on', isPlayerFullscreen());
+  syncNativeIosFullscreenCaptions();
 }
 function toggleFullscreen() {
   const v = webkitVideoFullscreenEl();
@@ -26343,6 +26572,7 @@ function okKeyReleased(maxMs = OK_KEY_RELEASE_MAX_MS) {
   });
 }
 async function playChannel(it, list) {
+  cancelPendingLiveZap();
   if (promotePlayerGuideChannelToFullscreen(it)) return;
   if (liveSplitEnabled() && S.view === 'player' && S.playing && S.playing.item && S.playing.item.type === 'live') {
     const pane = S.liveSplitPickPane === 1 ? 1 : liveSplitActivePane();
@@ -26361,6 +26591,7 @@ async function playChannel(it, list) {
   // channel's home genre. Guide tunes use the guide's selected category; page tunes use the page's.
   S.liveTuneCat = ($('pGuide') && $('pGuide').classList.contains('open') && S.pgLiveCat) ? S.pgLiveCat : S.liveCat;
   S.liveCur = it._channel;
+  updateLiveZapButtons();
   if ($('pGuide') && $('pGuide').classList.contains('open')) setPlayerGuideVisualFocus(it._channel);
   try { it = await hydrateLivePlaybackUrls(it); }
   catch (e) {
@@ -26457,18 +26688,67 @@ async function playChannelWeb(it) {
     }
   }
 }
+function cancelPendingLiveZap() {
+  if (S._zapTimer) { clearTimeout(S._zapTimer); S._zapTimer = null; }
+  S._zapTargetIdx = null;
+  S._zapList = null;
+}
+function liveChannelShortName(ch) {
+  const raw = (ch && (ch.title || ch.name)) || 'Live TV';
+  try { return (typeof liveNameParts === 'function' ? liveNameParts(raw).name : raw) || raw; }
+  catch { return raw; }
+}
+function updateLiveZapButtons(anchorIdx = null) {
+  const prevBtn = $('chPrevBtn');
+  const nextBtn = $('chNextBtn');
+  if (!prevBtn || !nextBtn) return;
+  const list = S.liveList || [];
+  const multi = list.length >= 2;
+  prevBtn.hidden = !multi;
+  nextBtn.hidden = !multi;
+  if (!multi) return;
+  const cur = liveSplitEnabled() ? activeLiveChannelIdx() : S.liveCur;
+  const base = Number.isInteger(anchorIdx) ? anchorIdx : list.findIndex((x) => String(x._channel) === String(cur));
+  const i = base >= 0 ? base : 0;
+  const prev = list[(i - 1 + list.length) % list.length];
+  const next = list[(i + 1) % list.length];
+  prevBtn.title = `Previous: ${liveChannelShortName(prev)} ([, PageDown)`;
+  nextBtn.title = `Next: ${liveChannelShortName(next)} (], PageUp)`;
+}
 function zapChannel(dir) {
   const list = S.liveList || [];
   if (list.length < 2) return toast('No other channels in this list');
+  const step = dir >= 0 ? 1 : -1;
   const cur = liveSplitEnabled() ? activeLiveChannelIdx() : S.liveCur;
-  const i = list.findIndex((x) => String(x._channel) === String(cur));
-  const next = list[(i + dir + list.length) % list.length];
-  if (liveSplitEnabled()) {
-    playLiveSplitChannel(next, list, liveSplitActivePane()).then(markGuideCur);
-    return;
+  const baseIdx = (S._zapList === list && Number.isInteger(S._zapTargetIdx))
+    ? S._zapTargetIdx
+    : Math.max(0, list.findIndex((x) => String(x._channel) === String(cur)));
+  const targetIdx = (baseIdx + step + list.length) % list.length;
+  const target = list[targetIdx];
+  S._zapList = list;
+  S._zapTargetIdx = targetIdx;
+  updateLiveZapButtons(targetIdx);
+  const label = `${targetIdx + 1}/${list.length} · ${liveChannelShortName(target)}`;
+  if (S.playing && S.playing.usingNative && window.TriboonTV && typeof window.TriboonTV.playerToast === 'function') {
+    try { window.TriboonTV.playerToast(label); } catch {}
+  } else {
+    toast(label, 1800);
   }
-  playChannel(next, list); // the guide (if open) stays up — just re-mark the row
-  markGuideCur();
+  if (S._zapTimer) clearTimeout(S._zapTimer);
+  S._zapTimer = setTimeout(() => {
+    const pickList = S._zapList || list;
+    const pickIdx = S._zapTargetIdx;
+    cancelPendingLiveZap();
+    const pick = Number.isInteger(pickIdx) ? pickList[pickIdx] : target;
+    if (!pick) return;
+    if (!(S.playing && S.playing.item && S.playing.item.type === 'live')) return;
+    if (liveSplitEnabled()) {
+      playLiveSplitChannel(pick, pickList, liveSplitActivePane()).then(markGuideCur);
+      return;
+    }
+    playChannel(pick, pickList); // the guide (if open) stays up — just re-mark the row
+    markGuideCur();
+  }, 350);
 }
 window.__tvNativeLiveZap = (dir) => {
   if (!(S.playing && S.playing.item && S.playing.item.type === 'live')) return;
@@ -29409,6 +29689,12 @@ function syncSectionTabs(tabsId, activeButton = null) {
 function mergeServerSettingsIntoPrefs() {
   const prefTabs = $('prefTabs'), prefs = $('prefs'), setTabs = $('setTabs'), settings = $('settings');
   if (!prefTabs || !setTabs || !prefs || !settings || prefTabs.querySelector('.srvTab')) return;
+  if (!$('prefMyDivider')) {
+    const myDiv = document.createElement('div');
+    myDiv.id = 'prefMyDivider'; myDiv.className = 'prefTabDivider'; myDiv.setAttribute('aria-hidden', 'true');
+    myDiv.innerHTML = '<span>My settings</span>';
+    prefTabs.prepend(myDiv);
+  }
   const apTab = setTabs.querySelector('button[data-tab="display"]'); if (apTab) apTab.remove();
   const apPanel = settings.querySelector('.setGrid[data-stab="display"]'); if (apPanel) apPanel.remove();
   const div = document.createElement('div');
@@ -29428,6 +29714,30 @@ function mergeServerSettingsIntoPrefs() {
   [...settings.querySelectorAll('.setGrid[data-stab]')].forEach((p) => { p.hidden = true; prefs.appendChild(p); });
 }
 mergeServerSettingsIntoPrefs();
+function isPhoneSettingsDrilldown() {
+  return !document.body.classList.contains('tv') && window.innerWidth <= 760;
+}
+function syncPrefMobileHeader(b) {
+  const title = $('prefMobileTitle');
+  if (!title || !b) return;
+  const lbl = b.querySelector('span');
+  title.textContent = (lbl && lbl.textContent.trim()) || b.textContent.trim() || 'Settings';
+}
+function openMobilePrefsDetail(b) {
+  const prefs = $('prefs');
+  if (!prefs || !isPhoneSettingsDrilldown()) return;
+  syncPrefMobileHeader(b);
+  prefs.classList.add('mobileDetailOpen');
+  prefs.scrollTop = 0;
+}
+function closeMobilePrefsDetail() {
+  const prefs = $('prefs');
+  if (!prefs || !prefs.classList.contains('mobileDetailOpen')) return false;
+  prefs.classList.remove('mobileDetailOpen');
+  prefs.scrollTop = 0;
+  return true;
+}
+if ($('prefMobileBack')) $('prefMobileBack').addEventListener('click', () => closeMobilePrefsDetail());
 // One handler for the whole account menu: pref tabs (data-tab → [data-ptab]) and server tabs
 // (data-srv → [data-stab]). Server data loads lazily the first time a server tab is opened.
 function accountTabKey(btn) {
@@ -29460,10 +29770,13 @@ function activateAccountTab(b) {
     ? `#prefs .setGrid[data-stab="${key}"]:not([hidden])`
     : `#prefs [data-ptab="${key}"]:not([hidden])`);
   if (b.classList.contains('on') && visible) {
+    syncPrefMobileHeader(b);
+    if (!S._prefsMenuLanding) openMobilePrefsDetail(b);
     if (S.view === 'prefs' && key) replaceRoute(accountTabRoute(key));
     return;
   }
   syncSectionTabs('prefTabs', b);
+  syncPrefMobileHeader(b);
   document.querySelectorAll('#prefs [data-ptab]').forEach((g) => { g.hidden = isSrv || g.dataset.ptab !== key; });
   document.querySelectorAll('#prefs .setGrid[data-stab]').forEach((g) => { g.hidden = !isSrv || g.dataset.stab !== key; });
   if (!(isSrv && key === 'users')) closeUserPeek();
@@ -29475,9 +29788,10 @@ function activateAccountTab(b) {
   if (isSrv && key === 'activity') { refreshActivity(); startActivityLive(); }
   else stopActivityLive();
   if (isSrv && key === 'logs') loadPlaybackStory();
-  if (isSrv && (key === 'users' || key === 'livetv' || key === 'catalog')) ensureAdminUsers();
+  if (isSrv && (key === 'users' || key === 'livetv' || key === 'catalog' || key === 'rules')) ensureAdminUsers();
   if (isSrv && key === 'security') refreshSecurity();
   if (isSrv && key === 'livetv') refreshIptvSyncStatus();
+  if (!S._prefsMenuLanding) openMobilePrefsDetail(b);
   if (document.body.classList.contains('tv')) {
     const page = $('prefs');
     if (page) page.scrollTop = 0;
@@ -30263,7 +30577,17 @@ async function renderPrefLiveCats() {
     list.appendChild(row);
   });
   list.dataset.painted = scopeKey;
+  applyPrefLiveCatFilter();
 }
+function applyPrefLiveCatFilter() {
+  const f = $('prefCatFilter');
+  const q = (f && f.value || '').trim().toLowerCase();
+  document.querySelectorAll('#prefCatList .catRow').forEach((row) => {
+    const name = (row.querySelector('.cgN') && row.querySelector('.cgN').textContent || '').toLowerCase();
+    row.style.display = !q || name.includes(q) ? '' : 'none';
+  });
+}
+if ($('prefCatFilter')) $('prefCatFilter').addEventListener('input', applyPrefLiveCatFilter);
 function savePrefLiveCats() { // debounced — a burst of presses saves once
   clearTimeout(S._catSaveT);
   S._catSaveT = setTimeout(async () => {
@@ -31989,6 +32313,8 @@ async function refreshSettings(opts = {}) {
     if ($('jellyfinAppsEnabled')) $('jellyfinAppsEnabled').checked = s.jellyfinApps === true;
     if ($('jellyfinServerName')) $('jellyfinServerName').value = s.jellyfinServerName || '';
     if ($('jellyfinQuickConnect')) $('jellyfinQuickConnect').checked = s.jellyfinQuickConnect !== false;
+    if ($('jellyfinAllow4k')) $('jellyfinAllow4k').checked = s.jellyfinAllow4k === true;
+    if ($('jellyfinLiveTv')) $('jellyfinLiveTv').checked = s.jellyfinLiveTv === true;
     paintJellyfinOptions(s);
     $('npList').innerHTML = s.providers.length ? s.providers.map((p, i) =>
       `<div class="kv"><span>${esc(p.host)}:${esc(p.port)} ${p.tls ? '🔒' : ''} ${p.user ? '· <span style="color:var(--amber)">login saved ✓</span>' : ''}${p.backup ? ' · <span class="chip" title="Dialed only when every primary account fails">backup only</span>' : ''}</span>
@@ -32520,12 +32846,16 @@ $('jellyfinAppsSave') && $('jellyfinAppsSave').addEventListener('click', async (
       jellyfinApps: $('jellyfinAppsEnabled').checked,
       jellyfinServerName: ($('jellyfinServerName') && $('jellyfinServerName').value) || '',
       jellyfinQuickConnect: $('jellyfinQuickConnect') ? $('jellyfinQuickConnect').checked : true,
+      jellyfinAllow4k: $('jellyfinAllow4k') ? $('jellyfinAllow4k').checked : false,
+      jellyfinLiveTv: $('jellyfinLiveTv') ? $('jellyfinLiveTv').checked : false,
     } });
     S.settingsCache = {
       ...(S.settingsCache || {}),
       jellyfinApps: $('jellyfinAppsEnabled').checked,
       jellyfinServerName: (($('jellyfinServerName') && $('jellyfinServerName').value) || '').trim(),
       jellyfinQuickConnect: $('jellyfinQuickConnect') ? $('jellyfinQuickConnect').checked : true,
+      jellyfinAllow4k: $('jellyfinAllow4k') ? $('jellyfinAllow4k').checked : false,
+      jellyfinLiveTv: $('jellyfinLiveTv') ? $('jellyfinLiveTv').checked : false,
     };
     $('jellyfinAppsStatus').textContent = 'Saved ✓';
     paintJellyfinOptions(S.settingsCache);
@@ -34291,7 +34621,7 @@ function playerControlButtonFocused() {
 // controls with NATIVE focus (so typing/selects keep working), Enter activates.
 function formActivate(el) {
   if (!el) return;
-  if (/^(BUTTON|A)$/.test(el.tagName) || (el.tagName === 'INPUT' && /^(checkbox|radio)$/.test(el.type))) {
+  if (/^(BUTTON|A|SUMMARY)$/.test(el.tagName) || (el.tagName === 'INPUT' && /^(checkbox|radio)$/.test(el.type))) {
     el.click();
     return;
   }
@@ -34369,7 +34699,7 @@ function closeFocusOverlay(id, key, opts = {}) {
 }
 function formCtls(scope) {
   if (!scope) return [];
-  const els = [...scope.querySelectorAll('button, input, select, a')].filter((el) => el.offsetParent !== null && !el.disabled);
+  const els = [...scope.querySelectorAll('button, input, select, a, summary')].filter((el) => el.offsetParent !== null && !el.disabled);
   // The unreadable-settings notice sits at the TOP of server panels. Its Hide button is listed LAST
   // so every landing spot (formCtls(...)[0]) stays the panel's first real control; D-pad movement
   // in panels is geometric, so Up still reaches the button.
@@ -34436,6 +34766,9 @@ function focusActiveSectionTab(cfg) {
   return focusSectionControl(tab);
 }
 function leaveSettingsPanelToTabs() {
+  if (typeof isPhoneSettingsDrilldown === 'function' && isPhoneSettingsDrilldown()) {
+    return closeMobilePrefsDetail();
+  }
   const cfg = sectionFormConfig();
   if (!cfg) return false;
   const onTab = cfg.tabs && (cfg.tabs.contains(document.activeElement) || cfg.tabs.querySelector('button.focus'));
@@ -34702,9 +35035,10 @@ document.addEventListener('keydown', (e) => {
             : /Previous/.test(k) ? 'prev' : 'toggle');
   }
   if (inInput && k !== 'Escape') return;
-  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', ' ', 'f', 'F', '2', '3', '4', 'PageUp', 'PageDown',
+  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', ' ', 'f', 'F', '2', '3', '4', 'PageUp', 'PageDown', '[', ']',
     'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaTrackNext', 'MediaTrackPrevious', 'MediaNextTrack', 'MediaPreviousTrack'].includes(k)) return;
   if ((k === 'f' || k === 'F') && S.view !== 'player') return; // F = fullscreen, player only
+  if ((k === '[' || k === ']') && !(S.view === 'player' && $('player').classList.contains('live'))) return;
   if ($('pwModal').classList.contains('open')) {
     e.preventDefault();
     if (k === 'Escape' || k === 'Backspace') closePwModal(); // Back / Esc = Cancel
@@ -35053,8 +35387,8 @@ document.addEventListener('keydown', (e) => {
       if (k === 'Enter' && back) return back.click();
       return;
     }
-    if ((k === 'PageUp' || k === 'PageDown') && $('player').classList.contains('live')) {
-      return zapChannel(k === 'PageUp' ? 1 : -1);
+    if ((k === 'PageUp' || k === 'PageDown' || k === '[' || k === ']') && $('player').classList.contains('live')) {
+      return zapChannel((k === 'PageUp' || k === ']') ? 1 : -1);
     }
     // Live TV remote feel: ↑/↓ opens the channel guide (seeking is meaningless on live);
     // the control bar stays reachable with ←/→ + Enter.

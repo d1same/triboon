@@ -54,6 +54,7 @@ function load({ native = true } = {}) {
     nativeLiveRequired: () => false,
     playChannelWeb: () => { calls.push({ kind: 'web', okDown: !!S._okKeyDown }); },
     toast() {}, markGuideCur() {}, schedulePlayerGuideFocusRestore() {}, playLiveSplitChannel() {}, liveSplitActivePane: () => 0,
+    cancelPendingLiveZap() {}, updateLiveZapButtons() {},
   };
   const src = `${okBlock()}\n${extractFunction('playChannel')}`;
   const fns = new Function(...Object.keys(stubs), `${src}\nreturn { playChannel, okKeyReleased };`)(...Object.values(stubs));

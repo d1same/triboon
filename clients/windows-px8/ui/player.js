@@ -271,6 +271,8 @@
     $('audio').hidden = state.mode === 'live' || (state.audioTracks.length < 2 && !state.otherVersions.length);
     $('captions').hidden = state.mode === 'live';
     $('guide').hidden = false;
+    if ($('chPrev')) $('chPrev').hidden = state.mode !== 'live';
+    if ($('chNext')) $('chNext').hidden = state.mode !== 'live';
     $('cast').hidden = state.mode === 'live';
     $('favorite').hidden = state.mode !== 'live';
     $('favorite').classList.toggle('favorite-on', state.favorite);
@@ -879,6 +881,8 @@
     });
     $('playerBack').addEventListener('click', requestClose);
     $('playPause').addEventListener('click', togglePlayback);
+    if ($('chPrev')) $('chPrev').addEventListener('click', () => send('live_zap', { direction: -1 }));
+    if ($('chNext')) $('chNext').addEventListener('click', () => send('live_zap', { direction: 1 }));
     $('back').addEventListener('click', () => seekRelative(-10));
     $('forward').addEventListener('click', () => seekRelative(30));
     $('next').addEventListener('click', () => send('next'));
@@ -1023,10 +1027,10 @@
     else if (key === 'a' && state.mode !== 'live' && titleInfoHasPeople(state.titleInfo)) { event.preventDefault(); openAbout(); }
     else if (key === 'n' && state.hasNext) { event.preventDefault(); send('next'); }
     else if (key === 'g') { event.preventDefault(); $('guide').click(); }
-    else if (state.mode === 'live' && (event.key === 'PageUp' || key === 'mediaprevioustrack')) {
+    else if (state.mode === 'live' && (event.key === 'PageUp' || event.key === '[' || key === 'mediaprevioustrack')) {
       event.preventDefault(); send('live_zap', { direction: -1 });
     }
-    else if (state.mode === 'live' && (event.key === 'PageDown' || key === 'medianexttrack')) {
+    else if (state.mode === 'live' && (event.key === 'PageDown' || event.key === ']' || key === 'medianexttrack')) {
       event.preventDefault(); send('live_zap', { direction: 1 });
     }
   }
