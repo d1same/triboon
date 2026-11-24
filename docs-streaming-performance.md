@@ -873,6 +873,22 @@ on a house cap of 8):
   ("blocked: live mount holds an unreadable piece") instead of being re-joined
   or re-mounted.
 
+## v3.5.9 Engine, Seek, Resume & Multi-Surface Optimizations
+
+- **VOD startup, seek & prepare (`server/vfs.js`, `server/nntp.js`, `server/rar.js`, `server/mkvsubs.js`, `server/segment-cache.js`, `server/transcode.js`, `server/index.js`):**
+  - Tightened segment fetch/seek handoff, MKV subtitle tap bounds, and disk segment-cache paths; capped `ffprobe` probe size at `8M` and kicked off background `probeMountTracks` right after `/api/prepare` so audio/subtitle tracks are already warm before Play.
+  - Android ExoPlayer passes the resume offset atomically via `setMediaItem(item, startMs)`, deduplicates `showNativeLoading`, uses tighter 4K start budgets (`1800 ms` / `2200 ms`), and retries side-subtitle 404s on a faster backoff (`700 / 1800 / 3500 ms`).
+  - Windows `libmpv` pre-spawns during `enter_loading`, polls startup at `25 ms`, and defers `apply_subtitle` until `session.ready`.
+  - Web TV (`body.tv`) disables continuous 28 s backdrop drift and per-card hover/focus transitions, debounces/deduplicates ambient tint, runs `/search/movie` + `/search/tv` in parallel, and skips `/api/local-lookup` when no local libraries exist.
+- **Live TV, XMLTV & Multiview (`server/xmltv.js`, `server/index.js`, `web/index.html`):**
+  - Precompiled `XML_ATTR_RE` / `M3U_ATTR_RE` regex maps and moved the `-12h/+48h` XMLTV time-window check ahead of `<title>` parsing and XML entity decoding.
+  - Per-user bounded `iptvAggregateCaches` Map (max 16) prevents personal-playlist users from thrashing shared channel state; `iptvGuide` & `epgNowNext` check warm RAM XMLTV first before Xtream panel calls and coalesce Xtream EPG persistence once per guide batch (4 s debounce for background refreshes, flushed on shutdown).
+  - Browser MSE `pump()` coalesces up to 8 queued chunks per `appendBuffer` call (lighter 2–4 pane Multiview) and starts playback at `0.35 s` buffered (`250 KB` early gate + `700 KB` fallback).
+- **Hot-path overhead, TMDB & Local Libraries (`server/tmdb.js`, `server/library-db.js`, `server/trakt.js`, `server/index.js`):**
+  - `TmdbProxy` deduplicates concurrent identical requests via `_inFlight` single-flight map and retains up to 4000 entries (recency-pruned to 3200); maturity certs cache for 6 h (`maturityCertCache`); `nextWatchEpisodes()` runs 6-wide `mapLimit` and skips `maxAge: 0` refetches on `Ended`/`Canceled` shows or entries refreshed within 15 minutes.
+  - Read-only hot paths use `settings.peek()` instead of re-parsing encrypted settings JSON; `withActivityPosters` builds `watchPosterIndex()` lazily and shares one index across `sessions` and `history`.
+  - `LibraryDb` creates composite sort indexes (`title COLLATE NOCASE`, `year DESC`, `rating DESC`) and batches show new-episode badges into a single `newEpisodeInfoBatch()` query per grid page; local media routes use async `fs.promises.stat` and destroy read streams on `res.once('close')`.
+
 ## When Changing This Area
 
 Before changing performance behavior, check:

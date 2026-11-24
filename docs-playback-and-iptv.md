@@ -215,3 +215,31 @@ chosen non-matched subtitle and does not replace either provider.
 **Remaining verification:** alignment quality against real NZB streams still
 needs the device/hardware pass recorded in `VERIFY.md`. The work is backgrounded
 and falls back to the original subtitle on failure.
+
+## Cross-Platform Cast, Live TV EPG & MSE Updates (v3.5.9)
+
+- **Full Cast in Player About (Web, Android, Windows):** All platform players
+  surface full billed cast metadata inside the in-player About overlay without
+  leaving playback.
+- **Per-User IPTV Lineup & Warm-RAM EPG:** `server/index.js` caches merged
+  per-user IPTV lineups in a bounded `iptvAggregateCaches` Map (cleared on source
+  mutation) and serves `iptvGuide` from the caller's own `userChannels`. Both
+  `iptvGuide` and `epgNowNext` check already-warm RAM XMLTV before calling Xtream
+  panel endpoints, avoid awaiting cold XMLTV when Xtream already answered, and
+  coalesce Xtream EPG persistence once per guide batch (with 4 s debouncing for
+  background refreshes and a shutdown flush).
+- **Faster XMLTV & M3U Parsing:** `server/xmltv.js` precompiles attribute regexes
+  and drops out-of-window programmes (`-12h` / `+48h`) before `<title>` extraction
+  and XML entity decoding; M3U attribute parsing in `server/index.js` uses a
+  precompiled `M3U_ATTR_RE` map.
+- **Smoother Web Live TV & Multiview:** `startLiveMseSource()` coalesces up to 8
+  queued fMP4 chunks per `appendBuffer` call and starts playback as soon as
+  `0.35 s` is buffered (`250 KB` early gate with the `700 KB` fallback retained).
+- **Audio & Audiobook Playback Hardening:** Music tracks active `yt-dlp`/`python3`
+  children for clean shutdown, caps stderr/lyrics caches, hardens the YouTube
+  audio proxy against idle timeouts and disconnects, pre-rolls shuffle next-track
+  prefetch, keeps `#musicNow` collapsed on auto-advance, and syncs lock-screen
+  seeking. Audiobooks wire container/health verdicts and diacritic/subtitle/surname
+  matching into scoring/search, cap `_audioStreams` LRU (3 streams × 16 MB), send
+  saved `resumeFrac` before Play, load chapters asynchronously, seek chapters in
+  place, and expose full MediaSession + TV mini-player controls.
