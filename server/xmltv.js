@@ -55,8 +55,14 @@ function xmlText(value) {
     .trim();
 }
 
+const XML_ATTR_RE = new Map();
 function xmlAttr(attrs, name) {
-  const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(String(attrs || ''));
+  let re = XML_ATTR_RE.get(name);
+  if (!re) {
+    re = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i');
+    XML_ATTR_RE.set(name, re);
+  }
+  const m = re.exec(String(attrs || ''));
   return m ? decodeXmlEntities(m[1] !== undefined ? m[1] : m[2]) : '';
 }
 
@@ -114,12 +120,14 @@ function parseXmltv(xml, carried = [], now = Date.now()) {
     scanned++;
     const channelId = xmlAttr(m[1], 'channel');
     if (!channelId || (filterToCarried && !wanted.has(channelId))) continue;
-    const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(m[2]);
-    const title = xmlText(titleMatch && titleMatch[1]);
-    if (!title) continue;
+    // Filter by the -12h/+48h time window BEFORE decoding <title> XML entities (skips 70-85% of a
+    // 7-14 day XMLTV guide before touching the inner markup).
     const start = parseXmltvDate(xmlAttr(m[1], 'start'));
     const stop = parseXmltvDate(xmlAttr(m[1], 'stop'));
     if (!start || !stop || stop < keepFrom || start > keepTo) continue;
+    const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(m[2]);
+    const title = xmlText(titleMatch && titleMatch[1]);
+    if (!title) continue;
     if (!byChannel.has(channelId)) byChannel.set(channelId, []);
     kept++;
     byChannel.get(channelId).push({ start, stop, title });

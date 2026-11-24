@@ -1158,6 +1158,7 @@ enum UpdateAction {
         choices: Vec<Value>,
         focus_index: usize,
     },
+    TitleInfo(Value),
     UpNext(Value),
     UpNextHide,
     LiveEpg(Vec<Value>),
@@ -1177,6 +1178,89 @@ fn other_version_rows(rows: Vec<Value>) -> Vec<Value> {
         })
         .take(3)
         .collect()
+}
+
+fn sanitize_title_info(payload: Value) -> Value {
+    let take_str = |obj: &serde_json::Map<String, Value>, key: &str, max: usize| -> String {
+        obj.get(key)
+            .and_then(Value::as_str)
+            .map(|s| s.trim().chars().take(max).collect())
+            .unwrap_or_default()
+    };
+    let take_url = |obj: &serde_json::Map<String, Value>, key: &str| -> String {
+        let raw = take_str(obj, key, 1024);
+        if raw.starts_with("http://") || raw.starts_with("https://") {
+            raw
+        } else {
+            String::new()
+        }
+    };
+    let Some(obj) = payload.as_object() else {
+        return Value::Null;
+    };
+    let cast: Vec<Value> = obj
+        .get("cast")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let row = item.as_object()?;
+                    let name = take_str(row, "name", 120);
+                    if name.is_empty() {
+                        return None;
+                    }
+                    Some(json!({
+                        "name": name,
+                        "character": take_str(row, "character", 120),
+                        "photo": take_url(row, "photo"),
+                    }))
+                })
+                .take(40)
+                .collect()
+        })
+        .unwrap_or_default();
+    let crew: Vec<Value> = obj
+        .get("crew")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let row = item.as_object()?;
+                    let name = take_str(row, "name", 120);
+                    if name.is_empty() {
+                        return None;
+                    }
+                    Some(json!({
+                        "name": name,
+                        "job": take_str(row, "job", 64),
+                    }))
+                })
+                .take(12)
+                .collect()
+        })
+        .unwrap_or_default();
+    let has_people = obj.get("hasPeople").and_then(Value::as_bool).unwrap_or(false)
+        || !cast.is_empty()
+        || !crew.is_empty();
+    let mut out = json!({
+        "title": take_str(obj, "title", 200),
+        "subline": take_str(obj, "subline", 200),
+        "year": take_str(obj, "year", 16),
+        "runtime": take_str(obj, "runtime", 32),
+        "cert": take_str(obj, "cert", 24),
+        "rating": take_str(obj, "rating", 16),
+        "overview": take_str(obj, "overview", 1600),
+        "poster": take_url(obj, "poster"),
+        "cast": cast,
+        "crew": crew,
+        "hasPeople": has_people,
+    });
+    if let Some(open) = obj.get("open").and_then(Value::as_bool) {
+        out["open"] = Value::Bool(open);
+    }
+    out
 }
 
 fn value_choices(payload: Value, key: &str) -> Result<Vec<Value>, String> {
@@ -1246,6 +1330,7 @@ fn parse_update(kind: &str, payload: Value, server: &str) -> Result<UpdateAction
                 focus_index,
             })
         }
+        "title_info" => Ok(UpdateAction::TitleInfo(sanitize_title_info(payload))),
         "up_next" => Ok(UpdateAction::UpNext(payload)),
         "up_next_hide" => Ok(UpdateAction::UpNextHide),
         "live_epg" => Ok(UpdateAction::LiveEpg(value_choices(payload, "programs")?)),
@@ -1302,6 +1387,7 @@ struct PlayerUiState {
     subtitle_choices: Vec<Value>,
     episode_choices: Vec<Value>,
     episode_focus_index: usize,
+    title_info: Value,
     up_next: Value,
     live_epg: Vec<Value>,
     live_favorite: bool,
@@ -1351,6 +1437,7 @@ impl Default for PlayerUiState {
             subtitle_choices: Vec::new(),
             episode_choices: Vec::new(),
             episode_focus_index: 0,
+            title_info: Value::Null,
             up_next: Value::Null,
             live_epg: Vec::new(),
             live_favorite: false,
@@ -1426,25 +1513,12 @@ impl PlayerController {
     }
 
     fn enter_loading(&self, app: &tauri::AppHandle, state: PlayerUiState) -> Result<(), String> {
-        let mut actor = match self.actor.lock() {
-            Ok(actor) => actor,
-            Err(_) => {
-                self.publish_ui(app, state);
-                return Err("native player state is unavailable".into());
-            }
-        };
-        if let Some(handle) = actor.as_ref() {
-            if handle
-                .tx
-                .send(PlayerCommand::ShowLoading(state.clone()))
-                .is_ok()
-            {
-                return Ok(());
-            }
-            *actor = None;
+        self.publish_ui(app, state.clone());
+        // Pre-spawn the libmpv D3D11 actor during loading so GPU/mpv initialization overlaps with
+        // /api/play instead of paying 200-400ms serially after the stream URL arrives.
+        if let Err(_e) = self.send(app, PlayerCommand::ShowLoading(state), true) {
+            // Loading UI is already published; any init error will surface cleanly on PlayVod/Live.
         }
-        drop(actor);
-        self.publish_ui(app, state);
         Ok(())
     }
 
@@ -1683,6 +1757,7 @@ fn show_player(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
 }
 
 fn show_catalog(app: &tauri::AppHandle) {
+    clear_guide_pip(app);
     if let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
         let _ = player.set_always_on_top(false);
         let _ = player.hide();
@@ -2359,7 +2434,12 @@ fn actor_loop(
     request_warning_logs(&mpv);
     let mut session: Option<NativeSession> = None;
     loop {
-        match rx.recv_timeout(Duration::from_millis(200)) {
+        let poll_ms = if session.as_ref().is_some_and(|s| !s.ready) {
+            25
+        } else {
+            200
+        };
+        match rx.recv_timeout(Duration::from_millis(poll_ms)) {
             Ok(PlayerCommand::ShowLoading(state)) => {
                 clear_cast_stop(&cast_stop);
                 flush_progress(&app, session.as_mut());
@@ -2963,20 +3043,6 @@ fn tick_session(
         publish_ui(app, shared, session.ui.clone());
         return;
     }
-    if session.file_loaded && !session.subtitle_attached {
-        session.subtitle_attached = true;
-        if apply_subtitle(mpv, &session.subtitle, session.subtitle_stream_offset()).is_err() {
-            if session.subtitle.file.is_some() {
-                eval_callback(
-                    app,
-                    "__tvNativeFileSubtitleFailed",
-                    vec![json!(session.subtitle.rel), json!("track not found or did not match"), json!(session.token)],
-                );
-            }
-            session.ui.subtitle_rel.clear();
-            session.ui.subtitle_label.clear();
-        }
-    }
     let raw_position = property::<f64>(mpv, "time-pos").unwrap_or(session.last_raw_pos);
     let raw_duration = property::<f64>(mpv, "duration").unwrap_or(0.0);
     let mut paused = property::<bool>(mpv, "pause").unwrap_or(!session.requested_playing);
@@ -3031,6 +3097,9 @@ fn tick_session(
             }
             let target_string = format!("{target:.3}");
             let _ = mpv.command("seek", &[target_string.as_str(), "absolute+keyframes"]);
+            session.last_position = target;
+            session.ui.pos = target;
+            return;
         }
         session.ready = true;
         session.ready_at = Some(Instant::now());
@@ -3055,6 +3124,24 @@ fn tick_session(
             eval_callback(app, "__tvNativeLiveReady", Vec::new());
         }
         publish_ui(app, shared, session.ui.clone());
+    }
+
+    // Attach subtitles AFTER session.ready publishes playing/ready so a slow Wyzie/OpenSubtitles
+    // fetch inside mpv's synchronous `sub-add` command can never hold up dismissing the loader.
+    if session.ready && session.file_loaded && !session.subtitle_attached {
+        session.subtitle_attached = true;
+        if apply_subtitle(mpv, &session.subtitle, session.subtitle_stream_offset()).is_err() {
+            if session.subtitle.file.is_some() {
+                eval_callback(
+                    app,
+                    "__tvNativeFileSubtitleFailed",
+                    vec![json!(session.subtitle.rel), json!("track not found or did not match"), json!(session.token)],
+                );
+            }
+            session.ui.subtitle_rel.clear();
+            session.ui.subtitle_label.clear();
+            publish_ui(app, shared, session.ui.clone());
+        }
     }
 
     if session.ready
@@ -3981,6 +4068,22 @@ fn handle_update(
         } => {
             active.ui.episode_choices = choices;
             active.ui.episode_focus_index = focus_index;
+        }
+        UpdateAction::TitleInfo(value) => {
+            if let Some(obj) = value.as_object() {
+                let open_only = obj.get("open").is_some()
+                    && obj.get("title").and_then(Value::as_str).unwrap_or("").is_empty()
+                    && obj.get("cast").and_then(Value::as_array).is_none_or(|a| a.is_empty());
+                if open_only {
+                    if let Some(existing) = active.ui.title_info.as_object_mut() {
+                        if let Some(open) = obj.get("open").cloned() {
+                            existing.insert("open".into(), open);
+                        }
+                    }
+                } else {
+                    active.ui.title_info = value;
+                }
+            }
         }
         UpdateAction::UpNext(value) => active.ui.up_next = value,
         UpdateAction::UpNextHide => active.ui.up_next = Value::Null,

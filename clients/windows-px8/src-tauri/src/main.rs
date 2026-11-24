@@ -422,21 +422,24 @@ fn windows_install_app_update(
     update::start_windows_update(app, url, filename)
 }
 
-fn bridge_script() -> String {
-    let bootstrap = json!({
-        "chromeVersion": player::native_chrome_version(),
-        "playbackCaps": player::native_playback_caps(),
-        "appVersion": {
-            "versionName": env!("CARGO_PKG_VERSION"),
-            "versionCode": 0,
-            "tv": false,
-            "platform": "windows",
-        }
-    });
-    format!(
-        "Object.defineProperty(window,'__TRIBOON_WINDOWS_BOOTSTRAP__',{{value:Object.freeze({bootstrap}),configurable:false,writable:false}});\n{}",
-        include_str!("../../ui/bridge.js")
-    )
+fn bridge_script() -> &'static str {
+    static SCRIPT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SCRIPT.get_or_init(|| {
+        let bootstrap = json!({
+            "chromeVersion": player::native_chrome_version(),
+            "playbackCaps": player::native_playback_caps(),
+            "appVersion": {
+                "versionName": env!("CARGO_PKG_VERSION"),
+                "versionCode": 0,
+                "tv": false,
+                "platform": "windows",
+            }
+        });
+        format!(
+            "Object.defineProperty(window,'__TRIBOON_WINDOWS_BOOTSTRAP__',{{value:Object.freeze({bootstrap}),configurable:false,writable:false}});\n{}",
+            include_str!("../../ui/bridge.js")
+        )
+    })
 }
 
 /// The bridge as a document-created script (WebView2 AddScriptToExecuteOnDocumentCreated), so
@@ -552,9 +555,9 @@ fn main() {
             let trusted = state
                 .server_origin()
                 .and_then(|server| {
-                    parse_http_url(payload.url().as_str())
+                    origin_from_page_url(payload.url().as_str())
                         .ok()
-                        .map(|url| url.origin() == server)
+                        .map(|origin| origin == server)
                 })
                 .unwrap_or(false);
             if trusted {

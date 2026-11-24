@@ -90,6 +90,9 @@ class SegmentDiskCache {
         return null;
       }
       rec.at = Date.now();
+      // Maintain O(1) insertion-LRU order in this.index so _evict never O(N log N)-sorts 100k+ keys.
+      this.index.delete(key);
+      this.index.set(key, rec);
       this.hits++;
       this._scheduleIndex();
       return { data, size: rec.size, partSize: rec.partSize, partOrigin: knownOrigin(rec.partOrigin) };
@@ -147,7 +150,14 @@ class SegmentDiskCache {
   flush() {
     if (this._flushing) return this._flushing;
     this._clearFlushTimer();
-    this._flushing = this._flushNow().finally(() => { this._flushing = null; });
+    this._flushing = this._flushNow().finally(() => {
+      this._flushing = null;
+      // Drain items queued while the previous flush was writing so the queue can never wedge at 64 MB.
+      if (this.enabled && this.queue.length) {
+        if (this.queuedBytes >= FLUSH_BYTES) this.flush();
+        else this._scheduleFlush();
+      }
+    });
     return this._flushing;
   }
 
@@ -254,11 +264,8 @@ class SegmentDiskCache {
         pinned -= rec.bytes;
       }
     }
-    const ordered = [...this.index.entries()].sort((a, b) => {
-      if (!!a[1].pin !== !!b[1].pin) return a[1].pin ? 1 : -1;
-      return (a[1].at || 0) - (b[1].at || 0);
-    });
-    for (const [key, rec] of ordered) {
+    // this.index is maintained in insertion-LRU order (oldest first); walk directly without sorting.
+    for (const [key, rec] of [...this.index.entries()]) {
       if (this.bytes <= this.maxBytes) break;
       if (this.index.size <= 1) break;
       if (rec.pin) continue;
@@ -280,12 +287,14 @@ class SegmentDiskCache {
     const entries = {};
     for (const [key, rec] of this.index) entries[key] = rec;
     const dest = path.join(this.dir, 'index.json');
-    const tmp = dest + '.tmp';
+    const tmp = `${dest}.${process.pid}.${(this._tmpSeq = (this._tmpSeq || 0) + 1)}.tmp`;
     try {
       await fs.promises.mkdir(this.dir, { recursive: true });
       await fs.promises.writeFile(tmp, JSON.stringify({ v: 1, entries }));
       await fs.promises.rename(tmp, dest);
-    } catch {}
+    } catch {
+      try { await fs.promises.rm(tmp, { force: true }); } catch {}
+    }
   }
 
   _blobPath(key) {
@@ -306,7 +315,7 @@ class SegmentDiskCache {
     this._indexTimer = setTimeout(() => {
       this._indexTimer = null;
       this._saveIndex();
-    }, 1000);
+    }, 15000);
     if (this._indexTimer.unref) this._indexTimer.unref();
   }
 

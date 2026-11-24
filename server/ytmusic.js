@@ -138,6 +138,22 @@ function friendlyYtdlpError(stderr, fallback) {
   return new Error(String(line || fallback || 'yt-dlp failed').trim());
 }
 
+// Track active yt-dlp / python3 child processes so server shutdown never leaves orphans.
+const _activeChildren = new Set();
+function trackChild(p) {
+  _activeChildren.add(p);
+  const done = () => _activeChildren.delete(p);
+  p.once('close', done);
+  p.once('error', done);
+  return p;
+}
+function killAllChildren() {
+  for (const p of [..._activeChildren]) {
+    try { p.kill('SIGKILL'); } catch {}
+    _activeChildren.delete(p);
+  }
+}
+
 // Run yt-dlp and collect stdout JSON (single object or NDJSON), with a hard timeout.
 function runJson(extra, { timeoutMs = 25000, cookiesPath, priority = 0, maxStdoutBytes = 16e6 } = {}) {
   return withYtdlpSlot(() => runJsonNow(extra, { timeoutMs, cookiesPath, maxStdoutBytes }), { priority });
@@ -147,7 +163,7 @@ function runJsonNow(extra, { timeoutMs = 25000, cookiesPath, maxStdoutBytes = 16
     const yt = detectYtdlp();
     if (!yt) return reject(new Error('yt-dlp not installed on the server'));
     const { bin, argv } = ytArgs(extra, cookiesPath, { noPlaylist: optsNoPlaylist(extra) });
-    const p = spawn(bin, argv, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const p = trackChild(spawn(bin, argv, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }));
     let out = '', err = '';
     let timedOut = false, tooLarge = false, outBytes = 0;
     const killer = setTimeout(() => { timedOut = true; try { p.kill('SIGKILL'); } catch {} }, timeoutMs);
@@ -160,7 +176,7 @@ function runJsonNow(extra, { timeoutMs = 25000, cookiesPath, maxStdoutBytes = 16
       }
       out += d;
     });
-    p.stderr.on('data', (d) => { err += d; });
+    p.stderr.on('data', (d) => { if (err.length < 64e3) err += d; });
     p.on('error', (e) => { clearTimeout(killer); reject(timedOut ? new Error('yt-dlp timed out') : e); });
     p.on('close', (code) => {
       clearTimeout(killer);
@@ -433,7 +449,7 @@ function runYtMusicApiRawNow(action, body, { timeoutMs = 12000 } = {}) {
   return new Promise((resolve, reject) => {
     const py = detectYtMusicApi();
     if (!py) return reject(new Error('ytmusicapi is not installed'));
-    const p = spawn(py.cmd[0], ['-c', YTMUSICAPI_SCRIPT], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const p = trackChild(spawn(py.cmd[0], ['-c', YTMUSICAPI_SCRIPT], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }));
     let out = '', err = '';
     let timedOut = false;
     const killer = setTimeout(() => { timedOut = true; try { p.kill('SIGKILL'); } catch {} }, timeoutMs);
@@ -545,7 +561,9 @@ async function trackLyrics(id, { cookiesPath, priority = 0 } = {}) {
     liked: data.liked === 'LIKE',
     likeStatus: data.liked || null,
   };
+  _lyricsCache.delete(key);
   _lyricsCache.set(key, { value, expiresAt: Date.now() + LYRICS_TTL_MS });
+  while (_lyricsCache.size > 200) _lyricsCache.delete(_lyricsCache.keys().next().value);
   return value;
 }
 async function rateSong(id, liked, { cookiesPath } = {}) {
@@ -635,7 +653,18 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
       { cookiesPath: cookieFile, timeoutMs: 30000, priority: 10 });
     try { return JSON.parse(out); } catch { throw new Error('yt-dlp returned no JSON'); }
   };
-  let j = await load(cookiesPath);
+  let j = null;
+  try {
+    j = await load(cookiesPath);
+  } catch (e) {
+    // If expired/rate-limited cookies threw, fall back immediately to public extraction instead of
+    // wasting two retry rounds with the same broken cookies (unless genuinely age-gated).
+    if (cookiesPath && !/age|confirm your age/i.test(String(e && e.message || ''))) {
+      j = await load(null);
+    } else {
+      throw e;
+    }
+  }
   if ((!j || typeof j !== 'object') && cookiesPath) j = await load(null);
   if (!j || typeof j !== 'object') throw new Error('yt-dlp returned no track data');
   const picked = (j.requested_downloads && j.requested_downloads[0])
@@ -644,10 +673,17 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
   const url = j.url || (picked && picked.url);
   if (!url) throw new Error('no audio stream found');
   const headers = { ...(j.http_headers || {}), ...((picked && picked.http_headers) || {}) };
+  const ext = String((picked && picked.ext) || j.ext || '').toLowerCase();
+  const isHls = /\.m3u8(?:$|\?)/i.test(url) || String((picked && picked.protocol) || j.protocol || '').includes('m3u8');
+  const mime = isHls
+    ? 'application/vnd.apple.mpegurl'
+    : (/mime=audio%2Fmp4|\.m4a|ext=m4a/i.test(url) || ext === 'm4a'
+      ? 'audio/mp4'
+      : (ext === 'webm' || ext === 'opus' ? 'audio/webm' : 'audio/mp4'));
   const rec = {
     url, at: Date.now(), expiresAt: Date.now() + STREAM_TTL_MS,
     headers,
-    mime: /mime=audio%2Fmp4|\.m4a|ext=m4a/i.test(url) || j.ext === 'm4a' || (picked && picked.ext === 'm4a') ? 'audio/mp4' : (j.ext === 'webm' || (picked && picked.ext === 'webm') ? 'audio/webm' : 'audio/mp4'),
+    mime,
     title: cleanTitle(j.title) || j.title || 'Unknown', artist: j.artist || j.uploader || j.channel || '',
     duration: num(j.duration), thumb: thumbFor(id),
   };
@@ -845,7 +881,7 @@ function _queueStats() { return { active: ytdlpActive, queued: ytdlpQueue.length
 function _ytmApiQueueStats() { return { active: ytmApiActive, queued: ytmApiQueue.length, concurrency: YTMUSICAPI_CONCURRENCY }; }
 
 module.exports = {
-  detectYtdlp, detectYtMusicApi,
+  detectYtdlp, detectYtMusicApi, killAllChildren,
   search, resolveStream, resolveVideoStream, listPlaylists, playlistTracks, watchQueue, trackLyrics, rateSong, homeRows,
   browserAuthFromCookies,
   thumbFor, cleanTitle, _upgradeThumbUrl: upgradeThumbUrl,

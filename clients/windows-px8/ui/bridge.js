@@ -220,6 +220,34 @@
       return playerUpdate('duration', { seconds: Math.max(0, Number(seconds) || 0) });
     },
     updateEpisodeChoices(raw) { return playerUpdate('episode_choices', raw); },
+    updateTitleInfo(raw) {
+      const payload = raw ? parsePayload(raw, 'Title info') : {};
+      if (payload.poster) payload.poster = safeHttpUrl(payload.poster, false);
+      if (payload.backdrop) payload.backdrop = safeHttpUrl(payload.backdrop, false);
+      if (Array.isArray(payload.cast)) {
+        payload.cast = payload.cast.slice(0, 40).map((c) => ({
+          name: String((c && c.name) || '').slice(0, 120),
+          character: String((c && c.character) || '').slice(0, 120),
+          photo: safeHttpUrl(c && c.photo, false),
+        })).filter((c) => c.name);
+      }
+      return playerUpdate('title_info', payload);
+    },
+    showTitleInfo(raw) {
+      const payload = raw ? parsePayload(raw, 'Title info') : {};
+      if (payload.poster) payload.poster = safeHttpUrl(payload.poster, false);
+      if (payload.backdrop) payload.backdrop = safeHttpUrl(payload.backdrop, false);
+      if (Array.isArray(payload.cast)) {
+        payload.cast = payload.cast.slice(0, 40).map((c) => ({
+          name: String((c && c.name) || '').slice(0, 120),
+          character: String((c && c.character) || '').slice(0, 120),
+          photo: safeHttpUrl(c && c.photo, false),
+        })).filter((c) => c.name);
+      }
+      payload.open = true;
+      return playerUpdate('title_info', payload);
+    },
+    hideTitleInfo() { return playerUpdate('title_info', { open: false }); },
     upNext(raw) { return playerUpdate('up_next', raw); },
     upNextHide() { return playerUpdate('up_next', { hidden: true }); },
     setLiveFav(on) { return playerUpdate('live_favorite', { on: !!on }); },

@@ -209,10 +209,14 @@ async function deobfuscateVolumes(pool, candidates, opts = {}) {
 // clips are video-extension files too ("…-sample.mkv") — they only win when NOTHING else
 // is playable, and the pipeline then refuses the mount by name.
 function pickInner(files, wantedEpisode = null, releaseName = '') {
+  const hasVideo = (files || []).some((f) => f && VIDEO_EXT.test(f.name || ''));
+  const hasAudio = !hasVideo && (files || []).some((f) => f && AUDIO_TRACK_EXT.test(f.name || ''));
   const scored = files
     .map((f) => {
-      const junk = JUNK_EXT.test(f.name) || /\bsample\b/i.test(f.name) || isArchiveVolumeName(f.name);
-      let score = (junk ? -1 : f.size) * (VIDEO_EXT.test(f.name) ? 10 : 1);
+      const ebookJunk = hasAudio && /\.(pdf|epub|mobi|azw3?|cue|m3u8?)$/i.test(f.name || '');
+      const junk = JUNK_EXT.test(f.name) || ebookJunk || /\bsample\b/i.test(f.name) || isArchiveVolumeName(f.name);
+      const mult = VIDEO_EXT.test(f.name) ? 10 : (hasAudio && AUDIO_TRACK_EXT.test(f.name) ? 10 : 1);
+      let score = (junk ? -1 : f.size) * mult;
       // A season pack may contain every episode inside one RAR/ZIP. Exact episode identity must
       // outrank file size, otherwise E01/the largest member is reused for an E05 request.
       if (!junk && wantedEpisode && VIDEO_EXT.test(f.name)
@@ -539,7 +543,7 @@ class ArchiveVirtualFile {
   }
 }
 
-function rememberArchiveMap(nzbXml, vf, opts = {}) {
+function rememberArchiveMap(nzbXml, vf, opts = {}, mapKey = '') {
   const store = getMountMap();
   if (!store || !vf || !Array.isArray(vf.vols) || !vf.vols.length) return;
   // A multi-file audiobook needs the full inner list. Replaying one file would drop the chapters.
@@ -573,7 +577,7 @@ function rememberArchiveMap(nzbXml, vf, opts = {}) {
   })).filter((sub) => sub.source);
   // Scoped by episode and audiobook mode (E2-2): a season pack's map names ONE inner episode.
   const scope = mapScope(opts);
-  store.put(scopedMapKey(nzbXml, opts), {
+  store.put(mapKey || scopedMapKey(nzbXml, opts), {
     v: 1,
     ep: scope.ep,
     audiobook: scope.audiobook,
@@ -587,10 +591,10 @@ function rememberArchiveMap(nzbXml, vf, opts = {}) {
   });
 }
 
-async function mountFromSavedMap(pool, nzbXml, candidates, opts, password) {
+async function mountFromSavedMap(pool, nzbXml, candidates, opts, password, mapKey = '') {
   const store = getMountMap();
   if (!store) return null;
-  const saved = store.get(scopedMapKey(nzbXml, opts));
+  const saved = store.get(mapKey || scopedMapKey(nzbXml, opts));
   if (!saved || saved.v !== 1 || !Array.isArray(saved.volumes) || !saved.volumes.length) return null;
   // Second guard: the record must have been saved for this exact selection. Old records carry no
   // scope and only ever match a plain (movie) request, which is what they were saved for.
@@ -641,7 +645,7 @@ async function mountFromSavedMap(pool, nzbXml, candidates, opts, password) {
 // Mount any NZB: flat post, RAR set, ZIP, or 7z. Returns a virtual file exposing
 // { id, name, size, container, method, streamable, tags, read(), triage(), segmentCount }.
 async function mountNzb(pool, nzbXml, opts = {}) {
-  const nzb = parseNzb(nzbXml);
+  const nzb = opts && opts.parsedNzb ? opts.parsedNzb : parseNzb(nzbXml);
   const password = nzbPassword(nzbXml);
   const candidates = nzb.files.map((f) => ({
     ...f,
@@ -649,7 +653,8 @@ async function mountNzb(pool, nzbXml, opts = {}) {
     bytes: f.segments.reduce((s, x) => s + x.bytes, 0),
   }));
 
-  const reused = await mountFromSavedMap(pool, nzbXml, candidates, opts, password);
+  const mapKey = getMountMap() ? scopedMapKey(nzbXml, opts) : '';
+  const reused = await mountFromSavedMap(pool, nzbXml, candidates, opts, password, mapKey);
   if (reused) return reused;
 
   const volumeEntries = orderVolumes(candidates);
@@ -659,7 +664,7 @@ async function mountNzb(pool, nzbXml, opts = {}) {
     if (vf && vf.id && Array.isArray(vf.vols)) {
       for (const v of vf.vols) if (v) v.viewerId = vf.id;
     }
-    rememberArchiveMap(nzbXml, vf, opts);
+    rememberArchiveMap(nzbXml, vf, opts, mapKey);
     return vf;
   };
   // Two obfuscation signatures: (a) one or zero named volumes next to several anonymous slices;
@@ -799,13 +804,16 @@ async function unwrapNestedArchive(outerVols, outerFiles, opts = {}) {
   }
   const picked = pickInner(parsed.files, opts.wantedEpisode, opts.releaseName);
   if (!picked) return null;
+  const composedFiles = (parsed.files || []).map((f) => ({
+    ...f,
+    extents: composeChildExtents(nestedMembers, f.extents),
+  }));
+  const composedPicked = composedFiles.find((f) => f.name === picked.name && f.size === picked.size)
+    || { ...picked, extents: composeChildExtents(nestedMembers, picked.extents) };
   return {
     container: kind === 'zip' ? 'zip' : 'rar',
-    files: parsed.files,
-    inner: {
-      ...picked,
-      extents: composeChildExtents(nestedMembers, picked.extents),
-    },
+    files: composedFiles,
+    inner: composedPicked,
   };
 }
 
@@ -849,12 +857,27 @@ function mountFlat(pool, nzb, opts) {
   const audio = audioTrackCandidates(files);
   if (audio.length > 1) {
     vf.audioFiles = audio;
-    vf._audioStreams = new Map(); // index -> mounted NzbFileStream (reused across Range requests)
+    vf._audioStreams = new Map(); // index -> mounted NzbFileStream (capped LRU to bound RAM)
     vf.audioStreamAt = async (index) => {
       const track = vf.audioFiles[index];
       if (!track || !track._source) { const e = new Error('audio track not found'); e.status = 404; throw e; }
       let s = vf._audioStreams.get(index);
-      if (!s) { s = new NzbFileStream(pool, track._source, { ...opts, viewerId: vf.id }); await s.mount('playback'); vf._audioStreams.set(index, s); }
+      if (s) {
+        vf._audioStreams.delete(index);
+        vf._audioStreams.set(index, s);
+      } else {
+        // Bound open chapter streams to 3 (current + adjacent) with a 16MB cache each instead of
+        // accumulating unbounded 128MB streams across a 40-chapter audiobook.
+        while (vf._audioStreams.size >= 3) {
+          const [oldIdx, oldStream] = vf._audioStreams.entries().next().value;
+          vf._audioStreams.delete(oldIdx);
+          try { oldStream.cancelReadAhead(); } catch {}
+          try { if (oldStream.cache && oldStream.cache.clear) oldStream.cache.clear(); } catch {}
+        }
+        s = new NzbFileStream(pool, track._source, { ...opts, viewerId: vf.id, cacheBytes: Math.min(Number(opts && opts.cacheBytes) || 16 * 1024 * 1024, 16 * 1024 * 1024) });
+        await s.mount('playback');
+        vf._audioStreams.set(index, s);
+      }
       s._touched = Date.now();
       return s;
     };

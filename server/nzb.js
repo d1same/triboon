@@ -3,6 +3,7 @@
 // Returns { files: [{ subject, groups[], segments: [{ msgId, bytes, number }] (sorted) }] }
 
 function decodeEntities(s) {
+  if (!s || s.indexOf('&') === -1) return s;
   return s
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
@@ -49,19 +50,22 @@ function parseNzb(xml) {
     const segments = [];
     const numbered = new WeakSet(); // segments whose `number` came from the NZB (review R9)
     const segRe = /<segment\b([^>]*)>([\s\S]*?)<\/segment>/gi;
-    let sm;
+    let sm, prevNum = -Infinity, inOrder = true;
     while ((sm = segRe.exec(body))) {
       const bytesM = /bytes="(\d+)"/i.exec(sm[1]);
       const numM = /number="(\d+)"/i.exec(sm[1]);
+      const num = numM ? parseInt(numM[1], 10) : segments.length + 1;
+      if (num < prevNum) inOrder = false;
+      prevNum = num;
       const seg = {
         msgId: decodeEntities(sm[2]).trim(),
         bytes: bytesM ? parseInt(bytesM[1], 10) : 0,
-        number: numM ? parseInt(numM[1], 10) : segments.length + 1,
+        number: num,
       };
       if (numM) numbered.add(seg);
       segments.push(seg);
     }
-    segments.sort((a, b) => a.number - b.number);
+    if (!inOrder) segments.sort((a, b) => a.number - b.number);
     files.push({
       subject, groups, segments: dropRepeatedParts(segments, numbered),
       poster: posterM ? decodeEntities(posterM[1]) : '',
@@ -172,8 +176,17 @@ function pickPrimaryFile(nzb, opts = {}) {
     }
     // Obfuscated single-file posts cannot prove episode identity from the filename. Preserve the
     // long-standing fallback only when there is exactly one plausible payload and it does NOT name a
-    // different episode. Anything else is unsafe to guess and must advance to another release.
+    // different episode — OR when the release name explicitly names THIS exact episode and one
+    // dominant video payload (>=80MB and >=10x the next largest, i.e. main episode + tiny sample/extra)
+    // has no competing episode names. Anything else is unsafe to guess and must advance.
     if (payloads.length === 1 && !episodeLikeName(payloads[0].name)) return payloads[0].f;
+    if (payloads.length > 1 && releaseNamesExactEpisode(opts.releaseName, we.s, we.e)
+        && payloads.every((p) => !episodeLikeName(p.name))) {
+      const bySize = payloads.slice().sort((a, b) => b.size - a.size);
+      if (bySize[0].size >= 80 * 1024 * 1024 && bySize[0].size >= bySize[1].size * 10) {
+        return bySize[0].f;
+      }
+    }
     if (payloads.length) throw episodeSelectionError(we, 'is not uniquely present in this release');
   }
   return scored[0].f;

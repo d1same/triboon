@@ -13,7 +13,7 @@ ARG ALASS_SHA256=7bd0b9ae7e035d3ba940eacffb21243614df36231d47f21f0b4ce42001ab7fc
 # gcompat lets the prebuilt (glibc) alass binary run on Alpine/musl — verified it executes.
 # alass ("Automatic Language-Agnostic Subtitle Synchronization") is one small static binary that
 # corrects subtitle offset AND framerate drift, using ffmpeg for the audio (no Python/numpy).
-RUN apk add --no-cache ffmpeg su-exec python3 py3-pip gcompat \
+RUN apk add --no-cache ffmpeg su-exec python3 py3-pip gcompat dpkg xz \
  && python3 -m pip install --no-cache-dir --break-system-packages ytmusicapi==1.12.1 \
  && wget -qO /usr/local/bin/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp" \
  && echo "${YTDLP_SHA256}  /usr/local/bin/yt-dlp" | sha256sum -c - \
@@ -23,19 +23,11 @@ RUN apk add --no-cache ffmpeg su-exec python3 py3-pip gcompat \
  && echo "${ALASS_SHA256}  /usr/local/bin/alass" | sha256sum -c - \
  && chmod +x /usr/local/bin/alass
 
-COPY package.json ./
-COPY LICENSE THIRD-PARTY-NOTICES.md ./
-COPY server ./server
-COPY web ./web
-COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
 # The official phone app opens the server website. Ship Jellyfin's own page
 # (the same 10.11.11 the door claims to be) so that window is not Triboon.
 ARG JELLYFIN_WEB_URL=https://repo.jellyfin.org/files/server/debian/stable/v10.11.11/amd64/jellyfin-web_10.11.11+deb12_all.deb
 ARG JELLYFIN_WEB_SHA256=f289b91e47cb44e52630c6a4262f3bdfe67a53c05db8f560edf479300ed0a37a
-RUN apk add --no-cache dpkg xz \
- && wget -qO /tmp/jellyfin-web.deb "${JELLYFIN_WEB_URL}" \
+RUN wget -qO /tmp/jellyfin-web.deb "${JELLYFIN_WEB_URL}" \
  && echo "${JELLYFIN_WEB_SHA256}  /tmp/jellyfin-web.deb" | sha256sum -c - \
  && mkdir -p /tmp/jfweb \
  && dpkg-deb -x /tmp/jellyfin-web.deb /tmp/jfweb \
@@ -43,6 +35,13 @@ RUN apk add --no-cache dpkg xz \
  && cp -a /tmp/jfweb/usr/share/jellyfin/web/. /usr/share/jellyfin-web/ \
  && rm -rf /tmp/jfweb /tmp/jellyfin-web.deb
 ENV TRIBOON_JELLYFIN_WEB=/usr/share/jellyfin-web
+
+COPY package.json ./
+COPY LICENSE THIRD-PARTY-NOTICES.md ./
+COPY server ./server
+COPY web ./web
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Persistent state (users, settings, watch, verdict cache) lives here — mount a volume.
 # Ownership is taken at runtime by the entrypoint (PUID/PGID, Unraid-style; default 99:100).

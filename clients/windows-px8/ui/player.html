@@ -19,6 +19,7 @@
     <symbol id="i-quality" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12H6"/><path d="M10 15V9"/><path d="M14 14.5a.5.5 0 0 0 .5.5h1a2.5 2.5 0 0 0 2.5-2.5v-1A2.5 2.5 0 0 0 15.5 9h-1a.5.5 0 0 0-.5.5z"/><path d="M6 15V9"/><rect x="2" y="5" width="20" height="14" rx="2"/></symbol>
     <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></symbol>
+    <symbol id="i-about" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
     <symbol id="i-guide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/><path d="m16 12 5 3-5 3v-6Z"/></symbol>
     <symbol id="i-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.9L12 3z"/></symbol>
     <symbol id="i-cast" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/><path d="M2 12a8 8 0 0 1 8 8"/><path d="M2 16a4 4 0 0 1 4 4"/><path d="M2 20h.01"/></symbol>
@@ -94,6 +95,25 @@
     <p class="stats-note">Hardware decoding is shown only after libmpv reports the active decoder.</p>
   </aside>
 
+  <section id="aboutPanel" class="about-panel" aria-hidden="true" aria-labelledby="aboutTitle">
+    <div class="about-card">
+      <div id="aboutPoster" class="about-poster" aria-hidden="true"></div>
+      <div class="about-body">
+        <div class="about-head">
+          <div>
+            <span id="aboutKicker" class="about-kicker">About</span>
+            <h2 id="aboutTitle"></h2>
+            <p id="aboutSub" class="about-sub"></p>
+          </div>
+          <button id="aboutClose" class="icon-button" aria-label="Close about"><svg><use href="#i-close"/></svg></button>
+        </div>
+        <div id="aboutChips" class="about-chips"></div>
+        <p id="aboutPlot" class="about-plot"></p>
+        <div id="aboutCast" class="about-cast" aria-label="Cast"></div>
+      </div>
+    </div>
+  </section>
+
   <footer id="controls" class="controls" aria-label="Playback controls">
     <div class="seekLine">
       <span class="seekTime" id="currentTime">0:00</span>
@@ -106,6 +126,7 @@
     <div class="control-row">
       <div class="control-group ctlLeft">
         <button id="guide" class="control optional" aria-label="TV guide" title="TV guide (G)"><svg><use href="#i-guide"/></svg></button>
+        <button id="about" class="control optional" aria-label="About and cast" title="About &amp; cast (A)" hidden><svg><use href="#i-about"/></svg></button>
         <button id="episodes" class="control optional" aria-label="Episodes" title="Episodes"><svg><use href="#i-list"/></svg></button>
         <button id="details" class="control" aria-label="Playback details" title="Playback details (I)"><svg><use href="#i-info"/></svg></button>
       </div>

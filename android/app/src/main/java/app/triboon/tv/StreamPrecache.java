@@ -74,6 +74,14 @@ final class StreamPrecache {
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
     }
 
+    // Cancel any in-flight prefetch when live playback starts so it never competes for bandwidth.
+    synchronized void cancel() {
+        if (job != null) {
+            job.cancel(true);
+            job = null;
+        }
+    }
+
     // Fetch [0, budgetBytes) of the stream into the cache. One job at a time: a newer prefetch
     // (focus moved to another title) interrupts the old one. Best-effort — failures only log.
     synchronized void prefetch(String url, long budgetBytes) {

@@ -12,6 +12,12 @@ const http = require('http');
 const https = require('https');
 
 const BASE = () => process.env.TRAKT_BASE || 'https://api.trakt.tv';
+const traktHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 8, maxFreeSockets: 4, keepAliveMsecs: 15000 });
+const traktHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 8, maxFreeSockets: 4, keepAliveMsecs: 15000 });
+function destroyTraktAgents() {
+  try { traktHttpsAgent.destroy(); } catch {}
+  try { traktHttpAgent.destroy(); } catch {}
+}
 
 // timeout = socket idle; the deadline is a HARD total budget — a trickling response never
 // idles, and several callers (link/exchange) run inside user-facing request handlers.
@@ -22,7 +28,7 @@ function request(path, { method = 'POST', body, token, clientId, deadlineMs = 15
     const payload = body ? JSON.stringify(body) : null;
     const req = lib.request(url, {
       method,
-      agent: false, // one-shot calls — don't hold keep-alive sockets to api.trakt.tv
+      agent: url.protocol === 'https:' ? traktHttpsAgent : traktHttpAgent,
       headers: {
         'content-type': 'application/json',
         'trakt-api-version': '2',
@@ -221,26 +227,39 @@ class Trakt {
     return { state: 'linked', user: tok.username || null };
   }
 
-  async _refresh(uid, t) {
-    const { id, secret } = this._creds();
-    const r = await request('/oauth/token', {
-      body: { refresh_token: t.refresh, client_id: id, client_secret: secret,
-        redirect_uri: 'urn:ietf:wg:oauth:2.0:oob', grant_type: 'refresh_token' },
+  async _refresh(uid, t, opts = {}) {
+    if (!this._refreshInflight) this._refreshInflight = new Map();
+    const existing = this._refreshInflight.get(uid);
+    if (existing) return existing;
+    const job = (async () => {
+      // Re-read the latest token in case another refresh just completed before we entered.
+      const latest = this._tokens()[uid] || t;
+      if (!latest || latest.broken) return null;
+      if (!opts.force && Date.now() < latest.expiresAt - 600000) return latest.access;
+      const { id, secret } = this._creds();
+      const r = await request('/oauth/token', {
+        body: { refresh_token: latest.refresh, client_id: id, client_secret: secret,
+          redirect_uri: 'urn:ietf:wg:oauth:2.0:oob', grant_type: 'refresh_token' },
+      });
+      if (r.status === 200 && r.json && r.json.access_token) {
+        const tok = { ...latest, access: r.json.access_token, refresh: r.json.refresh_token,
+          expiresAt: Date.now() + (r.json.expires_in || 7776000) * 1000 };
+        delete tok.broken; delete tok.brokenWhy;
+        this._saveToken(uid, tok);
+        return tok.access;
+      }
+      // A definitive 4xx (invalid_grant — revoked app / rotated refresh token) can never succeed
+      // on retry: stamp the token broken so status()/the UI say "re-link" instead of silently
+      // no-oping sync forever while Settings claims linked. Network errors / 5xx stay unstamped.
+      if (r.status >= 400 && r.status < 500) {
+        this._saveToken(uid, { ...latest, broken: Date.now(), brokenWhy: `token refresh rejected (HTTP ${r.status})` });
+      }
+      return null;
+    })().finally(() => {
+      if (this._refreshInflight && this._refreshInflight.get(uid) === job) this._refreshInflight.delete(uid);
     });
-    if (r.status === 200 && r.json && r.json.access_token) {
-      const tok = { ...t, access: r.json.access_token, refresh: r.json.refresh_token,
-        expiresAt: Date.now() + (r.json.expires_in || 7776000) * 1000 };
-      delete tok.broken; delete tok.brokenWhy;
-      this._saveToken(uid, tok);
-      return tok.access;
-    }
-    // A definitive 4xx (invalid_grant — revoked app / rotated refresh token) can never succeed
-    // on retry: stamp the token broken so status()/the UI say "re-link" instead of silently
-    // no-oping sync forever while Settings claims linked. Network errors / 5xx stay unstamped.
-    if (r.status >= 400 && r.status < 500) {
-      this._saveToken(uid, { ...t, broken: Date.now(), brokenWhy: `token refresh rejected (HTTP ${r.status})` });
-    }
-    return null;
+    this._refreshInflight.set(uid, job);
+    return job;
   }
 
   async _tokenFor(uid) {
@@ -260,7 +279,7 @@ class Trakt {
     // real refresh — which stamps `broken` on a definitive rejection — and retry once.
     if (r && r.status === 401) {
       const t = this._tokens()[uid];
-      const fresh = t && !t.broken ? await this._refresh(uid, t) : null;
+      const fresh = t && !t.broken ? await this._refresh(uid, t, { force: true }) : null;
       if (!fresh) return r;
       return request(path, { method, body, token: fresh, clientId: this._creds().id });
     }
@@ -523,12 +542,14 @@ class Trakt {
   // Everything the user has WATCHED on Trakt → our watch keys. Movies + per-episode shows.
   async pullWatched(uid) {
     const keys = [];
-    const mv = await this._getList(uid, '/sync/watched/movies', 'watched movies');
+    const [mv, sh] = await Promise.all([
+      this._getList(uid, '/sync/watched/movies', 'watched movies'),
+      this._getList(uid, '/sync/watched/shows', 'watched shows'),
+    ]);
     for (const e of mv) {
       const id = e.movie && e.movie.ids && e.movie.ids.tmdb;
       if (id) keys.push({ key: `tmdb:movie:${id}`, title: e.movie.title || '', year: e.movie.year || null, type: 'movie', tmdbId: id });
     }
-    const sh = await this._getList(uid, '/sync/watched/shows', 'watched shows');
     for (const e of sh) {
       const id = e.show && e.show.ids && e.show.ids.tmdb;
       if (!id) continue;
@@ -571,6 +592,7 @@ class Trakt {
     }
     return out;
   }
+  destroyAgents() { destroyTraktAgents(); }
 }
 
-module.exports = { Trakt, _request: request };
+module.exports = { Trakt, _request: request, destroyTraktAgents };

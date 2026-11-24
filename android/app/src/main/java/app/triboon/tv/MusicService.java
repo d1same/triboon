@@ -195,6 +195,8 @@ public class MusicService extends Service {
         return true;
     }
 
+    private volatile boolean destroyed = false;
+
     private void stopEverything() {
         hasMusicSnapshot = false;
         mainHandler.removeCallbacksAndMessages(null);
@@ -207,6 +209,8 @@ public class MusicService extends Service {
     }
 
     @Override public void onDestroy() {
+        destroyed = true;
+        hasMusicSnapshot = false;
         mainHandler.removeCallbacksAndMessages(null);
         try { if (session != null) session.release(); } catch (Throwable ignored) {}
         super.onDestroy();
@@ -285,17 +289,37 @@ public class MusicService extends Service {
     private void loadArt(final String url) {
         new Thread(() -> {
             Bitmap bmp = null;
+            HttpURLConnection c = null;
             try {
-                HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                c = (HttpURLConnection) new URL(url).openConnection();
                 c.setConnectTimeout(6000); c.setReadTimeout(6000);
                 c.setRequestProperty("User-Agent", "TriboonAndroid");
-                bmp = BitmapFactory.decodeStream(c.getInputStream());
-                c.disconnect();
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int total = 0;
+                try (java.io.InputStream in = c.getInputStream()) {
+                    int n;
+                    while ((n = in.read(buf)) > 0 && total < 2 * 1024 * 1024) {
+                        out.write(buf, 0, n);
+                        total += n;
+                    }
+                }
+                byte[] bytes = out.toByteArray();
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inJustDecodeBounds = true;
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
+                int maxDim = Math.max(opts.outWidth, opts.outHeight);
+                int sample = 1;
+                while (maxDim / sample > 512) sample *= 2;
+                opts.inJustDecodeBounds = false;
+                opts.inSampleSize = sample;
+                bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
             } catch (Throwable ignored) {}
+            finally { if (c != null) try { c.disconnect(); } catch (Throwable ignored) {} }
             final Bitmap fb = bmp;
-            if (fb == null) return;
-            new Handler(Looper.getMainLooper()).post(() -> {
-                if (!url.equals(artUrl)) return; // track changed while the art was loading
+            if (fb == null || destroyed) return;
+            mainHandler.post(() -> {
+                if (destroyed || !hasMusicSnapshot || !url.equals(artUrl)) return; // track stopped or changed while art was loading
                 art = fb;
                 applyMetadata();
                 try {

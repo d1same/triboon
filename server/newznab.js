@@ -42,6 +42,18 @@ function urlHost(url) {
 // never idles, so without a deadline a 30MB NZB can stall the pipeline for half a minute).
 // The deadline and hop budget are SHARED across redirects so a redirect chain can't reset the
 // clock or loop forever — both directly protect the press-play speed guarantee.
+// Shared short-lived keep-alive HTTPS agent for real indexers (reuses TCP+TLS across fan-out
+// waves while unref'ing idle sockets so test suites and clean shutdowns never hang).
+const httpsKeepAliveAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 10000,
+  maxSockets: 8,
+  maxFreeSockets: 4,
+});
+httpsKeepAliveAgent.on('free', (sock) => {
+  if (sock && typeof sock.unref === 'function') sock.unref();
+});
+
 function fetchUrl(url, opts = {}) {
   const { timeoutMs = 5000, deadlineMs = 30000, headers = {}, maxBytes = 64 * 1024 * 1024, signal = null } = opts;
   const abortError = () => signal && signal.reason instanceof Error
@@ -62,11 +74,11 @@ function fetchUrl(url, opts = {}) {
     const remaining = deadlineAt - Date.now();
     if (remaining <= 0) return reject(new Error(`deadline exceeded: ${urlHost(url)}`));
     const lib = url.startsWith('https') ? https : http;
-    // agent:false → one-shot connection, no keep-alive: every fetch here is a single search
-    // or NZB download. Node ≥19 keeps agent sockets alive for minutes otherwise — idle
-    // connections held to every indexer (and hung test teardowns waiting on them).
+    // Reuse TLS sessions on HTTPS indexer fan-outs (without custom DNS pinning); keep agent:false
+    // on plain HTTP and pinned lookups so local test mocks and SSRF-pinned sockets close immediately.
+    const useKeepAlive = url.startsWith('https') && !(validated && typeof validated.lookup === 'function');
     const requestOptions = {
-      agent: false,
+      agent: useKeepAlive ? httpsKeepAliveAgent : false,
       headers: { 'User-Agent': 'Triboon/1.0', ...headers },
       ...(validated && typeof validated.lookup === 'function' ? { lookup: validated.lookup } : {}),
     };
@@ -148,8 +160,18 @@ function fetchUrl(url, opts = {}) {
 }
 
 function attr(block, name) {
-  const m = new RegExp(`<newznab:attr[^>]*name="${name}"[^>]*value="([^"]*)"`, 'i').exec(block);
-  return m ? m[1] : null;
+  const esc = String(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const tagRe = /<newznab:attr\b([^>]*)\/?>/gi;
+  const nameRe = new RegExp(`\\bname=["']${esc}["']`, 'i');
+  const valRe = /\bvalue=["']([^"']*)["']/i;
+  let m;
+  while ((m = tagRe.exec(block))) {
+    if (nameRe.test(m[1])) {
+      const v = valRe.exec(m[1]);
+      if (v) return v[1];
+    }
+  }
+  return null;
 }
 
 function decodeEntities(s) {
@@ -171,6 +193,11 @@ function stripSubjectWrapper(name) {
     s = s.replace(/^(?:\[\s*\d{1,4}\s*[/ ]\s*\d{1,4}\s*\]\s*)+/, '');
     s = s.replace(/^\[?\s*(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:org|com|net|info|to|cc|xyz|eu|me|tv)\s*\]?[\s.\-_]*(?=\S)/i,
       (m) => (/^\[|www\./i.test(m) ? '' : m));
+    // Anime/fansub group prefix: "[SubsPlease] Title - 01" or "[Erai-raws] Title S01E01".
+    // Only strip a leading [Group] when followed by whitespace/separator and a real title.
+    s = s.replace(/^\[[A-Za-z0-9][A-Za-z0-9._\-\s]{1,24}\][\s._-]+(?=[A-Za-z0-9])/, (m) => (
+      /^\[(?:2160|1080|720|480)[pi]|4k|uhd|hdr/i.test(m) ? m : ''
+    ));
     s = s.replace(/^['"“”‘’]+/, '').replace(/['"“”‘’]+$/, '').trim();
     if (s === before) break;
   }

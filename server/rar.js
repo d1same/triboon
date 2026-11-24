@@ -71,6 +71,9 @@ async function walkRar4Volume(vol, volIdx) {
         vol: volIdx, dataOffset: off + hsize, packSize,
       });
       if (off + hsize + packSize > vol.size) throw new Error(`rar4: impossible data size at ${off}`);
+      // A file chunk with splitAfter continues into the next volume — no other file entry can
+      // follow it in this volume, so skip fetching the volume's tail article just for ENDARC.
+      if (flags & 0x02) break;
       off += hsize + packSize;
     } else if (type === 0x7b) { // end of archive
       break;
@@ -147,6 +150,8 @@ async function walkRar5Volume(vol, volIdx) {
         encrypted, splitBefore: !!(hflags & 0x0008), splitAfter: !!(hflags & 0x0010),
         vol: volIdx, dataOffset: off + headerTotal, packSize: dataSize,
       });
+      // Same as RAR4: a splitAfter file chunk ends the usable entries of this volume.
+      if (hflags & 0x0010) break;
     }
     off += headerTotal + dataSize;
   }

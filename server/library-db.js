@@ -2,6 +2,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const { foldPersian } = require('./library-match');
+
+const ARABIC_SCRIPT_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+function squashPersian(s) {
+  return foldPersian(s).replace(/[^\p{L}\p{N}]+/gu, '');
+}
 
 // The stored item: the relative path is recomputed when needed (library-keys.js), so it does not
 // travel in every payload (about 100 bytes x 21,000 items on every changed pass).
@@ -17,6 +23,8 @@ class LibraryDb {
     this.db = null;
     this.available = false;
     this._genreCache = new Map(); // libId -> { scannedAt, ids } — genres() is a full table scan; cache it per scan
+    this._facetCache = new Map(); // libId -> { scannedAt, facets }
+    this._searchCache = new Map(); // libId -> { scannedAt, rows } — top-level non-episode metadata for fast Latin + Persian search
     try {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       const { DatabaseSync } = require('node:sqlite');
@@ -52,10 +60,18 @@ class LibraryDb {
           ON library_items(lib_id, kind, added_at DESC);
         CREATE INDEX IF NOT EXISTS library_items_show_idx
           ON library_items(lib_id, show_idx, season, episode);
+        CREATE INDEX IF NOT EXISTS library_items_show_recent_idx
+          ON library_items(lib_id, kind, show_idx, added_at DESC, season DESC, episode DESC);
         CREATE INDEX IF NOT EXISTS library_items_tmdb_idx
           ON library_items(tmdb_id, kind, season, episode);
         CREATE INDEX IF NOT EXISTS library_items_title_idx
           ON library_items(lib_id, title_key);
+        CREATE INDEX IF NOT EXISTS library_items_title_sort_idx
+          ON library_items(lib_id, kind, title COLLATE NOCASE, idx);
+        CREATE INDEX IF NOT EXISTS library_items_year_sort_idx
+          ON library_items(lib_id, kind, year DESC, title COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS library_items_rating_sort_idx
+          ON library_items(lib_id, kind, rating DESC, title COLLATE NOCASE);
       `);
       // The stable key (library-keys.js) in its own column. An index on json_extract(payload) made
       // SQLite parse every payload on each insert and delete: a changed pass over a 21,000-item
@@ -120,6 +136,10 @@ class LibraryDb {
     if (!this.available || !this.db) return false;
     try {
       const r = this.db.prepare('UPDATE library_meta SET scanned_at = ? WHERE lib_id = ?').run(scannedAt, libId);
+      if (r && r.changes) {
+        const hit = this._searchCache.get(libId);
+        if (hit) hit.scannedAt = scannedAt;
+      }
       return !!(r && r.changes);
     } catch (e) { this.error = e; return false; }
   }
@@ -160,6 +180,9 @@ class LibraryDb {
         );
       }
       this.db.exec('COMMIT');
+      this._genreCache.delete(libId);
+      this._facetCache.delete(libId);
+      this._searchCache.delete(libId);
       this.checkpoint();
       return true;
     } catch (e) {
@@ -175,6 +198,8 @@ class LibraryDb {
       this.db.prepare('DELETE FROM library_items WHERE lib_id = ?').run(libId);
       this.db.prepare('DELETE FROM library_meta WHERE lib_id = ?').run(libId);
       this._genreCache.delete(libId);
+      this._facetCache.delete(libId);
+      this._searchCache.delete(libId);
       this.checkpoint();
       return true;
     } catch (e) { this.error = e; return false; }
@@ -266,6 +291,8 @@ class LibraryDb {
         parseInt(idx, 10),
       );
       this._genreCache.delete(libId); // a match-override can change genres without a rescan
+      this._facetCache.delete(libId);
+      this._searchCache.delete(libId); // matchTitle/title override updates search index
       return true;
     } catch (e) { this.error = e; return false; }
   }
@@ -306,6 +333,10 @@ class LibraryDb {
 
   facets(libId) {
     if (!this.available || !this.db) return { genres: [], years: [] };
+    const meta = this.db.prepare('SELECT scanned_at AS scannedAt FROM library_meta WHERE lib_id = ?').get(libId);
+    const scannedAt = meta ? meta.scannedAt : 0;
+    const hit = this._facetCache.get(libId);
+    if (hit && hit.scannedAt === scannedAt) return hit.facets;
     const rows = this.db.prepare(`
       SELECT genres, year FROM library_items WHERE lib_id = ? AND kind != 'episode'
     `).all(libId);
@@ -319,7 +350,9 @@ class LibraryDb {
         if (id) genres.add(id);
       }
     }
-    return { genres: [...genres], years: [...years].sort((a, b) => b - a) };
+    const facets = { genres: [...genres], years: [...years].sort((a, b) => b - a) };
+    this._facetCache.set(libId, { scannedAt, facets });
+    return facets;
   }
 
   page(libId, { offset = 0, limit = 72, sort = 'added.desc', genre = 0, genreIds = null, year = 0, years = null, q = '', starts = '', before = '', showIdx = null } = {}) {
@@ -404,11 +437,16 @@ class LibraryDb {
       LIMIT ? OFFSET ?
     `).all(...args, limit, offset);
     const items = rows.map((r) => this._parsePayload(r)).filter(Boolean);
-    // Library grid: a show card says which of its episodes are new (see newEpisodeInfo).
+    // Library grid: a show card says which of its episodes are new (batched in one query
+    // across all recent shows on the page instead of up to 72 per-show queries).
     if (showIdx === null) {
-      for (const item of items) {
-        const info = item.kind === 'show' ? this.newEpisodeInfo(libId, item) : null;
-        if (info) Object.assign(item, info);
+      const shows = items.filter((item) => item && item.kind === 'show');
+      if (shows.length) {
+        const infos = this.newEpisodeInfoBatch(libId, shows);
+        for (const showItem of shows) {
+          const info = infos.get(parseInt(showItem.idx, 10));
+          if (info) Object.assign(showItem, info);
+        }
       }
     }
     return {
@@ -439,10 +477,111 @@ class LibraryDb {
     return need.every((w) => w.length >= 4 && packed.includes(w));
   }
 
+  hasLibrary(libId) {
+    if (!this.available || !this.db) return false;
+    const row = this.db.prepare('SELECT 1 FROM library_meta WHERE lib_id = ?').get(String(libId));
+    return !!row;
+  }
+
+  // Top-level (non-episode) search index cached per (libId, scannedAt). A large library can hold
+  // 80k+ episodes, but only a few thousand movies/shows; keeping this tiny projection avoids
+  // loading + JSON.parsing every episode on every non-library search while keeping Latin,
+  // matched-title, typo, and Persian (Yeh/Kaf/ZWNJ-folded) searches sub-millisecond.
+  _searchIndexFor(libId) {
+    if (!this.available || !this.db) return null;
+    const id = String(libId);
+    const meta = this.db.prepare('SELECT scanned_at AS scannedAt FROM library_meta WHERE lib_id = ?').get(id);
+    if (!meta) {
+      this._searchCache.delete(id);
+      return null;
+    }
+    const cached = this._searchCache.get(id);
+    if (cached && cached.scannedAt === meta.scannedAt) return cached.rows;
+    const sqlRows = this.db.prepare(`
+      SELECT idx, title, dir, file, payload FROM library_items
+      WHERE lib_id = ? AND kind != 'episode'
+      ORDER BY added_at DESC, idx ASC
+    `).all(id);
+    const rows = [];
+    for (const r of sqlRows) {
+      const item = this._parsePayload(r);
+      if (!item) continue;
+      const title = String(item.title || r.title || '');
+      const originalTitle = String(item.originalTitle || '');
+      const matchTitle = String(item.matchTitle || '');
+      const dir = item.dir || r.dir || '';
+      const file = item.file || r.file || '';
+      const dirBase = dir ? path.basename(dir) : '';
+      const fileDirBase = file ? path.basename(path.dirname(file)) : '';
+      const combined = `${title} ${originalTitle} ${matchTitle} ${dirBase} ${fileDirBase}`;
+      const persianSquashed = ARABIC_SCRIPT_RE.test(combined)
+        ? [title, originalTitle, matchTitle, dirBase, fileDirBase].filter(Boolean).map(squashPersian).filter(Boolean)
+        : null;
+      rows.push({
+        idx: r.idx,
+        title,
+        originalTitle,
+        matchTitle,
+        dir,
+        file,
+        _persianSquashed: persianSquashed,
+      });
+    }
+    this._searchCache.set(id, { scannedAt: meta.scannedAt, rows });
+    return rows;
+  }
+
+  searchByMatcher(allowedLibIds = [], matcher, limit = 24) {
+    if (!this.available || !this.db || !allowedLibIds.length || typeof matcher !== 'function') return [];
+    const cap = Math.max(1, Math.min(40, parseInt(limit, 10) || 24));
+    const libs = [...new Set(allowedLibIds.map(String))].slice(0, 40);
+    const out = [];
+    const seen = new Set();
+    for (const libId of libs) {
+      const rows = this._searchIndexFor(libId);
+      if (!rows || !rows.length) continue;
+      for (const entry of rows) {
+        if (!matcher(entry)) continue;
+        const key = `${libId}:${entry.idx}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const full = this.item(libId, entry.idx);
+        if (full) out.push({ libId, item: full });
+        if (out.length >= cap) return out;
+      }
+    }
+    return out;
+  }
+
+  topTitles(allowedLibIds = [], max = 4000) {
+    if (!this.available || !this.db || !allowedLibIds.length) return [];
+    const cap = Math.max(1, parseInt(max, 10) || 4000);
+    const out = [];
+    const libs = [...new Set(allowedLibIds.map(String))].slice(0, 40);
+    for (const libId of libs) {
+      const rows = this._searchIndexFor(libId);
+      if (!rows || !rows.length) continue;
+      for (const entry of rows) {
+        if (entry.title) out.push(entry.title);
+        if (entry.originalTitle && entry.originalTitle !== entry.title) out.push(entry.originalTitle);
+        if (out.length >= cap) return out;
+      }
+    }
+    return out;
+  }
+
   search(query, allowedLibIds = [], limit = 24) {
     if (!this.available || !this.db || !allowedLibIds.length) return [];
     const raw = String(query || '').trim();
     if (raw.length < 2) return [];
+    const cap = Math.max(1, Math.min(40, parseInt(limit, 10) || 24));
+    if (ARABIC_SCRIPT_RE.test(raw)) {
+      const q = squashPersian(raw);
+      if (q.length < 2) return [];
+      return this.searchByMatcher(allowedLibIds, (entry) => (
+        Array.isArray(entry._persianSquashed) && entry._persianSquashed.some((s) => s.includes(q))
+      ), cap);
+    }
     const needles = this._contentWords(raw)
       .map((w) => w.replace(/[%_]/g, ''))
       .filter((w) => w.length >= 2)
@@ -463,7 +602,7 @@ class LibraryDb {
         AND (${clause})
       ORDER BY added_at DESC
       LIMIT ?
-    `).all(...libs, ...likeArgs, Math.max(1, Math.min(40, parseInt(limit, 10) || 24)));
+    `).all(...libs, ...likeArgs, cap);
     return rows.map((row) => {
       const item = this._parsePayload(row);
       return item && this._titleMatches(raw, item.title) ? { libId: row.lib_id, item } : null;
@@ -487,6 +626,39 @@ class LibraryDb {
     const eps = this._newEpisodesStmt.all(libId, parseInt(show.idx, 10), newest - batchMs);
     if (!eps.length) return null;
     return { newEpisodes: eps.length, latestEpisode: { s: eps[0].season, e: eps[0].episode } };
+  }
+
+  newEpisodeInfoBatch(libId, shows = [], { batchMs = 3 * 24 * 60 * 60 * 1000, recentMs = 30 * 24 * 60 * 60 * 1000, now = Date.now() } = {}) {
+    const out = new Map();
+    if (!this.available || !this.db || !Array.isArray(shows) || !shows.length) return out;
+    const eligible = [];
+    let minCutoff = Infinity;
+    for (const show of shows) {
+      if (!show || show.kind !== 'show') continue;
+      const idx = parseInt(show.idx, 10);
+      const newest = Number(show.addedAt) || 0;
+      if (!Number.isFinite(idx) || !newest || now - newest > recentMs) continue;
+      const cutoff = newest - batchMs;
+      if (cutoff < minCutoff) minCutoff = cutoff;
+      eligible.push({ idx, cutoff });
+    }
+    if (!eligible.length) return out;
+    const cutoffByIdx = new Map(eligible.map((e) => [e.idx, e.cutoff]));
+    const marks = eligible.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT show_idx, season, episode, added_at FROM library_items
+      WHERE lib_id = ? AND kind = 'episode' AND show_idx IN (${marks}) AND added_at >= ?
+      ORDER BY show_idx ASC, added_at DESC, season DESC, episode DESC
+    `).all(String(libId), ...eligible.map((e) => e.idx), minCutoff);
+    for (const row of rows) {
+      const sIdx = Number(row.show_idx);
+      const cutoff = cutoffByIdx.get(sIdx);
+      if (cutoff === undefined || Number(row.added_at) < cutoff) continue;
+      const cur = out.get(sIdx);
+      if (!cur) out.set(sIdx, { newEpisodes: 1, latestEpisode: { s: row.season, e: row.episode } });
+      else cur.newEpisodes++;
+    }
+    return out;
   }
 
   lookup(keys = [], allowedLibIds = []) {

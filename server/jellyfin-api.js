@@ -71,13 +71,22 @@ function doorServerId() {
   return serverId(secret);
 }
 
+function settingsPeek() {
+  if (!deps || !deps.settings) return {};
+  return typeof deps.settings.peek === 'function' ? deps.settings.peek() : deps.settings.get();
+}
+
 function jellyfinToken(req) {
-  const direct = req.headers['x-emby-token'];
+  const direct = req.headers['x-emby-token'] || req.headers['x-mediabrowser-token'];
   if (direct) return String(direct).trim();
-  const h = String(req.headers.authorization || req.headers['x-emby-authorization'] || '');
-  const tok = h.match(/(?:^|[,\s])Token=(?:"([^"]+)"|([^,\s"]+))/i);
-  if (tok) return tok[1] || tok[2];
-  if (/^Bearer\s+/i.test(h)) return h.replace(/^Bearer\s+/i, '').trim();
+  const headers = [req.headers.authorization, req.headers['x-emby-authorization']];
+  for (const raw of headers) {
+    const h = String(raw || '');
+    if (!h) continue;
+    const tok = h.match(/(?:^|[,\s])Token=(?:"([^"]+)"|([^,\s"]+))/i);
+    if (tok) return tok[1] || tok[2];
+    if (/^Bearer\s+/i.test(h)) return h.replace(/^Bearer\s+/i, '').trim();
+  }
   try {
     const key = new URL(req.url || '/', 'http://x').searchParams.get('api_key')
       || new URL(req.url || '/', 'http://x').searchParams.get('ApiKey');
@@ -107,6 +116,7 @@ function jellyfinCors(req) {
     'access-control-allow-origin': '*',
     'access-control-allow-methods': 'GET, POST, DELETE, HEAD, OPTIONS',
     'access-control-allow-headers': reflect ? asked : CORS_HEADERS,
+    'access-control-max-age': '86400',
   };
   if (reflect) out.vary = 'Access-Control-Request-Headers';
   return out;
@@ -194,13 +204,13 @@ function clientAddress(ctx) {
 }
 
 function jellyfinServerName() {
-  const s = deps.settings && deps.settings.get ? deps.settings.get() : {};
+  const s = settingsPeek();
   const name = String(s.jellyfinServerName || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 40);
   return name || 'Triboon';
 }
 
 function jellyfinQuickConnectOn() {
-  const s = deps.settings && deps.settings.get ? deps.settings.get() : {};
+  const s = settingsPeek();
   return s.jellyfinQuickConnect !== false;
 }
 
@@ -267,9 +277,9 @@ function userDto(user) {
       EnableLiveTvManagement: false,
       EnableLiveTvAccess: false,
       EnableMediaPlayback: true,
-      EnableAudioPlaybackTranscoding: false,
-      EnableVideoPlaybackTranscoding: false,
-      EnablePlaybackRemuxing: false,
+      EnableAudioPlaybackTranscoding: true,
+      EnableVideoPlaybackTranscoding: true,
+      EnablePlaybackRemuxing: true,
       ForceRemoteSourceTranscoding: false,
       EnableContentDeletion: false,
       EnableContentDownloading: false,
@@ -613,7 +623,16 @@ const resumeOrigin = new Map();
 function rememberResumeOrigin(uid, itemId, seconds) {
   const key = watchKeyFromId(itemId);
   if (!uid || !key) return;
-  resumeOrigin.set(`${uid}:${key}`, Math.max(0, Number(seconds) || 0));
+  const k = `${uid}:${key}`;
+  resumeOrigin.delete(k);
+  resumeOrigin.set(k, Math.max(0, Number(seconds) || 0));
+  while (resumeOrigin.size > 500) resumeOrigin.delete(resumeOrigin.keys().next().value);
+}
+
+function clearResumeOrigin(uid, itemId) {
+  const key = watchKeyFromId(itemId);
+  if (!uid || !key) return;
+  resumeOrigin.delete(`${uid}:${key}`);
 }
 
 function progressSeconds(uid, itemId, reported) {
@@ -635,6 +654,7 @@ function posterUrl(file, kind) {
 }
 
 const posterCache = new Map();
+const posterInflight = new Map();
 const POSTER_BYTES_MAX = 2 * 1024 * 1024;
 
 function imageType(buf) {
@@ -691,11 +711,16 @@ async function sendPoster(ctx, cors, file, wide) {
       'cache-control': 'public, max-age=86400',
       'x-triboon-poster': String(file || ''),
     });
-    return ctx.res.end(body);
+    return ctx.req.method === 'HEAD' ? ctx.res.end() : ctx.res.end(body);
   }
   let fetched = posterCache.get(loc);
   if (!fetched) {
-    fetched = await fetchPosterBytes(loc);
+    let job = posterInflight.get(loc);
+    if (!job) {
+      job = fetchPosterBytes(loc).finally(() => { posterInflight.delete(loc); });
+      posterInflight.set(loc, job);
+    }
+    fetched = await job;
     if (fetched) {
       if (posterCache.size > 100) posterCache.delete(posterCache.keys().next().value);
       posterCache.set(loc, fetched);
@@ -708,7 +733,7 @@ async function sendPoster(ctx, cors, file, wide) {
     'content-length': fetched.body.length,
     'cache-control': 'public, max-age=86400',
   });
-  return ctx.res.end(fetched.body);
+  return ctx.req.method === 'HEAD' ? ctx.res.end() : ctx.res.end(fetched.body);
 }
 
 function ticks(minutes) {
@@ -757,7 +782,11 @@ function shelfCoverForKind(kind) {
 // The home cards are JPEG photos saved with a .png name. Roku and Android TV
 // trust the label and die while drawing the first row. The emulator sniffs
 // the bytes and keeps going. The label has to match the bytes.
-function imageMime(file) {
+const imageMimeCache = new Map();
+function imageMime(file, mtimeMs = 0) {
+  const key = mtimeMs ? `${file}:${mtimeMs}` : file;
+  const hit = imageMimeCache.get(key);
+  if (hit) return hit;
   let buf = null;
   try {
     const fd = fs.openSync(file, 'r');
@@ -766,12 +795,16 @@ function imageMime(file) {
       fs.readSync(fd, buf, 0, 12, 0);
     } finally { fs.closeSync(fd); }
   } catch { buf = null; }
-  if (buf && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg';
-  if (buf && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image/png';
-  if (buf && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
-  if (/\.png$/i.test(file)) return 'image/png';
-  if (/\.webp$/i.test(file)) return 'image/webp';
-  return 'image/jpeg';
+  let mime = '';
+  if (buf && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) mime = 'image/jpeg';
+  else if (buf && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) mime = 'image/png';
+  else if (buf && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') mime = 'image/webp';
+  else if (/\.png$/i.test(file)) mime = 'image/png';
+  else if (/\.webp$/i.test(file)) mime = 'image/webp';
+  else mime = 'image/jpeg';
+  if (imageMimeCache.size > 256) imageMimeCache.delete(imageMimeCache.keys().next().value);
+  imageMimeCache.set(key, mime);
+  return mime;
 }
 
 function localPicture(ctx, libId, idx, wide) {
@@ -1306,7 +1339,41 @@ const SUB_LANG = {
   ar: 'Arabic',
 };
 
-function stampSubtitleUrls(streams, itemId, mountId, uid) {
+// Roku and some smart TV apps advertise only External SRT in DeviceProfile.SubtitleProfiles.
+function prefersSrtSubtitles(body) {
+  const prof = body && (body.DeviceProfile || body.deviceProfile);
+  const subs = prof && (prof.SubtitleProfiles || prof.subtitleProfiles);
+  if (!Array.isArray(subs) || !subs.length) return false;
+  const ext = subs.filter((s) => s && String(s.Method || s.method || '').toLowerCase() === 'external');
+  if (!ext.length) return false;
+  const hasVtt = ext.some((s) => /^(vtt|webvtt)$/i.test(String(s.Format || s.format || '').trim()));
+  const hasSrt = ext.some((s) => /^(srt|subrip)$/i.test(String(s.Format || s.format || '').trim()));
+  return hasSrt && !hasVtt;
+}
+
+function vttToSrt(vtt) {
+  const raw = String(vtt || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  const blocks = raw.split(/\n{2,}/);
+  const cues = [];
+  let n = 0;
+  for (const blk of blocks) {
+    const lines = blk.split('\n').filter((l) => l.trim() !== '');
+    if (!lines.length) continue;
+    if (/^(WEBVTT|NOTE\b|STYLE\b|REGION\b)/i.test(lines[0])) continue;
+    const ti = lines.findIndex((l) => l.includes('-->'));
+    if (ti < 0) continue;
+    const time = lines[ti].replace(/(\d{2}:\d{2}:\d{2})\.(\d{3})/g, '$1,$2')
+      .replace(/(^|\s)(\d{2}:\d{2})\.(\d{3})/g, '$100:$2,$3')
+      .replace(/(\d{2}:\d{2}:\d{2},\d{3})\s+.*$/, '$1');
+    const text = lines.slice(ti + 1).join('\n').replace(/<\/?c(?:\.[^>]*)?>/gi, '').trim();
+    if (!text) continue;
+    n += 1;
+    cues.push(`${n}\n${time}\n${text}`);
+  }
+  return cues.length ? `${cues.join('\n\n')}\n` : '1\n00:00:00,000 --> 00:00:00,001\n \n';
+}
+
+function stampSubtitleUrls(streams, itemId, mountId, uid, format = 'vtt') {
   // The phone's page calls getUrl on every external caption. An empty address
   // throws and the play spinner dies. Point each one at the caption we serve.
   if (!Array.isArray(streams) || !itemId || !mountId) return streams;
@@ -1315,9 +1382,13 @@ function stampSubtitleUrls(streams, itemId, mountId, uid) {
   // stream token bound to this one mount, never the session token (F2-1).
   const key = uid && deps.auth && typeof deps.auth.streamToken === 'function'
     ? deps.auth.streamToken(uid, mountId) : '';
+  const ext = format === 'srt' ? 'srt' : 'vtt';
+  const codec = ext === 'srt' ? 'srt' : 'webvtt';
   for (const row of streams) {
-    if (!row || row.Type !== 'Subtitle' || row.DeliveryMethod !== 'External' || row.DeliveryUrl) continue;
-    row.DeliveryUrl = `/videos/${itemId}/${mountId}/subtitles/${row.Index}/stream.vtt${key ? `?api_key=${encodeURIComponent(key)}` : ''}`;
+    if (!row || row.Type !== 'Subtitle' || row.DeliveryMethod !== 'External') continue;
+    if (ext === 'srt') row.Codec = codec;
+    if (row.DeliveryUrl) continue;
+    row.DeliveryUrl = `/videos/${itemId}/${mountId}/subtitles/${row.Index}/stream.${ext}${key ? `?api_key=${encodeURIComponent(key)}` : ''}`;
   }
   return streams;
 }
@@ -1349,12 +1420,12 @@ function streamsWithSubtitles(probe, sidecars) {
   for (const track of (probe && probe.subs) || []) {
     if (!track || !track.text) continue;
     streams.push(subtitleStream(index, track.lang, track.title, false));
-    byIndex.set(index, { embedded: track.rel });
+    byIndex.set(index, { embedded: track.rel, lang: track.lang || '' });
     index += 1;
   }
   for (const file of sidecars || []) {
     streams.push(subtitleStream(index, file.lang, file.title, file.forced));
-    byIndex.set(index, { file: file.file, ext: file.ext });
+    byIndex.set(index, { file: file.file, ext: file.ext, lang: file.lang || '' });
     index += 1;
   }
   return { streams, byIndex };
@@ -1863,7 +1934,7 @@ function watchShelf(ctx, kind, start, limit, view) {
   const filtered = rows.filter((row) => {
     if (!row || !savedMatches(row, view.filters)) return false;
     if (kind === 'movie') return /^tmdb:movie:/.test(row.key);
-    return /^tmdb:tv:/.test(row.key);
+    return /^tmdb:tv:\d+$/.test(row.key);
   });
   return {
     items: filtered.slice(start, start + limit).map((row) => itemFromWatchRow(ctx, row)).filter(Boolean),
@@ -1872,8 +1943,14 @@ function watchShelf(ctx, kind, start, limit, view) {
   };
 }
 
-async function itemsFor(ctx) {
+async function itemsFor(ctx, opts = {}) {
   const q = ctx.url && ctx.url.searchParams;
+  const rawIds = String((q && (q.get('Ids') || q.get('ids'))) || '').trim();
+  if (rawIds) {
+    const ids = rawIds.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 50);
+    const loaded = (await Promise.all(ids.map((id) => itemById(id, ctx).catch(() => null)))).filter(Boolean);
+    return { items: loaded, total: loaded.length, paged: true };
+  }
   const parent = internalItemId(String((q && (q.get('ParentId') || q.get('parentId'))) || ''));
   const types = String((q && (q.get('IncludeItemTypes') || q.get('includeItemTypes'))) || '').toLowerCase();
   const { start, limit } = windowOf(ctx);
@@ -1881,6 +1958,7 @@ async function itemsFor(ctx) {
   const localParent = parseItemId(parent);
   if (localParent && localParent.type === 'locallib' && typeof deps.localPage === 'function') {
     const wanted = localView(view);
+    if (opts.latest && !view.sortBy) wanted.sort = 'added.desc';
     if (wanted.blocked) return { items: [], total: 0, paged: true };
     if (watchFilters(view.filters)) {
       const all = deps.localPage(ctx, localParent.libId, 0, 8000, undefined, { ...wanted, scan: true });
@@ -1905,6 +1983,12 @@ async function itemsFor(ctx) {
   }
   if (localParent && localParent.type === 'local') {
     return localRows(ctx, localParent.libId, localParent.idx)
+      .map((row) => localJellyItem(row, localParent.libId))
+      .filter(Boolean);
+  }
+  if (localParent && localParent.type === 'localseason') {
+    return localRows(ctx, localParent.libId, localParent.idx)
+      .filter((row) => (Number(row.s || row.season) || 1) === localParent.season)
       .map((row) => localJellyItem(row, localParent.libId))
       .filter(Boolean);
   }
@@ -1983,8 +2067,8 @@ async function seasonsFor(tmdbId) {
   }));
 }
 
-async function episodesFor(tmdbId, season) {
-  const show = await tmdbGet(`/tv/${tmdbId}`);
+async function episodesFor(tmdbId, season, preloadedShow = null) {
+  const show = preloadedShow || await tmdbGet(`/tv/${tmdbId}`);
   const data = await tmdbGet(`/tv/${tmdbId}/season/${season}`);
   const eps = data && Array.isArray(data.episodes) ? data.episodes : [];
   return eps.filter((ep) => ep && ep.episode_number).map((ep) => baseItem({
@@ -2223,10 +2307,12 @@ function servedPlayUrl(ctx, payload, startSeconds, audioRel, itemId, durationSec
 
 // Desktop still wants a web-shaped source. Android TV 0.19 drops that shape
 // and crashes the next time you press play.
+const qcExchange = new Map();
+
 function desktopWebPlayer(ctx) {
   const hdr = (ctx && ctx.req && ctx.req.headers) || {};
   const blob = `${hdr['user-agent'] || ''} ${hdr.authorization || ''} ${hdr['x-emby-authorization'] || ''}`;
-  if (/Android/i.test(blob)) return false;
+  if (/Android|Tizen|Web0S|web0s|iPhone|iPad|iPod|Swiftfin|Jellyfin Mobile/i.test(blob)) return false;
   if (/Emby/i.test(blob) && /Windows/i.test(blob)) return true;
   if (/JellyfinDesktop/i.test(blob)) return true;
   return /Chrome\/|Edg\/|Firefox\/|Safari\//i.test(blob);
@@ -2250,8 +2336,19 @@ async function handleKind(kind, ctx) {
   const brand = ctx && ctx.brand;
   if (ctx && ctx.door === 'emby') {
     if (!embyDoorOpen()) return send(ctx.res, 404, { error: 'not found' });
-  } else if (!jellyfinEnabled(deps.settings.get())) {
+  } else if (!jellyfinEnabled(settingsPeek())) {
     return send(ctx.res, 404, { error: 'not found' });
+  }
+  if (kind === 'ping') {
+    if (ctx.req.method === 'HEAD') {
+      ctx.res.writeHead(200, { ...cors, 'content-type': 'application/json; charset=utf-8', 'content-length': '17' });
+      return ctx.res.end();
+    }
+    return send(ctx.res, 200, 'Jellyfin Server', cors);
+  }
+  if (kind === 'brandingCss') {
+    ctx.res.writeHead(200, { ...cors, 'content-type': 'text/css; charset=utf-8', 'content-length': '0' });
+    return ctx.res.end();
   }
   if (kind === 'emptyPage' && ctx.m && ctx.m[1] && !owns(ctx, ctx.m[1])) {
     return send(ctx.res, 403, { error: 'not your shelf' }, cors);
@@ -2308,9 +2405,59 @@ async function handleKind(kind, ctx) {
     const claims = auth.verifyToken(polled.token, 'session');
     const user = claims && auth.getUser(claims.uid);
     if (!user) return send(ctx.res, 404, { error: 'pending' }, cors);
+    // Keep a short-lived one-time exchange slot so Jellyfin 10.8+ clients that follow
+    // GET /QuickConnect/Connect with POST /Users/AuthenticateWithQuickConnect also succeed.
+    if (secret) {
+      const now = Date.now();
+      for (const [k, v] of qcExchange) if (now - v.at > 30000) qcExchange.delete(k);
+      qcExchange.set(String(secret), { token: polled.token, uid: user.id, at: now });
+      while (qcExchange.size > 100) qcExchange.delete(qcExchange.keys().next().value);
+    }
     return send(ctx.res, 200, {
+      Authenticated: true,
+      Secret: String(secret || ''),
+      Code: String(code || ''),
       User: userDto(user),
       AccessToken: polled.token,
+      ServerId: doorServerId(),
+    }, cors);
+  }
+  if (kind === 'qcAuthenticate') {
+    let body = {};
+    try { body = (await readJson(ctx.req)) || {}; } catch {
+      return send(ctx.res, 400, { error: 'bad json' }, cors);
+    }
+    const secret = String(body.Secret || body.secret || '').trim();
+    if (!secret) return send(ctx.res, 400, { error: 'secret required' }, cors);
+    let token = '';
+    const stashed = qcExchange.get(secret);
+    if (stashed) {
+      qcExchange.delete(secret);
+      if (Date.now() - stashed.at <= 30000) token = stashed.token;
+    }
+    if (!token) {
+      const code = auth.qcFindBySecret(secret);
+      const polled = code ? auth.qcPoll(code) : null;
+      if (polled && polled.status === 'approved' && polled.token) token = polled.token;
+    }
+    if (!token) return send(ctx.res, 401, { error: 'quick connect not approved' }, cors);
+    const claims = auth.verifyToken(token, 'session');
+    const user = claims && auth.getUser(claims.uid);
+    if (!user) return send(ctx.res, 401, { error: 'unknown user' }, cors);
+    return send(ctx.res, 200, {
+      User: userDto(user),
+      SessionInfo: {
+        Id: `triboon-${user.id}`,
+        UserId: jellyfinUserId(user),
+        UserName: user.username,
+        Client: authQuoted(ctx, 'Client') || 'Jellyfin',
+        DeviceName: authQuoted(ctx, 'Device') || 'Device',
+        DeviceId: authQuoted(ctx, 'DeviceId') || '',
+        ApplicationVersion: authQuoted(ctx, 'Version') || '1.0',
+        ServerId: doorServerId(),
+        IsActive: true,
+      },
+      AccessToken: token,
       ServerId: doorServerId(),
     }, cors);
   }
@@ -2446,14 +2593,17 @@ async function handleKind(kind, ctx) {
     const items = ranked.slice(start, start + limit).map((row) => row.item);
     return send(ctx.res, 200, { Items: items, TotalRecordCount: ranked.length, StartIndex: start }, cors);
   }
-  if (kind === 'progress') {
+  if (kind === 'progress' || kind === 'stopped') {
     let body = {};
     try { body = await readJson(ctx.req); } catch { body = {}; }
     const nowPlaying = body && (body.NowPlayingItem || body.nowPlayingItem);
-    const itemId = String((body && (body.ItemId || body.itemId)) || (nowPlaying && nowPlaying.Id) || '');
+    const itemId = String(queryField(ctx, body, 'ItemId') || (nowPlaying && nowPlaying.Id) || '');
+    const mediaSourceId = String(queryField(ctx, body, 'MediaSourceId') || '');
     const key = watchKeyFromId(itemId);
-    const ticks = Number(body && (body.PositionTicks || body.positionTicks || body.PlaybackPositionTicks)) || 0;
-    const position = progressSeconds(ctx.user && ctx.user.id, itemId, ticks / 10000000);
+    const ticksRaw = queryField(ctx, body, 'PositionTicks') || (body && body.PlaybackPositionTicks) || 0;
+    const ticks = Number(ticksRaw) || 0;
+    const uid = ctx.user && ctx.user.id;
+    const position = progressSeconds(uid, itemId, ticks / 10000000);
     if (key && position > 0 && typeof deps.jellyfinWatchSave === 'function') {
       const prev = (typeof deps.jellyfinWatchGet === 'function' && deps.jellyfinWatchGet(ctx, key)) || {};
       let duration = Number(prev.duration) || 0;
@@ -2472,6 +2622,16 @@ async function handleKind(kind, ctx) {
       }
       deps.jellyfinWatchSave(ctx, key, { position, duration, meta });
     }
+    if (kind === 'stopped') {
+      clearResumeOrigin(uid, itemId);
+      if (typeof deps.jellyfinStopPlayback === 'function') deps.jellyfinStopPlayback(ctx, mediaSourceId);
+    }
+    ctx.res.writeHead(204, { ...cors, 'x-content-type-options': 'nosniff' });
+    return ctx.res.end();
+  }
+  if (kind === 'stopEncodings') {
+    const mediaSourceId = String(queryField(ctx, null, 'MediaSourceId') || '');
+    if (typeof deps.jellyfinStopPlayback === 'function') deps.jellyfinStopPlayback(ctx, mediaSourceId);
     ctx.res.writeHead(204, { ...cors, 'x-content-type-options': 'nosniff' });
     return ctx.res.end();
   }
@@ -2525,7 +2685,7 @@ async function handleKind(kind, ctx) {
   }
   if (kind === 'shelf' || kind === 'latest') {
     if (ctx.m && ctx.m[1] && !owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
-    const items = await itemsFor(ctx);
+    const items = await itemsFor(ctx, { latest: kind === 'latest' });
     if (kind === 'latest') {
       const list = items && items.paged ? items.items : items;
       const q = ctx.url && ctx.url.searchParams;
@@ -2574,13 +2734,14 @@ async function handleKind(kind, ctx) {
     if (!n) {
       const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
       const nums = ((show && show.seasons) || []).map((row) => Number(row.season_number)).filter((row) => row > 0);
-      const groups = await Promise.all(nums.map((row) => episodesFor(parsed.tmdbId, row)));
+      const groups = await Promise.all(nums.map((row) => episodesFor(parsed.tmdbId, row, show)));
       return send(ctx.res, 200, fullPageOf(groups.flat(), ctx), cors);
     }
     return send(ctx.res, 200, fullPageOf(await episodesFor(parsed.tmdbId, n), ctx), cors);
   }
   if (kind === 'similar') {
-    const parsed = parseItemId(ctx.m[1]);
+    if (ctx.m[2] && !owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
+    const parsed = parseItemId(ctx.m[2] || ctx.m[1]);
     if (!parsed || (parsed.type !== 'movie' && parsed.type !== 'series')) {
       return send(ctx.res, 200, pageOf([], ctx), cors);
     }
@@ -2593,6 +2754,7 @@ async function handleKind(kind, ctx) {
     return send(ctx.res, 200, pageOf(items, ctx), cors);
   }
   if (kind === 'theme') {
+    if (ctx.m[2] && !owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
     return send(ctx.res, 200, {
       ThemeVideosResult: emptyPage(),
       ThemeSongsResult: emptyPage(),
@@ -2607,9 +2769,12 @@ async function handleKind(kind, ctx) {
     const pipeFile = (imgFile) => {
       let stat;
       try { stat = fs.statSync(imgFile); } catch { return false; }
-      const type = imageMime(imgFile);
+      const type = imageMime(imgFile, Math.floor(stat.mtimeMs || 0));
       ctx.res.writeHead(200, { ...cors, 'content-type': type, 'content-length': stat.size, 'cache-control': 'private, max-age=86400' });
-      fs.createReadStream(imgFile).pipe(ctx.res);
+      if (ctx.req.method === 'HEAD') { ctx.res.end(); return true; }
+      const rs = fs.createReadStream(imgFile);
+      rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
+      rs.pipe(ctx.res);
       return true;
     };
     const short = internalItemId(ctx.m[1]);
@@ -2664,11 +2829,7 @@ async function handleKind(kind, ctx) {
         : localPicture(ctx, parsed.libId, parsed.idx, wide);
       if (img && img.tmdb) file = img.tmdb;
       else if (img && img.file) {
-        let stat;
-        try { stat = fs.statSync(img.file); } catch { return send(ctx.res, 404, { error: 'not found' }, cors); }
-        const type = imageMime(img.file);
-        ctx.res.writeHead(200, { ...cors, 'content-type': type, 'content-length': stat.size, 'cache-control': 'private, max-age=86400' });
-        fs.createReadStream(img.file).pipe(ctx.res);
+        if (!pipeFile(img.file)) return send(ctx.res, 404, { error: 'not found' }, cors);
         return;
       }
     }
@@ -2741,20 +2902,22 @@ async function handleKind(kind, ctx) {
   if (kind === 'subtitle') {
     const parsed = parseItemId(ctx.m[1]);
     const index = parseInt(ctx.m[3], 10);
+    const wantSrt = String(ctx.m[4] || '').toLowerCase() === 'srt';
     let body = parsed && parsed.type === 'local' && typeof deps.localSubtitleBody === 'function'
       ? await deps.localSubtitleBody(ctx, parsed.libId, parsed.idx, index)
       : (typeof deps.jellyfinSubtitleBody === 'function' ? await deps.jellyfinSubtitleBody(ctx, ctx.m[2], index) : null);
     if (body && typeof deps.subtitleOnPlayerClock === 'function') body = await deps.subtitleOnPlayerClock(ctx.m[2], body);
     if (!body) return send(ctx.res, 404, { error: 'not found' }, cors);
+    const out = wantSrt ? vttToSrt(body) : String(body || '');
     ctx.res.writeHead(200, {
       ...cors,
-      'content-type': 'text/vtt; charset=utf-8',
-      'content-length': String(Buffer.byteLength(String(body || ''))),
+      'content-type': wantSrt ? 'application/x-subrip; charset=utf-8' : 'text/vtt; charset=utf-8',
+      'content-length': String(Buffer.byteLength(out)),
       // Same address for a fresh start and a resume of the same mount, but the
       // clock shift differs. A cached copy would put the words seconds off.
       'cache-control': 'no-store',
     });
-    return ctx.res.end(body);
+    return ctx.req.method === 'HEAD' ? ctx.res.end() : ctx.res.end(out);
   }
   if (kind === 'bitrate') {
     // The phone measures the line by downloading this blob. A missing page
@@ -2762,34 +2925,73 @@ async function handleKind(kind, ctx) {
     const q = ctx.url && ctx.url.searchParams;
     const asked = parseInt((q && (q.get('size') || q.get('Size'))) || '102400', 10);
     const size = Math.max(1024, Math.min(Number.isFinite(asked) ? asked : 102400, 1000000));
-    const body = Buffer.alloc(size);
     ctx.res.writeHead(200, {
       ...cors,
       'content-type': 'application/octet-stream',
       'content-length': String(size),
       'cache-control': 'no-store',
     });
-    return ctx.res.end(body);
+    return ctx.req.method === 'HEAD' ? ctx.res.end() : ctx.res.end(Buffer.alloc(size));
   }
   if (kind === 'playback') {
     // Press play only. Looking through Movies or Shows never reaches this.
     // A later seek sends the same mount id plus a start time, so we do not
     // open a second usenet download just to move the bar.
     let body = {};
-    try { body = await readJson(ctx.req); } catch (e) {
-      return send(ctx.res, (e && e.status) || 400, { error: 'bad json' }, cors);
+    if (ctx.req.method !== 'GET' && ctx.req.method !== 'HEAD') {
+      try { body = (await readJson(ctx.req)) || {}; } catch (e) {
+        return send(ctx.res, (e && e.status) || 400, { error: 'bad json' }, cors);
+      }
     }
     const parsed = parseItemId(ctx.m[1]);
-    const sentId = String(body.MediaSourceId || body.mediaSourceId || '');
+    const sentId = String(queryField(ctx, body, 'MediaSourceId') || '');
+    const playSessId = String(queryField(ctx, body, 'PlaySessionId') || '');
+    const isPlaybackRaw = queryField(ctx, body, 'IsPlayback');
+    const isProbeOnly = isPlaybackRaw === false || /^false$/i.test(String(isPlaybackRaw ?? ''));
     const uid = ctx.user && ctx.user.id;
     const reused = reusableMount(uid, ctx.m[1], sentId);
+    // Detail-page track-picker probes pass IsPlayback=false; avoid mounting Usenet or evicting
+    // an active session until Play is actually pressed.
+    if (isProbeOnly && !reused) {
+      let probe = null;
+      let sidecars = [];
+      let runtimeTicks = 0;
+      let name = '';
+      if (parsed && parsed.type === 'local') {
+        const info = typeof deps.localMediaInfo === 'function' ? await deps.localMediaInfo(ctx, parsed.libId, parsed.idx) : null;
+        probe = info && info.probe;
+        if (info && info.seconds) runtimeTicks = Math.round(info.seconds * 10000000);
+        sidecars = typeof deps.localSubtitles === 'function' ? deps.localSubtitles(ctx, parsed.libId, parsed.idx) : [];
+        const row = typeof deps.localOne === 'function' ? deps.localOne(ctx, parsed.libId, parsed.idx) : null;
+        name = (row && (row.title || row.name)) || '';
+      } else {
+        const s = await playSpec(parsed);
+        if (!s) return send(ctx.res, 404, { error: 'not found' }, cors);
+        if (s.runtime) runtimeTicks = ticks(s.runtime);
+        name = s.q || '';
+      }
+      const streams = streamsWithSubtitles(probe, sidecars).streams;
+      const source = completeSource({
+        Id: sentId || ctx.m[1],
+        Protocol: desktopWebPlayer(ctx) ? 'Http' : 'File',
+        Container: probe ? sourceContainer(probe, name) : 'mp4',
+        Name: name,
+        SupportsDirectPlay: false,
+        SupportsDirectStream: false,
+        SupportsTranscoding: true,
+        IsRemote: desktopWebPlayer(ctx),
+        MediaStreams: streams,
+      });
+      if (runtimeTicks) source.RunTimeTicks = runtimeTicks;
+      return send(ctx.res, 200, { PlaySessionId: playSessId || ctx.m[1], MediaSources: [source] }, cors);
+    }
     let spec = null;
     let playedBody = null;
     if (reused) {
       const { id, stream } = reused;
       playedBody = {
         id, remuxUrl: stream.remuxUrl, hlsUrl: stream.hlsUrl, streamUrl: stream.streamUrl,
-        name: stream.name, size: stream.size, sessionId: body.PlaySessionId || id,
+        name: stream.name, size: stream.size, sessionId: playSessId || id,
       };
       if (parsed && parsed.type === 'local' && typeof deps.localOne === 'function') {
         const row = deps.localOne(ctx, parsed.libId, parsed.idx);
@@ -2837,28 +3039,30 @@ async function handleKind(kind, ctx) {
     }
     const resumeAt = resumeStartSeconds(ctx, ctx.m[1], body, spec && spec.runtime);
     const durationSeconds = spec && spec.runtime ? Math.round(Number(spec.runtime) * 60) : 0;
-    const audioIndex = chosenAudioIndex(streams, body.AudioStreamIndex ?? body.audioStreamIndex);
+    const audioIndex = chosenAudioIndex(streams, queryField(ctx, body, 'AudioStreamIndex'));
     const audioRel = audioRelFromStreams(streams, audioIndex);
     const desktop = desktopWebPlayer(ctx);
     const check = desktop ? { ok: false, why: 'desktop web player' } : directPlayCheck(ctx, body, probe, {
       streamUrl: playedBody.streamUrl, name: playedBody.name, size: playedBody.size, audioRel,
     });
-    const direct = check.ok;
-    debug.log('jellyfin', `play ${direct ? 'original file' : 'encoded copy'} — ${check.why} — ${jellyfinAppLabel(ctx)}`);
+    const grantAddr = typeof deps.directGrantAddress === 'function' ? deps.directGrantAddress(ctx) : 'ok';
+    const needsDirectGrant = /Android\s*TV/i.test(jellyfinAppLabel(ctx));
+    const direct = check.ok && (!needsDirectGrant || !!grantAddr);
+    debug.log('jellyfin', `play ${direct ? 'original file' : 'encoded copy'} — ${!direct && check.ok ? 'no direct-grant address behind proxy' : check.why} — ${jellyfinAppLabel(ctx)}`);
     // The original file runs on the movie's own clock, so its progress is
     // never shifted by the resume point the way the encoded copy is.
     rememberResumeOrigin(uid, ctx.m[1], direct ? 0 : resumeAt);
     if (typeof deps.jellyfinMarkDirect === 'function') deps.jellyfinMarkDirect(playedBody.id, direct);
     const url = playUrlForClient(ctx, playedBody, resumeAt, audioRel, ctx.m[1], durationSeconds);
     if (!url && !direct) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' }, cors);
-    stampSubtitleUrls(streams, ctx.m[1], playedBody.id, uid);
+    stampSubtitleUrls(streams, ctx.m[1], playedBody.id, uid, prefersSrtSubtitles(body) ? 'srt' : 'vtt');
     const runtimeTicks = spec ? ticks(spec.runtime) : 0;
     const hls = url.includes('/api/hls/');
     const source = completeSource({
       // Android TV 0.19 keeps only File sources that are not remote. Anything
       // else is dropped, and pressing play again crashes on the empty list.
       // The id has to be the one the TV sent, or that second press crashes too.
-      Id: String(body.MediaSourceId || body.mediaSourceId || playedBody.id),
+      Id: sentId || String(playedBody.id),
       Protocol: desktop ? 'Http' : 'File',
       Container: direct ? sourceContainer(probe, playedBody.name) : 'mp4',
       Name: (playedBody.candidate && playedBody.candidate.name) || (spec && spec.q) || '',
@@ -2879,12 +3083,10 @@ async function handleKind(kind, ctx) {
       source.TranscodingContainer = 'mp4';
     }
     if (audioIndex != null) source.DefaultAudioStreamIndex = audioIndex;
-    const pq = ctx.url && ctx.url.searchParams;
-    const askedSub = body.SubtitleStreamIndex ?? body.subtitleStreamIndex
-      ?? (pq && (pq.get('SubtitleStreamIndex') ?? pq.get('subtitleStreamIndex')));
+    const askedSub = queryField(ctx, body, 'SubtitleStreamIndex');
     source.DefaultSubtitleStreamIndex = chosenSubtitleIndex(streams, askedSub);
     if (runtimeTicks) source.RunTimeTicks = runtimeTicks;
-    if (direct && typeof deps.directGrantAddress === 'function') issueDirectGrant(deps.directGrantAddress(ctx), uid, (ctx.user && ctx.user.sessionEpoch) || 0, ctx.m[1]);
+    if (direct && typeof deps.directGrantAddress === 'function' && grantAddr) issueDirectGrant(grantAddr, uid, (ctx.user && ctx.user.sessionEpoch) || 0, ctx.m[1]);
     return send(ctx.res, 200, { PlaySessionId: playedBody.sessionId, MediaSources: [source] }, cors);
   }
   if (kind === 'segments') {
@@ -2922,12 +3124,15 @@ async function handleKind(kind, ctx) {
     const itemId = ctx.m[2];
     const key = watchKeyFromId(itemId);
     // userdata carries the flags in a body; the others carry them in the path.
-    let want = { favorite: undefined, watched: undefined };
+    let want = { favorite: undefined, watched: undefined, position: undefined };
     if (kind === 'userdata') {
       let body = {};
       try { body = (await readJson(ctx.req)) || {}; } catch { body = {}; }
       if (typeof body.IsFavorite === 'boolean') want.favorite = body.IsFavorite;
       if (typeof body.Played === 'boolean') want.watched = body.Played;
+      if (Number.isFinite(Number(body.PlaybackPositionTicks))) {
+        want.position = Math.max(0, Math.round(Number(body.PlaybackPositionTicks) / 10000000));
+      }
     } else {
       if (kind === 'favorite') want.favorite = true;
       if (kind === 'unfavorite') want.favorite = false;
@@ -2959,12 +3164,13 @@ async function handleKind(kind, ctx) {
         meta,
       };
       if (want.favorite !== undefined) patch.favorite = want.favorite;
+      if (want.position !== undefined) patch.position = want.position;
       if (want.watched === true) {
         patch.watched = true;
-        if (duration) patch.position = duration;
+        if (duration && want.position === undefined) patch.position = duration;
       } else if (want.watched === false) {
         patch.watched = false;
-        patch.position = 0;
+        if (want.position === undefined) patch.position = 0;
       }
       deps.jellyfinWatchSave(ctx, key, patch);
       return send(ctx.res, 200, userDataFromRow({ ...prev, ...patch }, duration, itemId), cors);
@@ -2973,7 +3179,10 @@ async function handleKind(kind, ctx) {
     }
   }
   if (kind === 'login') {
-    const body = await readJson(ctx.req);
+    let body = {};
+    try { body = (await readJson(ctx.req)) || {}; } catch (e) {
+      return send(ctx.res, (e && e.status) || 400, { error: 'bad json' }, cors);
+    }
     const name = String(body.Username || body.username || body.Name || body.name || '');
     // Same cap as the Triboon sign-in (audit S2-11): account creation refuses longer names, so a
     // longer one never signs in; refuse it before any throttle key is built from it.
@@ -2982,7 +3191,7 @@ async function handleKind(kind, ctx) {
       deps.noteLoginFailure(ctx);
       return send(ctx.res, 400, { error: 'invalid credentials' }, cors);
     }
-    const pass = String(body.Pw || body.Password || body.password || '').trim();
+    const pass = String(body.Pw ?? body.Password ?? body.password ?? '');
     const uname = name.toLowerCase();
     const ip = clientIp(ctx);
     const key = `login:${uname}:${ip}`;
@@ -3003,6 +3212,17 @@ async function handleKind(kind, ctx) {
     const user = auth.getUser(result.user.id);
     return send(ctx.res, 200, {
       User: userDto(user),
+      SessionInfo: {
+        Id: `triboon-${user.id}`,
+        UserId: jellyfinUserId(user),
+        UserName: user.username,
+        Client: authQuoted(ctx, 'Client') || 'Jellyfin',
+        DeviceName: authQuoted(ctx, 'Device') || 'Device',
+        DeviceId: authQuoted(ctx, 'DeviceId') || '',
+        ApplicationVersion: authQuoted(ctx, 'Version') || '1.0',
+        ServerId: doorServerId(),
+        IsActive: true,
+      },
       AccessToken: result.token,
       ServerId: doorServerId(),
     }, cors);
@@ -3117,7 +3337,7 @@ function openJellyfinSocket(req, socket, head) {
     socket.destroy();
     return;
   }
-  const enabled = embyLine ? !!embySocketOpen() : !!(deps && jellyfinEnabled(deps.settings.get()));
+  const enabled = embyLine ? !!embySocketOpen() : !!(deps && jellyfinEnabled(settingsPeek()));
   const token = jellyfinToken(req);
   if (!enabled) return rejectUpgrade(socket, 404, 'not found');
   const claims = token && deps.auth.verifyToken(token, 'session');
@@ -3208,6 +3428,8 @@ function openJellyfinSocket(req, socket, head) {
 }
 
 const JELLYFIN_ROUTES = [
+  { m: 'GET', re: /^\/system\/ping$/, auth: 'public', kind: 'ping', h: serveJellyfin },
+  { m: 'POST', re: /^\/system\/ping$/, auth: 'public', kind: 'ping', h: serveJellyfin },
   { m: 'GET', re: /^\/system\/info\/public$/, auth: 'public', kind: 'infoPublic', h: serveJellyfin },
   { m: 'GET', re: /^\/system\/info$/, auth: 'user', kind: 'info', h: serveJellyfin },
   { m: 'GET', re: /^\/system\/endpoint$/, auth: 'user', kind: 'endpoint', h: serveJellyfin },
@@ -3215,6 +3437,7 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/system\/configuration\/encoding$/, auth: 'user', kind: 'encodingConfig', h: serveJellyfin },
   { m: 'GET', re: /^\/startup\/configuration$/, auth: 'public', kind: 'startup', h: serveJellyfin },
   { m: 'GET', re: /^\/branding\/configuration$/, auth: 'public', kind: 'branding', h: serveJellyfin },
+  { m: 'GET', re: /^\/branding\/css(?:\.css)?$/, auth: 'public', kind: 'brandingCss', h: serveJellyfin },
   { m: 'GET', re: /^\/quickconnect\/enabled$/, auth: 'public', kind: 'quickConnect', h: serveJellyfin },
   { m: 'POST', re: /^\/quickconnect\/initiate$/, auth: 'public', kind: 'qcInitiate', h: serveJellyfin },
   { m: 'GET', re: /^\/quickconnect\/connect$/, auth: 'public', kind: 'qcConnect', h: serveJellyfin },
@@ -3222,6 +3445,7 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/localization\/options$/, auth: 'public', kind: 'locale', h: serveJellyfin },
   { m: 'GET', re: /^\/localization\/cultures$/, auth: 'public', kind: 'cultures', h: serveJellyfin },
   { m: 'POST', re: /^\/users\/authenticatebyname$/, auth: 'public', kind: 'login', h: serveJellyfin },
+  { m: 'POST', re: /^\/users\/authenticatewithquickconnect$/, auth: 'public', kind: 'qcAuthenticate', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/me$/, auth: 'user', kind: 'me', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/public$/, auth: 'public', kind: 'publicUsers', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/resume$/, auth: 'user', kind: 'resume', h: serveJellyfin },
@@ -3262,6 +3486,7 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/items\/latest$/, auth: 'user', kind: 'latest', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/images\/(primary|backdrop|thumb|logo)(?:\/\d+)?$/, auth: 'public', kind: 'image', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/thememedia$/, auth: 'user', kind: 'theme', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/thememedia$/, auth: 'user', kind: 'theme', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/images$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/localtrailers$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/localtrailers$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
@@ -3269,10 +3494,12 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/([a-z0-9-]{1,64})\/subtitles\/(\d+)\/stream(?:\.([a-z0-9-]{1,64}))?$/, auth: 'user', kind: 'subtitle', h: serveJellyfin },
   { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/stream(?:\.[a-z0-9]+)?$/, auth: 'user', kind: 'video', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/similar$/, auth: 'user', kind: 'similar', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/similar$/, auth: 'user', kind: 'similar', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/intros$/, auth: 'user', kind: 'intros', h: serveJellyfin },
   { m: 'GET', re: /^\/playback\/bitratetest$/, auth: 'user', kind: 'bitrate', h: serveJellyfin },
   { m: 'GET', re: /^\/mediasegments\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'segments', h: serveJellyfin },
-  { m: 'DELETE', re: /^\/videos\/activeencodings$/, auth: 'user', kind: 'ack', h: serveJellyfin },
+  { m: 'DELETE', re: /^\/videos\/activeencodings$/, auth: 'user', kind: 'stopEncodings', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/playbackinfo$/, auth: 'user', kind: 'playback', h: serveJellyfin },
   { m: 'POST', re: /^\/items\/([a-z0-9-]{1,64})\/playbackinfo$/, auth: 'user', kind: 'playback', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'item', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/?$/, auth: 'user', kind: 'shelf', h: serveJellyfin },
@@ -3287,7 +3514,7 @@ const JELLYFIN_ROUTES = [
   { m: 'POST', re: /^\/displaypreferences\/([a-z0-9][a-z0-9-]{0,63})$/, auth: 'user', kind: 'ack', h: serveJellyfin },
   { m: 'GET', re: /^\/sessions$/, auth: 'user', kind: 'sessions', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/playing\/progress$/, auth: 'user', kind: 'progress', h: serveJellyfin },
-  { m: 'POST', re: /^\/sessions\/playing\/stopped$/, auth: 'user', kind: 'progress', h: serveJellyfin },
+  { m: 'POST', re: /^\/sessions\/playing\/stopped$/, auth: 'user', kind: 'stopped', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/playing$/, auth: 'user', kind: 'progress', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/capabilities\/full$/, auth: 'user', kind: 'capabilities', h: serveJellyfin },
   { m: 'POST', re: /^\/sessions\/capabilities$/, auth: 'user', kind: 'capabilities', h: serveJellyfin },

@@ -239,3 +239,28 @@ test('search close-title: server retries TMDB with a cached close title', () => 
   assert.match(idx, /found = found.filter\(\(row\) => searchLibraryItemMatch\(q, row && row\.item\)\)/);
   assert.doesNotMatch(idx, /lower\(payload\) LIKE/);
 });
+
+test('back-to-back voice and text search: mic-first Up/Back, abortable fetches, Persian matchTitle, and Android recognizer safety', () => {
+  const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(ui, /function focusSearchMicNow\(\) \{[\s\S]+mic\.classList\.add\('focus'\)/);
+  assert.match(ui, /function focusSearchBarFromResults\(\) \{[\s\S]+if \(focusSearchMicNow\(\)\) return true;/);
+  assert.match(ui, /function submitVoiceSearch\(text\) \{[\s\S]+clearAllVoiceListeningUi\(\)[\s\S]+syncSearchClear\(\)[\s\S]+submitSearchAndFocus\(\)/);
+  assert.match(ui, /window\.__tvVoice = \(text\) => \{[\s\S]+clearAllVoiceListeningUi\(\)[\s\S]+if \(S\.view === 'search'\) return submitVoiceSearch\(text\)/);
+  assert.match(ui, /if \(tv && \(k === 'Escape' \|\| k === 'ArrowLeft'\)\) \{\s*e\.preventDefault\(\);\s*ae\.blur\(\);\s*if \(focusSearchMicNow\(\)\) return; return enterRail\(\);/);
+  assert.doesNotMatch(ui, /if \(document\.body\.classList\.contains\('tv'\) && \(k === 'Escape' \|\| k === 'Backspace' \|\| \(k === 'ArrowLeft' && ae\.selectionStart === 0\)\)\)/);
+  assert.match(ui, /function cancelSearchRequest\(\) \{[\s\S]+searchAbort\.abort\(\)/);
+  assert.match(ui, /if \(tmdbFailed\) \{[\s\S]+Search timed out — try again\./);
+  assert.match(ui, /function abortMusicSearch\(\) \{[\s\S]+_musicSearchAbort\.abort\(\)/);
+  assert.match(ui, /function abortAbSearch\(\) \{[\s\S]+abSearchAbort\.abort\(\)/);
+  assert.match(ui, /await Promise\.allSettled\(\[mainP, freeP\]\)/, 'Audiobook Audible + LibriVox searches run in parallel');
+  assert.match(ui, /it\._matchTitle && searchLibraryTitleMatch\(q, it\._matchTitle\)/);
+  assert.match(idx, /libraryDb\.searchByMatcher\(sqlLibs, \(entry\) => searchLibraryItemMatch\(q, entry\), 24\)/);
+  assert.match(idx, /libraryDb\.topTitles\(libIds, 4000\)/);
+  assert.match(idx, /if \(cur && cur\.inflight === inflight\) \{[\s\S]+musicSearchCache\.delete\(key\)/);
+  assert.match(java, /public void stopVoice\(\)/);
+  assert.match(java, /private void cancelVoiceFlow\(boolean notifyWeb\)/);
+  assert.match(java, /private void armVoiceWatchdog\(final int gen, long timeoutMs\)/);
+  assert.match(java, /ERROR_RECOGNIZER_BUSY && !retriedBusy/);
+  assert.match(java, /EXTRA_PARTIAL_RESULTS, true/);
+  assert.match(java, /if \(voiceListening && !voiceActivityInFlight\) cancelVoiceFlow\(true\)/);
+});

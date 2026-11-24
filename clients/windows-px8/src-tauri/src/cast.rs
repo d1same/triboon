@@ -343,7 +343,7 @@ fn send_mdns_queries(sockets: &[UdpSocket], store: &MdnsRecords, asked_srv: &mut
         let _ = socket.send_to(&ptr_qm, dest);
     }
     let mut want_srv = Vec::new();
-    for instance in store.ptrs.values() {
+    for instance in store.ptrs.values().flat_map(|set| set.iter()) {
         let key = instance.to_ascii_lowercase();
         if !store.srvs.contains_key(&key) && asked_srv.insert(key.clone()) {
             want_srv.push(instance.clone());
@@ -491,7 +491,7 @@ pub fn discover(timeout: Duration) -> Vec<CastDevice> {
 
 #[derive(Default)]
 struct MdnsRecords {
-    ptrs: HashMap<String, String>,
+    ptrs: HashMap<String, HashSet<String>>,
     srvs: HashMap<String, (u16, String)>,
     txts: HashMap<String, HashMap<String, String>>,
     addrs: HashMap<String, String>,
@@ -533,7 +533,7 @@ fn ingest_mdns(store: &mut MdnsRecords, packet: &[u8]) {
         match rtype {
             12 => {
                 if let Ok((target, _)) = read_dns_name(packet, rdata_at, 0) {
-                    store.ptrs.insert(name.to_ascii_lowercase(), target);
+                    store.ptrs.entry(name.to_ascii_lowercase()).or_default().insert(target);
                 }
             }
             33 if rdata.len() >= 6 => {
@@ -558,7 +558,11 @@ fn ingest_mdns(store: &mut MdnsRecords, packet: &[u8]) {
 }
 
 fn devices_from_mdns(store: &MdnsRecords) -> Vec<CastDevice> {
-    let mut instances: HashSet<String> = store.ptrs.values().cloned().collect();
+    let mut instances: HashSet<String> = store
+        .ptrs
+        .values()
+        .flat_map(|set| set.iter().cloned())
+        .collect();
     for name in store.srvs.keys() {
         if name.contains("_googlecast._tcp") {
             instances.insert(name.clone());
@@ -918,7 +922,7 @@ mod session {
                 last_ping = Instant::now();
             }
             match read_message(&mut tls) {
-                Ok(message) => {
+                Ok(Some(message)) => {
                     if message.namespace == CAST_NAMESPACE_HEARTBEAT
                         && message.payload.contains("PING")
                     {
@@ -950,10 +954,20 @@ mod session {
                         });
                     }
                 }
-                Err(_) => {
+                Ok(None) => {
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
+                }
+                Err(_) => {
+                    on_status(CastStatus {
+                        connected: false,
+                        position: 0.0,
+                        duration: 0.0,
+                        state: "idle".into(),
+                        device: name.to_string(),
+                    });
+                    break;
                 }
             }
         }
@@ -995,16 +1009,27 @@ mod session {
         stream.flush().map_err(|e| e.to_string())
     }
 
-    fn read_message<S: Read>(stream: &mut S) -> Result<CastMessage, String> {
+    fn read_message<S: Read>(stream: &mut S) -> Result<Option<CastMessage>, String> {
         let mut len_buf = [0u8; 4];
-        stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
+        match stream.read_exact(&mut len_buf) {
+            Ok(()) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(e) => return Err(e.to_string()),
+        }
         let len = u32::from_be_bytes(len_buf) as usize;
         if len == 0 || len > 1024 * 1024 {
             return Err("cast frame is invalid".into());
         }
         let mut buf = vec![0u8; len];
         stream.read_exact(&mut buf).map_err(|e| e.to_string())?;
-        decode_cast_message(&buf)
+        decode_cast_message(&buf).map(Some)
     }
 
     fn wait_for_transport<S: Read + Write>(
@@ -1015,7 +1040,7 @@ mod session {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             match read_message(stream) {
-                Ok(message) => {
+                Ok(Some(message)) => {
                     if message.namespace == CAST_NAMESPACE_HEARTBEAT
                         && message.payload.contains("PING")
                     {
@@ -1031,7 +1056,8 @@ mod session {
                         return Ok(transport);
                     }
                 }
-                Err(_) => {}
+                Ok(None) => {}
+                Err(e) => return Err(e),
             }
         }
         Ok(String::new())
@@ -1044,7 +1070,7 @@ mod session {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             match read_message(stream) {
-                Ok(message) => {
+                Ok(Some(message)) => {
                     if message.namespace == CAST_NAMESPACE_HEARTBEAT
                         && message.payload.contains("PING")
                     {
@@ -1071,7 +1097,8 @@ mod session {
                         return Ok((0.0, 0.0));
                     }
                 }
-                Err(_) => {}
+                Ok(None) => {}
+                Err(e) => return Err(e),
             }
         }
         Err("the TV did not start the movie".into())

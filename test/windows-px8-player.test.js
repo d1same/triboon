@@ -450,8 +450,9 @@ test('Windows client: native chrome matches the web player loader and transport'
 });
 
 test('Windows client: About and seek stay on the shared web player contract', () => {
-  const { window } = loadBridge();
+  const { window, calls } = loadBridge();
   const playerHtml = read('clients/windows-px8/ui/player.html');
+  const playerJs = read('clients/windows-px8/ui/player.js');
   assert.match(webSource, /id="aboutBtn"[\s\S]+id="playerAbout"[\s\S]+function openPlayerAbout\(\)/,
     'Windows catalog WebView uses the same in-player About card as browser and Android web');
   assert.match(webSource, /function nudgeSeek\(delta\)/,
@@ -460,8 +461,20 @@ test('Windows client: About and seek stay on the shared web player contract', ()
     'native About handoff is the Android/Windows showTitleInfo bridge');
   assert.match(playerHtml, /id="back"[\s\S]+id="forward"/,
     'Windows native chrome still has back/forth skip buttons');
-  assert.strictEqual(typeof window.TriboonTV.showTitleInfo, 'undefined',
-    'Windows native About handoff is not on the bridge yet; catalog WebView About is the current contract');
+  assert.match(playerHtml, /id="aboutPanel"[\s\S]+id="aboutCast"[\s\S]+id="about"/,
+    'Windows native player chrome includes the About & cast button and scrollable cast overlay');
+  assert.match(playerJs, /function renderAbout\(\)[\s\S]+info\.cast\.slice\(0, 40\)/,
+    'Windows native player renders full cast up to 40 people');
+  assert.strictEqual(typeof window.TriboonTV.updateTitleInfo, 'function');
+  assert.strictEqual(typeof window.TriboonTV.showTitleInfo, 'function');
+  assert.strictEqual(typeof window.TriboonTV.hideTitleInfo, 'function');
+  const cast = Array.from({ length: 18 }, (_, i) => ({ name: `Actor ${i + 1}`, character: `Role ${i + 1}`, photo: `/api/art/w185/p${i}.jpg` }));
+  window.TriboonTV.showTitleInfo(JSON.stringify({ title: 'BEEF', poster: '/api/art/w342/poster.jpg', cast, hasPeople: true }));
+  const call = calls.find((c) => c.command === 'windows_player_update' && c.args && c.args.kind === 'title_info');
+  assert.ok(call, 'showTitleInfo forwards title_info update to Windows native player');
+  assert.strictEqual(call.args.payload.open, true);
+  assert.strictEqual(call.args.payload.cast.length, 18);
+  assert.match(call.args.payload.cast[0].photo, /^https?:\/\//, 'relative artwork URLs resolve to absolute http(s) for the native player window');
 });
 
 test('Windows client: web telemetry identifies libmpv and reports the desktop version', () => {

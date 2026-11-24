@@ -101,6 +101,10 @@ select option,select optgroup{background:var(--surface);color:var(--text)}
    glow/motion on controls. GPU-composited transform only; reduced-motion turns it off. */
 @keyframes bdDrift{from{transform:scale(1) translateY(0)}to{transform:scale(1.05) translateY(-1.2%)}}
 @media (prefers-reduced-motion:reduce){#backdrop .layer.show{animation:none}}
+/* TV boxes/WebViews: disable continuous 28s backdrop GPU drift and per-card hover/focus
+   transitions so rapid D-pad navigation stays locked at 60fps without stacked animations. */
+body.tv #backdrop .layer.show{animation:none}
+body.tv .pcard,body.tv .pcard .art,body.tv .seasonCard,body.tv .epCard,body.tv .castCard,body.tv .chCard,body.tv .playerEpCard{transition:none}
 /* TV: slightly tighter than desktop so the rows keep clear ink beneath the fade. */
 :root{--tvRowWin:calc(var(--homePoster, var(--poster)) * 1.5 + 48px)}
 body.tv{--bdW:min(54vw,980px);--bdH:min(70vh,760px);--overscan:1.5vmin;--tvCoverBot:12px;--bdInfoPadT:52px;--bdInfoPadB:48px;--appClockReserve:168px} /* TV title-safe margin (edge→rail on the left, edge→clock on the right). Owner wanted the left menu tighter to the edge — dropped 2.5vmin(~27px@1080p) → 1.5vmin(~16px). Content still clears the rail by the gutter (content left = rail + overscan). --tvCoverBot is a little air under poster years so 2026 is not on the bezel. Backdrop copy (Home, Movies, TV, Kids, Discover, Watchlist, libraries, details, Cast) uses --bdInfoPadT / --bdInfoPadB so the plot is not glued to the clock or the poster row. --tvRowWin lives on :root so JS can replace the fallback with the measured poster window. */
@@ -1376,7 +1380,8 @@ body.nativeGuideMode #player.guideMode #video{display:none}
   background:linear-gradient(180deg,rgba(0,0,0,.72) 0%,rgba(0,0,0,.42) 28%,rgba(0,0,0,.36) 46%,rgba(0,0,0,.68) 78%,rgba(0,0,0,.90) 100%)}
 #playerAbout.open{opacity:1;pointer-events:none}
 #playerAbout.open .paCard{pointer-events:auto}
-.paCard{display:flex;gap:32px;max-width:min(1100px,94vw);align-items:flex-end}
+.paCard{display:flex;gap:32px;width:min(1100px,94vw);max-width:min(1100px,94vw);align-items:flex-end}
+.paBody{min-width:0;flex:1 1 auto}
 .paPoster{flex:0 0 148px;width:148px;height:222px;border-radius:10px;background:#16101f center/cover no-repeat;box-shadow:0 22px 56px rgba(0,0,0,.62);position:relative}
 .paPoster::before{content:"";position:absolute;inset:0 auto 0 0;width:4px;border-radius:10px 0 0 10px;background:linear-gradient(180deg,#E35D8A,#F2B45C)}
 .paKicker{font:800 12px/1 "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase;color:rgba(255,198,92,.88);margin-bottom:8px}
@@ -1385,8 +1390,8 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .paChips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 16px}
 .paChip{font:700 13px/1 "JetBrains Mono";padding:7px 11px;border-radius:7px;background:rgba(255,255,255,.08);color:rgba(242,244,247,.9)}
 .paPlot{font:500 18px/1.5 "Albert Sans";color:rgba(242,244,247,.82);max-width:62ch;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
-.paCast{display:flex;gap:14px;margin-top:22px;flex-wrap:wrap}
-.paCastItem{width:72px;text-align:left}
+.paCast{display:flex;gap:14px;margin-top:22px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;padding-bottom:4px;scroll-behavior:smooth}
+.paCastItem{flex:0 0 72px;width:72px;text-align:left}
 .paCastPh{width:100%;aspect-ratio:3/4;border-radius:10px;background:#1a1422 center 12%/108% auto no-repeat}
 .paCastNm{font:650 13px/1.25 "Albert Sans";margin-top:7px;color:rgba(242,244,247,.86);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;word-break:break-word}
 #player.live #aboutBtn{display:none}
@@ -1395,8 +1400,8 @@ body.tv .paPoster{flex:0 0 124px;width:124px;height:186px}
 body.tv .paTitle{font-size:clamp(30px,3.4vw,44px)}
 body.tv .paPlot{font-size:16.5px}
 body.tv .paSub{font-size:15px}
-body.tv .paCast{flex-wrap:nowrap;gap:8px;overflow:hidden;width:100%}
-body.tv .paCastItem{flex:1 1 0;min-width:0;width:auto}
+body.tv .paCast{flex-wrap:nowrap;gap:8px;overflow-x:auto;scrollbar-width:none;width:100%}
+body.tv .paCastItem{flex:0 0 clamp(56px,calc((100% - 72px) / 10),72px);min-width:56px;width:auto}
 body.tv .paCastPh{width:100%;height:auto;border-radius:8px}
 body.tv .paCastNm{width:100%;font-size:11.5px}
 .osdRight{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
@@ -2152,7 +2157,8 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
   body.railOpen{--rail:0px}
   #home,#discover,#browse,#detail,#person,#settings,#prefs,#music{padding-left:16px!important;padding-right:16px!important}
   #audiobooks,#abDetail{padding-left:16px!important;padding-right:16px!important}
-  #searchBar{left:16px;right:16px}
+  #searchBar{left:16px;right:16px;top:62px!important}
+  body:has(.gate.open) #burger{display:none!important}
   #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
   body:not(.tv) #backdrop,body:not(.tv) #backdrop .layer{display:none!important;opacity:0!important;width:0!important;height:0!important}
   body:not(.tv) #hero,body:not(.tv) #bdInfo,body:not(.tv) #colorGlow{display:none!important;opacity:0!important}
@@ -6400,7 +6406,34 @@ const api = async function api(path, opts = {}) {
     path += (path.includes('?') ? '&' : '?') + '_pf=' + encodeURIComponent(S.profile.id);
   }
   if (opts.body && typeof opts.body !== 'string') { opts.body = JSON.stringify(opts.body); headers['content-type'] = 'application/json'; }
-  const r = await fetch(path, { ...opts, headers });
+  const fetchOpts = { ...opts, headers };
+  const timeoutMs = Number(opts.timeoutMs) || 0;
+  delete fetchOpts.timeoutMs;
+  let timeoutAc = null, timeoutId = null, onExtAbort = null;
+  if (timeoutMs > 0 && typeof AbortController !== 'undefined') {
+    timeoutAc = new AbortController();
+    const ext = opts.signal;
+    if (ext) {
+      if (ext.aborted) timeoutAc.abort(ext.reason);
+      else {
+        onExtAbort = () => timeoutAc.abort(ext.reason);
+        ext.addEventListener('abort', onExtAbort, { once: true });
+      }
+    }
+    timeoutId = setTimeout(() => {
+      const e = new Error('request timed out');
+      e.name = 'TimeoutError';
+      try { timeoutAc.abort(e); } catch { timeoutAc.abort(); }
+    }, timeoutMs);
+    fetchOpts.signal = timeoutAc.signal;
+  }
+  let r;
+  try {
+    r = await fetch(path, fetchOpts);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+    if (onExtAbort && opts.signal) try { opts.signal.removeEventListener('abort', onExtAbort); } catch {}
+  }
   if (r.status === 401 && !path.startsWith('/api/login') && !path.startsWith('/api/setup')) {
     const e = new Error('signed out');
     e.status = 401;
@@ -7124,14 +7157,16 @@ $('ivGo').addEventListener('click', async () => {
   } catch (e) { $('ivErr').textContent = e.message; }
 });
 $('qcStart').addEventListener('click', async () => {
+  if (S.qcTimer) { clearInterval(S.qcTimer); S.qcTimer = null; }
   showGate('qc');
   const r = await api('/api/quickconnect', { method: 'POST', body: { deviceName: 'TV' } });
   $('qcCode').textContent = r.code;
   $('qcState').textContent = 'waiting for approval…';
+  const until = Date.now() + Math.max(5000, Number(r.ttlMs) || 60000);
   S.qcTimer = setInterval(async () => {
-    const p = await api('/api/quickconnect/' + r.code).catch(() => ({ status: 'expired' }));
-    if (p.status === 'approved') { clearInterval(S.qcTimer); tokenStore.set(p.token); S.user = null; await enterApp(); }
-    else if (p.status === 'expired') { clearInterval(S.qcTimer); $('qcState').textContent = 'code expired'; }
+    const p = await api('/api/quickconnect/' + r.code).catch(() => ({ status: Date.now() >= until ? 'expired' : 'pending' }));
+    if (p.status === 'approved') { clearInterval(S.qcTimer); S.qcTimer = null; tokenStore.set(p.token); S.user = null; await enterApp(); }
+    else if (p.status === 'expired') { clearInterval(S.qcTimer); S.qcTimer = null; $('qcState').textContent = 'code expired'; }
   }, 2000);
 });
 $('qcCancel').addEventListener('click', () => { if (S.qcTimer) clearInterval(S.qcTimer); showGate('login'); });
@@ -7320,7 +7355,7 @@ async function startLoginQr() {
     const until = Date.now() + Math.max(5000, Number(r.ttlMs) || 60000) - 1500;
     const poll = async () => {
       if (!live()) return;
-      const p = await api('/api/quickconnect/' + code).catch(() => ({ status: 'expired' }));
+      const p = await api('/api/quickconnect/' + code).catch(() => ({ status: Date.now() > until ? 'expired' : 'pending' }));
       if (!live()) return;
       if (p.status === 'approved') { stopLoginQr(); tokenStore.set(p.token); S.user = null; await enterApp(); return; }
       if (p.status === 'expired' || Date.now() > until) { newCode(); return; }
@@ -9988,10 +10023,13 @@ async function ambientColorFor(artUrl) {
       { headers: tok ? { authorization: 'Bearer ' + tok } : {} });
     if (r.ok) {
       const bmp = await createImageBitmap(await r.blob());
-      const W = 16, H = 10;
-      const c = document.createElement('canvas'); c.width = W; c.height = H;
-      const x = c.getContext('2d'); x.drawImage(bmp, 0, 0, W, H);
-      const d = x.getImageData(0, 0, W, H).data;
+      let d;
+      try {
+        const W = 16, H = 10;
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const x = c.getContext('2d'); x.drawImage(bmp, 0, 0, W, H);
+        d = x.getImageData(0, 0, W, H).data;
+      } finally { try { bmp.close(); } catch {} }
       // DOMINANT-HUE extraction, not "most extreme pixel": near-black/near-white pixels are
       // dropped (they carry no mood), the rest are bucketed by hue and weighted by saturation ×
       // presence, and the winning bucket is AVERAGED. That tracks what the artwork actually looks
@@ -10032,12 +10070,15 @@ async function ambientColorFor(artUrl) {
   ambientCache.set(path, color);
   return color;
 }
-let _ambToken = 0;
+let _ambToken = 0, _ambLastUrl = '', _ambTimer = null;
 // Ambient follows whatever ART IS ON SCREEN. setBackdrop is the one chokepoint every surface
 // already routes through (home hero, browse/search/watchlist/library focus, discover, person,
 // detail), so driving the glow from there gives the colour fade on EVERY page for free — and it
 // always matches the exact image being shown, including the poster fallback.
 function applyAmbientArt(url) {
+  const safe = String(url || '');
+  if (safe && safe === _ambLastUrl) return;
+  _ambLastUrl = safe;
   const token = ++_ambToken;
   ambientColorFor(url).then((c) => {
     if (token !== _ambToken) return;
@@ -10047,7 +10088,9 @@ function applyAmbientArt(url) {
   });
 }
 function applyAmbient(it) {
-  applyAmbientArt(it && (it.backdrop || it.poster));
+  const url = it && (it.backdrop || it.poster);
+  clearTimeout(_ambTimer);
+  _ambTimer = setTimeout(() => applyAmbientArt(url), 150);
 }
 // ---- Scroll-linked backdrop fade ----
 // Scrolling into cast/related/lower rows fades the art away so that content sits on clean ink
@@ -11142,13 +11185,21 @@ function wlMeta(it) {
 // Restricted profiles: the watchlist/calendar are ACCOUNT-level lists (a parent's adds), not
 // query-filtered like catalog rows — verify each title's real certification (the same bar as
 // the play gate) before even showing its cover. Unverifiable titles stay hidden.
+let _certActive = 0;
+const _certWait = [];
 async function certAllowed(type, tmdbId) {
   if ((S.maxLevel ?? 4) >= 4) return true;
   if (!type || !tmdbId) return false;
+  if (_certActive >= 6) await new Promise((resolve) => _certWait.push(resolve));
+  _certActive++;
   try {
     const d = await api(`/api/tmdb/${type}/${tmdbId}?append_to_response=${type === 'tv' ? 'content_ratings' : 'release_dates'}`);
     return !d.adult && levelAllows(certOf(d, type));
   } catch { return false; }
+  finally {
+    _certActive--;
+    if (_certWait.length) _certWait.shift()();
+  }
 }
 function certTargetForMeta(meta, key = '') {
   const type = meta && meta.type;
@@ -13258,9 +13309,40 @@ function startLiveMseSource(url, opts = {}) {
       }
       try {
         appending = true;
-        const chunk = q.shift();
-        sb.appendBuffer(chunk);
-        appended += chunk.byteLength;
+        // Coalesce queued chunks (up to 8) into one appendBuffer call to reduce MSE updateend
+        // overhead across 2-4 Multiview panes.
+        let chunk = q.shift();
+        if (q.length > 0) {
+          const batch = [chunk];
+          let total = chunk.byteLength;
+          while (q.length > 0 && batch.length < 8 && total < 512 * 1024) {
+            const next = q.shift();
+            batch.push(next);
+            total += next.byteLength;
+          }
+          if (batch.length > 1) {
+            const merged = new Uint8Array(total);
+            let off = 0;
+            for (const b of batch) { merged.set(new Uint8Array(b), off); off += b.byteLength; }
+            chunk = merged.buffer;
+          }
+        }
+        try {
+          sb.appendBuffer(chunk);
+          appended += chunk.byteLength;
+        } catch (err) {
+          if (err && err.name === 'QuotaExceededError' && sb.buffered.length) {
+            // Buffer full (e.g. paused stream or tight browser quota) — put chunk back and evict old bytes instead of killing Live TV.
+            q.unshift(chunk);
+            const bStart = sb.buffered.start(0);
+            const cut = Math.max(bStart + 2, v.currentTime - 5);
+            if (cut > bStart + 0.5) {
+              sb.remove(bStart, cut);
+              return;
+            }
+          }
+          throw err;
+        }
       } catch (e) {
         appending = false;
         if (active()) failLiveMse(e);
@@ -13268,10 +13350,13 @@ function startLiveMseSource(url, opts = {}) {
     };
     sb.addEventListener('updateend', () => {
       appending = false;
-      // Zap speed: start playback as soon as ~0.7s of stream is buffered instead of ~1.5s. The
-      // fetch keeps filling behind playback and the trim/backpressure loop below absorbs jitter, so
-      // the smaller head-start just makes channel changes feel closer to real TV. (multiview keeps
-      // its own smaller retain window; this only gates the FIRST frame.)
+      // Zap speed: start playback as soon as ~0.35s of video is actually buffered (or 250KB fallback)
+      // instead of waiting for 700KB (which stalls SD/720p channels by 2.5-3.5s).
+      const bufferedReady = sb.buffered.length > 0 && (sb.buffered.end(0) - sb.buffered.start(0)) >= 0.35;
+      if (!started && (bufferedReady || appended > 250000)) {
+        started = true;
+        requestLivePlay();
+      }
       if (!started && appended > 700000) {
         started = true;
         requestLivePlay();
@@ -17875,6 +17960,8 @@ async function autoAdvance(opts = {}) {
     p.tracks = null; p._tracksJob = null; p.subTrack = null; p.audioTrack = 0; p.forceAacRemux = false;
     p.nativeAacAudio = false;
     p._fileSubFailed = false; // the new release's own file track gets its own chance (second check 3.5.7)
+    if (!nativePreferred) p.forceAacRemux = !!(typeof iosWebkitVideo === 'function' && iosWebkitVideo()) || !canUseNativeVideoPlayer();
+    p._osVariants = {}; p._osMissingLangs = {}; p._subVttText = ''; p._subVttRel = ''; p._subSyncBase = ''; p._nativeSyncedUrl = '';
     if (!opts.allowMidstreamAdvance) {
       $('pSrc').textContent = r.candidate ? r.candidate.name : r.name;
     }
@@ -18291,7 +18378,7 @@ function playerAboutTmdbSpec(it) {
   }
   return null;
 }
-const ABOUT_CAST_MAX = 10;
+const ABOUT_CAST_MAX = 40;
 function playerAboutCrewFrom(crew, createdBy) {
   const list = Array.isArray(crew) ? crew : [];
   const directors = (createdBy && createdBy.length)
@@ -18319,19 +18406,36 @@ function playerAboutCastList(d, epCredits, seasonCredits) {
   const billed = (epCredits && Array.isArray(epCredits.cast)) ? epCredits.cast : [];
   const seasonMain = (seasonCredits && Array.isArray(seasonCredits.cast)) ? seasonCredits.cast : [];
   const guests = (epCredits && Array.isArray(epCredits.guest_stars)) ? epCredits.guest_stars : [];
-  if (seriesMain.length || billed.length || seasonMain.length || guests.length) {
+  const aggregate = (d && d.aggregate_credits && Array.isArray(d.aggregate_credits.cast)) ? d.aggregate_credits.cast : [];
+  if (seriesMain.length || billed.length || seasonMain.length || guests.length || aggregate.length) {
     const seen = new Set();
     const out = [];
-    const add = (c) => {
+    const add = (raw) => {
+      const c = typeof mapTmdbCastPerson === 'function' ? mapTmdbCastPerson(raw) : raw;
       if (!c || !c.name || seen.has(c.id || c.name)) return;
       seen.add(c.id || c.name);
       out.push(c);
     };
-    // Show-level billed stars first (Joe on Lioness), then this season, then this episode.
-    seriesMain.slice().sort(tmdbCastOrder).forEach(add);
-    seasonMain.slice().sort(tmdbCastOrder).forEach(add);
-    billed.slice().sort(tmdbCastOrder).forEach(add);
-    guests.slice().sort(tmdbCastOrder).forEach(add);
+    const epCastIds = new Set([...seasonMain, ...billed].map((c) => c && (c.id || c.name)).filter(Boolean));
+    // Anthology shows (e.g. BEEF S1 vs S2, True Detective, White Lotus) have a brand-new season
+    // cast with zero overlap with d.credits.cast (TMDB's latest-season cast): put this season &
+    // episode's stars first so S1 doesn't open with S2's cast. Continuing shows (e.g. Lioness)
+    // keep show-level billed leads first, then this season, then episode billed & guest stars.
+    const anthologySeason = seriesMain.length > 0 && epCastIds.size > 0
+      && !seriesMain.some((c) => c && epCastIds.has(c.id || c.name));
+    if (anthologySeason) {
+      seasonMain.slice().sort(tmdbCastOrder).forEach(add);
+      billed.slice().sort(tmdbCastOrder).forEach(add);
+      guests.slice().sort(tmdbCastOrder).forEach(add);
+      seriesMain.slice().sort(tmdbCastOrder).forEach(add);
+    } else {
+      seriesMain.slice().sort(tmdbCastOrder).forEach(add);
+      seasonMain.slice().sort(tmdbCastOrder).forEach(add);
+      billed.slice().sort(tmdbCastOrder).forEach(add);
+      guests.slice().sort(tmdbCastOrder).forEach(add);
+    }
+    aggregate.slice().sort((a, b) => tmdbCastOrder(a, b)
+      || (Number(b && b.total_episode_count) || 0) - (Number(a && a.total_episode_count) || 0)).forEach(add);
     return out;
   }
   return detailCastList(d);
@@ -18457,6 +18561,7 @@ function renderPlayerAbout() {
   cast.innerHTML = people.map((c) =>
     `<div class="paCastItem"><div class="paCastPh" style="background-image:${c.photo ? `url(&quot;${c.photo}&quot;)` : 'none'}"></div><div class="paCastNm">${aboutCastNameHtml(c.name)}</div></div>`
   ).join('');
+  cast.scrollLeft = 0;
   cast.style.display = people.length ? '' : 'none';
 }
 function openPlayerAbout() {
@@ -18736,9 +18841,19 @@ function upNextWindowReady(p, pos, dur) {
 }
 function maybeShowUpNext(t, d, opts = {}) {
   if (!S.nextEp || S.upNextDismissed) return;
-  if (!upNextWindowReady(S.playing, t, d)) return;
+  if (!upNextWindowReady(S.playing, t, d)) {
+    // Scrubbed backwards out of the credits window → cancel any live countdown and hide the card.
+    if (S.upNextTimer || S.upNextShown) hideUpNext();
+    return;
+  }
   showUpNext();
-  const playing = opts.native || !$('video').paused;
+  const playing = opts.native ? !(S.playing && S.playing.nativePaused) : !$('video').paused;
+  if (!playing && S.upNextTimer) {
+    clearInterval(S.upNextTimer);
+    S.upNextTimer = null;
+    $('upNext').classList.remove('counting');
+    return;
+  }
   const fileD = playingFileSeconds(S.playing, d);
   if (playing && (fileD - t) <= UP_NEXT_COUNTDOWN_SECONDS + 1) armUpNextCountdown();
 }
@@ -19454,6 +19569,7 @@ async function closePlayer(opts = {}) {
   S._musicWasPlaying = false;
   closePlayerGuide();
   closePlayerEpisodes();
+  closePlayerAbout();
   $('upNext').classList.remove('show');
   closeTrackMenu({ restoreFocus: false });
   closePlayerStats();
@@ -19740,11 +19856,14 @@ function togglePlay() {
   else v.pause();
   updPP();
 }
+let _lastPpPaused = null;
 function updPP() {
   const casting = S.playing && S.playing.castingActive;
   const paused = casting ? (_castRp ? _castRp.isPaused : !!S.playing.castPaused)
     : (S.playing && S.playing.usingJellyfinDesktop) ? !!S.playing.jfPaused
     : activePlayerVideo().paused;
+  if (_lastPpPaused === paused) return;
+  _lastPpPaused = paused;
   $('ppIcon').innerHTML = paused ? '<path d="M8 5v14l11-7z"/>' : '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';
 }
 let _playerSurfaceClickT = null;
@@ -19823,10 +19942,24 @@ function setPlayerTimes(pos, dur) {
   $('seekTotal').textContent = total;
   $('pTime').textContent = dur ? `${cur} / ${total}` : cur;
 }
-function tick() {
+let _tickGen = 0, _tickTimer = null, _tickRaf = 0;
+function scheduleTick(gen) {
+  if (_tickTimer) { clearTimeout(_tickTimer); _tickTimer = null; }
+  if (_tickRaf) { cancelAnimationFrame(_tickRaf); _tickRaf = 0; }
+  _tickRaf = requestAnimationFrame(() => {
+    _tickRaf = 0;
+    if (gen !== _tickGen || S.view !== 'player') return;
+    _tickTimer = setTimeout(() => { _tickTimer = null; tick(gen); }, 250);
+  });
+}
+function tick(gen) {
+  // Re-entry without a matching token starts a fresh generation so zaps/handoffs never stack duplicate loops.
+  if (gen === undefined) gen = ++_tickGen;
+  else if (gen !== _tickGen) return;
   if (S.view !== 'player') return;
-  if ($('player').classList.contains('live')) { updateLiveChrome(); return requestAnimationFrame(() => setTimeout(tick, 250)); }
-  if (_nudgeBase !== null) { updPP(); return requestAnimationFrame(() => setTimeout(tick, 250)); } // don't fight the seek preview
+  if ($('player').classList.contains('live')) { updateLiveChrome(); return requestAnimationFrame(() => { if (gen === _tickGen) { clearTimeout(_tickTimer); _tickTimer = setTimeout(() => tick(gen), 250); } }); }
+  const osdVisible = !$('osd').classList.contains('hide');
+  if (_nudgeBase !== null) { if (osdVisible) updPP(); return scheduleTick(gen); } // don't fight the seek preview
   const t = currentTime(), d = totalDuration();
   const p = S.playing;
   if (p && !p.usingNative) {
@@ -19836,14 +19969,16 @@ function tick() {
   // Near the end of an episode → mount the next episode, then surface the Up-next card.
   maybePrepareNextEpisode(t, d);
   maybeShowUpNext(t, d);
-  const pct = d ? Math.min(100, (t / d) * 100) : 0;
-  $('fill').style.width = pct + '%'; $('knob').style.left = pct + '%';
-  const v = $('video');
-  if (v.buffered && v.buffered.length && d) $('buf').style.width = Math.min(100, ((S.playing.startOffset + v.buffered.end(v.buffered.length - 1)) / d) * 100) + '%';
-  setPlayerTimes(t, d);
+  if (osdVisible) {
+    const pct = d ? Math.min(100, (t / d) * 100) : 0;
+    $('fill').style.width = pct + '%'; $('knob').style.left = pct + '%';
+    const v = $('video');
+    if (v.buffered && v.buffered.length && d) $('buf').style.width = Math.min(100, ((S.playing.startOffset + v.buffered.end(v.buffered.length - 1)) / d) * 100) + '%';
+    setPlayerTimes(t, d);
+    updPP();
+  }
   if ($('playerStats').classList.contains('open')) renderPlayerStats();
-  updPP();
-  requestAnimationFrame(() => setTimeout(tick, 250));
+  scheduleTick(gen);
 }
 $('playPause').addEventListener('click', togglePlay);
 $('back10').addEventListener('click', () => nudgeSeek(-10));
@@ -19900,6 +20035,7 @@ function liveBufferedEdge(v) {
   return v && v.buffered && v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0;
 }
 function updateLiveChrome() {
+  if ($('osd').classList.contains('hide')) return;
   paintLiveEpgStrip(); // progress on the "now" cell advances each tick
   const v = $('video'), btn = $('liveBtn');
   if (!v || !v.buffered || !v.buffered.length) return;
@@ -20095,7 +20231,7 @@ function showOsd() {
   S.osdTimer = setTimeout(() => {
     // An open CC/audio menu means the user is READING it — never hide it from under them
     // (3.5s is shorter than picking a subtitle on a remote). Check again in a beat.
-    if ($('trackMenu').classList.contains('open') || $('playerStats').classList.contains('open')) return showOsd();
+    if ($('trackMenu').classList.contains('open') || $('playerStats').classList.contains('open') || $('playerEpisodes').classList.contains('open')) return showOsd();
     if ($('playerAbout').classList.contains('open')) return;
     $('osd').classList.add('hide');
     $('player').classList.add('osdHide'); // controls away → #upNext docks to the bottom edge
@@ -21580,6 +21716,7 @@ async function setSubtitle(rel, opts = {}) {
       if (subtitleAbortIsCurrent(p, subGen) && opts.startup) scheduleStartupSubtitleRetry(p);
       return;
     }
+    if (!subtitleAbortIsCurrent(p, subGen)) return;
     const info = typeof rel === 'string' && rel.startsWith('os:') ? osTrackInfo(rel) : null;
     const definitiveMiss = !!(e && (e.noSubtitles || e.status === 404));
     if (info && e && e.noSubtitles) rememberSubtitleMiss(info.lang, e.message);
@@ -21597,6 +21734,7 @@ async function setSubtitle(rel, opts = {}) {
     refreshNativeSubtitleChoices();
     return;
   }
+  if (!subtitleAbortIsCurrent(p, subGen)) return;
   p.subTrack = rel; p._subShift = rel ? loadSubShift(rel) : 0;
   p._subAutoPick = manualChoice ? '' : rel; // brief 143: an automatic pick may give way to the file's track
   p._subVttText = '';
@@ -21614,8 +21752,10 @@ async function setSubtitle(rel, opts = {}) {
       // players keep &shift in their payload URL (Android strips it; the shell applies once).
       url = webSubtitleFetchUrl(url);
       let r = await fetch(url, subSignal ? { signal: subSignal } : {});
+      if (!subtitleAbortIsCurrent(p, subGen)) return;
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
+        if (!subtitleAbortIsCurrent(p, subGen)) return;
         const info = rel.startsWith('os:') ? osTrackInfo(rel) : null;
         const noResults = info ? subtitleResponseNoResults(info.lang, r.status, j) : '';
         if (noResults && rel.startsWith('os:')) rememberSubtitleMiss(info.lang, noResults);
@@ -21646,6 +21786,7 @@ async function setSubtitle(rel, opts = {}) {
         return;
       }
       p._subVttText = await r.text();
+      if (!subtitleAbortIsCurrent(p, subGen)) { p._subVttText = ''; return; }
       p._subVttRel = rel;
       if (rel.startsWith('os:')) p._subSyncBase = url;
       // Automatic sync: if the server flags this online sub as not-already-in-sync and alass is
@@ -22691,7 +22832,8 @@ function canShowScreensaver() {
   if (S.view === 'player' || S.playing || document.body.classList.contains('videoOpen')
       || $('player').classList.contains('open')) return false;
   if (document.querySelector('#detail.open,#person.open,#settings.open,#prefs.open,#music.open')) return false;
-  if (document.querySelector('.gate.open,#drawer.open,#trailer.open,#libModal.open,#matchModal.open,#updateModal.open,#catModal.open,#filterMenu.open,#cwMenu.open,#trackMenu.open,#musicNow.open')) return false;
+  if (document.querySelector('.gate.open,#drawer.open,#trailer.open,#libModal.open,#matchModal.open,#updateModal.open,#catModal.open,#filterMenu.open,#cwMenu.open,#trackMenu.open,#musicNow.open,#abPlayer.open')) return false;
+  if (typeof AB === 'object' && AB && AB.now && $('abAudio') && !$('abAudio').paused) return false;
   return true;
 }
 function showScreensaver() {
@@ -22784,19 +22926,24 @@ function discoverGemWindow() {
 function tmdbPosterResults(r) {
   return (r && r.results || []).filter((x) => x && x.poster_path && passesMaturity(x) && catalogOk(x));
 }
-async function discoverHasTrailer(type, id, title) {
+async function discoverTrailerList(type, id, titleOrItem) {
   const key = `${type}:${id}`;
   const memo = S._discoverTrailerMemo || (S._discoverTrailerMemo = new Map());
   if (memo.has(key)) return memo.get(key);
   try {
     const v = await api(`/api/tmdb/${type}/${id}/videos`);
-    const ok = !!pickBestTrailer(v.results, title);
-    memo.set(key, ok);
-    return ok;
+    const x = typeof titleOrItem === 'object' && titleOrItem ? titleOrItem : { title: titleOrItem };
+    const list = listPlayableTrailers(v.results, x.title || x.name);
+    memo.set(key, list);
+    return list;
   } catch {
-    memo.set(key, false);
-    return false;
+    memo.set(key, []);
+    return [];
   }
+}
+async function discoverHasTrailer(type, id, title) {
+  const list = await discoverTrailerList(type, id, title);
+  return Array.isArray(list) ? list.length > 0 : !!list;
 }
 async function tmdbDiscoverPages(path, pages = 2) {
   const qs = path.includes('?') ? '&' : '?';
@@ -23042,19 +23189,19 @@ async function buildTrailerRow(list) {
   const found = await Promise.all(list.map(async (x) => {
     const type = x.media_type === 'tv' || (x.name && !x.title) ? 'tv' : 'movie';
     try {
-      const v = await api(`/api/tmdb/${type}/${x.id}/videos`);
-      const trList = listPlayableTrailers(v.results, x.title || x.name);
+      const trList = await discoverTrailerList(type, x.id, x.title || x.name);
       const tr = trList[0];
       if (!tr) return null;
       const clip = trailerClip(tr);
-      prefetchTrailerStream(clip);
       const pub = tr.published_at ? new Date(tr.published_at).getTime() : 0;
       return { ...mapTmdb(x), trailer: { ...clip, title: x.title || x.name, alts: trList.slice(1).map(trailerClip) }, _trailerPub: Number.isFinite(pub) ? pub : 0 };
     } catch { return null; }
   }));
   // "Latest" means newest trailer first — the old code kept trending order, so this-week's real
   // trailer drops got buried behind months-old ones for perennially-popular titles.
-  return found.filter(Boolean).sort((a, b) => b._trailerPub - a._trailerPub).slice(0, 12);
+  const ranked = found.filter(Boolean).sort((a, b) => b._trailerPub - a._trailerPub).slice(0, 12);
+  ranked.slice(0, 3).forEach((it) => { if (it && it.trailer) prefetchTrailerStream(it.trailer); });
+  return ranked;
 }
 
 /* ============ browse pages (Movies / TV): genre + sort dropdowns, infinite scroll ============ */
@@ -23990,20 +24137,31 @@ async function loadCalendar() {
     focusCalendarStart();
     return;
   }
+  const calReq = (S._calReq = (S._calReq || 0) + 1);
+  const calCurrent = () => calReq === S._calReq && S.view === 'calendar';
   list.innerHTML = '<div class="calDayHead">Loading</div>';
-  await loadWatchlist();
-  try { S.watchMap = Object.fromEntries((await api('/api/watch' + profileQ())).map((w) => [w.key, w])); } catch {}
+  await Promise.all([
+    loadWatchlist(),
+    api('/api/watch' + profileQ()).then((rows) => { S.watchMap = Object.fromEntries(rows.map((w) => [w.key, w])); }).catch(() => {}),
+  ]);
+  if (!calCurrent()) return;
+  const curYear = new Date().getFullYear();
   const metas = [
     ...(S.watchlist || []).map((w) => ({ ...w.meta, _key: w.key })),
-    ...Object.entries(S.watchMap || {}).filter(([, w]) => !w.watched && w.meta).map(([key, w]) => ({ ...w.meta, _key: key })),
+    ...Object.entries(S.watchMap || {}).filter(([, w]) => !w.watched && w.meta).map(([key, w]) => ({ ...w.meta, _key: key, _activeWatch: true })),
   ];
   const uniq = new Map();
   for (const m of metas) {
     if (!m || !m.tmdbId || !m.type) continue;
     const t = certTargetForMeta(m, m._key || '');
+    const knownYear = parseInt(String(m.year || '').slice(0, 4), 10);
+    if (t.type === 'movie' && Number.isInteger(knownYear) && knownYear < curYear - 1) continue;
     uniq.set(t.type + ':' + t.tmdbId, { ...m, ...t });
   }
-  if (!uniq.size) {
+  // Prioritize actively-watched TV shows ahead of watchlist items so old watchlist movies never
+  // truncate airing TV episodes at the 40-title cap.
+  const ordered = [...uniq.values()].sort((a, b) => Number(!!b._activeWatch) - Number(!!a._activeWatch));
+  if (!ordered.length) {
     list.innerHTML = '<div class="calEmpty focusable">Add titles to your watchlist or start watching a show. Calendar shows the next 7 days only.</div>';
     S._calPainted = true; S._calAt = Date.now();
     focusCalendarStart();
@@ -24012,11 +24170,14 @@ async function loadCalendar() {
   const today = todayStr();
   const weekDates = calendarWeekDates(today);
   const weekEnd = weekDates[weekDates.length - 1];
+  const restricted = (S.maxLevel ?? 4) < 4;
   const upcoming = [];
-  await Promise.all([...uniq.values()].slice(0, 40).map(async (m) => {
+  await Promise.all(ordered.slice(0, 40).map(async (m) => {
     try {
-      const d = await api(`/api/tmdb/${m.type}/${m.tmdbId}?append_to_response=${m.type === 'tv' ? 'content_ratings' : 'release_dates'}`);
-      if ((S.maxLevel ?? 4) < 4 && (d.adult || !levelAllows(certOf(d, m.type)))) return;
+      const qs = restricted ? `?append_to_response=${m.type === 'tv' ? 'content_ratings' : 'release_dates'}` : '';
+      const d = await api(`/api/tmdb/${m.type}/${m.tmdbId}${qs}`);
+      if (!calCurrent()) return;
+      if (restricted && (d.adult || !levelAllows(certOf(d, m.type)))) return;
       if (m.type === 'tv' && d.next_episode_to_air && d.next_episode_to_air.air_date) {
         const ne = d.next_episode_to_air;
         if (ne.air_date >= today && ne.air_date <= weekEnd) {
@@ -24029,6 +24190,7 @@ async function loadCalendar() {
       }
     } catch {}
   }));
+  if (!calCurrent()) return;
   upcoming.sort((a, b) => (a._date || '').localeCompare(b._date || ''));
   list.innerHTML = '';
   const byDay = {};
@@ -24156,6 +24318,7 @@ function localLookupKeysForItem(it) {
   return [...new Set(keys.filter(Boolean))];
 }
 async function fetchLocalPlaybackKeys(keys) {
+  if (Array.isArray(S.libraries) && !S.libraries.some((l) => l && l.path)) return S.localMap || {};
   keys = [...new Set((keys || []).map(String).filter(Boolean))]
     .filter((k) => !(S.localMap && S.localMap[k])).slice(0, 100);
   if (!keys.length) return S.localMap || {};
@@ -24683,6 +24846,10 @@ async function applyMatch(tmdbId, pick) {
         if (S.libByTmdb && it.tmdbId) delete S.libByTmdb[`${it.type || ''}:${it.tmdbId}`];
         ensureLocalMap();
         toast(tmdbId === null ? 'Now showing the folder info ✓' : 'Match fixed ✓');
+        if (S.view === 'player' || S.playing) return;
+        const stillSameLib = S.view === 'library' && S.currentLib && it._lib && S.currentLib.id === it._lib.id;
+        const stillSameDetail = $('detail').classList.contains('open') && S.detailItem && S.detailItem._idx === it._idx;
+        if (!stillSameLib && !stillSameDetail) return;
         $('detail').classList.remove('open'); document.body.classList.remove('detailOpen');
         S.currentLib = it._lib;
         switchView('library', true, { preservePage: true });
@@ -24761,6 +24928,7 @@ async function loadWatchlistView() {
   $('browseTitle').textContent = 'My Watchlist';
   let entries = S.watchlist || [];
   if ((S.maxLevel ?? 4) < 4 && entries.length) {
+    // certAllowed() bounds concurrent TMDB certification lookups to 6-wide automatically.
     const ok = await Promise.all(entries.map((w) => {
       const t = certTargetForMeta(w.meta, w.key);
       return certAllowed(t.type, t.tmdbId);
@@ -24947,6 +25115,7 @@ const epgMemo = new Map(); // stable channel identity -> { at, data } (now/next,
 const LIVE_GUIDE_BATCH = 24;
 function liveChannelByIdx(idx) {
   const key = String(idx);
+  if (S._liveByIdx && S._liveByIdx.has(key)) return S._liveByIdx.get(key);
   return (S.liveChannels || []).find((c) => String(c && (c.idx ?? c._channel)) === key) || null;
 }
 function liveChannelStableId(ch) {
@@ -25234,6 +25403,7 @@ function clearLiveClientCaches({ channels = false } = {}) {
   guideMemo.clear();
   if (channels) {
     S.liveChannels = null;
+    S._liveByIdx = null;
     S._chSearchCache = null;
     S._liveAt = 0;
   }
@@ -25243,6 +25413,15 @@ window.__tvTrimMemory = () => {
     clearLiveClientCaches();
     S.musicCoverCache = {};
     S.musicCoverFeedCache = {};
+    S.detailPageCache = {};
+    S.seasonPageCache = {};
+    S.pageCache = {};
+    S._localShowEpsCache = {};
+    S._liveHost = null;
+    if (S._discoverTrailerMemo && typeof S._discoverTrailerMemo.clear === 'function') S._discoverTrailerMemo.clear();
+    if (typeof ambientCache !== 'undefined' && ambientCache && typeof ambientCache.clear === 'function') ambientCache.clear();
+    if (typeof titleLogoCache !== 'undefined' && titleLogoCache && typeof titleLogoCache.clear === 'function') titleLogoCache.clear();
+    if (typeof epgMemo !== 'undefined' && epgMemo && typeof epgMemo.clear === 'function') epgMemo.clear();
   } catch {}
 };
 // A guide fetch that 409s ("channel list changed") means our cached channel indices no longer
@@ -25262,6 +25441,15 @@ function fillLiveState(r) {
   if (S.liveGuide === undefined && S.liveEpg) S.liveGuide = true;
   S.liveSourceErrors = Array.isArray(r.sourceErrors) ? r.sourceErrors : [];
   S.liveChannels = r.channels;
+  const byIdx = new Map();
+  if (Array.isArray(r.channels)) {
+    for (let i = 0; i < r.channels.length; i++) {
+      const c = r.channels[i];
+      if (!c) continue;
+      byIdx.set(String(c.idx ?? c._channel ?? i), c);
+    }
+  }
+  S._liveByIdx = byIdx;
   S._chSearchCache = r.channels;
   S._liveAt = Date.now();
   S.liveOpen = S.liveOpen || new Set();
@@ -25481,13 +25669,25 @@ function scaffoldLiveTv(grid) {
   } catch (e) { grid.innerHTML = `<div class="gridMore focusable">Live TV failed: ${esc(e.message)}</div>`; focusLiveGridMessage(); }
 }
 function liveChannelSearchText(ch) {
-  return [ch && ch.name, ch && ch.group, ch && (ch.sourceName || ch._sourceName)]
+  if (!ch) return '';
+  if (typeof ch._searchText === 'string') return ch._searchText;
+  const text = [ch.name, ch.group, ch.sourceName || ch._sourceName]
     .filter(Boolean).join(' ').toLowerCase();
+  ch._searchText = text;
+  return text;
 }
 function liveChannelMatchesQuery(ch, q) {
   const needle = String(q || '').toLowerCase().trim();
   if (!needle) return true;
   if (liveChannelSearchText(ch).includes(needle)) return true;
+  const name = (ch && ch.name) || '';
+  if (!name || needle.length < 3) return false;
+  // Fast reject before Levenshtein: on 10k-channel IPTV lineups, running edit-distance against
+  // every non-matching channel froze the main thread during Search and Live TV filtering.
+  const qAlnum = needle.replace(/[^a-z0-9]+/g, '');
+  if (!qAlnum) return false;
+  if (typeof ch._nameAlnum !== 'string') ch._nameAlnum = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (Math.abs(ch._nameAlnum.length - qAlnum.length) > 6 && !ch._nameAlnum.includes(qAlnum.slice(0, 2))) return false;
   return searchLibraryTitleMatch(q, (ch && ch.name) || '');
 }
 function liveChannelSubtitle(ch) {
@@ -26994,15 +27194,31 @@ async function loadMusicPlaylistPage(reset = false) {
     if (reset) p.tracks = rows;
     else p.tracks.push(...rows);
     if (!p.cover && rows[0] && rows[0].thumb) p.cover = rows[0].thumb;
+    if (!reset && S.musicQueue === p.tracks && $('musicNow') && $('musicNow').classList.contains('open')) {
+      renderMusicQueue();
+    }
   } catch (e) {
     toast(`Could not load ${p.title || 'playlist'}: ${e.message}`);
   }
   finally { if (p) p.loading = false; }
 }
 let _musicSearchT = 0;
+let _musicSearchAbort = null;
+let _musicFocusTimer = 0;
+let _musicFocusSeq = 0;
+function cancelMusicSearchFocus() {
+  _musicFocusSeq++;
+  clearTimeout(_musicFocusTimer);
+  _musicFocusTimer = 0;
+}
+function abortMusicSearch() {
+  if (_musicSearchAbort) { try { _musicSearchAbort.abort(); } catch {} _musicSearchAbort = null; }
+}
 async function doMusicSearch() {
   const q = $('musicSearch').value.trim();
   const reqId = (S.musicSearchReq = (S.musicSearchReq || 0) + 1);
+  abortMusicSearch();
+  cancelMusicSearchFocus();
   syncMusicClear();
   if (!q) { showMusicHome(); return false; }
   S.musicPage = 'search';
@@ -27011,20 +27227,30 @@ async function doMusicSearch() {
     && S.musicPage === 'search' && $('musicSearch').value.trim() === q;
   $('musicBrowse').classList.add('hide');
   $('musicList').innerHTML = '<div class="mNote">Searching...</div>';
+  const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  _musicSearchAbort = ac;
   try {
-    const r = await api('/api/music/search?q=' + encodeURIComponent(q));
+    const r = await api('/api/music/search?q=' + encodeURIComponent(q), { signal: ac ? ac.signal : undefined, timeoutMs: 12000 });
     if (!current()) return false;
     renderMusicRows(r.results || [], { search: true, query: q });
     return true;
   } catch (e) {
     if (!current()) return false;
+    if (ac && ac.signal.aborted) return false;
     $('musicList').innerHTML = `<div class="mNote">Search failed: ${esc(e.message)}</div>`;
     return true;
+  } finally {
+    if (_musicSearchAbort === ac) _musicSearchAbort = null;
   }
 }
-function focusMusicResultsSoon(tries = 18) {
-  setTimeout(() => {
-    if (S.view !== 'music') return;
+function focusMusicResultsSoon(tries = 18, token = null) {
+  if (token === null) {
+    cancelMusicSearchFocus();
+    token = _musicFocusSeq;
+  }
+  _musicFocusTimer = setTimeout(() => {
+    if (token !== _musicFocusSeq || S.view !== 'music') return;
+    if ($('musicMicBtn') && $('musicMicBtn').classList.contains('listening')) return;
     const rows = musicRows();
     if (rows.length) {
       $('musicSearch').blur();
@@ -27032,7 +27258,7 @@ function focusMusicResultsSoon(tries = 18) {
       focusMusic(0);
       return;
     }
-    if (tries > 0) return focusMusicResultsSoon(tries - 1);
+    if (tries > 0) return focusMusicResultsSoon(tries - 1, token);
     focusMusicSearch();
   }, 120);
 }
@@ -27083,6 +27309,8 @@ function focusMusicClear() {
 }
 function clearMusicSearch(opts = {}) {
   clearTimeout(_musicSearchT);
+  abortMusicSearch();
+  cancelMusicSearchFocus();
   $('musicSearch').value = '';
   syncMusicClear();
   showMusicHome();
@@ -27206,26 +27434,47 @@ function playMusic(queue, idx, opts = {}) {
   document.body.classList.toggle('musicPaused', opts.autoplay === false);
   if (opts.autoplay === false) setPlayIcon(false);
   markMusicCur();
-  openMusicNow();
+  if (opts.notify !== false || ($('musicNow') && $('musicNow').classList.contains('open'))) openMusicNow();
+  else updateMusicNow();
   prefetchNextMusicStream();
 }
 // Warm the NEXT track's googlevideo URL server-side (a tiny Range hit triggers yt-dlp resolve +
-// cache) so advancing feels instant instead of paying the 1-3s resolve at track change. Shuffle's
-// next pick is random, so only the sequential/repeat-all path is predictable enough to prefetch.
+// cache) so advancing feels instant instead of paying the 1-3s resolve at track change. When Shuffle
+// is on, pre-roll the next index so shuffle track changes also start from a warm cache.
+function nextShuffleIdxFor(q, curIdx) {
+  if (!q || q.length < 2) return -1;
+  let next;
+  do { next = Math.floor(Math.random() * q.length); } while (next === curIdx);
+  return next;
+}
 function prefetchNextMusicStream() {
   try {
     const q = S.musicQueue; if (!q || !q.length) return;
     // Nearing the end of a paged playlist: pull the next page in the background so the queue has
     // grown before playback arrives (no gap at the page boundary). Applies to shuffle too.
     if (musicQueueCanExtend(q) && S.musicIdx >= q.length - 3) loadMusicPlaylistPage(false);
-    if (q.length < 2 || S.musicShuffle) return;
-    let next = S.musicIdx + 1;
-    if (next >= q.length) { if (S.musicRepeat === 'all') next = 0; else return; }
-    const t = q[next]; if (!t || !t.streamUrl || t._prefetched) return;
-    t._prefetched = true;
+    if (q.length < 2) return;
+    let next;
+    if (S.musicShuffle) {
+      if (S.musicNextShuffleIdx == null || S.musicNextShuffleIdx === S.musicIdx || S.musicNextShuffleIdx >= q.length) {
+        S.musicNextShuffleIdx = nextShuffleIdxFor(q, S.musicIdx);
+      }
+      next = S.musicNextShuffleIdx;
+    } else {
+      S.musicNextShuffleIdx = null;
+      next = S.musicIdx + 1;
+      if (next >= q.length) { if (S.musicRepeat === 'all') next = 0; else return; }
+    }
+    const t = q[next]; if (!t || !t.streamUrl) return;
+    const now = Date.now();
+    if (t._prefetchedAt && now - t._prefetchedAt < 2.5 * 3600 * 1000) return;
+    t._prefetchedAt = now;
     fetch(t.streamUrl, { headers: { Range: 'bytes=0-1' } })
-      .then((r) => { try { r.body && r.body.cancel && r.body.cancel(); } catch {} })
-      .catch(() => {});
+      .then((r) => {
+        if (!r.ok) t._prefetchedAt = 0;
+        try { r.body && r.body.cancel && r.body.cancel(); } catch {}
+      })
+      .catch(() => { t._prefetchedAt = 0; });
   } catch {}
 }
 function safeMusicPlay(opts = {}) {
@@ -27250,6 +27499,14 @@ function musicTransport(action = 'toggle') {
   else if (action === 'stop') closeMusicPlayer();
   else if (action === 'next') musicNext();
   else if (action === 'prev') musicPrev();
+  else if (action === 'fast_forward') {
+    const d = mAudio.duration || (S.musicCur && S.musicCur.duration) || 0;
+    mAudio.currentTime = d ? Math.min(d, (mAudio.currentTime || 0) + 10) : (mAudio.currentTime || 0) + 10;
+    if (typeof nativeMusicSession === 'function') nativeMusicSession();
+  } else if (action === 'rewind') {
+    mAudio.currentTime = Math.max(0, (mAudio.currentTime || 0) - 10);
+    if (typeof nativeMusicSession === 'function') nativeMusicSession();
+  }
   else musicToggle();
   return true;
 }
@@ -27258,14 +27515,19 @@ function musicNext(auto) {
   if (auto && S.musicRepeat === 'one') { mAudio.currentTime = 0; safeMusicPlay({ notify: false }); return; }
   let next;
   if (S.musicShuffle && q.length > 1) {
-    do { next = Math.floor(Math.random() * q.length); } while (next === S.musicIdx);
+    if (S.musicNextShuffleIdx != null && S.musicNextShuffleIdx !== S.musicIdx && S.musicNextShuffleIdx < q.length) {
+      next = S.musicNextShuffleIdx;
+    } else {
+      next = nextShuffleIdxFor(q, S.musicIdx);
+    }
+    S.musicNextShuffleIdx = null;
   } else next = S.musicIdx + 1;
   if (next >= q.length) {
     if (S.musicRepeat === 'all') next = 0;
     else if (musicQueueCanExtend(q)) { extendMusicQueueThenNext(auto); return; }
     else return; // end of queue, no repeat
   }
-    playMusic(q, next, { notify: !auto });
+  playMusic(q, next, { notify: !auto });
 }
 // The playing queue is the current playlist's live tracks array and the playlist has more pages:
 // reaching the end means "load the next page", not "stop" — playlists used to die at track 24.
@@ -27350,7 +27612,7 @@ mAudio.addEventListener('error', () => {
   // MEDIA_ERR_ABORTED (code 1) fires when we change src to the next track. Treating that as a
   // failure used to skip the new song, then the next, then the next.
   if (mAudio.error && mAudio.error.code === 1) return;
-  if (Date.now() - (S._musicSwapAt || 0) < 400) return;
+  if (!mAudio.getAttribute('src')) return;
   S.musicLoadFailed = true;
   try { mAudio.pause(); } catch {}
   // Bound the auto-skip: with shuffle/repeat-all on, musicNext never reports "end of queue", so a
@@ -27487,13 +27749,16 @@ async function startMusicFeed(item) {
   if (item && item.playlistId) return startMusicPlaylist(item.playlistId, item.title || 'Playlist');
   const q = String(item && (item.query || item.coverFeed || item.title) || '').trim();
   if (!q) return;
+  const reqId = (S._musicStartReq = (S._musicStartReq || 0) + 1);
   toast(`Loading ${item.title || 'mix'}...`);
   try {
     const r = await api('/api/music/search?q=' + encodeURIComponent(q) + '&limit=24');
+    if (reqId !== S._musicStartReq || S.view !== 'music') return;
     const rows = r.results || [];
     if (!rows.length) return toast('No songs found for that mix yet.');
     playMusic(rows, 0);
   } catch (e) {
+    if (reqId !== S._musicStartReq || S.view !== 'music') return;
     toast('Could not load mix: ' + e.message);
   }
 }
@@ -27552,7 +27817,8 @@ async function coverForMusicCard(card) {
     S.musicCoverFeedCache = S.musicCoverFeedCache || {};
     const feed = card.dataset.coverFeed;
     if (!S.musicCoverFeedCache[feed]) {
-      S.musicCoverFeedCache[feed] = api('/api/music/search?q=' + encodeURIComponent(feed) + '&limit=12')
+      // Match startMusicFeed's limit=24 so clicking any weekly mix tile hits the server search cache.
+      S.musicCoverFeedCache[feed] = api('/api/music/search?q=' + encodeURIComponent(feed) + '&limit=24')
         .then((r) => {
           const seen = new Set();
           return (r.results || []).filter((t) => {
@@ -27727,6 +27993,7 @@ function musicMicVisible() {
 function focusMusicSearch() {
   clearFocus();
   S.zone = 'musicSearch';
+  if (musicMicVisible()) $('musicMicBtn').classList.add('focus');
   return musicMicVisible() ? $('musicMicBtn').focus() : $('musicSearch').focus();
 }
 function focusMusicInput() {
@@ -27866,7 +28133,6 @@ function updateMusicNow() {
   updateMusicLikeBtn();
   renderMusicQueue();
   if ($('musicNow').classList.contains('lyricsOpen')) loadMusicLyrics(t);
-  else loadMusicLyrics(t, { silent: true });
 }
 async function loadMusicLyrics(t, opts = {}) {
   if (!t || !t.id) return;
@@ -27933,15 +28199,18 @@ async function toggleMusicLike() {
 }
 async function startMusicRadio() {
   const t = S.musicCur; if (!t) return;
+  const reqId = (S._musicStartReq = (S._musicStartReq || 0) + 1);
   toast('Starting radio…');
   try {
     const r = await api('/api/music/radio/' + encodeURIComponent(t.id) + '?limit=24');
+    if (reqId !== S._musicStartReq || S.view !== 'music' || !S.musicCur || S.musicCur.id !== t.id) return;
     const rest = (r.results || []).filter((x) => x.id !== t.id);
     if (!rest.length) return toast('No similar tracks for radio yet.');
     S.musicPlaylist = null;
     playMusic([t, ...rest], 0, { notify: false });
     toast('Radio from “' + t.title + '”');
   } catch (e) {
+    if (reqId !== S._musicStartReq || S.view !== 'music') return;
     toast((e && e.message) || 'Radio is not available.');
   }
 }
@@ -27984,6 +28253,7 @@ function removeMusicQueueTrack(i) {
   if (S.musicIdx > i) S.musicIdx--;
   else if (playing) return playMusic(q, Math.min(i, q.length - 1), { notify: false });
   renderMusicQueue();
+  if (S.zone === 'musicNowQueue') focusQueue(Math.min(i, q.length - 1));
 }
 function moveMusicQueueTrack(from, to) {
   const q = S.musicQueue; if (!q) return;
@@ -28036,6 +28306,7 @@ function mnSeekToPointer(e) {
   const x = Number.isFinite(e.clientX) ? e.clientX : NaN;
   if (!d || !r.width || !Number.isFinite(x)) return;
   mAudio.currentTime = Math.max(0, Math.min(1, (x - r.left) / r.width)) * d;
+  if (typeof nativeMusicSession === 'function') nativeMusicSession();
 }
 $('mnSeek').addEventListener('pointerdown', (e) => {
   _mnSeekDrag = true;
@@ -30046,8 +30317,29 @@ $('prefReset').addEventListener('click', () => {
 /* ============ global search ============ */
 let searchTimer = null, searchSeq = 0;
 let searchSuggestPicked = false;
+let searchAbort = null, searchFocusTimer = null, searchFocusSeq = 0;
+let _activeWebVoiceStop = null;
+function cancelSearchRequest() {
+  if (searchAbort) { try { searchAbort.abort(); } catch {} searchAbort = null; }
+}
+function cancelSearchFocusLoop() {
+  searchFocusSeq++;
+  clearTimeout(searchFocusTimer);
+  searchFocusTimer = null;
+}
+function stopActiveVoiceInput() {
+  if (typeof _activeWebVoiceStop === 'function') {
+    const fn = _activeWebVoiceStop;
+    _activeWebVoiceStop = null;
+    try { fn(); } catch {}
+  }
+  if ($('micBtn')) $('micBtn').classList.remove('listening');
+  if ($('musicMicBtn')) $('musicMicBtn').classList.remove('listening');
+  if ($('abMicBtn')) $('abMicBtn').classList.remove('listening');
+}
 function clearSearchResults(opts = {}) {
   if (opts.invalidate) searchSeq++;
+  if (opts.invalidate) { cancelSearchRequest(); cancelSearchFocusLoop(); }
   const grid = $('grid');
   clearTimeout(searchTimer);
   searchTimer = null;
@@ -30060,8 +30352,13 @@ function clearSearchResults(opts = {}) {
   grid.style.setProperty('--tf', '0px');
 }
 function resetSearchPage(opts = {}) {
+  searchComposing = false;
+  searchSuggestPicked = false;
+  stopActiveVoiceInput();
+  if (window.TriboonTV && TriboonTV.stopVoice) { try { TriboonTV.stopVoice(); } catch {} }
   $('searchInput').value = '';
   $('micBtn').classList.remove('listening');
+  showSearchSuggest(null);
   clearSearchResults({ invalidate: true });
   syncSearchClear();
 }
@@ -30076,18 +30373,39 @@ function syncSearchClear() {
 }
 function searchClearVisible() { return !$('searchClearBtn').hidden; }
 function focusSearchClear() { $('micBtn').blur(); $('searchInput').blur(); $('searchClearBtn').focus(); }
-// Leave the result grid and put the remote on the search field. ArrowUp used to call
-// focusSearchMic(), which refuses to land while a card still has .focus — so TV could
-// never climb back up to type a new query or reach the clear (X).
-function focusSearchBarFromResults() {
+// Explicit user move onto the Mic button (ArrowUp/Back from results or ArrowLeft from the field).
+// Unlike focusSearchMic() (the automatic empty-page landing pin), this ALWAYS works even when a
+// previous query is in the box — so the user can do back-to-back voice searches without deleting.
+function focusSearchMicNow() {
+  const mic = $('micBtn');
+  if (!mic || mic.style.display === 'none') return false;
+  if (!searchInputBusy()) return focusSearchMic();
   cancelSearchMicLand();
+  searchComposing = false;
   clearFocus();
   S.zone = '';
+  if ($('searchInput')) try { $('searchInput').blur(); } catch {}
+  if ($('searchClearBtn')) try { $('searchClearBtn').blur(); } catch {}
+  mic.classList.add('focus');
+  try { mic.focus({ preventScroll: true }); } catch { try { mic.focus(); } catch {} }
+  reportTvInputState();
+  return true;
+}
+// Leave the result grid and return to the search bar. When the Mic is visible (TV/voice-capable
+// clients), land directly on the Mic so one OK starts a new voice search (Right → text box,
+// Right → Clear X). When no Mic exists, fall back to the search input with caret at end.
+function focusSearchBarFromResults() {
+  cancelSearchMicLand();
+  searchComposing = false;
+  clearFocus();
+  S.zone = '';
+  if (focusSearchMicNow()) return true;
   const input = $('searchInput');
-  if (!input) return;
+  if (!input) return false;
   try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
   const n = input.value.length;
   try { input.setSelectionRange(n, n); } catch {}
+  return true;
 }
 // Spatial Up from the first poster row: last chip (closest to the covers), then the field.
 // Back/Escape still uses focusSearchBarFromResults so it skips the chips and lands on the box.
@@ -30144,7 +30462,7 @@ function focusSearchMic() {
 }
 // One clear action shared by the mouse click, the browser element-keydown, AND the on-device global
 // D-pad handler, so all three do exactly the same thing.
-function clearSearchQuery() { $('searchInput').value = ''; syncSearchClear(); showSearchSuggest(null); clearSearchResults({ invalidate: true }); $('searchInput').focus(); }
+function clearSearchQuery() { searchComposing = false; searchSuggestPicked = false; $('searchInput').value = ''; syncSearchClear(); showSearchSuggest(null); clearSearchResults({ invalidate: true }); $('searchInput').focus(); }
 function searchSuggestEls() {
   return [...document.querySelectorAll('#searchSuggest .searchSuggestItem')];
 }
@@ -30194,6 +30512,9 @@ $('searchInput').addEventListener('focus', () => {
   cancelSearchMicLand();
   try { $('micBtn').classList.remove('focus'); $('micBtn').blur(); } catch {}
 });
+$('searchInput').addEventListener('blur', () => {
+  searchComposing = false;
+});
 $('searchInput').addEventListener('compositionstart', () => {
   searchComposing = true;
   cancelSearchMicLand();
@@ -30240,7 +30561,7 @@ $('searchSuggest').addEventListener('keydown', (e) => {
   } else if (e.key === 'ArrowUp') {
     e.preventDefault(); e.stopPropagation();
     if (i > 0) focusSearchSuggest(i - 1);
-    else $('searchInput').focus();
+    else focusSearchBarFromResults();
   } else if (e.key === 'ArrowDown') {
     e.preventDefault(); e.stopPropagation();
     if (i < els.length - 1) focusSearchSuggest(i + 1);
@@ -30290,7 +30611,7 @@ $('searchInput').addEventListener('keydown', (e) => {
   }
   // Caret at the very start: ← steps back out to the mic (it sits left of the field now).
   else if (e.key === 'ArrowLeft' && $('searchInput').selectionStart === 0 && $('micBtn').style.display !== 'none') {
-    e.preventDefault(); e.stopPropagation(); $('searchInput').blur(); $('micBtn').focus();
+    e.preventDefault(); e.stopPropagation(); focusSearchMicNow();
   }
 });
 // Voice search (Web Speech API — Chrome/Android; the mic shows only when supported).
@@ -30311,40 +30632,54 @@ function focusSearchResultsSoon(tries = 18, forQuery = null) {
   // The viewer kept typing after submitting: the results on screen are for an older word.
   // Leave the focus in the box; the new search will place it when it lands.
   if (forQuery !== null && $('searchInput').value.trim() !== forQuery) return;
-  if (focusSearchResultsNow()) return;
-  if ($('grid') && $('grid').querySelector('.gridMore')) {
-    const chips = searchSuggestEls();
-    if (searchSuggestVisible() && chips.length) return focusSearchSuggest(chips.length - 1);
-    $('searchInput').focus();
-    return;
-  }
-  setTimeout(() => {
-    if (S.view !== 'search') return;
+  cancelSearchFocusLoop();
+  const token = searchFocusSeq;
+  const step = (left) => {
+    if (token !== searchFocusSeq || S.view !== 'search') return;
+    if ($('micBtn') && $('micBtn').classList.contains('listening')) return;
     if (forQuery !== null && $('searchInput').value.trim() !== forQuery) return;
     if (focusSearchResultsNow()) return;
-    if (tries > 0) return focusSearchResultsSoon(tries - 1, forQuery);
-    const chips = searchSuggestEls();
-    if (searchSuggestVisible() && chips.length) return focusSearchSuggest(chips.length - 1);
-    $('micBtn').blur();
-    $('searchInput').focus();
-  }, 120);
+    if ($('grid') && $('grid').querySelector('.gridMore')) {
+      const chips = searchSuggestEls();
+      if (searchSuggestVisible() && chips.length) return focusSearchSuggest(chips.length - 1);
+      focusSearchBarFromResults();
+      return;
+    }
+    if (left <= 0) {
+      const chips = searchSuggestEls();
+      if (searchSuggestVisible() && chips.length) return focusSearchSuggest(chips.length - 1);
+      focusSearchBarFromResults();
+      return;
+    }
+    searchFocusTimer = setTimeout(() => step(left - 1), 120);
+  };
+  step(tries);
 }
 let tvVoiceTarget = 'search';
 function setTvVoiceTarget(target) {
   tvVoiceTarget = (target === 'music' || target === 'audiobooks') ? target : 'search';
 }
+function clearAllVoiceListeningUi() {
+  if ($('micBtn')) $('micBtn').classList.remove('listening');
+  if ($('musicMicBtn')) $('musicMicBtn').classList.remove('listening');
+  if ($('abMicBtn')) $('abMicBtn').classList.remove('listening');
+}
 function submitVoiceSearch(text) {
-  $('micBtn').classList.remove('listening');
-  $('musicMicBtn').classList.remove('listening');
+  clearAllVoiceListeningUi();
   const q = String(text || '').trim();
   if (!q) return;
+  searchComposing = false;
+  searchSuggestPicked = false;
+  showSearchSuggest(null);
   $('searchInput').value = q;
+  syncSearchClear();
   submitSearchAndFocus();
 }
 window.__tvVoice = (text) => {
+  clearAllVoiceListeningUi();
   if (tvVoiceTarget === 'music' && S.view === 'music') return submitMusicVoiceSearch(text);
   if (tvVoiceTarget === 'audiobooks' && S.view === 'audiobooks') return submitAudiobookVoiceSearch(text);
-  submitVoiceSearch(text);
+  if (S.view === 'search') return submitVoiceSearch(text);
 };
 // The shell bridge takes PRIORITY: the Chromium WebView still EXPOSES webkitSpeechRecognition
 // but ships no speech backend, so the SR path always errored ("Voice search unavailable") and
@@ -30356,6 +30691,13 @@ if (window.TriboonTV && TriboonTV.startVoice) {
   $('micBtn').closest('.wrap').classList.add('hasMic');
   if ($('searchBar')) $('searchBar').classList.add('hasMic');
   $('micBtn').addEventListener('click', () => {
+    if ($('micBtn').classList.contains('listening') && TriboonTV.stopVoice) {
+      $('micBtn').classList.remove('listening');
+      try { TriboonTV.stopVoice(); } catch {}
+      return;
+    }
+    clearTimeout(searchTimer);
+    cancelSearchFocusLoop();
     setTvVoiceTarget('search');
     $('micBtn').classList.add('listening');
     try { TriboonTV.startVoice(); } catch { $('micBtn').classList.remove('listening'); }
@@ -30365,22 +30707,55 @@ if (SR) {
   $('micBtn').style.display = '';
   $('micBtn').closest('.wrap').classList.add('hasMic');
   if ($('searchBar')) $('searchBar').classList.add('hasMic');
-  let rec = null;
+  let rec = null, watch = null;
+  const finish = () => {
+    clearTimeout(watch); watch = null;
+    $('micBtn').classList.remove('listening');
+    rec = null;
+    _activeWebVoiceStop = null;
+  };
   $('micBtn').addEventListener('click', () => {
-    if (rec) { rec.stop(); return; }
+    if (rec) {
+      const cur = rec;
+      finish();
+      try { cur.stop(); } catch { try { cur.abort(); } catch {} }
+      return;
+    }
+    stopActiveVoiceInput();
+    clearTimeout(searchTimer);
+    cancelSearchFocusLoop();
     setTvVoiceTarget('search');
-    rec = new SR();
-    rec.lang = navigator.language || 'en-US';
-    rec.interimResults = true;
+    let gotFinal = false, lastTxt = '';
+    const r = new SR();
+    rec = r;
+    _activeWebVoiceStop = () => { if (rec === r) { finish(); try { r.abort(); } catch {} } };
+    r.lang = navigator.language || 'en-US';
+    r.interimResults = true;
     $('micBtn').classList.add('listening');
-    rec.onresult = (e) => {
-      const txt = [...e.results].map((r) => r[0].transcript).join('');
-      $('searchInput').value = txt;
-      if (e.results[e.results.length - 1].isFinal) submitVoiceSearch(txt);
+    watch = setTimeout(() => { if (rec === r) { finish(); try { r.abort(); } catch {} } }, 15000);
+    r.onresult = (e) => {
+      if (rec !== r) return;
+      const txt = [...e.results].map((x) => x[0].transcript).join('').trim();
+      lastTxt = txt;
+      if (txt) { $('searchInput').value = txt; syncSearchClear(); }
+      if (e.results[e.results.length - 1].isFinal) {
+        gotFinal = true;
+        finish();
+        submitVoiceSearch(txt);
+      }
     };
-    rec.onend = () => { $('micBtn').classList.remove('listening'); rec = null; if ($('searchInput').value.trim()) focusSearchResultsSoon(); };
-    rec.onerror = () => { $('micBtn').classList.remove('listening'); rec = null; toast('Voice search unavailable'); };
-    try { rec.start(); } catch { rec = null; $('micBtn').classList.remove('listening'); }
+    r.onend = () => {
+      if (rec !== r) return;
+      finish();
+      if (!gotFinal && lastTxt) submitVoiceSearch(lastTxt);
+    };
+    r.onerror = (ev) => {
+      if (rec !== r) return;
+      finish();
+      const err = ev && ev.error;
+      if (err !== 'aborted' && err !== 'no-speech') toast('Voice search unavailable');
+    };
+    try { r.start(); } catch { finish(); }
   });
 }
 // Search results are SECTIONED (Movies / TV Shows / Live TV) — one flat soup of cards made
@@ -30395,6 +30770,13 @@ function setupMusicVoiceSearch() {
   if (window.TriboonTV && TriboonTV.startVoice) {
     show();
     btn.addEventListener('click', () => {
+      if (btn.classList.contains('listening') && TriboonTV.stopVoice) {
+        btn.classList.remove('listening');
+        try { TriboonTV.stopVoice(); } catch {}
+        return;
+      }
+      clearTimeout(_musicSearchT);
+      cancelMusicSearchFocus();
       setTvVoiceTarget('music');
       btn.classList.add('listening');
       try { TriboonTV.startVoice(); } catch { btn.classList.remove('listening'); }
@@ -30403,22 +30785,55 @@ function setupMusicVoiceSearch() {
   }
   if (!SR) return;
   show();
-  let rec = null;
+  let rec = null, watch = null;
+  const finish = () => {
+    clearTimeout(watch); watch = null;
+    btn.classList.remove('listening');
+    rec = null;
+    _activeWebVoiceStop = null;
+  };
   btn.addEventListener('click', () => {
-    if (rec) { rec.stop(); return; }
+    if (rec) {
+      const cur = rec;
+      finish();
+      try { cur.stop(); } catch { try { cur.abort(); } catch {} }
+      return;
+    }
+    stopActiveVoiceInput();
+    clearTimeout(_musicSearchT);
+    cancelMusicSearchFocus();
     setTvVoiceTarget('music');
-    rec = new SR();
-    rec.lang = navigator.language || 'en-US';
-    rec.interimResults = true;
+    let gotFinal = false, lastTxt = '';
+    const r = new SR();
+    rec = r;
+    _activeWebVoiceStop = () => { if (rec === r) { finish(); try { r.abort(); } catch {} } };
+    r.lang = navigator.language || 'en-US';
+    r.interimResults = true;
     btn.classList.add('listening');
-    rec.onresult = (e) => {
-      const txt = [...e.results].map((r) => r[0].transcript).join('');
-      $('musicSearch').value = txt;
-      if (e.results[e.results.length - 1].isFinal) submitMusicVoiceSearch(txt);
+    watch = setTimeout(() => { if (rec === r) { finish(); try { r.abort(); } catch {} } }, 15000);
+    r.onresult = (e) => {
+      if (rec !== r) return;
+      const txt = [...e.results].map((x) => x[0].transcript).join('').trim();
+      lastTxt = txt;
+      if (txt) { $('musicSearch').value = txt; syncMusicClear(); }
+      if (e.results[e.results.length - 1].isFinal) {
+        gotFinal = true;
+        finish();
+        submitMusicVoiceSearch(txt);
+      }
     };
-    rec.onend = () => { btn.classList.remove('listening'); rec = null; if ($('musicSearch').value.trim()) focusMusicResultsSoon(); };
-    rec.onerror = () => { btn.classList.remove('listening'); rec = null; toast('Voice search unavailable'); };
-    try { rec.start(); } catch { rec = null; btn.classList.remove('listening'); }
+    r.onend = () => {
+      if (rec !== r) return;
+      finish();
+      if (!gotFinal && lastTxt) submitMusicVoiceSearch(lastTxt);
+    };
+    r.onerror = (ev) => {
+      if (rec !== r) return;
+      finish();
+      const err = ev && ev.error;
+      if (err !== 'aborted' && err !== 'no-speech') toast('Voice search unavailable');
+    };
+    try { r.start(); } catch { finish(); }
   });
 }
 setupMusicVoiceSearch();
@@ -30811,15 +31226,19 @@ function tmdbSearchRank(x, q) {
   return score;
 }
 // The page's own word check is Latin-only, so it dropped every Persian library hit the server had
-// already matched (spelling-folded, 2-letter words). A Persian query keeps the server's hits.
+// already matched (spelling-folded, 2-letter words). A Persian query keeps the server's hits, and
+// a Latin query also checks _matchTitle so searching an English catalog name still surfaces the
+// folder-named Persian local copy.
 function libraryHitShown(q, it) {
-  if (/[؀-ۿ]/.test(String(q || ''))) return true;
-  return searchLibraryTitleMatch(q, (it && (it.title || it.name)) || '');
+  if (/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(String(q || ''))) return true;
+  if (searchLibraryTitleMatch(q, (it && (it.title || it.name)) || '')) return true;
+  return !!(it && it._matchTitle && searchLibraryTitleMatch(q, it._matchTitle));
 }
 async function searchLibrary(q) {
   if (!q || String(q).trim().length < 2) return [];
   try {
-    const r = await api('/api/libraries/search?q=' + encodeURIComponent(String(q).trim()));
+    const sig = searchAbort ? searchAbort.signal : undefined;
+    const r = await api('/api/libraries/search?q=' + encodeURIComponent(String(q).trim()), { signal: sig, timeoutMs: 10000 });
     const libs = S.libraries || [];
     return (r.items || []).map((x) => {
       const lib = libs.find((l) => l.id === x.libraryId)
@@ -30845,19 +31264,35 @@ async function doSearch() {
   const q = $('searchInput').value.trim();
   const grid = $('grid');
   if (!q) { clearSearchResults({ invalidate: true }); return; }
+  cancelSearchRequest();
+  const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  searchAbort = ac;
+  const sig = ac ? ac.signal : undefined;
   const seq = ++searchSeq;
   const current = () => seq === searchSeq && S.view === 'search' && $('searchInput').value.trim() === q;
   const libJob = searchLibrary(q);
+  let tmdbFailed = false;
   if (S.serverInfo.tmdb) {
     try {
-      const [r, live, lib] = await Promise.all([
-        api('/api/tmdb/search/multi?query=' + encodeURIComponent(q) + '&include_adult=false'),
+      const qs = encodeURIComponent(q) + '&include_adult=false';
+      // Query /search/movie and /search/tv in parallel instead of /search/multi so popular actors
+      // and directors never crowd movies or shows out of the 20-slot page.
+      const [rm, rt, live, lib] = await Promise.all([
+        api('/api/tmdb/search/movie?query=' + qs, { signal: sig, timeoutMs: 12000 }).catch(() => null),
+        api('/api/tmdb/search/tv?query=' + qs, { signal: sig, timeoutMs: 12000 }).catch(() => null),
         searchChannels(q),
         libJob,
       ]);
       if (!current()) return;
+      if (!rm && !rt) throw new Error('tmdb search failed');
+      const r = {
+        didYouMean: (rm && rm.didYouMean) || (rt && rt.didYouMean) || '',
+        originalQuery: (rm && rm.originalQuery) || (rt && rt.originalQuery) || q,
+      };
+      const movieRows = ((rm && rm.results) || []).map((x) => ({ ...x, media_type: 'movie' }));
+      const tvRows = ((rt && rt.results) || []).map((x) => ({ ...x, media_type: 'tv' }));
       // Maturity applies to SEARCH too — a kids profile must not even see the cover art.
-      const ok = (r.results || []).filter((x) => x.media_type !== 'person' && (x.poster_path || x.backdrop_path) && passesMaturity(x));
+      const ok = [...movieRows, ...tvRows].filter((x) => (x.poster_path || x.backdrop_path) && passesMaturity(x));
       const bySearchRank = (a, b) => tmdbSearchRank(b, q) - tmdbSearchRank(a, q);
       const rawMovies = ok.filter((x) => x.media_type === 'movie').sort(bySearchRank);
       const rawShows = ok.filter((x) => x.media_type === 'tv').sort(bySearchRank);
@@ -30893,27 +31328,46 @@ async function doSearch() {
         ? [{ name: 'TV Shows', items: shows }, { name: 'Movies', items: movies }]
         : [{ name: 'Movies', items: movies }, { name: 'TV Shows', items: shows }];
       if (libHits.length || movies.length || shows.length || live.length) {
+        if (searchAbort === ac) searchAbort = null;
         return renderSearchSections([
           { name: 'Library', items: libHits },
           ...catalogSecs,
           { name: 'Live TV', items: live },
         ]);
       }
-    } catch {}
+    } catch (e) {
+      if ((ac && ac.signal.aborted) || !current()) return;
+      tmdbFailed = true;
+    }
   }
   // Raw usenet search has no ratings at all — restricted profiles never get the fallback.
   if (!current()) return;
   const lib = (await libJob.catch(() => [])).filter((it) => libraryHitShown(q, it));
   if (!current()) return; // the library wait can lose to a newer keystroke too
+  // If TMDB failed/timed out, do NOT fall through to slow Usenet indexer fan-out — piling up
+  // indexer searches across 6 HTTP/1.1 sockets is what froze the app after a few searches.
+  if (tmdbFailed) {
+    const live = await searchChannels(q).catch(() => []);
+    if (!current()) return;
+    if (searchAbort === ac) searchAbort = null;
+    if (lib.length || live.length) {
+      return renderSearchSections([{ name: 'Library', items: lib }, { name: 'Live TV', items: live }]);
+    }
+    renderGrid([]);
+    grid.innerHTML = '<div class="gridMore">Search timed out — try again.</div>';
+    return;
+  }
   if ((S.maxLevel ?? 4) < 4) {
+    if (searchAbort === ac) searchAbort = null;
     if (lib.length) return renderSearchSections([{ name: 'Library', items: lib }]);
     renderGrid([]); $('grid').innerHTML = '<div class="gridMore">No results for this profile.</div>'; return;
   }
   // No TMDB (or no metadata hits): search indexers directly and synthesize poster cards.
   try {
-    const r = await api('/api/search?q=' + encodeURIComponent(q));
+    const r = await api('/api/search?q=' + encodeURIComponent(q), { signal: sig, timeoutMs: 12000 });
     if (!current()) return;
-    const cards = r.candidates.slice(0, 24).map((c, i) => ({
+    if (searchAbort === ac) searchAbort = null;
+    const cards = (r.candidates || []).slice(0, 24).map((c, i) => ({
       key: 't:' + c.name, title: c.name.slice(0, 70), year: '', genre: c.indexer, type: null,
       rating: '—', q: c.name, overview: (c.reasons || []).join(' · '),
       poster: procBackdrop(200 + i * 12, 320, i + 3), backdrop: procBackdrop(200 + i * 12, 320, i + 3),
@@ -30921,7 +31375,12 @@ async function doSearch() {
     if (lib.length) return renderSearchSections([{ name: 'Library', items: lib }, { name: 'Usenet', items: cards }]);
     renderGrid(cards);
     if (!cards.length) grid.innerHTML = '<div class="gridMore">No matches.</div>';
-  } catch (e) { toast('Search failed: ' + e.message); }
+  } catch (e) {
+    if ((ac && ac.signal.aborted) || !current()) return;
+    if (searchAbort === ac) searchAbort = null;
+    if (lib.length) return renderSearchSections([{ name: 'Library', items: lib }]);
+    toast('Search failed: ' + e.message);
+  }
 }
 
 /* ============ settings ============ */
@@ -31497,7 +31956,7 @@ async function refreshSettings(opts = {}) {
   }
   S._settingsFreshAt = now;
   try {
-    const st = await api('/api/status');
+    const [st, s] = await Promise.all([api('/api/status'), api('/api/settings')]);
     const d = st.device || {};
     const up = d.uptimeSec ? (d.uptimeSec > 86400 ? Math.floor(d.uptimeSec / 86400) + 'd ' : '') +
       Math.floor((d.uptimeSec % 86400) / 3600) + 'h ' + Math.floor((d.uptimeSec % 3600) / 60) + 'm' : '—';
@@ -31515,7 +31974,6 @@ async function refreshSettings(opts = {}) {
       <div class="kv"><span>Active mounts</span><span>${st.mounts}</span></div>`;
     if (opts.force || tab === 'activity') refreshActivity();
     if (opts.force || tab === 'security') refreshSecurity();
-    const s = await api('/api/settings');
     paintSettingsUnreadable(s);
     setPerfForm(s.streamingPerformance || {});
     S.perfRecommendation = null;
@@ -32433,6 +32891,12 @@ function switchView(v, push = true, opts = {}) {
   resetScreensaverIdle();
   if (prevView === 'multiview' && v !== 'multiview' && S.multiView) closeMultiView({ silent: true });
   if (prevView === 'search' && v !== 'search' && !opts.preserveSearch) resetSearchPage();
+  if (prevView !== v && (prevView === 'music' || prevView === 'audiobooks')) {
+    stopActiveVoiceInput();
+    if (window.TriboonTV && TriboonTV.stopVoice) { try { TriboonTV.stopVoice(); } catch {} }
+    if (prevView === 'music') { abortMusicSearch(); cancelMusicSearchFocus(); }
+    if (prevView === 'audiobooks') abortAbSearch();
+  }
   if (prevView === 'home' && v !== 'home') S._homeLoadRun = (S._homeLoadRun || 0) + 1;
   if (['movies', 'tv', 'kids'].includes(prevView) && prevView !== v) saveBrowseCache(prevView);
   if (['movies', 'tv', 'kids', 'watchlist', 'library'].includes(prevView) && prevView !== v) S._gridKind = '';
@@ -32950,7 +33414,7 @@ function scrollDetailFocusIntoView(el) {
   let delta = 0;
   if (top < s.top + padTop) delta = top - s.top - padTop;
   else if (bot > s.bottom - padBot) delta = bot - (s.bottom - padBot);
-  if (Math.abs(delta) > 2) sc.scrollTo({ top: sc.scrollTop + delta, behavior: 'smooth' });
+  if (Math.abs(delta) > 2) sc.scrollTo({ top: sc.scrollTop + delta, behavior: focusScrollBehavior() });
   return true;
 }
 function detailRowScroller(el) {
@@ -34132,6 +34596,7 @@ document.addEventListener('keydown', (e) => {
     if (S.zone === 'rail') { S.zone = ''; clearFocus(); }
   }
   if (inInput && S.view === 'search' && ae === $('searchInput')) {
+    const tv = document.body.classList.contains('tv');
     if (k === 'ArrowDown') {
       e.preventDefault();
       moveSearchDownFromField();
@@ -34142,56 +34607,65 @@ document.addEventListener('keydown', (e) => {
       searchAndFocusResults();
       return;
     }
-    // Caret at end + a query present: → steps to the clear (X). On-device this is the ONLY path that
-    // reaches it, since keys arrive on `document` and the input's own element listener never fires.
-    if (k === 'ArrowRight' && ae.selectionStart >= ae.value.length && searchClearVisible()) {
+    // Caret at end + a query present (or any Right on TV, where synthetic arrows cannot move the
+    // native caret): → steps to the clear (X).
+    if ((k === 'ArrowRight' && ae.selectionStart >= ae.value.length && searchClearVisible())
+        || (tv && k === 'ArrowRight' && searchClearVisible())) {
       e.preventDefault(); ae.blur();
       return focusSearchClear();
     }
-    if (document.body.classList.contains('tv') && (k === 'Escape' || k === 'Backspace' || (k === 'ArrowLeft' && ae.selectionStart === 0))) {
+    // On TV, synthetic ArrowLeft cannot move the native caret inside <input>, so ArrowLeft always
+    // steps out to the Mic (even when a query is present) or the rail. Backspace stays native so
+    // keyboard/IME deletion works instead of kicking focus out of the field.
+    if (tv && (k === 'Escape' || k === 'ArrowLeft')) {
       e.preventDefault();
       ae.blur();
-      if (focusSearchMic()) return; return enterRail();
+      if (focusSearchMicNow()) return; return enterRail();
+    }
+    if (!tv && k === 'ArrowLeft' && ae.selectionStart === 0 && $('micBtn') && $('micBtn').style.display !== 'none') {
+      e.preventDefault();
+      return focusSearchMicNow();
     }
     return;
   }
   if (inInput && ae === $('musicSearch')) {
+    const tv = document.body.classList.contains('tv');
     if (k === 'ArrowDown' || k === 'Enter') {
       e.preventDefault();
       return k === 'Enter' ? musicSearchAndFocusResults() : moveMusicSearchDown();
     }
     if (k === 'ArrowUp') {
-      if (document.body.classList.contains('tv')) { e.preventDefault(); return; }
+      if (tv) { e.preventDefault(); return; }
     }
-    if (k === 'ArrowRight' && ae.selectionStart >= ae.value.length && musicClearVisible()) {
+    if ((k === 'ArrowRight' && ae.selectionStart >= ae.value.length && musicClearVisible())
+        || (tv && k === 'ArrowRight' && musicClearVisible())) {
       e.preventDefault(); ae.blur();
       return focusMusicClear();
     }
-    if (document.body.classList.contains('tv') && (k === 'Escape' || k === 'Backspace' || (k === 'ArrowLeft' && ae.selectionStart === 0))) {
+    if (tv && (k === 'Escape' || k === 'ArrowLeft')) {
       e.preventDefault(); ae.blur();
       return musicMicVisible() ? focusMusicSearch() : enterRail();
     }
-    // TV remotes: never let leftover arrows fall through to the generic input swallow
-    // (that is what made Music D-pad feel dead after landing on search).
-    if (document.body.classList.contains('tv') && k.startsWith('Arrow')) {
-      e.preventDefault();
-      return moveMusicSearchDown();
+    if (!tv && k === 'ArrowLeft' && ae.selectionStart === 0) {
+      e.preventDefault(); ae.blur();
+      return musicMicVisible() ? focusMusicSearch() : enterRail();
     }
     return;
   }
   if (inInput && S.view === 'livetv' && ae === $('chSearch')) {
+    const tv = document.body.classList.contains('tv');
     if (k === 'ArrowDown') {
       e.preventDefault(); ae.blur();
       return liveTopDown();
     }
-    if (k === 'ArrowRight' && ae.selectionStart >= ae.value.length) {
+    if (k === 'ArrowRight' && (ae.selectionStart >= ae.value.length || tv)) {
       // The X sits between the field and the Multiview button — step onto it first when a filter is
       // typed (mirrors Music/global search), else jump straight to Multiview.
       const clr = $('chClearBtn');
       if (clr && !clr.hidden) { e.preventDefault(); ae.blur(); clr.focus(); return; }
       if ($('chMultiBtn')) { e.preventDefault(); ae.blur(); return focusLiveToolbar('chMultiBtn'); }
     }
-    if (document.body.classList.contains('tv') && (k === 'Escape' || k === 'Backspace' || (k === 'ArrowLeft' && ae.selectionStart === 0))) {
+    if (tv && (k === 'Escape' || k === 'ArrowLeft')) {
       e.preventDefault(); ae.blur();
       return enterRail();
     }
@@ -34319,9 +34793,12 @@ document.addEventListener('keydown', (e) => {
       return;
     }
     if (S.zone === 'musicNowLyrics') {
-      if (k === 'ArrowUp') return focusMusicNowControl($('mnLyrics'));
+      const box = $('mnLyricsPanel');
+      if (k === 'ArrowUp') {
+        if (box && box.scrollTop > 4) { box.scrollTop = Math.max(0, box.scrollTop - 72); return; }
+        return focusMusicNowControl($('mnLyrics'));
+      }
       if (k === 'ArrowDown') {
-        const box = $('mnLyricsPanel');
         if (box) box.scrollTop += 72;
         return;
       }
@@ -34603,6 +35080,13 @@ document.addEventListener('keydown', (e) => {
     }
     if ($('playerAbout').classList.contains('open')) {
       if (k === 'Escape' || k === 'Backspace' || k === 'ArrowUp') closePlayerAbout();
+      else if (k === 'ArrowLeft' || k === 'ArrowRight') {
+        const castEl = $('paCast');
+        if (castEl && castEl.scrollWidth > castEl.clientWidth) {
+          const step = Math.max(220, Math.round(castEl.clientWidth * 0.65));
+          castEl.scrollLeft += k === 'ArrowRight' ? step : -step;
+        }
+      }
       return;
     }
     if ($('playerEpisodes').classList.contains('open')) {
@@ -34940,7 +35424,7 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowUp') {
         if (si > 0) return focusSearchSuggest(si - 1);
         document.activeElement.blur();
-        return $('searchInput').focus();
+        return focusSearchBarFromResults();
       }
       if (k === 'ArrowDown') {
         if (si >= 0 && si < sug.length - 1) return focusSearchSuggest(si + 1);
@@ -35196,7 +35680,7 @@ document.addEventListener('keyup', (e) => {
 // at the true root it answers 'exit' and the shell shows press-back-again-to-quit.
 function backToBrowseSectionMenu() {
   const browseSection = S.view === 'movies' || S.view === 'tv' || S.view === 'kids' || S.view === 'library'
-    || S.view === 'discover' || S.view === 'calendar' || S.view === 'watchlist';
+    || S.view === 'discover' || S.view === 'calendar' || S.view === 'watchlist' || S.view === 'audiobooks';
   if (!browseSection) return false;
   // Only the open menu counts. A leftover zone==='rail' with the menu closed
   // used to skip this and jump Home (Watchlist/Calendar first Back).
@@ -35570,36 +36054,39 @@ async function enterAppShell() {
   S.libraries = S.libraries || [];
   applyMenuPrefs(); // search-first default order + user's hide/reorder choices
   loadProfilePrefs(); // pull account-synced prefs (auto-CC, screensaver, languages, …) for this profile
-  // Live TV is LAZY now (owner: don't load everything at startup). The 19k-channel parse is
-  // warmed the moment the user shows intent — hovering or focusing the Live TV rail item —
-  // not at boot. The server's stale-while-revalidate cache still makes the first open fast.
-  const nav = $('navLiveTv');
-  if (nav) { nav.addEventListener('mouseenter', prefetchLiveTv); nav.addEventListener('focus', prefetchLiveTv, true); }
-  // Music playlists load lazily too — warm them on rail intent so the Music tab opens instantly.
-  const navMx = $('navMusic');
-  if (navMx) { navMx.addEventListener('mouseenter', prefetchMusic); navMx.addEventListener('focus', prefetchMusic, true); }
-  // Desktop/web: rolling over (hovering) the rail expands its labels AND PUSHES the whole page right —
-  // titles, art, covers and every view slide over via the body.railOpen transform, then slide back
-  // LEFT on mouseleave. (The Triboon logo that used to be the click-toggle is gone; the profile avatar
-  // took its place, so hover is the trigger now.) TV is unaffected — it expands+pushes from the
-  // explicit D-pad state (railOpen/.expanded), never hover (the WebView can latch :hover).
-  $('rail').addEventListener('mouseenter', () => {
-    if (document.body.classList.contains('tv')) return; // TV drives expand via D-pad, not hover
-    document.body.classList.add('railOpen'); // PUSH the content right (the Plex-style slide, all pages)
-    $('rail').classList.add('expanded');     // widen the rail so the labels show
-  });
-  $('rail').addEventListener('mouseleave', () => {
-    // Desktop: leaving the rail slides the content back LEFT and closes the labels.
-    if (!document.body.classList.contains('tv')) { document.body.classList.remove('railOpen'); $('rail').classList.remove('expanded'); return; }
-    if (S.zone === 'rail') return;
-    const wasRail = S.zone === 'rail';
-    leaveRail();
-    if (wasRail) {
-      S.zone = '';
-      clearFocus();
-      setTimeout(() => focusContent(), 40);
-    }
-  });
+  if (!S._railHoverWired) {
+    S._railHoverWired = true;
+    // Live TV is LAZY now (owner: don't load everything at startup). The 19k-channel parse is
+    // warmed the moment the user shows intent — hovering or focusing the Live TV rail item —
+    // not at boot. The server's stale-while-revalidate cache still makes the first open fast.
+    const nav = $('navLiveTv');
+    if (nav) { nav.addEventListener('mouseenter', prefetchLiveTv); nav.addEventListener('focus', prefetchLiveTv, true); }
+    // Music playlists load lazily too — warm them on rail intent so the Music tab opens instantly.
+    const navMx = $('navMusic');
+    if (navMx) { navMx.addEventListener('mouseenter', prefetchMusic); navMx.addEventListener('focus', prefetchMusic, true); }
+    // Desktop/web: rolling over (hovering) the rail expands its labels AND PUSHES the whole page right —
+    // titles, art, covers and every view slide over via the body.railOpen transform, then slide back
+    // LEFT on mouseleave. (The Triboon logo that used to be the click-toggle is gone; the profile avatar
+    // took its place, so hover is the trigger now.) TV is unaffected — it expands+pushes from the
+    // explicit D-pad state (railOpen/.expanded), never hover (the WebView can latch :hover).
+    $('rail').addEventListener('mouseenter', () => {
+      if (document.body.classList.contains('tv')) return; // TV drives expand via D-pad, not hover
+      document.body.classList.add('railOpen'); // PUSH the content right (the Plex-style slide, all pages)
+      $('rail').classList.add('expanded');     // widen the rail so the labels show
+    });
+    $('rail').addEventListener('mouseleave', () => {
+      // Desktop: leaving the rail slides the content back LEFT and closes the labels.
+      if (!document.body.classList.contains('tv')) { document.body.classList.remove('railOpen'); $('rail').classList.remove('expanded'); return; }
+      if (S.zone === 'rail') return;
+      const wasRail = S.zone === 'rail';
+      leaveRail();
+      if (wasRail) {
+        S.zone = '';
+        clearFocus();
+        setTimeout(() => focusContent(), 40);
+      }
+    });
+  }
   $('appClock').classList.add('show'); updateClocks();
   installScreensaverIdle();
   // Scroll-fade: the top edge fades out as a list scrolls up.
@@ -35876,6 +36363,10 @@ function abFmt(s) {
   return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
 }
 let abSearchDebounce = null;
+let abSearchAbort = null;
+function abortAbSearch() {
+  if (abSearchAbort) { try { abSearchAbort.abort(); } catch {} abSearchAbort = null; }
+}
 function loadAudiobooks() {
   const inp = $('abSearch');
   if (!inp._bound) {
@@ -35916,6 +36407,7 @@ function syncAbClear() {
 }
 function clearAbSearch(opts = {}) {
   clearTimeout(abSearchDebounce);
+  abortAbSearch();
   AB.searchReq = (AB.searchReq || 0) + 1;
   $('abSearch').value = '';
   syncAbClear();
@@ -36127,6 +36619,8 @@ function abRemoveContinue(asin, meta) {
 }
 async function abSearchRun(q) {
   q = String(q || '').trim();
+  clearTimeout(abSearchDebounce);
+  abortAbSearch();
   const reqId = (AB.searchReq = (AB.searchReq || 0) + 1);
   const current = () => reqId === AB.searchReq && S.view === 'audiobooks'
     && $('abSearch').value.trim() === q;
@@ -36135,21 +36629,31 @@ async function abSearchRun(q) {
   showAbDiscovery(false); // hide discovery/continue while showing search results
   $('abFree').innerHTML = '';
   $('abHint').textContent = 'Searching…';
-  try {
-    const { results } = await api('/api/audible/search?q=' + encodeURIComponent(q));
-    if (!current()) return false;
-    $('abHint').textContent = results.length ? `${results.length} result${results.length === 1 ? '' : 's'}` : 'No audiobooks found.';
-    renderAbGrid(results);
-  } catch (e) {
-    if (!current()) return false;
-    $('abHint').textContent = 'Search failed: ' + e.message;
-  }
-  // Public-domain (free) results, fetched in parallel — best-effort, never blocks the main list.
-  try {
-    const pr = await api('/api/pubaudio/search?q=' + encodeURIComponent(q));
-    if (!current()) return false;
-    renderAbFree(pr.results || []);
-  } catch {}
+  const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  abSearchAbort = ac;
+  const sig = ac ? ac.signal : undefined;
+  // Fetch Audible and public-domain (LibriVox) results genuinely in parallel, rendering each as it lands.
+  const mainP = (async () => {
+    try {
+      const { results } = await api('/api/audible/search?q=' + encodeURIComponent(q), { signal: sig, timeoutMs: 12000 });
+      if (!current()) return false;
+      $('abHint').textContent = results.length ? `${results.length} result${results.length === 1 ? '' : 's'}` : 'No audiobooks found.';
+      renderAbGrid(results);
+    } catch (e) {
+      if (!current()) return false;
+      if (ac && ac.signal.aborted) return false;
+      $('abHint').textContent = 'Search failed: ' + e.message;
+    }
+  })();
+  const freeP = (async () => {
+    try {
+      const pr = await api('/api/pubaudio/search?q=' + encodeURIComponent(q), { signal: sig, timeoutMs: 12000 });
+      if (!current()) return false;
+      renderAbFree(pr.results || []);
+    } catch {}
+  })();
+  await Promise.allSettled([mainP, freeP]);
+  if (abSearchAbort === ac) abSearchAbort = null;
   return current();
 }
 function renderAbGrid(items) {
@@ -36228,7 +36732,17 @@ async function openAbDetail(asin, fallback) {
     chapTog.setAttribute('aria-expanded', String(!nowCollapsed));
   });
   $('abDwrap').querySelectorAll('.abChap:not(.abBm)').forEach((el) =>
-    el.addEventListener('click', () => abStartPlay(book, fallback, chapters[+el.dataset.ci].startMs / 1000)));
+    el.addEventListener('click', () => {
+      const sec = chapters[+el.dataset.ci].startMs / 1000;
+      if (AB.now && String(AB.now.asin) === String(asin) && !AB.now.multi) {
+        $('abDetail').classList.remove('open');
+        openAbPlayer();
+        const a = $('abAudio');
+        try { a.currentTime = sec; if (a.paused) a.play().catch(() => {}); } catch {}
+        return;
+      }
+      abStartPlay(book, fallback, sec);
+    }));
   $('abDwrap').querySelectorAll('.abBm').forEach((el) => el.addEventListener('click', () => {
     const b = bms[+el.dataset.bi]; if (!b) return;
     abStartPlay(book, fallback, b.track != null ? { track: b.track, offset: b.pos } : b.pos);
@@ -36286,22 +36800,45 @@ async function abStartPlay(book, fallback, seekTo) {
   const author = (book.authors || (fallback && fallback.authors) || [])[0] || '';
   // No title: never search usenet or the free libraries with an empty query (it matches any book).
   if (!String(title).trim()) { toast('This book has no title to search for'); return; }
+  const playReq = (AB.playReq = (AB.playReq || 0) + 1);
+  const current = () => playReq === AB.playReq && S.view === 'audiobooks';
   toast('Finding a source…');
+  // Look up saved resume BEFORE /api/audiobook/play so we can pass resumeFrac to warm the right
+  // byte window immediately instead of waiting after mount.
+  const asinBefore = typeof AB !== 'undefined' ? AB.asin : null;
+  let savedResume = null;
+  if (!seekTo && asinBefore && typeof abResumePos === 'function') {
+    try { savedResume = await abResumePos(asinBefore); } catch {}
+    if (!current()) return;
+  }
+  const runtimeSec = Number(book.runtimeMin || (fallback && fallback.runtimeMin) || 0) * 60;
+  const resumeSec = (typeof seekTo === 'number' && seekTo > 0) ? seekTo : (typeof savedResume === 'number' && savedResume > 0 ? savedResume : 0);
+  const resumeFrac = (runtimeSec > 60 && resumeSec > 5 && resumeSec < runtimeSec) ? Math.min(0.98, resumeSec / runtimeSec) : 0;
   let payload;
   try {
-    payload = await api('/api/audiobook/play', { method: 'POST', body: { title, author } });
+    payload = await api('/api/audiobook/play', { method: 'POST', body: { title, author, ...(resumeFrac > 0 ? { resumeFrac } : {}) } });
   } catch (e) {
+    if (!current()) return;
     // Not on usenet → try the free public-domain sources (LibriVox / Internet Archive) before failing.
     // Great for classics surfaced in discovery; a no-op for modern/niche titles that aren't PD.
     try {
       const pr = await api('/api/pubaudio/search?q=' + encodeURIComponent(title));
+      if (!current()) return;
       const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
       const want = norm(title);
       const match = (pr.results || []).find((x) => { const t = norm(x.title); return t === want || t.includes(want) || want.includes(t); });
       if (match) { toast('Not on usenet — playing the free public-domain edition.'); return abPlayPubaudio(match); }
     } catch {}
+    if (!current()) return;
     toast((e.detail && e.detail.summary) || e.message || 'Couldn’t start playback.');
     return;
+  }
+  if (!current()) {
+    if (payload && payload.sessionId && typeof releasePlaybackSession === 'function') releasePlaybackSession(payload.sessionId);
+    return;
+  }
+  if (AB.sessionId && AB.sessionId !== payload.sessionId && typeof releasePlaybackSession === 'function') {
+    releasePlaybackSession(AB.sessionId);
   }
   AB.mountId = payload.id; AB.sessionId = payload.sessionId;
   const asin = AB.asin; // the detail ASIN we're playing — snapshotted into AB.now below
@@ -36313,13 +36850,18 @@ async function abStartPlay(book, fallback, seekTo) {
   const tracks = multi ? payload.audioFiles.map((f) => ({
     index: f.index, name: f.name, url: `${payload.audioBase}/${f.index}?t=${encodeURIComponent(payload.streamToken)}`,
   })) : [];
-  // Chapters: for single-file prefer Audnexus (detail) then embedded; for multi-file the tracks ARE
-  // the chapters (their names, cleaned).
+  // Chapters: for single-file prefer Audnexus (detail) then load embedded chapters ASYNCHRONOUSLY
+  // after playback starts so ffprobe never blocks audio start by 5-30s.
   let chapters = AB.chapters.slice();
-  if (!multi && !chapters.length) {
-    try { const c = await api('/api/audiobook/chapters/' + AB.mountId); chapters = (c && c.chapters) || []; } catch {}
-  }
   AB.now = { book, author, asin, chapters, curChap: -1, active: false, tracks, trackIdx: 0, multi };
+  if (!multi && !chapters.length && AB.mountId) {
+    const mid = AB.mountId;
+    api('/api/audiobook/chapters/' + mid).then((c) => {
+      if (!current() || !AB.now || AB.mountId !== mid) return;
+      const list = (c && c.chapters) || [];
+      if (list.length) { AB.now.chapters = list; AB.chapters = list; }
+    }).catch(() => {});
+  }
   $('abPcover').style.backgroundImage = artBackground(book.cover, artFallback('audiobook-player:' + asin, 65));
   $('abPbg').style.backgroundImage = artBackground(book.cover, artFallback('audiobook-player-bg:' + asin, 66));
   $('abPtitle').textContent = title;
@@ -36330,13 +36872,18 @@ async function abStartPlay(book, fallback, seekTo) {
     // Resume a multi-file book to the saved (track, offset); an explicit chapter tap overrides.
     let idx = 0, off = 0;
     if (seekTo && seekTo.track != null) { idx = seekTo.track; off = seekTo.offset || 0; }
-    else if (!seekTo) { try { const r = await abResumePos(asin); if (r && r.track != null) { idx = r.track; off = r.offset || 0; } } catch {} }
+    else if (!seekTo && savedResume && savedResume.track != null) { idx = savedResume.track; off = savedResume.offset || 0; }
+    if (!current()) return;
     abLoadTrack(idx, off);
   } else {
     audio.src = payload.streamUrl;
-    let start = (seekTo && typeof seekTo === 'number') ? seekTo : 0;
-    if (!seekTo) { try { const r = await abResumePos(asin); start = (r && typeof r === 'number') ? r : 0; } catch {} }
-    audio.play().then(() => { if (start > 1) audio.currentTime = start; }).catch(() => {});
+    const start = (seekTo && typeof seekTo === 'number') ? seekTo : ((typeof savedResume === 'number') ? savedResume : 0);
+    if (!current()) return;
+    if (start > 1) {
+      const seekOnce = () => { if (current() && Math.abs((audio.currentTime || 0) - start) > 2) { try { audio.currentTime = start; } catch {} } };
+      audio.addEventListener('loadedmetadata', seekOnce, { once: true });
+    }
+    audio.play().then(() => { if (start > 1 && current() && Math.abs((audio.currentTime || 0) - start) > 2) audio.currentTime = start; }).catch(() => {});
   }
   abStartSaveLoop();
 }
@@ -36356,14 +36903,18 @@ function abLoadTrack(idx, seekSec) {
 // Play a public-domain book (LibriVox / Internet Archive) — fetch its chapter MP3s and drive the
 // SAME multi-file player with the direct (external) URLs. No usenet mount, no session.
 async function abPlayPubaudio(item) {
+  const playReq = (AB.playReq = (AB.playReq || 0) + 1);
+  const current = () => playReq === AB.playReq && S.view === 'audiobooks';
   toast('Loading…');
   let tracks;
   try {
     const r = await api(`/api/pubaudio/tracks?source=${encodeURIComponent(item.source)}&id=${encodeURIComponent(item.id)}`);
+    if (!current()) return;
     tracks = (r && r.tracks) || [];
-  } catch (e) { toast('Couldn’t load: ' + e.message); return; }
+  } catch (e) { if (current()) toast('Couldn’t load: ' + e.message); return; }
   if (!tracks.length) { toast('No audio found for this title.'); return; }
   const asin = 'pub:' + item.source + ':' + item.id; // stable Continue-Listening key (no ASIN)
+  if (AB.sessionId && typeof releasePlaybackSession === 'function') releasePlaybackSession(AB.sessionId);
   AB.mountId = null; AB.sessionId = null;
   AB.now = { book: { title: item.title, cover: item.cover, authors: item.authors || [] }, author: (item.authors || [])[0] || '',
     asin, chapters: [], curChap: -1, active: false,
@@ -36376,6 +36927,7 @@ async function abPlayPubaudio(item) {
   openAbPlayer();
   let idx = 0, off = 0;
   try { const r = await abResumePos(asin); if (r && r.track != null) { idx = r.track; off = r.offset || 0; } } catch {}
+  if (!current()) return;
   abLoadTrack(idx, off);
   abStartSaveLoop();
 }
@@ -36401,13 +36953,16 @@ function closeAbPlayer() { $('abPlayer').classList.remove('open'); updateAbMini(
 // Stop playback entirely — used when leaving the Audiobooks section. Saves position first so the
 // book reappears under "Continue Listening" and resumes where it left off.
 function stopAudiobook() {
-  if (!AB.now && !$('abAudio').src) return;
+  AB.playReq = (AB.playReq || 0) + 1; // cancel any in-flight abStartPlay/abPlayPubaudio
+  const sid = AB.sessionId;
+  if (!AB.now && !$('abAudio').src && !sid) return;
   abSaveWatch();
   const a = $('abAudio');
   try { a.pause(); a.removeAttribute('src'); a.load(); } catch {}
-  clearInterval(AB.saveTimer);
+  clearInterval(AB.saveTimer); AB.saveTimer = null;
   clearTimeout(AB.sleepTimer); AB.sleep = 0;
   AB.now = null; AB.sessionId = null; AB.mountId = null;
+  if (sid && typeof releasePlaybackSession === 'function') releasePlaybackSession(sid);
   $('abPlayer').classList.remove('open');
   window.__tvAudioOwner = null;
   try { if (window.TriboonTV && TriboonTV.musicStop) TriboonTV.musicStop(); } catch {}
@@ -36507,6 +37062,7 @@ function abStartSaveLoop() { clearInterval(AB.saveTimer); AB.saveTimer = setInte
     const n = AB.now;
     // Multi-file: auto-advance to the next track (chapter). Otherwise the book is finished.
     if (n && n.multi && n.trackIdx + 1 < n.tracks.length) { abLoadTrack(n.trackIdx + 1, 0); return; }
+    clearInterval(AB.saveTimer); AB.saveTimer = null;
     if (n) n.active = false;
     try { if (window.TriboonTV && TriboonTV.musicStop) TriboonTV.musicStop(); } catch {}
     updateAbMini();
@@ -36515,14 +37071,18 @@ function abStartSaveLoop() { clearInterval(AB.saveTimer); AB.saveTimer = setInte
   // single-file usenet mounts — multi-file playlists (usenet tracks or public-domain URLs) don't
   // remount a whole session on one track hiccup.
   audio.addEventListener('error', async () => {
-    if (!AB.sessionId || (AB.now && AB.now.multi)) return;
+    const sid = AB.sessionId;
+    if (!sid || !AB.now || AB.now.multi) return;
+    const playReq = AB.playReq;
     const at = audio.currentTime || 0;
     try {
       const frac = audio.duration ? at / audio.duration : 0;
-      const next = await api('/api/advance/' + AB.sessionId, { method: 'POST', body: { resumeFrac: frac } });
+      const next = await api('/api/advance/' + sid, { method: 'POST', body: { resumeFrac: frac } });
+      if (AB.playReq !== playReq || AB.sessionId !== sid || !AB.now) return;
       AB.mountId = next.id; audio.src = next.streamUrl;
-      audio.play().then(() => { if (at > 1) audio.currentTime = at; }).catch(() => {});
-    } catch { toast('Playback source was lost.'); }
+      audio.playbackRate = AB.speed;
+      audio.play().then(() => { audio.playbackRate = AB.speed; if (at > 1 && AB.playReq === playReq) audio.currentTime = at; }).catch(() => {});
+    } catch { if (AB.playReq === playReq && AB.sessionId === sid) toast('Playback source was lost.'); }
   });
   $('abPlayPause').addEventListener('click', () => { audio.paused ? audio.play().catch(() => {}) : audio.pause(); });
   $('abBack30').addEventListener('click', () => { audio.currentTime = Math.max(0, audio.currentTime - 30); });
@@ -36532,8 +37092,8 @@ function abStartSaveLoop() { clearInterval(AB.saveTimer); AB.saveTimer = setInte
   const seekTo = (clientX) => { const r = $('abBar').getBoundingClientRect(); const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width)); if (audio.duration) audio.currentTime = f * audio.duration; };
   $('abBar').addEventListener('click', (e) => seekTo(e.clientX));
   $('abBar').addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowRight') { audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 10); e.preventDefault(); }
-    else if (e.key === 'ArrowLeft') { audio.currentTime = Math.max(0, audio.currentTime - 10); e.preventDefault(); }
+    if (e.key === 'ArrowRight') { audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 10); e.preventDefault(); e.stopPropagation(); }
+    else if (e.key === 'ArrowLeft') { audio.currentTime = Math.max(0, audio.currentTime - 10); e.preventDefault(); e.stopPropagation(); }
   });
   $('abSpeed').addEventListener('click', () => {
     const i = (AB_SPEEDS.indexOf(AB.speed) + 1) % AB_SPEEDS.length;
@@ -36604,11 +37164,28 @@ function abSetSleep(mins) {
    Transport/seek are shared with Music and routed by __tvAudioOwner so only the active source reacts. */
 function abNativeSession(playing) {
   try {
-    if (!(window.TriboonTV && TriboonTV.musicSession)) return;
     const n = AB.now; if (!n) return;
     window.__tvAudioOwner = 'audiobook';
     const b = n.book || {}, a = $('abAudio');
     const chap = n.multi ? abTrackLabel(n.trackIdx) : ((n.curChap >= 0 && n.chapters[n.curChap]) ? n.chapters[n.curChap].title : '');
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: b.title || 'Audiobook',
+          artist: n.author || '',
+          album: chap || '',
+          artwork: b.cover ? [{ src: b.cover }] : [],
+        });
+        navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+        navigator.mediaSession.setActionHandler('play', () => abNativeTransport('play'));
+        navigator.mediaSession.setActionHandler('pause', () => abNativeTransport('pause'));
+        navigator.mediaSession.setActionHandler('previoustrack', () => abNativeTransport('prev'));
+        navigator.mediaSession.setActionHandler('nexttrack', () => abNativeTransport('next'));
+        navigator.mediaSession.setActionHandler('seekbackward', () => abNativeTransport('rewind'));
+        navigator.mediaSession.setActionHandler('seekforward', () => abNativeTransport('fast_forward'));
+      } catch {}
+    }
+    if (!(window.TriboonTV && TriboonTV.musicSession)) return;
     TriboonTV.musicSession(JSON.stringify({
       playing: !!playing, title: b.title || 'Audiobook', artist: n.author || '',
       album: chap, artwork: b.cover || '',
@@ -36620,6 +37197,9 @@ function abNativeTransport(action) {
   const a = $('abAudio');
   if (action === 'play') a.play().catch(() => {});
   else if (action === 'pause') a.pause();
+  else if (action === 'toggle') { a.paused ? a.play().catch(() => {}) : a.pause(); }
+  else if (action === 'fast_forward') { a.currentTime = Math.min(a.duration || 1e9, (a.currentTime || 0) + 30); }
+  else if (action === 'rewind') { a.currentTime = Math.max(0, (a.currentTime || 0) - 30); }
   else if (action === 'next') abJumpChapter(1);   // lock-screen "next" = next chapter (Audible-style)
   else if (action === 'prev') abJumpChapter(-1);
   else if (action === 'stop') a.pause();
@@ -36633,12 +37213,14 @@ function abNativeTransport(action) {
 /* ---- audiobook voice search (mirrors Music: Web Speech API on browsers, the TriboonTV native
    recognizer on the Android TV shell) ---- */
 function submitAudiobookVoiceSearch(text) {
-  $('abMicBtn').classList.remove('listening');
+  clearAllVoiceListeningUi();
   const q = String(text || '').trim();
   if (!q) return;
   $('abSearch').value = q;
   syncAbClear();
-  abSearchRun(q);
+  abSearchRun(q).then((active) => {
+    if (active && S.view === 'audiobooks' && abBrowseCards().length) abFocusEntry();
+  }).catch(() => {});
 }
 function setupAudiobookVoiceSearch() {
   const btn = $('abMicBtn');
@@ -36648,6 +37230,12 @@ function setupAudiobookVoiceSearch() {
   if (window.TriboonTV && TriboonTV.startVoice) {
     show();
     btn.addEventListener('click', () => {
+      if (btn.classList.contains('listening') && TriboonTV.stopVoice) {
+        btn.classList.remove('listening');
+        try { TriboonTV.stopVoice(); } catch {}
+        return;
+      }
+      clearTimeout(abSearchDebounce);
       setTvVoiceTarget('audiobooks');
       btn.classList.add('listening');
       try { TriboonTV.startVoice(); } catch { btn.classList.remove('listening'); }
@@ -36657,22 +37245,54 @@ function setupAudiobookVoiceSearch() {
   const SRc = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SRc) return;
   show();
-  let rec = null;
+  let rec = null, watch = null;
+  const finish = () => {
+    clearTimeout(watch); watch = null;
+    btn.classList.remove('listening');
+    rec = null;
+    _activeWebVoiceStop = null;
+  };
   btn.addEventListener('click', () => {
-    if (rec) { rec.stop(); return; }
+    if (rec) {
+      const cur = rec;
+      finish();
+      try { cur.stop(); } catch { try { cur.abort(); } catch {} }
+      return;
+    }
+    stopActiveVoiceInput();
+    clearTimeout(abSearchDebounce);
     setTvVoiceTarget('audiobooks');
-    rec = new SRc();
-    rec.lang = navigator.language || 'en-US';
-    rec.interimResults = true;
+    let gotFinal = false, lastTxt = '';
+    const r = new SRc();
+    rec = r;
+    _activeWebVoiceStop = () => { if (rec === r) { finish(); try { r.abort(); } catch {} } };
+    r.lang = navigator.language || 'en-US';
+    r.interimResults = true;
     btn.classList.add('listening');
-    rec.onresult = (e) => {
-      const txt = [...e.results].map((r) => r[0].transcript).join('');
-      $('abSearch').value = txt;
-      if (e.results[e.results.length - 1].isFinal) submitAudiobookVoiceSearch(txt);
+    watch = setTimeout(() => { if (rec === r) { finish(); try { r.abort(); } catch {} } }, 15000);
+    r.onresult = (e) => {
+      if (rec !== r) return;
+      const txt = [...e.results].map((x) => x[0].transcript).join('').trim();
+      lastTxt = txt;
+      if (txt) { $('abSearch').value = txt; syncAbClear(); }
+      if (e.results[e.results.length - 1].isFinal) {
+        gotFinal = true;
+        finish();
+        submitAudiobookVoiceSearch(txt);
+      }
     };
-    rec.onend = () => { btn.classList.remove('listening'); rec = null; };
-    rec.onerror = () => { btn.classList.remove('listening'); rec = null; toast('Voice search unavailable'); };
-    try { rec.start(); } catch { rec = null; btn.classList.remove('listening'); }
+    r.onend = () => {
+      if (rec !== r) return;
+      finish();
+      if (!gotFinal && lastTxt) submitAudiobookVoiceSearch(lastTxt);
+    };
+    r.onerror = (ev) => {
+      if (rec !== r) return;
+      finish();
+      const err = ev && ev.error;
+      if (err !== 'aborted' && err !== 'no-speech') toast('Voice search unavailable');
+    };
+    try { r.start(); } catch { finish(); }
   });
 }
 
@@ -36761,6 +37381,9 @@ function abRowMove(cards, k) {
           const r2 = abRows();
           if (r2.length > rows.length && r2[rows.length] && r2[rows.length].cards[0]) abFocusEl(r2[rows.length].cards[0]);
         }, 350);
+      } else if ($('abMini') && $('abMini').classList.contains('show')) {
+        AB.zone = 'abMini';
+        applyFocus($('abMini'), false);
       }
       return true;
     }
@@ -36845,6 +37468,17 @@ function abHandleKey(e, k) {
     // handler owns it, exactly like movies/TV. Without this we kept re-grabbing keys and yanked
     // focus back into the grid (the "LEFT never reaches the menu" bug).
     if (S.zone === 'rail') return false;
+    if (AB.zone === 'abMini' && $('abMini') && $('abMini').classList.contains('show')) {
+      if (!NAV.includes(k)) return false;
+      e.preventDefault(); e.stopPropagation();
+      const onPlay = document.querySelector('#abMiniPlay.focus');
+      if (k === 'ArrowUp') { restoreAbSelection(); return true; }
+      if (k === 'ArrowLeft') { if (onPlay) applyFocus($('abMini'), false); else enterRail(); return true; }
+      if (k === 'ArrowRight') { if (!onPlay && $('abMiniPlay')) applyFocus($('abMiniPlay'), false); return true; }
+      if (k === 'Enter') { (onPlay ? $('abMiniPlay') : $('abMini')).click(); return true; }
+      if (['Escape', 'Backspace', 'GoBack', 'BrowserBack'].includes(k)) { restoreAbSelection(); return true; }
+      return true;
+    }
     // Browse page
     const ae = document.activeElement;
     const inSearch = ae === $('abSearch') || ae === $('abMicBtn') || ae === $('abClearBtn');

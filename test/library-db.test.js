@@ -239,3 +239,38 @@ test('library db: the stable key has its own column, the relative path is not st
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('library sqlite search handles Persian spelling folding, matchTitle, and cached non-episode index without loading episodes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-library-fa-search-'));
+  const db = new LibraryDb(dir);
+  if (!db.available) return;
+  try {
+    db.replaceLibrary('libFa', 500, [
+      { idx: 1, kind: 'movie', title: 'درباره كوچك', originalTitle: 'درباره کوچک', tmdbId: 731, addedAt: 3000, file: '/fa/small.mkv' },
+      { idx: 2, kind: 'show', title: 'Kaval کول', tmdbId: null, addedAt: 2000, dir: '/fa/kaval' },
+      { idx: 3, kind: 'show', title: 'Bandar Sefid بندر سفید', matchTitle: 'White Harbour', tmdbId: 721, addedAt: 1000, dir: '/fa/bandar' },
+      { idx: 4, kind: 'episode', showIdx: 3, title: 'Bandar Sefid · S01E01', s: 1, e: 1, addedAt: 1001, file: '/fa/bandar/e1.mkv' },
+    ]);
+    // Direct Persian search with Persian Yeh/Kaf finds Arabic Yeh/Kaf stored title.
+    assert.deepStrictEqual(db.search('درباره کوچک', ['libFa']).map((x) => x.item.title), ['درباره كوچك']);
+    assert.deepStrictEqual(db.search('کول', ['libFa']).map((x) => x.item.title), ['Kaval کول']);
+    // Non-episode cached index excludes episodes and exposes matchTitle for fast matcher fallback.
+    const byMatch = db.searchByMatcher(['libFa'], (e) => /white harbour/i.test(e.matchTitle || ''), 10);
+    assert.deepStrictEqual(byMatch.map((x) => x.item.title), ['Bandar Sefid بندر سفید']);
+    const titles = db.topTitles(['libFa'], 100);
+    assert.ok(titles.includes('Kaval کول') && !titles.some((t) => /S01E01/.test(t)), 'topTitles excludes episodes');
+    // Unchanged touch preserves cache; updateItem/deleteLibrary invalidate it.
+    assert.strictEqual(db.touchLibrary('libFa', 600), true);
+    assert.strictEqual(db._searchCache.get('libFa').scannedAt, 600);
+    const it = db.item('libFa', 2);
+    it.title = 'Kaval جدید';
+    db.updateItem('libFa', 2, it);
+    assert.strictEqual(db._searchCache.has('libFa'), false);
+    assert.deepStrictEqual(db.search('جدید', ['libFa']).map((x) => x.item.title), ['Kaval جدید']);
+    db.deleteLibrary('libFa');
+    assert.strictEqual(db._searchCache.has('libFa'), false);
+  } finally {
+    db.close && db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

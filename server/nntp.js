@@ -271,9 +271,16 @@ class NntpConnection {
     return new Promise((resolve, reject) => {
       const { host, port } = this.opts;
       const onConn = () => {};
+      const tlsOpts = { host, port, rejectUnauthorized: false };
+      if (this.opts.tls && Buffer.isBuffer(this.opts.tlsSession)) tlsOpts.session = this.opts.tlsSession;
       this.sock = this.opts.tls
-        ? tls.connect({ host, port, rejectUnauthorized: false }, onConn)
+        ? tls.connect(tlsOpts, onConn)
         : net.connect({ host, port }, onConn);
+      if (this.opts.tls && typeof this.opts.onTlsSession === 'function') {
+        this.sock.on('session', (sess) => {
+          if (Buffer.isBuffer(sess)) this.opts.onTlsSession(sess);
+        });
+      }
       this.sock.setNoDelay(true);
       this.sock.on('data', (d) => this._onData(d));
       this.sock.on('error', (e) => this._fail(e));
@@ -820,7 +827,9 @@ class ProviderPool {
     const want = Math.min(target, this.size, room);
     while (!this.closed && this.conns.length + this.connecting < want && this.connecting < CONNECT_BURST) {
       this.connecting++;
-      const c = new NntpConnection(this.opts);
+      const c = new NntpConnection(this.opts.tls
+        ? { ...this.opts, tlsSession: this._tlsSession || null, onTlsSession: (sess) => { this._tlsSession = sess; } }
+        : this.opts);
       c.pool = this;
       c.connect().then(() => {
         this.connecting--;
@@ -1546,6 +1555,16 @@ class ProviderPool {
     if (this._quietWakeTimer) { clearTimeout(this._quietWakeTimer); this._quietWakeTimer = null; }
     if (this._parkedWakeTimer) { clearTimeout(this._parkedWakeTimer); this._parkedWakeTimer = null; }
     if (this._dialingTimer) { clearTimeout(this._dialingTimer); this._dialingTimer = null; }
+    if (this._stuckTimer) { clearInterval(this._stuckTimer); this._stuckTimer = null; }
+    if (this.queue && this.queue.length) {
+      const pending = this.queue.splice(0, this.queue.length);
+      for (const t of pending) {
+        if (t && t.signal && t.onAbort) { try { t.signal.removeEventListener('abort', t.onAbort); } catch {} }
+        if (t && typeof t.reject === 'function') {
+          try { t.reject(new Error('NNTP pool closed')); } catch {}
+        }
+      }
+    }
     for (const c of this.conns) c.close();
     this.conns = [];
   }
@@ -1762,24 +1781,22 @@ class NntpPool {
     }
   }
 
-  // How many lines to hold open: 4 per watcher, plus extra only for read-ahead
-  // that is already waiting on that same watcher.
+  // How many lines to hold open: reserve per watcher, plus extra up to the watcher's share when
+  // either high-lane startup/seek/playback work or read-ahead is waiting on that watcher.
   viewerOpenWant() {
     if (!this.viewerSharesActive()) return 0;
-    const lowQueued = new Map();
+    const queuedByViewer = new Map();
     for (const p of this.providers) {
       for (const t of p.queue || []) {
         if (!t || !t.viewer || signalAborted(t.signal)) continue;
-        if (p._priorityRank(t.priority) > p._priorityRank('playback')) {
-          lowQueued.set(t.viewer, (lowQueued.get(t.viewer) || 0) + 1);
-        }
+        queuedByViewer.set(t.viewer, (queuedByViewer.get(t.viewer) || 0) + 1);
       }
     }
     let total = 0;
     for (const [id, lines] of this._viewerShares) {
       const reserve = this._reserveFor(lines);
       const expand = Math.max(0, lines - reserve);
-      const queued = Math.min(expand, lowQueued.get(id) || 0);
+      const queued = Math.min(expand, queuedByViewer.get(id) || 0);
       const lowBusy = this._ownedBy(id).filter(({ p, c }) => p.busy.has(c) && !c.hold).length;
       total += reserve + Math.max(queued, Math.min(expand, lowBusy));
     }

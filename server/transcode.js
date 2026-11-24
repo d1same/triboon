@@ -48,9 +48,9 @@ function ffprobeKeyframeAtOrAfter(streamUrl, targetSec, { timeoutMs = 8000 } = {
   return new Promise((resolve) => {
     const fp = detectFfprobe();
     if (!fp || !(targetSec > 0)) return resolve(targetSec > 0 ? targetSec : 0);
+    // Demux-only packet scan (no software video frame decode): orders of magnitude faster on 4K HEVC.
     const args = ['-v', 'error', '-read_intervals', `${targetSec}%+10`,
-      '-select_streams', 'v:0', '-skip_frame', 'nokey',
-      '-show_entries', 'frame=pts_time', '-of', 'csv=p=0', streamUrl];
+      '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,flags', '-of', 'csv=p=0', streamUrl];
     const p = spawn(fp.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let out = '', done = false;
     const finish = (v) => { if (done) return; done = true; clearTimeout(killer); resolve(v); };
@@ -60,7 +60,9 @@ function ffprobeKeyframeAtOrAfter(streamUrl, targetSec, { timeoutMs = 8000 } = {
     p.on('close', () => {
       let best = Infinity;
       for (const line of out.split(/\r?\n/)) {
-        const t = parseFloat(line);
+        const parts = line.split(',');
+        if (parts.length >= 2 && !String(parts[1]).includes('K')) continue;
+        const t = parseFloat(parts[0]);
         if (Number.isFinite(t) && t >= targetSec && t < best) best = t; // next keyframe at or after the drop, never the one before it
       }
       finish(best !== Infinity ? best : targetSec);
@@ -81,8 +83,7 @@ function ffprobeKeyframeAtOrBefore(streamUrl, targetSec, { timeoutMs = 8000 } = 
     if (!fp || !(targetSec > 0)) return resolve(null);
     const from = Math.max(0, targetSec - 10);
     const args = ['-v', 'error', '-read_intervals', `${from}%${targetSec}`,
-      '-select_streams', 'v:0', '-skip_frame', 'nokey',
-      '-show_entries', 'frame=pts_time', '-of', 'csv=p=0', streamUrl];
+      '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,flags', '-of', 'csv=p=0', streamUrl];
     const p = spawn(fp.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let out = '', done = false;
     const finish = (v) => { if (done) return; done = true; clearTimeout(killer); resolve(v); };
@@ -92,7 +93,9 @@ function ffprobeKeyframeAtOrBefore(streamUrl, targetSec, { timeoutMs = 8000 } = 
     p.on('close', () => {
       let best = null;
       for (const line of out.split(/\r?\n/)) {
-        const t = parseFloat(line);
+        const parts = line.split(',');
+        if (parts.length >= 2 && !String(parts[1]).includes('K')) continue;
+        const t = parseFloat(parts[0]);
         if (Number.isFinite(t) && t <= targetSec + 0.01 && (best === null || t > best)) best = Math.max(0, t);
       }
       finish(best);
@@ -326,9 +329,13 @@ function probeTracks(url) {
   return new Promise((resolve, reject) => {
     const fp = detectFfprobe();
     if (!fp) return reject(new Error('ffprobe not available'));
+    // Background priority: track probing must never steal the startup NNTP lane from playback/remux.
+    const target = typeof url === 'string' && url.includes('/api/stream/') && !url.includes('priority=')
+      ? `${url}${url.includes('?') ? '&' : '?'}priority=background`
+      : url;
     const p = spawn(fp.path, [
       '-v', 'error', '-print_format', 'json', '-show_streams', '-show_format',
-      '-analyzeduration', '20M', '-probesize', '20M', url,
+      '-analyzeduration', '8M', '-probesize', '8M', target,
     ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let out = '', err = '';
     p.stdout.on('data', (d) => { out += d; });
@@ -483,14 +490,16 @@ function spawnTranscode(streamUrl, { startSeconds = 0, audioTrack = 0, height = 
   const enc = detectEncoder();
   if (!ff || !enc) throw new Error('no H.264 encoder available');
   const lad = LADDER[height] || LADDER[1080];
+  const isVaapi = enc.name === 'h264_vaapi';
   const filters = [];
   if (hdr) filters.push('zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv');
-  filters.push(`scale=-2:'min(${lad.h},ih)'`, 'format=yuv420p');
+  filters.push(`scale=-2:'min(${lad.h},ih)'`, isVaapi ? 'format=nv12,hwupload' : 'format=yuv420p');
   const encArgs = enc.name === 'libx264'
     ? ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-maxrate', lad.maxb, '-bufsize', '24M']
     : ['-c:v', enc.name, '-b:v', lad.vb, '-maxrate', lad.maxb];
   const args = [
     '-hide_banner', '-loglevel', 'error',
+    ...(isVaapi ? ['-vaapi_device', '/dev/dri/renderD128'] : []),
     ...(startSeconds > 0 ? ['-ss', String(startSeconds)] : []),  // re-encode → accurate seek is exact for BOTH tracks
     '-i', streamUrl,
     '-map', '0:v:0', '-map', `0:a:${audioTrack}?`,
@@ -632,12 +641,12 @@ function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio 
     ...(holdSegments ? [
       '-vf', "scale=-2:'min(720,ih)',format=yuv420p",
       '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
-      '-profile:v', 'high', '-pix_fmt', 'yuv420p',
+      '-profile:v', 'high', '-level:v', '4.1', '-pix_fmt', 'yuv420p',
       '-force_key_frames', 'expr:gte(t,n_forced*2)',
       '-b:v', '2500k', '-maxrate', '3000k', '-bufsize', '3000k',
     ] : ['-c:v', 'copy']),
     ...(transcodeAudio
-      ? ['-c:a', 'aac', '-b:a', safeStereo ? '192k' : '384k', '-ac', safeStereo ? '2' : '6']
+      ? ['-c:a', 'aac', '-ar', '48000', '-b:a', safeStereo ? '192k' : '384k', '-ac', safeStereo ? '2' : '6']
       : ['-c:a', 'copy']),
     // A restart mid-list must stamp piece N at N*segmentTime like the first run did.
     // Without it piece 30 says 0s instead of 60s and the player's clock jumps back.

@@ -1145,14 +1145,16 @@ function fakeDoor(extra = {}) {
   });
   const call = async (kind, method, p, { body, headers } = {}) => {
     const url = new URL(`http://x${p}`);
-    const route = JELLYFIN_ROUTES.find((r) => r.kind === kind && r.m === method && r.re.test(url.pathname.toLowerCase()));
+    const matchMethod = method === 'HEAD' ? 'GET' : method;
+    const route = JELLYFIN_ROUTES.find((r) => r.kind === kind && r.m === matchMethod && r.re.test(url.pathname.toLowerCase()));
     assert.ok(route, `route for ${method} ${p}`);
     const res = {
+      raw: '',
       writeHead(status, h) { res.status = status; res.headers = h; },
-      end() {},
+      end(chunk) { if (chunk != null) res.raw += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk); },
     };
     const ctx = {
-      req: { headers: headers || {}, body },
+      req: { method, headers: headers || {}, body },
       res,
       url,
       m: route.re.exec(url.pathname.toLowerCase()),
@@ -1394,4 +1396,96 @@ test('jellyfin answers the lists Roku reads right before play', async () => {
   const enc = await door.call('encodingConfig', 'GET', '/System/Configuration/Encoding');
   assert.strictEqual(enc.status, 200);
   assert.ok(JELLYFIN_ROUTES.some((r) => r.kind === 'shelf' && r.re.test('/items/')), 'Roku favorites ask /Items/ with a slash');
+});
+
+test('jellyfin cross-platform: ping, branding css, transcoding policy, query PlaybackInfo, Roku SRT, stop teardown, and Tizen/iOS direct play', async () => {
+  const door = fakeDoor({
+    subs: true,
+    tracks: async () => ({
+      ...H264_FILE,
+      audio: [
+        { codec: 'aac', channels: 2, lang: 'en', title: 'English' },
+        { codec: 'aac', channels: 2, lang: 'fa', title: 'Persian' },
+      ],
+    }),
+  });
+  // Patch stop hook + subtitle body on the fake door deps.
+  const rokuProfile = {
+    ...TV_PROFILE,
+    SubtitleProfiles: [{ Format: 'srt', Method: 'External' }],
+  };
+  assert.strictEqual(
+    jellyfinToken({ headers: { 'x-mediabrowser-token': 'mb-tok' }, url: '/' }),
+    'mb-tok',
+    'X-MediaBrowser-Token is accepted'
+  );
+  assert.strictEqual(
+    jellyfinToken({
+      headers: {
+        authorization: 'MediaBrowser Client="Tizen", Device="Samsung"',
+        'x-emby-authorization': 'MediaBrowser Token="emby-tok"',
+      },
+      url: '/',
+    }),
+    'emby-tok',
+    'Authorization without Token= falls through to X-Emby-Authorization'
+  );
+
+  // Ping & Branding CSS
+  const ping = await door.call('ping', 'GET', '/System/Ping');
+  assert.strictEqual(ping.status, 200);
+  assert.strictEqual(ping.raw || JSON.stringify(ping.body), '"Jellyfin Server"');
+  const css = await door.call('brandingCss', 'GET', '/Branding/Css');
+  assert.strictEqual(css.status, 200);
+  assert.match(css.headers['content-type'], /text\/css/);
+
+  // User.Policy enables transcoding & remuxing for Tizen/Web/iOS/Roku fallback
+  const me = await door.call('me', 'GET', '/Users/Me');
+  assert.strictEqual(me.body.Policy.EnableVideoPlaybackTranscoding, true);
+  assert.strictEqual(me.body.Policy.EnableAudioPlaybackTranscoding, true);
+  assert.strictEqual(me.body.Policy.EnablePlaybackRemuxing, true);
+
+  // IsPlayback=false must NOT trigger a Usenet mount
+  const probeOnly = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo?IsPlayback=false', { body: {} });
+  assert.strictEqual(probeOnly.status, 200);
+  assert.strictEqual(door.calls.play, 0, 'IsPlayback=false detail probe must not mount Usenet');
+
+  // Query-string AudioStreamIndex + MediaSourceId + Roku SRT subtitle format
+  const rokuPlay = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo?AudioStreamIndex=2&MediaSourceId=m550', {
+    body: { DeviceProfile: rokuProfile },
+  });
+  assert.strictEqual(rokuPlay.status, 200);
+  const rSrc = rokuPlay.body.MediaSources[0];
+  assert.strictEqual(rSrc.Id, 'm550');
+  assert.strictEqual(rSrc.DefaultAudioStreamIndex, 2, 'query-string AudioStreamIndex selects track 2');
+  assert.match(rSrc.TranscodingUrl, /audio=1/, 'audio=1 maps to the second audio track');
+  const rSub = (rSrc.MediaStreams || []).find((s) => s.Type === 'Subtitle');
+  assert.ok(rSub, 'Roku gets subtitle stream');
+  assert.strictEqual(rSub.Codec, 'srt', 'Roku SRT-only profile gets srt codec');
+  assert.match(rSub.DeliveryUrl, /\/stream\.srt(?:\?|$)/, 'Roku SRT-only profile gets .srt delivery url');
+
+  // Tizen and iOS Swiftfin evaluate Direct Play instead of being misclassified as desktop browsers
+  for (const ua of [
+    'Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.5) AppleWebKit/537.36 Chrome/85.0 Safari/537.36',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1',
+  ]) {
+    const dp = await door.call('playback', 'POST', '/Items/m550/PlaybackInfo', {
+      headers: { 'user-agent': ua },
+      body: { MediaSourceId: 'm550', DeviceProfile: TV_PROFILE },
+    });
+    assert.strictEqual(dp.body.MediaSources[0].SupportsDirectPlay, true, `Direct Play allowed for ${ua}`);
+  }
+
+  // HEAD on BitrateTest sends empty body
+  const headBitrate = await door.call('bitrate', 'HEAD', '/Playback/BitrateTest?Size=4096');
+  assert.strictEqual(headBitrate.status, 200);
+  assert.strictEqual(headBitrate.raw, '', 'HEAD must not write a response body');
+
+  // New routes are registered with explicit auth
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'POST' && r.re.test('/users/authenticatewithquickconnect') && r.auth === 'public'));
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'GET' && r.re.test('/items/m550/playbackinfo') && r.auth === 'user'));
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'DELETE' && r.re.test('/videos/activeencodings') && r.kind === 'stopEncodings'));
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'POST' && r.re.test('/sessions/playing/stopped') && r.kind === 'stopped'));
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'GET' && r.re.test('/users/1234/items/m550/similar') && r.auth === 'user'));
+  assert.ok(JELLYFIN_ROUTES.some((r) => r.m === 'GET' && r.re.test('/users/1234/items/m550/thememedia') && r.auth === 'user'));
 });

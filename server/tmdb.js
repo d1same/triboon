@@ -13,6 +13,7 @@ class TmdbProxy {
     this.store = store;
     this.getKey = getKey;       // () => api key | null
     this.baseUrl = baseUrl;     // injectable for tests
+    this._inFlight = new Map(); // single-flight dedup for concurrent identical TMDB requests
   }
 
   _ttlFor(path) {
@@ -52,39 +53,47 @@ class TmdbProxy {
     // for the full TTL even after TMDB populates the id) — fall through to a live re-fetch instead.
     if (hit && ttl > 0 && Date.now() - hit.at < ttl && !this._externalIdsEmpty(path, hit.data)) return hit.data;
 
+    if (ttl > 0 && this._inFlight.has(cacheKey)) return this._inFlight.get(cacheKey);
     const sep = path.includes('?') ? '&' : '?';
-    // ONE retry on transient upstream failure (timeout / 5xx / 429 / reset). A single TMDB hiccup
-    // used to 500 straight through to the client, and the detail page renders its whole body
-    // (cast, crew, seasons, related) from one big append_to_response call — so the owner saw
-    // "cast and rest don't load, go back and try again" (2026-08-08). Real 4xx (bad key, missing
-    // title) still fails fast. 429 is transient — fail-fast used to turn a brief cap into a blank
-    // detail page and a Play that died with "q required" because the title never arrived.
-    let r;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        r = await fetchUrl(`${this.baseUrl}${path}${sep}api_key=${key}`, { timeoutMs: 8000 });
-        if (r.status === 200) break;
-        if (r.status >= 400 && r.status < 500 && r.status !== 429) break;
-        throw new Error(`tmdb upstream ${r.status}`);
-      } catch (e) {
-        if (attempt >= 1) { const err = new Error(e.message || 'tmdb upstream failed'); err.status = 502; throw err; }
-        await new Promise((res) => setTimeout(res, 350));
+    const work = (async () => {
+      // ONE retry on transient upstream failure (timeout / 5xx / 429 / reset). A single TMDB hiccup
+      // used to 500 straight through to the client, and the detail page renders its whole body
+      // (cast, crew, seasons, related) from one big append_to_response call — so the owner saw
+      // "cast and rest don't load, go back and try again" (2026-08-08). Real 4xx (bad key, missing
+      // title) still fails fast. 429 is transient — fail-fast used to turn a brief cap into a blank
+      // detail page and a Play that died with "q required" because the title never arrived.
+      let r;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          r = await fetchUrl(`${this.baseUrl}${path}${sep}api_key=${key}`, { timeoutMs: 8000 });
+          if (r.status === 200) break;
+          if (r.status >= 400 && r.status < 500 && r.status !== 429) break;
+          throw new Error(`tmdb upstream ${r.status}`);
+        } catch (e) {
+          if (attempt >= 1) { const err = new Error(e.message || 'tmdb upstream failed'); err.status = 502; throw err; }
+          await new Promise((res) => setTimeout(res, 350));
+        }
       }
-    }
-    if (r.status !== 200) { const e = new Error(`tmdb upstream ${r.status}`); e.status = 502; throw e; }
-    let data;
-    try { data = JSON.parse(r.body.toString('utf8')); }
-    catch { const e = new Error('tmdb upstream returned non-JSON'); e.status = 502; throw e; }
-    if (!this._externalIdsEmpty(path, data)) {
-      this.store.update('tmdb-cache', {}, (c) => {
-        c[cacheKey] = { at: Date.now(), data };
-        // Light eviction: keep the cache bounded.
-        const keys = Object.keys(c);
-        if (keys.length > 500) for (const k of keys.slice(0, keys.length - 400)) delete c[k];
-        return c;
-      });
-    }
-    return data;
+      if (r.status !== 200) { const e = new Error(`tmdb upstream ${r.status}`); e.status = 502; throw e; }
+      let data;
+      try { data = JSON.parse(r.body.toString('utf8')); }
+      catch { const e = new Error('tmdb upstream returned non-JSON'); e.status = 502; throw e; }
+      if (!this._externalIdsEmpty(path, data)) {
+        this.store.update('tmdb-cache', {}, (c) => {
+          // Delete + re-insert keeps keys ordered by recency, and 4000-entry headroom prevents
+          // Discover/Calendar/Kids from evicting hot Home/Detail entries.
+          delete c[cacheKey];
+          c[cacheKey] = { at: Date.now(), data };
+          const keys = Object.keys(c);
+          if (keys.length > 4000) for (const k of keys.slice(0, keys.length - 3200)) delete c[k];
+          return c;
+        });
+      }
+      return data;
+    })();
+    if (ttl > 0) this._inFlight.set(cacheKey, work);
+    try { return await work; }
+    finally { if (this._inFlight.get(cacheKey) === work) this._inFlight.delete(cacheKey); }
   }
 }
 

@@ -58,6 +58,18 @@ function tokenizeWanted(q) {
     // normalize all punctuation to spaces), so the title was unfindable.
     for (const w of (t.replace(/['’`]/g, '').match(/[a-z0-9]+/g) || [])) out.words.push(w);
   }
+  // Non-Latin titles (CJK, Cyrillic, Persian/Arabic, Korean): when ASCII tokenization yields ZERO
+  // words, fall back to Unicode letter/digit tokens so releaseMatches still verifies the title
+  // instead of treating an empty words[] as "accept any release".
+  if (!out.words.length && /\p{L}/u.test(String(q || ''))) {
+    const rawToks = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    for (let i = 0; i < rawToks.length; i++) {
+      const t = rawToks[i];
+      if (/^s(\d{1,2})e(\d{1,3})$/.test(t) || i === lastYearIdx) continue;
+      for (const w of (t.replace(/['’`]/g, '').match(/[\p{L}\p{N}]+/gu) || [])) out.words.push(w);
+    }
+    if (out.words.length) out.unicode = true;
+  }
   // A query that is ONLY a year (1917 the movie, 1923 the show) must still ANCHOR on that number.
   // Swallowing it as the year left ZERO title words, so any same-episode release matched — including
   // Yellowstone.S01E01 for a play of 1923. Drop the year filter; the digits ARE the title.
@@ -174,15 +186,18 @@ function mountIdentity(candidate, mountOpts = {}) {
 // real title is LONGER than the wanted one — a different film/show.
 const STRUCTURAL_AFTER_TITLE = new RegExp('^(' + [
   '(19|20)\\d{2}', 's\\d{1,2}(e\\d{1,3})*', '\\d{1,2}x\\d{1,3}', // year / SxxEyy / season / 1x01
-  '(2160|1080|720|576|480)[pi]', '4k', 'uhd', 'hdr', 'hdr10', 'dv', 'dovi', 'sdr',
+  '(2160|1080|720|576|480)[pi]', '4k', 'uhd', 'hdr', 'hdr10', 'hdr10plus', '10bit', 'dv', 'dovi', 'sdr',
   'x26[45]', 'h26[45]', 'hevc', 'avc', 'av1', 'xvid', 'divx',
+  'amzn', 'nf', 'dsnp', 'atvp', 'hmax', 'pcok', 'pmtp', 'hulu', 'cr',
   'web', 'webrip', 'webdl', 'rip', 'dl', 'bluray', 'blu', 'ray', 'bd', 'bdrip', 'brrip',
   'bdremux', 'remux', 'dvdrip', 'dvd', 'hdtv', 'uhdtv', 'hybrid',
-  'complete', 'season', 'extended', 'directors', 'theatrical', 'unrated', 'uncut',
+  'complete', 'season', 'extended', 'directors', 'dc', 'ee', 'theatrical', 'unrated', 'uncut',
   'remastered', 'imax', 'proper', 'repack', 'internal', 'limited', 'criterion',
   'anniversary', 'edition', 'cut', 'redux', 'aka', 'intl',
-  'us', 'uk', 'au', 'nz', 'ca', 'multi', 'dual', 'dubbed', 'ita', 'eng', 'french', 'german',
-  'spanish', 'nordic', 'vostfr',
+  'us', 'uk', 'au', 'nz', 'ca', 'multi', 'dual', 'dubbed', 'ita', 'eng', 'french', 'truefrench',
+  'german', 'italian', 'spanish', 'portuguese', 'persian', 'farsi', 'korean', 'japanese', 'russian',
+  'polish', 'turkish', 'arabic', 'hindi', 'dutch', 'swedish', 'danish', 'norwegian', 'finnish',
+  'nordic', 'vostfr',
 ].join('|') + ')$');
 // Country/remake tags are a legal title boundary (The.Office.AU is not a longer title), but they
 // name a DIFFERENT show unless this catalog title is that country. "The Office" (US, tt0386679)
@@ -232,7 +247,7 @@ function shortTitleQuery(paramsQ, wanted) {
   if (!alias.length) return '';
   if (titleCoreWords(alias).length >= titleCoreWords(wanted.words).length) return '';
   const tokens = String(paramsQ || '').split(/\s+/).filter(Boolean);
-  const tail = tokens.filter((w) => /^(S\d{2}E\d{2}|s\d{2}e\d{2}|(19|20)\d{2})$/.test(w));
+  const tail = tokens.filter((w) => /^(S\d{1,2}E\d{1,3}|s\d{1,2}e\d{1,3}|(19|20)\d{2})$/.test(w));
   const head = alias.slice();
   while (head.length && OPTIONAL_TITLE_ARTICLES.has(head[0])) head.shift();
   const q = [...head, ...tail].join(' ').trim();
@@ -245,7 +260,7 @@ function sanitizeIndexerQuery(q) {
 }
 
 function queryTailTokens(paramsQ) {
-  return String(paramsQ || '').split(/\s+/).filter((w) => /^(S\d{2}E\d{2}|s\d{2}e\d{2}|(19|20)\d{2})$/.test(w));
+  return String(paramsQ || '').split(/\s+/).filter((w) => /^(S\d{1,2}E\d{1,3}|s\d{1,2}e\d{1,3}|(19|20)\d{2})$/.test(w));
 }
 
 // Extra indexer queries from TMDB original/aka names. SEARCH only — verify still uses the
@@ -352,7 +367,7 @@ function countrySearchQuery(paramsQ, wanted) {
   const current = String(paramsQ || '').trim();
   if (!current || new RegExp(`\\b${country}\\b`, 'i').test(current)) return '';
   const label = country.toUpperCase();
-  const se = /\bS\d{2}E\d{2}\b/i.exec(current);
+  const se = /\bS\d{1,2}E\d{1,3}\b/i.exec(current);
   if (se) return `${current.slice(0, se.index)}${label} ${se[0]}${current.slice(se.index + se[0].length)}`.replace(/\s+/g, ' ').trim();
   return `${current} ${label}`;
 }
@@ -519,11 +534,14 @@ function countryTagMatches(tag, wanted, words) {
   return (words || []).includes(scene);
 }
 // An untagged name (The.Office.S01E01, no US/UK) is the dominant show. On the other country's
-// page it is the wrong show, unless it names this episode or this show's year.
-function untaggedEditionOk(norm, wanted) {
+// page it is the wrong show, unless it names this episode, this show's year, is verified by an
+// exact indexer catalog ID, or catalog facts confirmed there is no dominant sibling show.
+function untaggedEditionOk(norm, wanted, opts = {}) {
+  if (opts && opts.idVerified) return true;
   const want = sceneCountry(wanted && wanted.country);
   if (!want || want === 'us') return true;
   if (wanted.s == null) return true;
+  if (wanted.hasDominantSibling === false) return true;
   const siblings = wanted.otherYears && wanted.otherYears.length;
   if (!siblings) return true;
   const mine = episodeTitlePhrase(wanted.episodeTitle);
@@ -553,14 +571,17 @@ function episodeTitleConflicts(norm, wanted, rawName) {
     return !!(phrase && norm.includes(` ${phrase.join(' ')} `));
   });
 }
-function releaseMatches(name, wanted) {
+function releaseMatches(name, wanted, opts = {}) {
   // Indexer rows are already unwrapped by newznab.parseNewznabRss; strip again here so cached
   // rows, tests, and direct callers with raw subjects get the same anchored check.
   // "U.S." spells as one token like the catalog's "US" (The.Office.U.S.S01E01, Shameless.U.S.),
   // and accents fold the same way the wanted title does (Shōgun → Shogun).
-  const norm = ' ' + foldDiacritics(stripSubjectWrapper(name)).toLowerCase()
-    .replace(/\bu\.s\b/g, 'us').replace(/\bu\.k\b/g, 'uk')
-    .replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ') + ' ';
+  const unwrapped = stripSubjectWrapper(name);
+  const norm = wanted && wanted.unicode
+    ? (' ' + unwrapped.toLowerCase().replace(/['’`]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ') + ' ')
+    : (' ' + foldDiacritics(unwrapped).toLowerCase()
+      .replace(/\bu\.s\b/g, 'us').replace(/\bu\.k\b/g, 'uk')
+      .replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ') + ' ');
   const toks = norm.trim().split(' ');
   if (wanted.words.length) {
     const variants = [wanted.words];
@@ -587,7 +608,7 @@ function releaseMatches(name, wanted) {
       break;
     }
     if (!matched) return false;
-    if (!sawCountry && !untaggedEditionOk(norm, wanted)) return false;
+    if (!sawCountry && !untaggedEditionOk(norm, wanted, opts)) return false;
   }
   if (wanted.s !== null) {
     const s = wanted.s, e = wanted.e;
@@ -636,10 +657,10 @@ function releaseMatches(name, wanted) {
           return false;
         }
         if (remakeYears.length && !remakeYears.some((y) => Math.abs(y - wanted.year) <= 1)) {
-          // A season's own air year (The.Last.of.Us.2025.S02E01 for the 2023 show) is fine when it
-          // fits the season number; The.Office.2024.S01E01 for the 2005 show is a remake and is not.
+          // A season's own air year (The.Last.of.Us.2025.S02E01 for the 2023 show, or modern
+          // multi-year streaming hiatuses) is fine when it fits the season number; S01 remakes stay blocked.
           const looksLikeAirYear = wanted.s >= 2
-            && remakeYears.every((y) => y >= wanted.year && y <= wanted.year + 2 * wanted.s + 1);
+            && remakeYears.every((y) => y >= wanted.year && y <= wanted.year + 3 * wanted.s + 2);
           if (!looksLikeAirYear) return false;
         }
         // Air year AFTER the episode must be plausible for that season. Doctor.Who.S01E01.2024 is
@@ -755,9 +776,15 @@ function episodeNumberEvidence(named, tmdbE) {
 }
 
 function releaseQualifies(result, wanted, params) {
-  return catalogIdentityMatches(result, params) && releaseMatches(result && result.name, wanted);
+  if (!catalogIdentityMatches(result, params)) return false;
+  const wantImdb = normImdb(params && params.imdbid);
+  const gotImdb = normImdb(result && (result.imdb || result.imdbid));
+  const wantTvdb = normCatalogId(params && params.tvdbid);
+  const gotTvdb = normCatalogId(result && result.tvdbid);
+  const idVerified = !!((wantImdb && gotImdb && wantImdb === gotImdb) || (wantTvdb && gotTvdb && wantTvdb === gotTvdb));
+  return releaseMatches(result && result.name, wanted, { idVerified });
 }
-const { rankReleases, parseRelease, rankAudiobooks, unstreamableContainer, isCamCandidate } = require('./scoring');
+const { rankReleases, parseRelease, rankAudiobooks, scoreAudiobook, parseAudiobook, unstreamableContainer, isCamCandidate } = require('./scoring');
 const { mountNzb, orderVolumes } = require('./archive');
 
 // ---- audiobook title verification ----
@@ -768,13 +795,22 @@ const { mountNzb, orderVolumes } = require('./archive');
 // subsequence, tolerant of gaps and dropped articles) AND the author surname to be present — the two
 // together are a strong "this is the right book" signal without the scene-name assumptions.
 const BOOK_STOP = new Set(['the', 'a', 'an', 'of', 'and', 'or', 'to', 'in']);
+const AUTHOR_SUFFIX = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'phd', 'md', 'esq']);
 function bookTokens(s) {
-  return String(s || '').toLowerCase().replace(/['’`]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+  return foldDiacritics(String(s || '')).toLowerCase().replace(/['’`]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
 }
 function parseWantedBook(title, author) {
-  const titleWords = bookTokens(title).filter((w) => !BOOK_STOP.has(w));
+  const rawTitle = String(title || '').trim();
+  const titleWords = bookTokens(rawTitle).filter((w) => !BOOK_STOP.has(w));
+  // Audible titles often embed ": A Novel" / ": Book One" / "(Unabridged)" subtitles that Usenet
+  // posts omit. Keep the pre-subtitle head as a fallback alias when it still carries >= 2 words.
+  const stripped = rawTitle.replace(/\s*\([^)]*\)\s*/g, ' ').split(':')[0].trim();
+  const shortWords = bookTokens(stripped).filter((w) => !BOOK_STOP.has(w));
+  const shortTitleWords = (shortWords.length >= 2 && shortWords.length < titleWords.length) ? shortWords : [];
   const authorWords = bookTokens(author).filter((w) => w.length > 2 && !BOOK_STOP.has(w));
-  return { titleWords, authorWords };
+  const nonSuffix = authorWords.filter((w) => !AUTHOR_SUFFIX.has(w));
+  const surname = nonSuffix.length ? nonSuffix[nonSuffix.length - 1] : (authorWords[authorWords.length - 1] || '');
+  return { titleWords, shortTitleWords, authorWords, surname };
 }
 function tokensInOrder(needle, hay) {
   if (!needle.length) return false;
@@ -784,10 +820,15 @@ function tokensInOrder(needle, hay) {
 }
 function bookMatches(name, wanted) {
   const toks = bookTokens(name);
-  if (!tokensInOrder(wanted.titleWords, toks)) return false;
-  // Author is a strong disambiguator but optional: if none was supplied, title-in-order is enough.
-  // When supplied, require ANY author word present (surname is enough — "Sanderson").
-  if (wanted.authorWords.length && !wanted.authorWords.some((w) => toks.includes(w))) return false;
+  const titleOk = tokensInOrder(wanted.titleWords, toks)
+    || (wanted.shortTitleWords && wanted.shortTitleWords.length > 0 && tokensInOrder(wanted.shortTitleWords, toks));
+  if (!titleOk) return false;
+  // Require surname (not just first name like "John" or "Stephen") when an author is supplied.
+  if (wanted.surname) {
+    if (!toks.includes(wanted.surname)) return false;
+  } else if (wanted.authorWords && wanted.authorWords.length && !wanted.authorWords.some((w) => toks.includes(w))) {
+    return false;
+  }
   return true;
 }
 
@@ -1689,10 +1730,10 @@ function releaseFingerprint(candidate) {
   return 'fp:' + crypto.createHash('sha256').update(`${Math.round(size)}|${poster}|${day}`).digest('hex').slice(0, 32);
 }
 
-function applyNzbFingerprintFields(candidate, xml) {
+function applyNzbFingerprintFields(candidate, xml, parsedNzb) {
   if (!candidate || candidate.poster) return;
   try {
-    const nzb = parseNzb(xml);
+    const nzb = parsedNzb || parseNzb(xml);
     const file = nzb.files && nzb.files[0];
     if (file && file.poster) candidate.poster = file.poster;
     if (file && file.date && !candidate.usenetDate) candidate.usenetDate = file.date;
@@ -1744,6 +1785,8 @@ function cachedStreamClass(v) {
 }
 
 function skipTitleVerdict(verdict, detail = {}) {
+  // A transient NZB download error belongs to that indexer URL, not every copy of the title.
+  if (verdict === 'fetch-failed') return true;
   if (verdict !== 'unstreamable') return false;
   const cls = detail.streamClass || '';
   // These describe THIS file (extents / disc / 7z / a short upload), not every copy of the title.
@@ -1752,8 +1795,8 @@ function skipTitleVerdict(verdict, detail = {}) {
   return (detail.tags || []).includes('unmappable');
 }
 
-function firstProbeTarget(nzbXml, mountOpts = {}, candidateName = '') {
-  const nzb = parseNzb(nzbXml);
+function firstProbeTarget(nzbXml, mountOpts = {}, candidateName = '', parsedNzb = null) {
+  const nzb = parsedNzb || parseNzb(nzbXml);
   const candidates = nzb.files.map((f) => ({
     ...f,
     name: fileNameFromSubject(f.subject),
@@ -1916,6 +1959,7 @@ class Pipeline {
     this.searchCache = new Map(); // queryKey -> { at, results, errors } (prefetch-on-browse → instant play)
     this.searchInflight = new Map(); // queryKey -> Promise(hit), so Play can join an active prefetch
     this.nzbCache = new Map();    // nzbUrl -> xml (small LRU; replays remount instantly)
+    this.parsedNzbCache = new Map(); // nzbUrl -> { xml, parsed } (15-entry LRU; skips re-parsing 50MB NZBs)
     this.nzbInflight = new Map(); // nzbUrl -> Promise(xml), so Play joins detail-page prefetch
     this.prepareInflight = new Map(); // mountIdentity -> shared cancellable mount record
     this.titlePrepareInflight = new Map(); // prepareJobKey -> shared title-level prepare job
@@ -2015,8 +2059,9 @@ class Pipeline {
     };
   }
 
-  async _fanoutMeasured(ixs, params, opts) {
-    this._activeFanouts++;
+  async _fanoutMeasured(ixs, params, opts = {}) {
+    const isSub = !!(opts && opts.subFanout);
+    if (!isSub) this._activeFanouts++;
     const competing = Math.max(1, this._activeFanouts);
     const concurrency = competing > 1
       ? Math.max(2, Math.ceil(ixs.length / competing))
@@ -2027,7 +2072,7 @@ class Pipeline {
       this._noteIndexerOutcomes(ixs, out);
       return out;
     } finally {
-      this._activeFanouts = Math.max(0, this._activeFanouts - 1);
+      if (!isSub) this._activeFanouts = Math.max(0, this._activeFanouts - 1);
       const ms = Date.now() - t0;
       this.metrics.searchFanouts++;
       this.metrics.searchFanoutMs += ms;
@@ -2280,6 +2325,10 @@ class Pipeline {
       policy.deviceClass || null,
       // A browser without HEVC decode ranks differently (DEV-1): never share its pick with one that has it.
       policy.browserHevc === false ? 0 : null,
+      policy.av1Hardware === false ? 0 : null,
+      policy.preferredAudioLanguage || null,
+      policy.audioPassthrough ? 1 : 0,
+      policy.audioDecodesLossless ? 1 : 0,
     ]);
   }
 
@@ -2343,9 +2392,9 @@ class Pipeline {
     return died.length ? [...keep, ...died] : list;
   }
 
-  _rememberTitlePrepared(params, policy, vf, candidate) {
+  _rememberTitlePrepared(params, policy, vf, candidate, opts = {}) {
     if (!vf || !candidate) return;
-    const rec = { vf, candidate, at: Date.now(), titleId: this._titleIdentity(params) };
+    const rec = { vf, candidate, at: Date.now(), titleId: this._titleIdentity(params), noHigherRank: !!opts.noHigherRank };
     this.titlePreparedReady.set(this._prepareJobKey(params, policy), rec);
     if (params.imdbid || params.tvdbid) {
       this.titlePreparedReady.set(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }), rec);
@@ -2447,6 +2496,7 @@ class Pipeline {
   // Resume and Start Over then joined that 1080 forever and never raced the real 4K list.
   _preparedFitsPolicy(rec, policy = {}) {
     if (!rec || !rec.candidate) return false;
+    if (rec.noHigherRank) return true;
     const want = Number.isInteger(policy.exactResolutionRank) ? policy.exactResolutionRank : null;
     if (want == null) return true;
     const have = this._standbyResolutionRank(rec.candidate);
@@ -2581,14 +2631,36 @@ class Pipeline {
     // next Play/Sources retry said "no playable" / "no 1080p lead".
     if (!hasResults) return;
     this.searchCache.set(key, hit);
-    if (this.searchCache.size > 50) this.searchCache.delete(this.searchCache.keys().next().value);
+    if (this.searchCache.size > 100) this.searchCache.delete(this.searchCache.keys().next().value);
   }
 
   _rememberNzb(url, xml) {
     this.nzbCache.set(url, xml);
     if (this.nzbCache.size > 15) this.nzbCache.delete(this.nzbCache.keys().next().value);
+    if (this.parsedNzbCache && this.parsedNzbCache.has(url)) {
+      const prev = this.parsedNzbCache.get(url);
+      if (!prev || prev.xml !== xml) this.parsedNzbCache.delete(url);
+    }
     const store = getNzbStore();
     if (store) store.put(url, xml);
+  }
+
+  _parseNzbCached(url, xml) {
+    if (!xml) return null;
+    if (url && this.parsedNzbCache) {
+      const hit = this.parsedNzbCache.get(url);
+      if (hit && hit.xml === xml) {
+        this.parsedNzbCache.delete(url);
+        this.parsedNzbCache.set(url, hit);
+        return hit.parsed;
+      }
+    }
+    const parsed = parseNzb(xml);
+    if (url && this.parsedNzbCache) {
+      this.parsedNzbCache.set(url, { xml, parsed });
+      if (this.parsedNzbCache.size > 15) this.parsedNzbCache.delete(this.parsedNzbCache.keys().next().value);
+    }
+    return parsed;
   }
 
   async _cachedNzb(url) {
@@ -2885,7 +2957,7 @@ class Pipeline {
       if (!(vf._playbackWarmupJobs instanceof Map)) vf._playbackWarmupJobs = new Map();
       const controller = new AbortController();
       const job = { controller, timer: null, promise: null };
-      job.timer = setTimeout(() => {
+      const run = () => {
         job.timer = null;
         job.promise = (async () => {
           const warmPriority = priority || 'readAhead';
@@ -2906,9 +2978,14 @@ class Pipeline {
             vf._playbackWarmupJobs.delete(key);
           }
         });
-      }, 150);
+      };
       vf._playbackWarmupJobs.set(key, job);
-      if (job.timer && typeof job.timer.unref === 'function') job.timer.unref();
+      if (opts && opts.hot === true) {
+        run();
+      } else {
+        job.timer = setTimeout(run, 150);
+        if (job.timer && typeof job.timer.unref === 'function') job.timer.unref();
+      }
     };
     // RESUME WINDOW. A Continue-Watching resume makes the player seek straight to a DEEP mid-file byte
     // offset that the head/tail warm never primed — that cold window is the 20-30s resume wait on
@@ -3098,9 +3175,12 @@ class Pipeline {
   }
 
   async _fetchSearchHit(ixs, params, wanted, timeoutMs, opts = {}) {
-    ixs.forEach((ix) => this.usage.onSearch(ix.name)); // a real fan-out costs one API hit per indexer
-    // Start the short-title alias in parallel with the main query so Play does not wait
-    // 2s + 2s when both are needed. Merge after both land; empty-result fallbacks stay serial.
+    const countSearch = (list) => list.forEach((ix) => {
+      if (!indexerIsCooling(ix.name)) this.usage.onSearch(ix.name);
+    });
+    countSearch(ixs); // a real fan-out costs one API hit per non-cooling indexer
+    // Start the short-title alias and bounded widening queries IN PARALLEL with the main query so
+    // Play does not wait 2s + 2s + 2s when all three are needed. Empty-result fallbacks stay serial.
     const aliasQ = shortTitleQuery(params.q, wanted);
     const idSearch = !!(params.imdbid || params.tvdbid);
     const season = Number(params.season);
@@ -3111,11 +3191,12 @@ class Pipeline {
     // ID-tagged Special.Ops.Lioness leftovers. Always pair an id episode search with a plain
     // t=search of the same q so Lioness.S01E01 WEB-DLs actually show up.
     const titleQ = aliasQ || (idSearch && episodeSearch ? params.q : '');
+    const mainP = this._fanoutMeasured(ixs, params, { timeoutMs });
     let aliasP = null;
     if (titleQ) {
-      ixs.forEach((ix) => this.usage.onSearch(ix.name));
+      countSearch(ixs);
       const aliasParams = { q: titleQ };
-      aliasP = this._fanoutMeasured(ixs, aliasParams, { timeoutMs });
+      aliasP = this._fanoutMeasured(ixs, aliasParams, { timeoutMs, subFanout: true });
     }
     // Yearless + quality + aka run in parallel with the titled search. Waiting until the
     // titled page is empty skipped every proper Mutiny NTb/FLUX file once a small encode hit.
@@ -3125,7 +3206,7 @@ class Pipeline {
     // Remux + size-desc + yearless first (3 at a time). Firing every extra against every
     // indexer at once froze the local Node process; three bounded workers keep Play moving.
     const extraFns = extraJobs.map((job) => async () => {
-      ixs.forEach((ix) => this.usage.onSearch(ix.name));
+      countSearch(ixs);
       const extraParams = { q: job.q };
       if (job.sort) extraParams.sort = job.sort;
       if (job.order) extraParams.order = job.order;
@@ -3134,10 +3215,23 @@ class Pipeline {
         extraParams.season = season;
         extraParams.ep = ep;
       }
-      const hit = await this._fanoutMeasured(ixs, extraParams, { timeoutMs });
+      const hit = await this._fanoutMeasured(ixs, extraParams, { timeoutMs, subFanout: true });
       return { ...hit, silentErrors: !!job.silentErrors };
     });
-    let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });
+    const extras = [];
+    let extraP = null;
+    if (extraFns.length) {
+      let ei = 0;
+      const extraLimit = Math.min(3, extraFns.length);
+      const extraWorker = async () => {
+        while (ei < extraFns.length) {
+          const fn = extraFns[ei++];
+          extras.push(await fn());
+        }
+      };
+      extraP = Promise.all(Array.from({ length: extraLimit }, () => extraWorker()));
+    }
+    let { results, errors } = await mainP;
     const namedEpisodes = {};
     // Each release name counts once: the widened queries return the same rows again.
     const seenNamed = new Set();
@@ -3159,34 +3253,32 @@ class Pipeline {
       results = mergeQualifiedResults(results, retry.results, qualifies);
       if (retry.errors && retry.errors.length) errors = errors.concat(retry.errors);
     }
-    const extras = [];
-    if (extraFns.length) {
-      let ei = 0;
-      const extraLimit = Math.min(3, extraFns.length);
-      const extraWorker = async () => {
-        while (ei < extraFns.length) {
-          const fn = extraFns[ei++];
-          extras.push(await fn());
-        }
-      };
-      await Promise.all(Array.from({ length: extraLimit }, () => extraWorker()));
+    if (extraP) {
+      await extraP;
       for (const extra of extras) {
         noteNamed(extra.results);
         results = mergeQualifiedResults(results, extra.results, qualifies);
         if (extra.errors && extra.errors.length && !extra.silentErrors) errors = errors.concat(extra.errors);
       }
     }
+    // Skip indexers that already timed out during this search so empty-result fallbacks do not
+    // pay another full timeoutMs waiting on an already-hung provider.
+    const timedOut = new Set();
+    for (const err of errors || []) {
+      if (err && err.indexer && isIndexerTimeoutError(err.error)) timedOut.add(err.indexer);
+    }
+    const retryIxs = ixs.filter((ix) => !timedOut.has(ix.name));
     // Fallback: long branded titles ("Brand Name Subtitle SxxEyy") often index under the
     // shorter brand — retry once with a trimmed QUERY, but verify hits against the FULL
     // original title so the shorter search can never surface a different film.
-    if (!results.length) {
+    if (!results.length && retryIxs.length) {
       const words = params.q.split(' ');
-      const tail = words.filter((w) => /^(S\d{2}E\d{2}|s\d{2}e\d{2}|(19|20)\d{2})$/.test(w));
+      const tail = words.filter((w) => /^(S\d{1,2}E\d{1,3}|s\d{1,2}e\d{1,3}|(19|20)\d{2})$/.test(w));
       const head = words.filter((w) => !tail.includes(w));
       if (head.length > 3) {
         const simpler = [...head.slice(0, 3), ...tail].join(' ');
-        ixs.forEach((ix) => this.usage.onSearch(ix.name));
-        const retry = await this._fanoutMeasured(ixs, { ...params, q: simpler }, { timeoutMs });
+        countSearch(retryIxs);
+        const retry = await this._fanoutMeasured(retryIxs, { ...params, q: simpler }, { timeoutMs });
         const verified = retry.results.filter(qualifies);
         if (verified.length) { results = verified; errors = retry.errors; }
       }
@@ -3194,12 +3286,12 @@ class Pipeline {
     // Some Newznab providers return worse/no results for imdbid/tvdbid searches even when
     // their plain title index has the release. Fall back to q-only, but keep the same strict
     // title verifier so catalog identity improves precision without making old films vanish.
-    if (!results.length && (params.imdbid || params.tvdbid)) {
+    if (!results.length && retryIxs.length && (params.imdbid || params.tvdbid)) {
       const titleOnly = { ...params };
       delete titleOnly.imdbid;
       delete titleOnly.tvdbid;
-      ixs.forEach((ix) => this.usage.onSearch(ix.name));
-      const retry = await this._fanoutMeasured(ixs, titleOnly, { timeoutMs });
+      countSearch(retryIxs);
+      const retry = await this._fanoutMeasured(retryIxs, titleOnly, { timeoutMs });
       const verified = retry.results.filter(qualifies);
       if (verified.length) { results = verified; errors = retry.errors; }
     }
@@ -3277,6 +3369,10 @@ class Pipeline {
     }
     // Catalog country (TMDB origin: GB → uk). The Office UK must not verify as The.Office.US.
     if (wanted && sceneCountry(policy.originCountry)) wanted.country = sceneCountry(policy.originCountry);
+    if (wanted && typeof policy.hasDominantSibling === 'boolean') wanted.hasDominantSibling = policy.hasDominantSibling;
+    // Pass the wanted title to scoring so nationality words inside English titles ("The Italian Job",
+    // "The French Dispatch") are never misread as foreign-dub audio tags.
+    if (params.q && !policy.wantedTitle) policy = { ...policy, wantedTitle: params.q };
     // Runner (2026) and The Runner (2026) share a year and differ by one article. When the
     // catalog lookup found that other work, the article is no longer optional.
     if (wanted && Array.isArray(policy.articleSiblings) && policy.articleSiblings.length) {
@@ -3456,8 +3552,13 @@ class Pipeline {
     // before the last-resort no-category sweep. Only when using the default 3030 (admin overrides skip).
     if (cat === '3030') strategies.push({ q: qFull, cat: '3000' });
     strategies.push({ q: qFull, cat: undefined });
-    let verified = [];
+    const verified = [];
+    const seenUrls = new Set();
     let lastErrors = [];
+    const enrichOne = (r) => {
+      const v = lookupVerdict(this.verdicts, r);
+      return { ...r, health: v ? (v.verdict === 'ok' ? 'verified' : v.verdict) : undefined };
+    };
     for (const strat of strategies) {
       const key = JSON.stringify(['ab', strat.q, strat.cat || '']);
       let hit = this._getFreshSearchHit(key);
@@ -3470,7 +3571,7 @@ class Pipeline {
           const searchParams = { q: strat.q };
           if (strat.cat) searchParams.cat = strat.cat;
           pending = (async () => {
-            ixs.forEach((ix) => this.usage.onSearch(ix.name));
+            ixs.forEach((ix) => { if (!indexerIsCooling(ix.name)) this.usage.onSearch(ix.name); });
             const { results, errors } = await this._fanoutMeasured(ixs, searchParams, { timeoutMs });
             return { at: Date.now(), results, errors };
           })().finally(() => this.searchInflight.delete(key));
@@ -3480,15 +3581,19 @@ class Pipeline {
         this._rememberSearchHit(key, hit);
       }
       lastErrors = hit.errors;
-      verified = hit.results.filter((r) => bookMatches(r.name, wanted));
-      if (verified.length) break; // first strategy that finds real books wins
+      for (const r of hit.results) {
+        if (!bookMatches(r.name, wanted)) continue;
+        const k = r.nzbUrl || r.guid || r.name;
+        if (seenUrls.has(k)) continue;
+        seenUrls.add(k);
+        verified.push(enrichOne(r));
+      }
+      // Only early-break once we actually found at least one PLAYABLE audio release (not just an
+      // .epub / .7z / dead-verdict hit that scoreAudiobook disqualifies).
+      if (verified.some((r) => scoreAudiobook(r).score > -5000)) break;
     }
-    const enriched = verified.map((r) => {
-      const v = lookupVerdict(this.verdicts, r);
-      return { ...r, health: v ? (v.verdict === 'ok' ? 'verified' : v.verdict) : undefined };
-    });
     return {
-      candidates: rankAudiobooks(enriched).map((c) => ({ ...c, pickKey: candidateKey(c) })),
+      candidates: rankAudiobooks(verified).map((c) => ({ ...c, pickKey: candidateKey(c) })),
       errors: lastErrors,
     };
   }
@@ -3503,7 +3608,7 @@ class Pipeline {
     if (!ixs.length) return false;
     const author = String(params.author || '').trim();
     const wanted = parseWantedBook(title, author);
-    const sanitize = (s) => String(s || '').replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const sanitize = (s) => foldDiacritics(String(s || '')).replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
     const q = sanitize(`${author} ${title}`) || sanitize(title);
     const key = JSON.stringify(['abavail', q]);
     let hit = this._getFreshSearchHit(key);
@@ -3511,7 +3616,7 @@ class Pipeline {
       let pending = this.searchInflight.get(key);
       if (!pending) {
         pending = (async () => {
-          ixs.forEach((ix) => this.usage.onSearch(ix.name));
+          ixs.forEach((ix) => { if (!indexerIsCooling(ix.name)) this.usage.onSearch(ix.name); });
           const { results, errors } = await this._fanoutMeasured(ixs, { q }, { timeoutMs });
           return { at: Date.now(), results, errors };
         })().finally(() => this.searchInflight.delete(key));
@@ -3520,7 +3625,14 @@ class Pipeline {
       hit = await pending;
       this._rememberSearchHit(key, hit);
     }
-    return hit.results.some((r) => bookMatches(r.name, wanted));
+    const playableHit = hit.results.some((r) => bookMatches(r.name, wanted) && !parseAudiobook(r.name || '').ebookOnly && !unstreamableContainer(r.name || ''));
+    if (playableHit) return true;
+    // If every indexer errored/timed out with zero results, throw so the caller does NOT persist
+    // `available: false` for 24 hours due to a transient outage.
+    if (!hit.results.length && Array.isArray(hit.errors) && hit.errors.length >= ixs.length) {
+      throw new Error('indexers unavailable');
+    }
+    return false;
   }
 
   _recordVerdict(candidate, verdict, detail = {}) {
@@ -3765,7 +3877,9 @@ class Pipeline {
       }
     }
     const nzbMs = Date.now() - nzbT0;
-    applyNzbFingerprintFields(candidate, xml);
+    let parsedNzb = null;
+    try { parsedNzb = this._parseNzbCached(candidate.nzbUrl, xml); } catch {}
+    applyNzbFingerprintFields(candidate, xml, parsedNzb);
     const fpAfterNzb = releaseFingerprint(candidate);
     const deadAfterNzb = fpAfterNzb && this.verdicts.get(fpAfterNzb);
     if (deadAfterNzb && DEAD_RELEASE_VERDICTS.has(deadAfterNzb.verdict)) {
@@ -3780,7 +3894,7 @@ class Pipeline {
     let probeEpisodeScoped = false;
     const probeT0 = Date.now();
     try {
-      const probeTarget = firstProbeTarget(xml, mountOpts, candidate.name);
+      const probeTarget = firstProbeTarget(xml, mountOpts, candidate.name, parsedNzb);
       const probeMsg = probeTarget.msgId;
       probeEpisodeScoped = probeTarget.episodeScoped;
       if (probeMsg) {
@@ -3819,7 +3933,7 @@ class Pipeline {
       mountParentDetached = true;
     };
     const mountPromise = withDeadline(
-      mountNzb(this.pool(), xml, { ...mountOpts, signal: mountController.signal, releaseName: candidate.name }),
+      mountNzb(this.pool(), xml, { ...mountOpts, signal: mountController.signal, releaseName: candidate.name, parsedNzb }),
       this.mountDeadlineMs,
       'mount timeout',
     );
@@ -4114,6 +4228,7 @@ class Pipeline {
     // resume into a serial one-at-a-time walk (the pre-pin behavior users knew was the raced one).
     const joiningPrepare = !explicitPick && this._findTitlePrepare(params, policy);
     if (joiningPrepare) {
+      joiningPrepare.promoted = true;
       this.metrics.titlePrepareJoins++;
       console.log('[play] joining prepare');
     }
@@ -4140,9 +4255,12 @@ class Pipeline {
         delete relaxed.exactResolutionRank;
         const retry = await this.search(params, relaxed);
         const tried = new Set(playable.map((c) => c.pickKey));
-        const fallback = this._playableCandidates(retry.candidates, params).filter((c) => !tried.has(c.pickKey));
+        let fallback = this._playableCandidates(retry.candidates, params).filter((c) => !tried.has(c.pickKey));
         if (fallback.length) {
+          if (!explicitPick) fallback = this._orderForPipe(fallback, relaxed);
+          if (!explicitPick && !params.pinnedResume) fallback = this._orderForPicture(fallback, relaxed);
           const s2 = new PlaySession(params, fallback);
+          s2.policy = relaxed;
           this.sessions.set(s2.id, s2);
           const r = await this._advance(s2, mountOpts, { width });
           r.relaxedResolution = policy.exactResolutionRank; // signal the UI a lower res was substituted
@@ -4190,9 +4308,12 @@ class Pipeline {
     this.sessions.set(session.id, session);
     const committed = this._commitMount(session, ready.candidate, ready.vf, [], mountOpts);
     // Ranked backups can wait. First frame must not sit behind an indexer fan-out.
+    const userChose = (params.pickKey || params.pick) && !params.pinnedResume;
     this.search(params, policy, { allowStale: true }).then(({ candidates }) => {
       if (session.released) return;
       let extra = this._playableCandidates(candidates, params);
+      if (!userChose) extra = this._orderForPipe(extra, policy);
+      if (!userChose && !params.pinnedResume) extra = this._orderForPicture(extra, policy);
       if (!extra.some((c) => c.pickKey === ready.candidate.pickKey)) {
         extra = [ready.candidate, ...extra];
       }
@@ -4222,6 +4343,7 @@ class Pipeline {
       throw e;
     }
     const session = new PlaySession(params, playable);
+    session.audiobook = true;
     this.sessions.set(session.id, session);
     const width = (params.pickKey || params.pick) ? 1 : PLAY_RACE_WIDTH;
     return await this._advance(session, { ...mountOpts, audiobook: true }, { width });
@@ -4396,8 +4518,22 @@ class Pipeline {
     if (!existing && (params.imdbid || params.tvdbid)) {
       existing = this.titlePrepareInflight.get(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }));
     }
+    const attachSignal = (rec, sig) => {
+      if (!sig || !rec || !rec.controller) return;
+      const onAbort = () => {
+        rec.callers = Math.max(0, (rec.callers || 1) - 1);
+        if (rec.callers <= 0 && !rec.promoted && !rec.controller.signal.aborted) {
+          rec.controller.abort();
+        }
+      };
+      if (sig.aborted) onAbort();
+      else sig.addEventListener('abort', onAbort, { once: true });
+    };
+    const callerSignal = mountOpts.signal || (params && params._signal) || null;
     if (existing) {
       this.metrics.titlePrepareJoins++;
+      existing.callers = (existing.callers || 1) + 1;
+      attachSignal(existing, callerSignal);
       return existing.promise;
     }
     const failUntil = this.prepareFailUntil.get(key);
@@ -4406,8 +4542,11 @@ class Pipeline {
       e.cachedFail = true;
       throw e;
     }
-    const rec = { promise: null };
-    rec.promise = this._runPrepare(params, policy, mountOpts).then((r) => {
+    const controller = new AbortController();
+    const rec = { promise: null, controller, callers: 1, promoted: false };
+    attachSignal(rec, callerSignal);
+    const runOpts = { ...mountOpts, signal: controller.signal };
+    rec.promise = this._runPrepare(params, policy, runOpts).then((r) => {
       this.prepareFailUntil.delete(key);
       return r;
     }, (e) => {
@@ -4427,7 +4566,10 @@ class Pipeline {
   }
 
   async _runPrepare(params, policy = {}, mountOpts = {}) {
+    const prepSignal = mountOpts && mountOpts.signal;
+    if (prepSignal && prepSignal.aborted) return { candidate: null, attempts: [], prepared: false, aborted: true };
     const first = await this.search(params, policy);
+    if (prepSignal && prepSignal.aborted) return { candidate: null, attempts: [], prepared: false, aborted: true };
     let searchErrors = first.errors;
     // Same fallback as play(): the 4K toggle on a title with no 4K release disqualified every
     // release, so the warm-up failed and was cached as failed ("House S04E06 — 33 disqualified by
@@ -4445,8 +4587,9 @@ class Pipeline {
     if (!userChose && !params.pinnedResume) playable = this._orderForPicture(playable, policy);
     const attempts = [];
     const started = Date.now();
-    const tryList = async (list) => {
+    const tryList = async (list, { noHigherRank = false } = {}) => {
       for (const candidate of list.slice(0, PREPARE_MAX_ATTEMPTS)) {
+        if (prepSignal && prepSignal.aborted) break;
         if (Date.now() - started >= PREPARE_MAX_MS) break;
         const res = await this._tryCandidate(candidate, { ...mountOpts, startupPriority: 'prepare' });
         if (res.vf && !res.fail) {
@@ -4457,7 +4600,14 @@ class Pipeline {
           if (candidate.name) res.vf._releaseName = candidate.name;
           this.mounts.set(res.vf.id, res.vf);
           this.mountByUrl.set(res.vf._mountIdentity || mountIdentity(candidate, mountOpts), res.vf.id);
-          this._rememberTitlePrepared(params, this._rememberPolicyForCandidate(policy, candidate), res.vf, candidate);
+          const remPolicy = this._rememberPolicyForCandidate(policy, candidate);
+          this._rememberTitlePrepared(params, remPolicy, res.vf, candidate);
+          // When no release of the requested exact rank even existed (e.g. 4K toggle on a 1080p-only
+          // show), also park the warmed fallback under the requested policy key so Play joins it
+          // instead of destroying it in forgetMismatchedPrepared() and cold-remounting.
+          if (noHigherRank && this._prepareJobKey(params, remPolicy) !== this._prepareJobKey(params, policy)) {
+            this._rememberTitlePrepared(params, policy, res.vf, candidate, { noHigherRank: true });
+          }
           this.rebalancePlaybackWindows();
           // No second backup file. With the segment cache on, this one file's
           // start, end, and resume spot are saved to disk. Play still warms either way.
@@ -4468,11 +4618,11 @@ class Pipeline {
       }
       return null;
     };
-    let done = await tryList(playable);
+    let done = await tryList(playable, { noHigherRank: !!chosen.widened });
     // Mirror play()'s relax-on-exhaustion: when every preferred-res (4K) source is dead, pre-warm
     // the fallback resolution too — so a focus pre-warm keeps resume instant even on UHD source rot,
     // not just when 4K is healthy. Cache-hit re-search re-scores the lower-res tier into playability.
-    if (!done && policy.exactResolutionRank != null && ((!params.pickKey && !params.pick) || params.pinnedResume) && Date.now() - started < PREPARE_MAX_MS) {
+    if (!done && !(prepSignal && prepSignal.aborted) && policy.exactResolutionRank != null && ((!params.pickKey && !params.pick) || params.pinnedResume) && Date.now() - started < PREPARE_MAX_MS) {
       const relaxed = { ...policy };
       delete relaxed.exactResolutionRank;
       const retry = await this.search(params, relaxed);
@@ -4831,6 +4981,7 @@ class Pipeline {
     if (Number.isFinite(frac) && frac > 0 && frac < 1) session.query = { ...(session.query || {}), resumeFrac: frac };
     const _we = wantedEpisodeOf(session.query);
     const nextOpts = _we ? { ...rest, wantedEpisode: _we } : rest;
+    if (session.audiobook) nextOpts.audiobook = true;
     const kept = {
       candidates: session.candidates, cursor: session.cursor,
       activeCandidate: session.activeCandidate, currentMountId: session.currentMountId,
@@ -4900,6 +5051,7 @@ class Pipeline {
       session.activeCandidate = null;
     }
     const nextOpts = _we ? { ...rest, wantedEpisode: _we } : rest;
+    if (session.audiobook) nextOpts.audiobook = true;
     // session.standby only holds a copy warmed before this Play. One armed after it sits in the title
     // list, and missing it sent every switch through a cold search and mount.
     const warm = session.standby || this._findTitleStandby(session.query || {}, session.policy || {});

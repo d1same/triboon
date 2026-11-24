@@ -90,14 +90,21 @@ function request(method, url, { key, bearer, body, timeoutMs = 10000, deadlineMs
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume(); clearTimeout(deadline);
         const next = new URL(res.headers.location, url);
+        const sameOrigin = next.origin === new URL(url).origin;
         const redirectKey = key && subtitleDownloadNeedsAuth(next.href, url) ? key : undefined;
+        const redirectBearer = bearer && (sameOrigin || subtitleDownloadNeedsAuth(next.href, url)) ? bearer : undefined;
         if (redirectKey && !next.searchParams.has('key')) next.searchParams.set('key', redirectKey);
-        return request(method, next.href,
-          { key: redirectKey, bearer, timeoutMs, raw, _deadlineAt: deadlineAt, _hops: _hops + 1 }).then(resolve, reject);
+        const keepBody = res.statusCode === 307 || res.statusCode === 308;
+        const nextMethod = (!keepBody && (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303)) ? 'GET' : method;
+        return request(nextMethod, next.href,
+          { key: redirectKey, bearer: redirectBearer, body: keepBody ? body : undefined, timeoutMs, raw, _deadlineAt: deadlineAt, _hops: _hops + 1 }).then(resolve, reject);
       }
       const chunks = [];
+      let done = false;
       res.on('data', (c) => { if (chunks.reduce((n, x) => n + x.length, 0) < 8e6) chunks.push(c); });
-      res.on('end', () => { clearTimeout(deadline); const buf = Buffer.concat(chunks); resolve({ status: res.statusCode, body: raw ? buf : buf.toString('utf8') }); });
+      res.on('error', (e) => { if (done) return; done = true; clearTimeout(deadline); reject(e); });
+      res.on('close', () => { if (done || res.complete) return; done = true; clearTimeout(deadline); reject(new Error(`subs stream closed early: ${url.split('?')[0]}`)); });
+      res.on('end', () => { if (done) return; done = true; clearTimeout(deadline); const buf = Buffer.concat(chunks); resolve({ status: res.statusCode, body: raw ? buf : buf.toString('utf8') }); });
     });
     const deadline = setTimeout(() => req.destroy(new Error(`subs deadline after ${deadlineMs}ms: ${url.split('?')[0]}`)), remaining);
     req.setTimeout(timeoutMs, () => req.destroy(new Error(`subs timeout: ${url.split('?')[0]}`)));

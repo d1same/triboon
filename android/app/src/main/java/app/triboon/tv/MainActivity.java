@@ -257,6 +257,7 @@ public class MainActivity extends Activity {
     private TextView nativeAboutSubline;
     private TextView nativeAboutMeta;
     private TextView nativeAboutPlot;
+    private HorizontalScrollView nativeAboutCastScroll;
     private LinearLayout nativeAboutCast;
     private org.json.JSONObject nativeAboutData;
     private boolean nativeAboutOpen = false;
@@ -472,6 +473,11 @@ public class MainActivity extends Activity {
     private android.speech.SpeechRecognizer speech; // in-app voice search (created per use)
     private boolean voiceListening;
     private boolean voicePending;            // mic permission was requested BY a voice tap
+    private boolean voiceActivityInFlight;   // external RecognizerIntent fallback activity is open
+    private int voiceSessionGen;             // invalidates stale callbacks/timeouts from previous voice sessions
+    private String voiceLastPartial = "";
+    private final Handler voiceHandler = new Handler(Looper.getMainLooper());
+    private Runnable voiceWatchdog;
     private int focusRecoveryEpoch;
     // Invalidates a delayed WebView suspension if the Activity resumes before the final playback
     // checkpoint callback returns (for example, a very fast app switch).
@@ -571,9 +577,11 @@ public class MainActivity extends Activity {
             web.onResume();
             web.resumeTimers();
         }
-        // Lazily bring up Google Cast (guarded on Play Services; a no-op on degoogled/Fire boxes),
-        // then start foreground device discovery so the cast button reflects real device availability.
-        try { castCtx(); startCastDiscovery(); } catch (Throwable ignored) {}
+        // Lazily bring up Google Cast on phones/tablets only (TV boxes are receivers, not senders;
+        // skipping MediaRouter discovery on Android TV saves continuous mDNS/CPU wakeups).
+        if (!isTvDevice()) {
+            try { castCtx(); startCastDiscovery(); } catch (Throwable ignored) {}
+        }
         scheduleTvFocusRecovery("resume");
         // Returned from granting "install unknown apps"? Continue the update the user already started,
         // so they never have to press Update a second time.
@@ -1486,6 +1494,12 @@ public class MainActivity extends Activity {
                 runOnUiThread(MainActivity.this::startVoiceFlow);
             }
 
+            @android.webkit.JavascriptInterface
+            public void stopVoice() {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> cancelVoiceFlow(false));
+            }
+
             // "Change server" (Preferences → Profile & Pins): re-open the server-entry screen, pre-filled
             // with the current server, so the user can point the app at a different Triboon server without
             // reinstalling. connect() saves the new URL to prefs and loads it.
@@ -2184,6 +2198,7 @@ public class MainActivity extends Activity {
         if (sourceId == null || sourceId.trim().isEmpty()) return;
         clearPersonalIptvSourceCacheIn(KEY_PERSONAL_IPTV_CHANNEL_CACHE, sourceId);
         clearPersonalIptvSourceCacheIn(KEY_PERSONAL_IPTV_GUIDE_CACHE, sourceId);
+        clearPersonalIptvSourceCacheIn(KEY_PERSONAL_IPTV_GUIDE_CACHE, sourceId + ":xmltv");
     }
 
     private void clearPersonalIptvSourceCacheIn(String prefKey, String sourceId) {
@@ -3788,6 +3803,10 @@ public class MainActivity extends Activity {
         return d;
     }
 
+    private String nativeLoadingLastTitle = "";
+    private String nativeLoadingLastBackdrop = "";
+    private boolean nativeLoadingLastHot = false;
+
     private void showNativeLoading(String title, String backdropUrl) {
         showNativeLoading(title, backdropUrl, false);
     }
@@ -3795,15 +3814,33 @@ public class MainActivity extends Activity {
     private void showNativeLoading(String title, String backdropUrl, boolean hot) {
         if (nativeLoading == null) return;
         hideNativeChromeNow();
+        String normTitle = (title == null || title.isEmpty()) ? "Preparing stream" : title;
+        String normArt = backdropUrl == null ? "" : backdropUrl.trim();
+        // Deduplicate back-to-back showNativeLoading calls for the same title + backdrop (e.g.
+        // web pre-loader → play handoff → player prepare) so we do not flash the backdrop blank,
+        // re-download the JPEG 3 times, or reset the loading sweep animation.
+        if (nativeLoading.getVisibility() == View.VISIBLE
+                && normTitle.equals(nativeLoadingLastTitle)
+                && normArt.equals(nativeLoadingLastBackdrop)) {
+            if (hot && !nativeLoadingLastHot) {
+                nativeLoadingLastHot = true;
+                startNativeLoadingStatus(true);
+            }
+            nativeLoading.bringToFront();
+            return;
+        }
+        nativeLoadingLastTitle = normTitle;
+        nativeLoadingLastBackdrop = normArt;
+        nativeLoadingLastHot = hot;
         int token = ++nativeLoadingToken;
-        nativeLoadingTitle.setText(title == null || title.isEmpty() ? "Preparing stream" : title);
+        nativeLoadingTitle.setText(normTitle);
         startNativeLoadingStatus(hot);
         nativeLoadingBackdrop.setImageDrawable(null);
         nativeLoading.setVisibility(View.VISIBLE);
         nativeLoading.bringToFront();
         startNativeLoadingLane();
-        if (backdropUrl == null || backdropUrl.trim().isEmpty()) return;
-        String art = backdropUrl.trim();
+        if (normArt.isEmpty()) return;
+        String art = normArt;
         new Thread(() -> {
             Bitmap bitmap = null;
             HttpURLConnection conn = null;
@@ -4052,6 +4089,7 @@ public class MainActivity extends Activity {
         body.addView(nativeAboutPlot);
 
         HorizontalScrollView castScroll = new HorizontalScrollView(this);
+        nativeAboutCastScroll = castScroll;
         castScroll.setHorizontalScrollBarEnabled(false);
         castScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         castScroll.setClipToPadding(true);
@@ -4124,8 +4162,9 @@ public class MainActivity extends Activity {
         }
         if (nativeAboutCast != null) {
             nativeAboutCast.removeAllViews();
+            if (nativeAboutCastScroll != null) nativeAboutCastScroll.scrollTo(0, 0);
             org.json.JSONArray cast = d.optJSONArray("cast");
-            int n = cast == null ? 0 : Math.min(10, cast.length());
+            int n = cast == null ? 0 : Math.min(40, cast.length());
             int face = nativeAboutCastFaceDp();
             for (int i = 0; i < n; i++) {
                 org.json.JSONObject c = cast.optJSONObject(i);
@@ -4214,6 +4253,12 @@ public class MainActivity extends Activity {
         if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_DPAD_UP
                 || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
             return hideNativeTitleInfo();
+        }
+        if ((code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT)
+                && nativeAboutCastScroll != null) {
+            int step = Math.max(dp(220), Math.round(nativeAboutCastScroll.getWidth() * 0.65f));
+            nativeAboutCastScroll.smoothScrollBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? step : -step, 0);
+            return true;
         }
         return true;
     }
@@ -4613,10 +4658,16 @@ public class MainActivity extends Activity {
             buildNativePlayerLayer();
             boolean keepVideoLoader = !guide && "video".equals(mode) && !quietSeek;
             if (keepVideoLoader) showNativeLoading(title, backdropUrl);
-            // quietSeek reuses the surface. Same-token + same-URL also reuses, so a pause/resume
-            // recovery cannot Release+Init a healthy ExoPlayer (that 4K rebuild is a 30s spinner).
+            try { precache().cancel(); } catch (Throwable ignored) {}
+            String nextKind = j.optString("kind", "direct");
+            String nextQuality = qualityLabel.isEmpty() ? ("live".equals(mode) ? "LIVE" : "1080p") : qualityLabel;
+            boolean sameLoadProfile = nextKind.equals(nativeKind)
+                    && (nextQuality.toUpperCase(java.util.Locale.US).contains("4K")
+                        == (nativeQualityLabel != null && nativeQualityLabel.toUpperCase(java.util.Locale.US).contains("4K")));
+            // quietSeek reuses the surface when the ExoPlayer LoadControl profile still matches.
+            // Same-token + same-URL also reuses, so a pause/resume recovery cannot Release+Init a healthy ExoPlayer.
             boolean reuseQuietVideo = "video".equals(mode) && "video".equals(nativeMode) && nativePlayer != null
-                    && nativePlayerView != null && nativePlayerOpen() && !guide
+                    && nativePlayerView != null && nativePlayerOpen() && !guide && sameLoadProfile
                     && (quietSeek || (playbackToken > 0L && playbackToken == nativePlaybackToken && url.equals(nativeUrl)));
             boolean reuseLivePlayer = "live".equals(mode) && "live".equals(nativeMode) && nativePlayer != null
                     && nativePlayerView != null && nativePlayerOpen() && !guide;
@@ -5110,9 +5161,9 @@ public class MainActivity extends Activity {
                 nativePlayer.clearMediaItems();
             }
             applyNativeHttpHostHeader();
-            nativePlayer.setMediaItem(buildNativeMediaItem());
+            if (startMs > 0) nativePlayer.setMediaItem(buildNativeMediaItem(), startMs);
+            else nativePlayer.setMediaItem(buildNativeMediaItem());
             nativePlayer.prepare();
-            if (startMs > 0) nativePlayer.seekTo(startMs);
             // Percent-only Trakt resume must not audibly play from 0 while duration is being
             // resolved. Direct play begins after its seek; server-seek modes begin after remount.
             nativeQuietSeekHoldPlay = reuseQuietVideo && "video".equals(mode)
@@ -6358,6 +6409,7 @@ public class MainActivity extends Activity {
     }
     private void updateNativeChrome() {
         if (nativePlayer == null || nativeSeek == null || nativeTime == null) return;
+        if (nativeChrome != null && nativeChrome.getVisibility() != View.VISIBLE) return;
         updateNativeCastButton();
         long pos = nativePosSeconds();
         long dur = nativeDurSeconds();
@@ -6704,7 +6756,7 @@ public class MainActivity extends Activity {
         boolean heavyVod = video && nativeLikelyHeavyVod();
         int minMs = video ? (conservative ? (heavyVod ? 14000 : 5000) : (heavyVod ? 22000 : 5000)) : (conservative ? 8000 : 4000);
         int maxMs = video ? (conservative ? (heavyVod ? 75000 : 30000) : (heavyVod ? 120000 : 75000)) : 60000;
-        int startMs = video ? (conservative ? (heavyVod ? 3500 : 1200) : (heavyVod ? 3500 : 900)) : (conservative ? 1800 : 700);
+        int startMs = video ? (conservative ? (heavyVod ? 2200 : 1200) : (heavyVod ? 1800 : 900)) : (conservative ? 1800 : 700);
         int rebufferMs = video ? (conservative ? (heavyVod ? 7000 : 3000) : (heavyVod ? 8000 : 1800)) : (conservative ? 3500 : 1800);
         // Buffer the player holds is DERIVED from the owner's "read-ahead goal" (Settings →
         // Streaming performance) for THIS resolution: goalSec × the file's real bitrate, CLAMPED to
@@ -7130,6 +7182,13 @@ public class MainActivity extends Activity {
                             if (token != nativeSubtitleLoadToken) return;
                             loadNativeSubtitleOverlayAttempt(subtitleUrl, cleanUrl, token, true, attempt);
                         }, NativeSideSubtitle.nextReadMs(-attempt, nativeSideSubtitleAheadSeconds()));
+                        return;
+                    }
+                    if (!definitive && NativeSideSubtitle.isSideFile(cleanUrl) && attempt < 3) {
+                        nativeSubtitleHandler.postDelayed(() -> {
+                            if (token != nativeSubtitleLoadToken) return;
+                            loadNativeSubtitleOverlayAttempt(subtitleUrl, cleanUrl, token, silent, attempt + 1);
+                        }, attempt == 0 ? 700 : (attempt == 1 ? 1800 : 3500));
                         return;
                     }
                     if (!definitive && attempt < 2) { // 3 attempts total, 4s then 9s apart
@@ -9396,6 +9455,7 @@ public class MainActivity extends Activity {
 
     private void closeNativePlayback(boolean notifyClosed) {
         boolean waitForLiveClose = notifyClosed && "live".equals(nativeMode);
+        clearNativePipAutoEnter();
         releaseNativePlayer(notifyClosed);
         setPhonePlaybackOrientation(false);
         if (nativePlayerLayer != null) nativePlayerLayer.setVisibility(View.GONE);
@@ -9418,8 +9478,10 @@ public class MainActivity extends Activity {
      * player if another native playback starts during the handoff.
      */
     private void closeNativePlaybackForWebSurface() {
+        clearNativePipAutoEnter();
         ExoPlayer closingPlayer = nativePlayer;
         if (closingPlayer == null) {
+            hideNativeLoading();
             setPhonePlaybackOrientation(false);
             if (nativePlayerLayer != null) nativePlayerLayer.setVisibility(View.GONE);
             showWebAfterNativePlayback();
@@ -9542,9 +9604,13 @@ public class MainActivity extends Activity {
             if (mi != null && mi.localConfiguration != null && mi.localConfiguration.uri != null) url = mi.localConfiguration.uri.toString();
         } catch (Throwable ignored) {}
         if (url.isEmpty()) { pushCastError("No stream to cast"); return; }
-        String title = nativeChromeTitle != null && nativeChromeTitle.getText() != null ? nativeChromeTitle.getText().toString() : "Triboon";
+        String title = (nativePlaybackTitle != null && !nativePlaybackTitle.trim().isEmpty()) ? nativePlaybackTitle : "Triboon";
+        // Server-seek remux/transcode URLs already carry &start=<offset> in the URL itself; send the
+        // player's relative offset so the receiver does not double-add startOffset.
+        boolean urlHasStart = url.contains("start=");
+        long castPos = urlHasStart ? Math.max(0L, nativePlayer.getCurrentPosition() / 1000L) : nativePosSeconds();
         org.json.JSONObject j = new org.json.JSONObject();
-        try { j.put("url", url); j.put("title", title); j.put("position", nativePosSeconds()); j.put("contentType", "video/mp4"); } catch (Throwable ignored) {}
+        try { j.put("url", url); j.put("title", title); j.put("position", castPos); j.put("contentType", "video/mp4"); } catch (Throwable ignored) {}
         handleCastRequest(j.toString());
     }
     private void handleCastRequest(String json) {
@@ -10120,6 +10186,11 @@ public class MainActivity extends Activity {
             return;
         }
 
+        if (voiceListening && !voiceActivityInFlight) {
+            cancelVoiceFlow(true);
+            return;
+        }
+
         handleBack();
     }
 
@@ -10142,23 +10213,78 @@ public class MainActivity extends Activity {
     // resolves to the launcher's GLOBAL search (Katniss) — it opens, but never returns a
     // transcript to us, which is exactly the "voice didn't work" symptom. The reliable path
     // is the in-app SpeechRecognizer SERVICE; it needs RECORD_AUDIO granted at runtime.
+    private void destroySpeechLater(final android.speech.SpeechRecognizer old) {
+        if (old == null) return;
+        voiceHandler.post(() -> {
+            try { old.cancel(); } catch (Throwable ignored) {}
+            try { old.destroy(); } catch (Throwable ignored) {}
+        });
+    }
+
+    private void armVoiceWatchdog(final int gen, long timeoutMs) {
+        if (voiceWatchdog != null) voiceHandler.removeCallbacks(voiceWatchdog);
+        voiceWatchdog = () -> {
+            if (gen != voiceSessionGen || !voiceListening || voiceActivityInFlight) return;
+            String partial = voiceLastPartial != null ? voiceLastPartial.trim() : "";
+            cancelVoiceFlow(false);
+            voiceResult(partial);
+        };
+        voiceHandler.postDelayed(voiceWatchdog, timeoutMs);
+    }
+
+    private void cancelVoiceFlow(boolean notifyWeb) {
+        voiceSessionGen++;
+        voiceHandler.removeCallbacksAndMessages(null);
+        voiceWatchdog = null;
+        voiceListening = false;
+        voicePending = false;
+        voiceActivityInFlight = false;
+        voiceLastPartial = "";
+        restoreNativePlaybackAfterVoice();
+        if (speech != null) {
+            android.speech.SpeechRecognizer old = speech;
+            speech = null;
+            try { old.cancel(); } catch (Throwable ignored) {}
+            try { old.destroy(); } catch (Throwable ignored) {}
+        }
+        if (notifyWeb) voiceResult("");
+    }
+
     private void startVoiceFlow() {
+        boolean hadActive = speech != null || voiceListening;
+        if (hadActive) cancelVoiceFlow(false);
         voiceListening = true;
+        voiceLastPartial = "";
+        final int gen = ++voiceSessionGen;
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             voicePending = true; // so the grant callback resumes the voice session
             requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC);
             return; // resumes in onRequestPermissionsResult
         }
-        if (android.speech.SpeechRecognizer.isRecognitionAvailable(this)) { listenInApp(); return; }
+        if (android.speech.SpeechRecognizer.isRecognitionAvailable(this)) {
+            if (hadActive) {
+                // Brief settle window so the previous SpeechRecognizer service finishes unbinding
+                // before a back-to-back voice search starts (prevents ERROR_RECOGNIZER_BUSY).
+                armVoiceWatchdog(gen, 15000L);
+                voiceHandler.postDelayed(() -> {
+                    if (gen == voiceSessionGen && voiceListening) listenInApp(gen, false);
+                }, 140L);
+            } else {
+                listenInApp(gen, false);
+            }
+            return;
+        }
         // Last resort: some boxes ship a recognizer activity that DOES return results.
         try {
             duckNativePlaybackForVoice();
+            voiceActivityInFlight = true;
             android.content.Intent i = new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                     android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             startActivityForResult(i, REQ_VOICE);
         } catch (Exception ex) {
+            voiceActivityInFlight = false;
             restoreNativePlaybackAfterVoice();
             voiceListening = false;
             Toast.makeText(this, "Voice input isn't available on this device", Toast.LENGTH_SHORT).show();
@@ -10166,35 +10292,95 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void listenInApp() {
-        if (speech != null) { speech.destroy(); speech = null; }
+    private void listenInApp(final int gen, final boolean retriedBusy) {
+        if (gen != voiceSessionGen || !voiceListening) return;
+        if (speech != null) {
+            android.speech.SpeechRecognizer old = speech;
+            speech = null;
+            try { old.cancel(); } catch (Throwable ignored) {}
+            try { old.destroy(); } catch (Throwable ignored) {}
+        }
         duckNativePlaybackForVoice();
-        speech = android.speech.SpeechRecognizer.createSpeechRecognizer(this);
-        android.content.Intent i = new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        i.putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
-        speech.setRecognitionListener(new android.speech.RecognitionListener() {
-            @Override public void onResults(Bundle b) {
-                java.util.ArrayList<String> r = b.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
-                voiceResult(r != null && !r.isEmpty() && r.get(0) != null ? r.get(0) : "");
-                done();
-            }
-            @Override public void onError(int code) { voiceResult(""); done(); }
-            @Override public void onReadyForSpeech(Bundle b) {}
-            @Override public void onBeginningOfSpeech() {}
-            @Override public void onRmsChanged(float rms) {}
-            @Override public void onBufferReceived(byte[] buf) {}
-            @Override public void onEndOfSpeech() {}
-            @Override public void onPartialResults(Bundle b) {}
-            @Override public void onEvent(int type, Bundle b) {}
-            private void done() {
-                voiceListening = false;
-                restoreNativePlaybackAfterVoice();
-                if (speech != null) { speech.destroy(); speech = null; }
-            }
-        });
-        speech.startListening(i);
+        armVoiceWatchdog(gen, 15000L);
+        try {
+            speech = android.speech.SpeechRecognizer.createSpeechRecognizer(this);
+            android.content.Intent i = new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            i.putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
+            i.putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+            speech.setRecognitionListener(new android.speech.RecognitionListener() {
+                private void finish(String text) {
+                    if (gen != voiceSessionGen) return;
+                    voiceSessionGen++;
+                    if (voiceWatchdog != null) { voiceHandler.removeCallbacks(voiceWatchdog); voiceWatchdog = null; }
+                    voiceListening = false;
+                    voiceLastPartial = "";
+                    restoreNativePlaybackAfterVoice();
+                    android.speech.SpeechRecognizer old = speech;
+                    speech = null;
+                    destroySpeechLater(old);
+                    voiceResult(text);
+                }
+                @Override public void onResults(Bundle b) {
+                    if (gen != voiceSessionGen) return;
+                    java.util.ArrayList<String> r = b != null
+                            ? b.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION) : null;
+                    String text = (r != null && !r.isEmpty() && r.get(0) != null) ? r.get(0).trim() : "";
+                    if (text.isEmpty() && voiceLastPartial != null) text = voiceLastPartial.trim();
+                    finish(text);
+                }
+                @Override public void onError(int code) {
+                    if (gen != voiceSessionGen) return;
+                    if (code == android.speech.SpeechRecognizer.ERROR_RECOGNIZER_BUSY && !retriedBusy) {
+                        android.speech.SpeechRecognizer old = speech;
+                        speech = null;
+                        destroySpeechLater(old);
+                        voiceHandler.postDelayed(() -> {
+                            if (gen == voiceSessionGen && voiceListening) listenInApp(gen, true);
+                        }, 240L);
+                        return;
+                    }
+                    String partial = voiceLastPartial != null ? voiceLastPartial.trim() : "";
+                    if ((code == android.speech.SpeechRecognizer.ERROR_NO_MATCH
+                            || code == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+                            && !partial.isEmpty()) {
+                        finish(partial);
+                        return;
+                    }
+                    Log.w(TAG, "voice search error code=" + code);
+                    if (code != android.speech.SpeechRecognizer.ERROR_NO_MATCH
+                            && code != android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                            && code != android.speech.SpeechRecognizer.ERROR_CLIENT) {
+                        Toast.makeText(MainActivity.this, "Voice search failed — try again", Toast.LENGTH_SHORT).show();
+                    }
+                    finish("");
+                }
+                @Override public void onReadyForSpeech(Bundle b) {}
+                @Override public void onBeginningOfSpeech() {
+                    if (gen == voiceSessionGen && voiceListening) armVoiceWatchdog(gen, 15000L);
+                }
+                @Override public void onRmsChanged(float rms) {}
+                @Override public void onBufferReceived(byte[] buf) {}
+                @Override public void onEndOfSpeech() {
+                    if (gen == voiceSessionGen && voiceListening) armVoiceWatchdog(gen, 7000L);
+                }
+                @Override public void onPartialResults(Bundle b) {
+                    if (gen != voiceSessionGen || b == null) return;
+                    java.util.ArrayList<String> r = b.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
+                    if (r != null && !r.isEmpty() && r.get(0) != null && !r.get(0).trim().isEmpty()) {
+                        voiceLastPartial = r.get(0).trim();
+                    }
+                }
+                @Override public void onEvent(int type, Bundle b) {}
+            });
+            speech.startListening(i);
+        } catch (Throwable t) {
+            Log.w(TAG, "listenInApp failed", t);
+            cancelVoiceFlow(false);
+            Toast.makeText(this, "Voice input isn't available on this device", Toast.LENGTH_SHORT).show();
+            voiceResult("");
+        }
     }
 
     // Empty text = cancelled/failed: the page just stops the mic pulse animation.
@@ -10250,14 +10436,18 @@ public class MainActivity extends Activity {
             java.util.ArrayList<String> r = data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);
             if (r != null && !r.isEmpty() && r.get(0) != null) text = r.get(0);
         }
+        voiceActivityInFlight = false;
         voiceListening = false;
         restoreNativePlaybackAfterVoice();
-        voiceResult(text);
+        final String finalText = text;
+        // Post after onResume() unpauses WebView timers so doSearch() timers run reliably.
+        voiceHandler.post(() -> voiceResult(finalText));
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        if (voiceListening && !voiceActivityInFlight) cancelVoiceFlow(true);
         stopCastDiscovery(); // foreground-only scan; a live cast SESSION is intentionally left running
         boolean inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode();
         if (nativePlayer != null && !inPip) {
@@ -10345,8 +10535,28 @@ public class MainActivity extends Activity {
         }
     }
 
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // If the user dismissed the PiP window (X or swipe away), Android jumps straight to onStop()
+        // without onPause(). Pause ExoPlayer so audio doesn't keep playing invisibly in the background.
+        boolean inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode();
+        if (nativePlayer != null && !inPip && nativePlayer.isPlaying()) {
+            nativePauseCause = "playback dismissed";
+            try { nativePlayer.pause(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private void clearNativePipAutoEnter() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || isTvDevice()) return;
+        try {
+            setPictureInPictureParams(new PictureInPictureParams.Builder().setAutoEnterEnabled(false).build());
+        } catch (Throwable ignored) {}
+    }
+
     private void trimAndroidMemoryCaches(boolean aggressive) {
         personalIptvHostSafetyCache.clear();
+        if (nativeStillCache != null) nativeStillCache.evictAll();
         if (nativeLoadingBackdrop != null) nativeLoadingBackdrop.setImageDrawable(null);
         if (web != null) {
             web.evaluateJavascript("window.__tvTrimMemory && window.__tvTrimMemory()", null);
@@ -10367,7 +10577,13 @@ public class MainActivity extends Activity {
             try { getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backInvokedCallback); } catch (Exception ignored) {}
             backInvokedCallback = null;
         }
+        clearNativePipAutoEnter();
         releaseNativePlayer(false);
+        if (nativeStillPool != null) {
+            try { nativeStillPool.shutdownNow(); } catch (Throwable ignored) {}
+            nativeStillPool = null;
+        }
+        if (nativeStillCache != null) nativeStillCache.evictAll();
         setPhonePlaybackOrientation(false);
         // Detach Cast listeners so the framework doesn't hold this Activity (do NOT end the session —
         // the user expects the TV to keep playing after leaving the app).
@@ -10375,7 +10591,7 @@ public class MainActivity extends Activity {
         detachCastMediaListeners();
         removeCastListeners();
         disposeWebView(web, false);
-        if (speech != null) { speech.destroy(); speech = null; }
+        cancelVoiceFlow(false);
         stopMusicService(); // tear down the media notification + foreground service with the app
         if (active == this) active = null;
         super.onDestroy();

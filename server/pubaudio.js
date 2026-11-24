@@ -23,7 +23,7 @@ function lvAuthor(a) { return a ? [a.first_name, a.last_name].filter(Boolean).jo
 
 // ---- LibriVox ----
 async function searchLibrivox(q, limit = 8) {
-  const url = `https://librivox.org/api/feed/audiobooks/?title=^${encodeURIComponent(q)}&format=json&limit=${limit}`;
+  const url = `https://librivox.org/api/feed/audiobooks/?title=${encodeURIComponent(q)}&format=json&limit=${limit}`;
   let data; try { data = await getJson(url); } catch { return []; }
   const books = Array.isArray(data && data.books) ? data.books : [];
   return books.map((b) => ({
@@ -60,8 +60,13 @@ async function browseLibrivox(genre, limit = 20) {
 }
 
 // ---- Internet Archive (librivoxaudio collection) ----
+function escapeArchiveQuery(q) {
+  return String(q || '').replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, ' ').replace(/\b(?:AND|OR|NOT)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
 async function searchArchive(q, limit = 8) {
-  const query = `collection:librivoxaudio AND title:(${q})`;
+  const safe = escapeArchiveQuery(q);
+  if (!safe) return [];
+  const query = `collection:librivoxaudio AND (title:(${safe}) OR creator:(${safe}))`;
   const url = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(query)}&fl[]=identifier&fl[]=title&fl[]=creator&rows=${limit}&output=json`;
   let data; try { data = await getJson(url); } catch { return []; }
   const docs = (data && data.response && data.response.docs) || [];
@@ -77,13 +82,13 @@ async function archiveTracks(id) {
   const data = await getJson(`https://archive.org/metadata/${encodeURIComponent(id)}`, 12000);
   const files = (data && data.files) || [];
   const mp3 = files.filter((f) => /mp3/i.test(f.format || '') || /\.mp3$/i.test(f.name || ''));
-  // Pick ONE clean bitrate set so we don't list the same chapter 3× (64Kbps → VBR → any).
+  // Pick ONE clean bitrate set so we don't list the same chapter 3× (VBR → 64Kbps → any).
   const pick = (fmt) => mp3.filter((f) => (f.format || '').toLowerCase().includes(fmt));
-  let set = pick('64kbps'); if (!set.length) set = pick('vbr'); if (!set.length) set = mp3;
+  let set = pick('vbr'); if (!set.length) set = pick('64kbps'); if (!set.length) set = mp3;
   set.sort((a, b) => naturalKey(a.name).localeCompare(naturalKey(b.name)));
   return set.map((f, i) => ({
     index: i, name: String(f.title || f.name),
-    url: `https://archive.org/download/${encodeURIComponent(id)}/${encodeURIComponent(f.name)}`,
+    url: `https://archive.org/download/${encodeURIComponent(id)}/${String(f.name || '').split('/').map(encodeURIComponent).join('/')}`,
     durationSec: Number(f.length) || null,
   }));
 }

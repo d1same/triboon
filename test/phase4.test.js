@@ -5156,8 +5156,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'an open About card should not keep restarting the OSD show timer');
   assert.match(ui, /\.paPoster\{flex:0 0 148px;width:148px;height:222px/,
     'browser About poster stays a dedicated size so Display cover size cannot shove the last face off-screen');
-  assert.match(ui, /body\.tv \.paPoster\{flex:0 0 124px;width:124px;height:186px\}[\s\S]+body\.tv \.paCast\{flex-wrap:nowrap;gap:8px;overflow:hidden[\s\S]+body\.tv \.paCastItem\{flex:1 1 0/,
-    'TV About keeps a smaller cover and a single unclipped cast row that shares width across 10 faces');
+  assert.match(ui, /body\.tv \.paPoster\{flex:0 0 124px;width:124px;height:186px\}[\s\S]+body\.tv \.paCast\{flex-wrap:nowrap;gap:8px;overflow-x:auto[\s\S]+body\.tv \.paCastItem\{flex:0 0/,
+    'TV About keeps a smaller cover and a horizontally scrollable cast row sized for 10 visible faces');
   assert.match(ui, /function nativeEpisodeAboutChoice\(\) \{[\s\S]+about: true,[\s\S]+return playerAboutHasPeople\(\) \? \[nativeEpisodeAboutChoice\(\)\]\.concat\(eps\) : eps/,
     'the episode strip should lead with an About tile only when the title has cast or crew');
   assert.match(ui, /function playerAboutTmdbSpec\(it\) \{[\s\S]+const tmdbId = \+\(\(it && it\.tmdbId\) \|\| 0\);[\s\S]+if \(\(it\.type === 'movie' \|\| it\.type === 'tv'\) && tmdbId\)/,
@@ -5180,8 +5180,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native About should fade in and out on the same 350ms beat as the web OSD');
   assert.match(ui, /function aboutCastNameHtml\(name\) \{[\s\S]+<br>\$\{esc\(parts\.slice\(1\)\.join\(' '\)\)\}/,
     'About cast names should put first and last name on two lines');
-  assert.match(ui, /\.paCast\{display:flex;gap:14px[\s\S]+\.paCastItem\{width:72px[\s\S]+\.paCastNm\{[^}]*-webkit-line-clamp:2/,
-    'About cast should use details-page 3:4 photos with two-line names');
+  assert.match(ui, /\.paCast\{display:flex;gap:14px[\s\S]+\.paCastItem\{flex:0 0 72px;width:72px[\s\S]+\.paCastNm\{[^}]*-webkit-line-clamp:2/,
+    'About cast should use details-page 3:4 photos with two-line names in a scrollable row');
   assert.match(ui, /it\.type === 'episode' \? getPlayerEpisodeContext\(it\)[\s\S]+overview: \(ep && ep\.overview\) \|\| S\.playerAbout\.overview/,
     'episode About should prefer that episode plot over the show overview');
   assert.match(ui, /function playerAboutCastList\(d, epCredits, seasonCredits\) \{[\s\S]+d\.credits\.cast[\s\S]+seasonCredits\.cast[\s\S]+epCredits\.guest_stars[\s\S]+\/season\/\$\{parts\.season\}\/episode\/\$\{parts\.episode\}\/credits[\s\S]+\/season\/\$\{parts\.season\}\/credits/,
@@ -5199,11 +5199,24 @@ test('Android native player: direct source and native chrome stay out of the web
   }, {
     cast: [{ id: 4, name: 'Season regular', order: 0 }, { id: 1, name: 'Zoe', order: 7 }],
   }).map((c) => c.name), ['Zoe', 'Season regular', 'Episode billed', 'Guest'],
-    'show billed stars stay first even when this season lists them after number 7');
+    'show billed stars stay first on continuing shows even when this season lists them after number 7');
+  assert.deepStrictEqual(playerAboutCastList({
+    credits: { cast: [{ id: 10, name: 'Oscar Isaac', order: 0 }, { id: 11, name: 'Carey Mulligan', order: 1 }] },
+    aggregate_credits: { cast: [{ id: 12, name: 'Aggregate Extra', order: 20, total_episode_count: 5 }] },
+  }, {
+    cast: [{ id: 20, name: 'Steven Yeun', order: 0 }, { id: 21, name: 'Ali Wong', order: 1 }],
+    guest_stars: [{ id: 22, name: 'Ashley Park', order: 0 }],
+  }, {
+    cast: [{ id: 20, name: 'Steven Yeun', order: 0 }, { id: 21, name: 'Ali Wong', order: 1 }],
+  }).map((c) => c.name), ['Steven Yeun', 'Ali Wong', 'Ashley Park', 'Oscar Isaac', 'Carey Mulligan', 'Aggregate Extra'],
+    'anthology seasons (BEEF S1 vs S2) lead with this season and episode cast instead of latest-season credits');
+  assert.match(ui, /const ABOUT_CAST_MAX = 40;/, 'in-player About supports full cast up to 40 people');
   assert.match(ui, /playerAboutCastList\(d, epCredits, seasonCredits\)\.slice\(0, ABOUT_CAST_MAX\)\.map\(\(c\) => \(\{\r?\n        name: c\.name,/,
     'About cast map must return an object literal — a stray ({) would kill the whole UI script and freeze the splash');
-  assert.match(android, /Math\.min\(10, cast\.length\(\)\)/,
-    'native About should show up to ten billed faces');
+  assert.match(android, /Math\.min\(40, cast\.length\(\)\)/,
+    'native About should render full cast up to 40 people inside the horizontal scroller');
+  assert.match(android, /nativeAboutCastScroll\.smoothScrollBy\(/,
+    'native About should scroll horizontally on D-pad Left/Right');
   assert.match(ui, /kicker\.textContent = about\.subline \? 'This episode' : 'About'[\s\S]+sub\.textContent = about\.subline/,
     'episode About should label the card This episode and show SxxExx plus the episode name');
   assert.match(android, /private static String formatNativeAboutCastName\(String name\) \{[\s\S]+parts\[0\] \+ "\\n"/,
@@ -5224,8 +5237,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native About faces are not circles');
   assert.match(ui, /\.paCastPh\{width:100%;aspect-ratio:3\/4;border-radius:10px/,
     'web About faces match details-page 3:4 rounded photos');
-  assert.match(ui, /body\.tv \.paCastItem\{flex:1 1 0;min-width:0;width:auto\}/,
-    'TV About sizes ten faces across the remaining row');
+  assert.match(ui, /body\.tv \.paCastItem\{flex:0 0 clamp\(56px,calc\(\(100% - 72px\) \/ 10\),72px\);min-width:56px;width:auto\}/,
+    'TV About sizes faces for 10 visible across the row while scrolling all cast');
   assert.doesNotMatch(ui, /\.paCastPh\{width:56px;height:56px;border-radius:50%/,
     'web About dropped circular faces');
   assert.match(android, /nativeAboutKicker\.setText\(subline\.isEmpty\(\) \? "About" : "This episode"\)/,

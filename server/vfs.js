@@ -39,7 +39,7 @@ class SharedCacheBudget {
     this.bytes = 0;
     this.entries = 0;
     this.byOwner = new Map();
-    this.order = [];
+    this.order = new Set(); // insertion-ordered O(1) add/delete instead of O(N) array scans
   }
 
   setMaxBytes(maxBytes) {
@@ -54,7 +54,7 @@ class SharedCacheBudget {
     if (prior) this._removeRecord(prior);
     const rec = { owner, index, bytes: Math.max(0, Number(bytes) || 0), active: true };
     owned.set(index, rec);
-    this.order.push(rec);
+    this.order.add(rec);
     this.bytes += rec.bytes;
     this.entries++;
     this.trim();
@@ -69,6 +69,7 @@ class SharedCacheBudget {
   _removeRecord(rec) {
     if (!rec || !rec.active) return;
     rec.active = false;
+    this.order.delete(rec);
     this.bytes = Math.max(0, this.bytes - rec.bytes);
     this.entries = Math.max(0, this.entries - 1);
     const owned = this.byOwner.get(rec.owner);
@@ -93,13 +94,14 @@ class SharedCacheBudget {
     // pieces sitting on the playhead — that is the "1 MB already ahead" stall: a tail warmup or
     // an old article evicts the next second the TV is about to play.
     while (this.bytes > this.maxBytes && this.entries > 1) {
-      let rec = this.order.find((r) => r.active && !this._isPlayheadWindow(r.owner, r.index));
+      let rec = null;
+      for (const r of this.order) {
+        if (!this._isPlayheadWindow(r.owner, r.index)) { rec = r; break; }
+      }
       if (!rec) {
-        rec = this.order.reduce((best, r) => {
-          if (!r.active) return best;
-          if (!best || r.index > best.index) return r;
-          return best;
-        }, null);
+        for (const r of this.order) {
+          if (!rec || r.index > rec.index) rec = r;
+        }
       }
       if (!rec) break;
       this._removeRecord(rec);
@@ -107,7 +109,6 @@ class SharedCacheBudget {
         rec.owner._cacheDrop(rec.index, { fromSharedBudget: true });
       }
     }
-    if (this.order.length > this.entries * 2 + 32) this.order = this.order.filter((rec) => rec.active);
   }
 }
 
@@ -366,13 +367,6 @@ class NzbFileStream {
     this.cache.delete(i);
     this.cacheBytes = Math.max(0, this.cacheBytes - old.length);
     if (this.sharedCacheBudget && !fromSharedBudget) this.sharedCacheBudget.remove(this, i);
-    if (fromSharedBudget) {
-      const orderIndex = this.cacheOrder.indexOf(i);
-      if (orderIndex >= 0) this.cacheOrder.splice(orderIndex, 1);
-    }
-    if (this.cacheOrder.length > this.cache.size * 2 + 32) {
-      this.cacheOrder = this.cacheOrder.filter((index) => this.cache.has(index));
-    }
   }
 
   trimCache() {
@@ -380,17 +374,19 @@ class NzbFileStream {
       ? this._segForOffset(this.lastPlaybackOffset) : -1;
     const keep = play >= 0 ? play + Math.max(4, this.readAhead || 0) : -1;
     const inWindow = (index) => play >= 0 && index >= play && index <= keep;
+    // Map iterates in exact insertion order, avoiding O(N^2) cacheOrder.indexOf/splice scans.
     while (this.cache.size > 1
         && (this.cache.size > this.cacheMax || this.cacheBytes > this.cacheMaxBytes)) {
-      let index = this.cacheOrder.find((i) => this.cache.has(i) && !inWindow(i));
+      let index;
+      for (const i of this.cache.keys()) {
+        if (!inWindow(i)) { index = i; break; }
+      }
       if (index === undefined) {
         let far = -1;
         for (const i of this.cache.keys()) if (i > far) far = i;
         index = far;
       }
       if (index === undefined || index < 0) break;
-      const at = this.cacheOrder.indexOf(index);
-      if (at >= 0) this.cacheOrder.splice(at, 1);
       this._cacheDrop(index);
     }
   }
@@ -529,12 +525,16 @@ class NzbFileStream {
       throw misplaced(`piece ${i + 1} starts at ${dec.part.begin}, expected ${want} (uneven yEnc parts)`);
     };
     const decodeAndCache = (raw, skip) => {
-      let dec = (skip <= 0 && verified && verified.raw === raw) ? verified.dec : decode(raw, skip > 0 ? { skipDecoded: skip } : undefined);
+      // Reuse the already-verified full decode even on mid-segment seeks (skip > 0) instead of
+      // decoding and CRC-checking the entire 750 KB article a second time.
+      const reusedFull = !!(verified && verified.raw === raw && verified.dec);
+      let dec = reusedFull ? verified.dec : decode(raw, skip > 0 ? { skipDecoded: skip } : undefined);
+      const effectiveSkip = reusedFull ? 0 : skip;
       checkPlaced(dec);
       // A mid-segment skip past this article's real decoded size (short last/uneven
       // yEnc part, or a partSize grid that drifted) used to return 0 bytes. Remux
       // then threw "read out of range" and the player froze on Preparing.
-      if (skip > 0 && (!dec.data || dec.data.length === 0)) {
+      if (effectiveSkip > 0 && (!dec.data || dec.data.length === 0)) {
         dec = decode(raw);
         if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
         if (dec.size !== null) this.size = dec.size;
@@ -560,9 +560,14 @@ class NzbFileStream {
           this._checkGrid();
         }
       }
-      if (skip > 0) {
-        this._rememberSlice(i, skip, dec.data);
-        return markStart(dec.data, skip);
+      if (skip > 0 && reusedFull && dec.data && skip < dec.data.length) {
+        const tail = Buffer.from(dec.data.subarray(skip));
+        this._rememberSlice(i, skip, tail);
+        return markStart(tail, skip);
+      }
+      if (effectiveSkip > 0) {
+        this._rememberSlice(i, effectiveSkip, dec.data);
+        return markStart(dec.data, effectiveSkip);
       }
       this._cachePut(i, dec.data);
       return markStart(dec.data, 0);
@@ -753,7 +758,15 @@ class NzbFileStream {
       const segIdx = this._segForOffset(offset);
       const segStart = segIdx * this.partSize;
       const from = offset - segStart;
-      // Kick read-ahead (fire and forget).
+      const wasCached = this.cache.has(segIdx);
+      const waitStart = Date.now();
+      // Start the needed playback/startup/seek segment FIRST so _yieldReadAhead() cancels only
+      // stale pre-seek work and activePriority gets first pick of any idle NNTP line. Then kick
+      // read-ahead for segIdx+1..segIdx+readAhead so it pipelines cleanly instead of being
+      // immediately aborted by our own fetch.
+      const segP = this._fetchSegment(segIdx, activePriority, {
+        signal, skipDecoded: wasCached ? 0 : from, pin: priority === 'seek' || opts.pin === true,
+      });
       if (priority !== 'background' && priority !== 'health' && readAheadEpoch === this.readAheadEpoch && !aborted()) {
         // A RAR volume ends in pieces no extent needs. Fetching one anyway could mark it dead and
         // block a release whose video bytes are all there.
@@ -766,12 +779,8 @@ class NzbFileStream {
         }
       }
       let data;
-      const wasCached = this.cache.has(segIdx);
-      const waitStart = Date.now();
       try {
-        data = await this._fetchSegment(segIdx, activePriority, {
-          signal, skipDecoded: wasCached ? 0 : from, pin: priority === 'seek' || opts.pin === true,
-        });
+        data = await segP;
       } catch (e) {
         if (aborted()) return;
         let err = e;
@@ -930,7 +939,8 @@ class NzbFileStream {
       Array.from({ length: last - first + 1 }, (_, k) => this._fetchSegment(first + k, priority, { signal }))
     );
     const base = first * this.partSize;
-    return Buffer.concat(parts).subarray(start - base, end - base);
+    const buf = parts.length === 1 ? parts[0] : Buffer.concat(parts);
+    return buf.subarray(start - base, end - base);
   }
 
   // Health triage: STAT `sampleCount` segments in parallel and verdict the sample.

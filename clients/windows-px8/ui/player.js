@@ -30,6 +30,7 @@
     otherVersions: [],
     audioId: '',
     stats: {},
+    titleInfo: null,
     upNext: null,
     liveEpg: [],
   };
@@ -253,9 +254,18 @@
     pill.textContent = hide ? '' : label;
   }
 
+  function titleInfoHasPeople(info) {
+    if (!info || typeof info !== 'object') return false;
+    if (info.hasPeople) return true;
+    if (Array.isArray(info.cast) && info.cast.some((c) => c && text(c.name, 120))) return true;
+    if (Array.isArray(info.crew) && info.crew.some((c) => c && text(c.name, 120))) return true;
+    return false;
+  }
+
   function updateOptionalControls() {
     document.body.classList.toggle('live', state.mode === 'live');
     $('next').hidden = state.mode === 'live' || !state.hasNext;
+    if ($('about')) $('about').hidden = state.mode === 'live' || !titleInfoHasPeople(state.titleInfo);
     $('episodes').hidden = state.mode === 'live' || !state.episodeChoices.length;
     $('quality').hidden = state.mode === 'live' || !state.qualityChoices;
     $('audio').hidden = state.mode === 'live' || (state.audioTracks.length < 2 && !state.otherVersions.length);
@@ -285,6 +295,10 @@
     renderUpNext();
     renderLiveEpg();
     if ($('stats').classList.contains('open')) renderStats();
+    if ($('aboutPanel') && $('aboutPanel').classList.contains('open')) {
+      if (state.mode === 'live' || !titleInfoHasPeople(state.titleInfo)) closePanels();
+      else renderAbout();
+    }
   }
 
   function copySession(data) {
@@ -316,6 +330,9 @@
     if (session.audioId !== undefined) state.audioId = text(session.audioId, 32);
     if (session.upNext !== undefined) {
       state.upNext = session.upNext && typeof session.upNext === 'object' ? session.upNext : null;
+    }
+    if (session.titleInfo !== undefined) {
+      applyTitleInfo(session.titleInfo);
     }
     if (session.liveFavorite !== undefined) state.favorite = !!session.liveFavorite;
     if (Array.isArray(session.liveEpg)) state.liveEpg = session.liveEpg;
@@ -352,6 +369,18 @@
     }
   }
 
+  function applyTitleInfo(info) {
+    if (!info || typeof info !== 'object') {
+      state.titleInfo = null;
+      return;
+    }
+    const openFlag = info.open;
+    const hasMeta = !!(info.title || (Array.isArray(info.cast) && info.cast.length) || (Array.isArray(info.crew) && info.crew.length));
+    if (hasMeta || !state.titleInfo) state.titleInfo = info;
+    if (openFlag === true && state.mode !== 'live' && titleInfoHasPeople(state.titleInfo)) openAbout();
+    else if (openFlag === false && $('aboutPanel') && $('aboutPanel').classList.contains('open')) closePanels();
+  }
+
   function applyUpdate(kind, data) {
     if (kind === 'subtitle_choices') {
       state.subtitleChoices = Array.isArray(data.choices) ? data.choices : [];
@@ -363,6 +392,8 @@
     } else if (kind === 'episode_choices') {
       state.episodeChoices = state.mode === 'live' ? [] : (Array.isArray(data.episodes) ? data.episodes : []);
       state.episodeFocusIndex = Math.max(0, finite(data.focusIndex));
+    } else if (kind === 'title_info') {
+      applyTitleInfo(data);
     } else if (kind === 'other_versions') {
       state.otherVersions = Array.isArray(data.choices) ? data.choices.slice(0, 3) : [];
     } else if (kind === 'audio_tracks') {
@@ -395,7 +426,7 @@
     const type = text(event.type || event.event || event.kind || '', 80).toLowerCase().replace(/-/g, '_');
     const data = event.data && typeof event.data === 'object' ? { ...event, ...event.data } : event;
     if (type === 'update') applyUpdate(text(event.kind || data.updateKind, 80), decode(event.value || event.payload || event.data) || {});
-    else if (['subtitle_choices', 'active_subtitle', 'duration', 'episode_choices', 'audio_tracks', 'other_versions', 'up_next', 'live_favorite', 'live_epg'].includes(type)) applyUpdate(type, data);
+    else if (['subtitle_choices', 'active_subtitle', 'duration', 'episode_choices', 'title_info', 'audio_tracks', 'other_versions', 'up_next', 'live_favorite', 'live_epg'].includes(type)) applyUpdate(type, data);
 
     if (['loading', 'session', 'state_snapshot', 'ready', 'playing', 'paused', 'buffering', 'progress', 'stats'].includes(type)) copySession(data);
     if (Number.isFinite(Number(data.position ?? data.pos ?? data.timePos))) state.position = Math.max(0, finite(data.position ?? data.pos ?? data.timePos));
@@ -533,7 +564,9 @@
   }
 
   function isPanelOpen() {
-    return $('menu').classList.contains('open') || $('stats').classList.contains('open');
+    return $('menu').classList.contains('open')
+      || $('stats').classList.contains('open')
+      || !!($('aboutPanel') && $('aboutPanel').classList.contains('open'));
   }
 
   function closePanels() {
@@ -542,6 +575,10 @@
     $('menu').setAttribute('aria-hidden', 'true');
     $('stats').classList.remove('open');
     $('stats').setAttribute('aria-hidden', 'true');
+    if ($('aboutPanel')) {
+      $('aboutPanel').classList.remove('open');
+      $('aboutPanel').setAttribute('aria-hidden', 'true');
+    }
     if (open) { showControls(false); $('playPause').focus({ preventScroll: true }); }
     return open;
   }
@@ -666,17 +703,26 @@
   }
 
   function openEpisodeMenu() {
-    const items = state.episodeChoices.map((episode, index) => menuItem(
-      [episode.tag, episode.name].filter(Boolean).join(' - ') || `Episode ${index + 1}`,
-      {
-        selected: !!episode.current || index === state.episodeFocusIndex,
-        disabled: !!episode.upcoming,
-        art: episode.still,
-        watched: !!episode.watched,
-        sub: episode.watched ? '✓ Watched' : (episode.upcoming ? 'Upcoming' : ''),
-      },
-      () => { closePanels(); send('episode', { index: finite(episode.index, index) }); },
-    ));
+    const items = state.episodeChoices.map((episode, index) => {
+      if (episode && episode.about) {
+        return menuItem(
+          text(episode.name || 'About & cast', 120),
+          { art: episode.still, sub: 'Cast & overview' },
+          () => openAbout(),
+        );
+      }
+      return menuItem(
+        [episode.tag, episode.name].filter(Boolean).join(' - ') || `Episode ${index + 1}`,
+        {
+          selected: !!episode.current || index === state.episodeFocusIndex,
+          disabled: !!episode.upcoming,
+          art: episode.still,
+          watched: !!episode.watched,
+          sub: episode.watched ? '✓ Watched' : (episode.upcoming ? 'Upcoming' : ''),
+        },
+        () => { closePanels(); send('episode', { index: finite(episode.index, index) }); },
+      );
+    });
     if (items.length) openMenu('Episodes', 'KEEP WATCHING', items);
   }
 
@@ -721,6 +767,68 @@
       const dd = document.createElement('dd'); dd.textContent = value;
       row.append(dt, dd); return row;
     }));
+  }
+
+  function renderAbout() {
+    const panel = $('aboutPanel');
+    const info = state.titleInfo;
+    if (!panel || !info) return;
+    const subline = text(info.subline, 200);
+    $('aboutKicker').textContent = subline ? 'This episode' : 'About';
+    $('aboutTitle').textContent = text(info.title || state.title, 200);
+    const sub = $('aboutSub');
+    sub.textContent = subline;
+    sub.hidden = !subline;
+    const posterUrl = safeArtwork(info.poster);
+    $('aboutPoster').style.backgroundImage = posterUrl ? `url(${JSON.stringify(posterUrl)})` : '';
+    $('aboutPoster').hidden = !posterUrl;
+    const bits = [
+      text(info.year, 16),
+      text(info.runtime, 32),
+      text(info.cert, 24),
+      info.rating ? `★ ${text(info.rating, 16)}` : '',
+    ].filter(Boolean);
+    $('aboutChips').replaceChildren(...bits.map((b) => {
+      const chip = document.createElement('span');
+      chip.className = 'about-chip';
+      chip.textContent = b;
+      return chip;
+    }));
+    $('aboutPlot').textContent = text(info.overview, 1600);
+    const cast = Array.isArray(info.cast) ? info.cast.slice(0, 40) : [];
+    const castEl = $('aboutCast');
+    castEl.replaceChildren(...cast.map((person) => {
+      const card = document.createElement('div');
+      card.className = 'about-cast-item';
+      const photo = document.createElement('div');
+      photo.className = 'about-cast-ph';
+      const photoUrl = safeArtwork(person && person.photo);
+      if (photoUrl) photo.style.backgroundImage = `url(${JSON.stringify(photoUrl)})`;
+      const name = document.createElement('div');
+      name.className = 'about-cast-nm';
+      name.textContent = text(person && person.name, 120);
+      card.append(photo, name);
+      const role = text(person && person.character, 120);
+      if (role) {
+        const ch = document.createElement('div');
+        ch.className = 'about-cast-ch';
+        ch.textContent = role;
+        card.append(ch);
+      }
+      return card;
+    }));
+    castEl.hidden = !cast.length;
+    castEl.scrollLeft = 0;
+  }
+
+  function openAbout() {
+    if (state.mode === 'live' || !titleInfoHasPeople(state.titleInfo)) return;
+    closePanels();
+    renderAbout();
+    $('aboutPanel').classList.add('open');
+    $('aboutPanel').setAttribute('aria-hidden', 'false');
+    showControls(false);
+    requestAnimationFrame(() => $('aboutClose').focus({ preventScroll: true }));
   }
 
   function openStats() {
@@ -778,6 +886,13 @@
     $('audio').addEventListener('click', openAudioMenu);
     $('quality').addEventListener('click', openQualityMenu);
     $('episodes').addEventListener('click', openEpisodeMenu);
+    if ($('about')) $('about').addEventListener('click', openAbout);
+    if ($('aboutClose')) $('aboutClose').addEventListener('click', closePanels);
+    if ($('aboutPanel')) {
+      $('aboutPanel').addEventListener('click', (event) => {
+        if (event.target === $('aboutPanel')) closePanels();
+      });
+    }
     $('details').addEventListener('click', openStats);
     $('guide').addEventListener('click', () => {
       closePanels();
@@ -869,6 +984,18 @@
       event.preventDefault(); handleBack(); return;
     }
     if (handleUpNextKey(event)) return;
+    if ($('aboutPanel') && $('aboutPanel').classList.contains('open')) {
+      const castEl = $('aboutCast');
+      if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && castEl && castEl.scrollWidth > castEl.clientWidth) {
+        event.preventDefault();
+        const step = Math.max(220, Math.round(castEl.clientWidth * 0.65));
+        castEl.scrollLeft += event.key === 'ArrowRight' ? step : -step;
+      } else if (event.key === 'ArrowUp' || event.key.toLowerCase() === 'a') {
+        event.preventDefault();
+        closePanels();
+      }
+      return;
+    }
     if (isPanelOpen()) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowRight') { event.preventDefault(); moveFocus(1); }
       else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') { event.preventDefault(); moveFocus(-1); }
@@ -893,6 +1020,7 @@
     else if (key === 'm') { event.preventDefault(); $('mute').click(); }
     else if (key === 'c') { event.preventDefault(); openSubtitleMenu(); }
     else if (key === 'i') { event.preventDefault(); openStats(); }
+    else if (key === 'a' && state.mode !== 'live' && titleInfoHasPeople(state.titleInfo)) { event.preventDefault(); openAbout(); }
     else if (key === 'n' && state.hasNext) { event.preventDefault(); send('next'); }
     else if (key === 'g') { event.preventDefault(); $('guide').click(); }
     else if (state.mode === 'live' && (event.key === 'PageUp' || key === 'mediaprevioustrack')) {

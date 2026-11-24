@@ -175,9 +175,18 @@ class MkvSubtitleTap {
       this.head = Buffer.concat([this.head, chunk.subarray(this.head.length - offset)]);
       const h = parseHeader(this.head);
       if (h && h.notMkv) { this.notMkv = true; this.cursors = []; return; }
-      if (h) { this.header = h; this.head = Buffer.alloc(0); }
+      if (h) {
+        this.header = h;
+        this.head = Buffer.alloc(0);
+        // No text subtitle tracks (e.g. PGS-only 4K BluRay): skip EBML scanning for the rest of the file.
+        if (!Array.isArray(h.subs) || !h.subs.some((s) => s && s.text)) {
+          this.noTextSubs = true;
+          this.cursors = [];
+          return;
+        }
+      }
     }
-    if (!this.header) return;
+    if (!this.header || this.noTextSubs) return;
     let cur = this.cursors.find((c) => c.next === offset);
     if (!cur) {
       cur = { next: offset, pos: offset, buf: Buffer.alloc(0), skip: 0, sync: true, clusterEnd: Infinity, tc: 0, inCluster: false };

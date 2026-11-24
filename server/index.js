@@ -121,8 +121,11 @@ store.flushIntervals = {
   verdicts: 10000,         // 6h-TTL health cache
   'tmdb-cache': 15000,     // pure proxy cache
   iptvcaches: 30000,       // channel lineups (8000+ channels), refreshed from the provider
+  iptvcache: 30000,        // legacy single-source fallback
   epgcaches: 30000,        // XMLTV guide payloads
+  epgcache: 30000,         // legacy single-source fallback
   xtreamepgcaches: 30000,  // Xtream guide payloads (up to 5000 entries per fetch)
+  xtreamepgcache: 30000,   // legacy single-source fallback
   libitems: 5000,          // scan output (19K+ items on big libraries; SQLite is the read path)
   'audible-search': 15000, // audiobook search proxy cache
   'audible-browse': 20000, // audiobook discovery-row cache
@@ -169,6 +172,7 @@ applyTranscode4kPolicy();
 const verdicts = new VerdictCache(store);
 const mounts = new Map(); // id -> virtual file
 const scanStates = new Map(); // library id -> { running, startedAt, progress, ...summary }
+const legacyThumbsCleaned = new Set(); // library ids already swept for legacy <lib>-<idx>.jpg thumbs this process
 const thumbJobs = new Map(); // thumb path -> in-flight generation promise (no double-spawn)
 const THUMB_CONCURRENCY = 2;
 let thumbActive = 0;
@@ -1312,6 +1316,7 @@ const IPTV_PLAYBACK_API_QUIET_MS = 7000;
 const IPTV_GROUP_SEPARATOR = ' \u00B7 ';
 const IPTV_PRIVATE_URL_CACHE_MS = 30 * 60000;
 let iptvCache = { key: null, at: 0, channels: [] };
+const iptvAggregateCaches = new Map(); // aggregateKey -> { key, at, channels, sourceErrors } (max 16)
 let epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
 let xtreamEpgCache = { key: null, byStream: new Map() };
 let iptvSourceCaches = new Map(); // sourceId -> { key, at, channels }
@@ -1455,15 +1460,9 @@ async function resolveIptvHost(host) {
         if (timer.unref) timer.unref();
       }),
     ]);
-    // Prefer IPv4. Self-hosted boxes (Docker/Unraid, some Windows dev rigs) routinely have NO working
-    // IPv6 route, while Cloudflare-fronted IPTV CDNs (and the redirect targets providers hand out)
-    // publish AAAA records — pinning/probing those over IPv6 yields ENETUNREACH and the channel reads
-    // as "live stream unavailable". IPTV hosts always serve IPv4, so pin IPv4 when present and only
-    // fall back to IPv6 for the (vanishingly rare) IPv6-only host. This keeps the redirect probe and
-    // the pinned native/proxy paths off the unreachable family.
-    const list = Array.isArray(addrs) ? addrs : [];
-    const v4 = list.filter((a) => a && a.family === 4);
-    return v4.length ? v4 : list;
+    // Return all addresses so validateAndPinIptvUrl checks both A and AAAA for private/loopback
+    // records before preferring IPv4 for pinning/probing.
+    return Array.isArray(addrs) ? addrs : [];
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -1553,10 +1552,14 @@ async function validateAndPinIptvUrl(raw, label = 'IPTV URL') {
       if (!addrs.length) throw iptvPolicyError(label, 'host has no DNS addresses');
       const blocked = addrs.find((a) => isPrivateIptvHost(a && a.address));
       if (blocked) throw iptvPolicyError(label, 'DNS resolves to a private, loopback, or link-local address');
+      // Prefer IPv4 after all A/AAAA records pass the private-IP check (Docker/Unraid hosts often
+      // have no IPv6 route, so pinning IPv4 avoids ENETUNREACH while keeping IPv6 SSRF blocked).
+      const v4 = addrs.filter((a) => a && a.family === 4);
+      const pinAddrs = v4.length ? v4 : addrs;
       // Make room first: the entry stored here is the one this call pins from.
       iptvUrlSafetyCache.delete(host);
       while (iptvUrlSafetyCache.size >= 1000) iptvUrlSafetyCache.delete(iptvUrlSafetyCache.keys().next().value);
-      iptvUrlSafetyCache.set(host, { expiresAt: Date.now() + IPTV_PRIVATE_URL_CACHE_MS, addrs });
+      iptvUrlSafetyCache.set(host, { expiresAt: Date.now() + IPTV_PRIVATE_URL_CACHE_MS, addrs: pinAddrs });
     }
     safeHit = iptvUrlSafetyCache.get(host);
     picked = safeHit && Array.isArray(safeHit.addrs) ? pickCachedIptvAddress(host) : null;
@@ -1640,7 +1643,7 @@ function legacyIptvSource(s = {}) {
     users: Array.isArray(s.iptvUsers) ? s.iptvUsers : [],
   }, IPTV_LEGACY_SOURCE_ID);
 }
-function iptvSourcesFromSettings(s = settings.get()) {
+function iptvSourcesFromSettings(s = settings.peek()) {
   const seen = new Set();
   const out = [];
   const push = (src) => {
@@ -1654,7 +1657,7 @@ function iptvSourcesFromSettings(s = settings.get()) {
   if (!out.length && legacy) push(legacy);
   return out;
 }
-function iptvConfigured(s = settings.get()) {
+function iptvConfigured(s = settings.peek()) {
   return iptvSourcesFromSettings(s).length > 0;
 }
 function userCanAccessIptvSource(user, src = {}) {
@@ -1664,7 +1667,7 @@ function userCanAccessIptvSource(user, src = {}) {
 // Audiobooks visibility (admin-controlled): a global OFF hides it for EVERYONE (the admin re-enables
 // from Settings, which is never gated). When ON, an allowlist (empty = everyone) restricts to specific
 // users, and admins are always in the allowlist so they can manage it. Same model as Live TV sharing.
-function audiobooksAllowedFor(user, s = settings.get()) {
+function audiobooksAllowedFor(user, s = settings.peek()) {
   if (s.audiobooksEnabled === false) return false;
   const list = Array.isArray(s.audiobooksUsers) ? s.audiobooksUsers : [];
   return !user || user.role === 'admin' || !list.length || list.includes(user.id);
@@ -1678,10 +1681,10 @@ function pubaudioCacheSet(key, data) {
     return c;
   });
 }
-function iptvSourcesForUser(user, s = settings.get()) {
+function iptvSourcesForUser(user, s = settings.peek()) {
   return iptvSourcesFromSettings(s).filter((src) => userCanAccessIptvSource(user, src));
 }
-function iptvOwnedSourcesForUser(user, s = settings.get()) {
+function iptvOwnedSourcesForUser(user, s = settings.peek()) {
   return iptvSourcesFromSettings(s).filter((src) => user && src.ownerUserId === user.id);
 }
 function redactIptvSource(src = {}) {
@@ -1724,6 +1727,7 @@ function makeIptvSourceFromBody(b = {}, existing = null) {
 }
 function clearIptvAggregateCache() {
   iptvCache = { key: null, at: 0, channels: [], sourceErrors: [] };
+  iptvAggregateCaches.clear();
 }
 function clearIptvSourceRuntime(sourceId) {
   const id = cleanIptvSourceId(sourceId);
@@ -3255,10 +3259,14 @@ function iptvAggregateKeyForSources(sources = []) {
 async function loadIptvChannelState(sources = iptvSourcesFromSettings(settings.get())) {
   const usable = (sources || []).filter(iptvSourceConfigured);
   if (!usable.length) {
-    clearIptvAggregateCache();
     return { channels: [], sourceErrors: [] };
   }
   const aggregateKey = iptvAggregateKeyForSources(usable);
+  const aggHit = iptvAggregateCaches.get(aggregateKey);
+  if (aggHit && Date.now() - aggHit.at < IPTV_CACHE_TTL_MS) {
+    iptvCache = aggHit;
+    return { channels: aggHit.channels, sourceErrors: aggHit.sourceErrors || [] };
+  }
   if (iptvCache.key === aggregateKey && Date.now() - iptvCache.at < IPTV_CACHE_TTL_MS) {
     return { channels: iptvCache.channels, sourceErrors: iptvCache.sourceErrors || [] };
   }
@@ -3279,28 +3287,38 @@ async function loadIptvChannelState(sources = iptvSourcesFromSettings(settings.g
   });
   const channels = aggregateIptvChannels(rows);
   const sourceErrors = errors.map(({ src, error }) => iptvSourceErrorPayload(src, error));
-  iptvCache = { key: aggregateKey, at: Date.now(), channels, sourceErrors };
+  const next = { key: aggregateKey, at: Date.now(), channels, sourceErrors };
+  iptvAggregateCaches.delete(aggregateKey);
+  iptvAggregateCaches.set(aggregateKey, next);
+  while (iptvAggregateCaches.size > 16) iptvAggregateCaches.delete(iptvAggregateCaches.keys().next().value);
+  iptvCache = next;
   return { channels, sourceErrors };
 }
 async function ensureIptvChannelStateForUser(user) {
   if (!user) {
-    clearIptvAggregateCache();
     return { sources: [], channels: [], sourceErrors: [] };
   }
   const sources = iptvSourcesForUser(user, settings.get());
   const aggregateKey = iptvAggregateKeyForSources(sources);
   if (!aggregateKey) {
-    clearIptvAggregateCache();
     return { sources, channels: [], sourceErrors: [] };
   }
-  if (iptvCache.key !== aggregateKey || !Array.isArray(iptvCache.channels)) {
-    const state = await loadIptvChannelState(sources);
-    return { sources, ...state };
+  const aggHit = iptvAggregateCaches.get(aggregateKey);
+  if (aggHit && Array.isArray(aggHit.channels) && Date.now() - aggHit.at < IPTV_CACHE_TTL_MS) {
+    iptvCache = aggHit;
+    return { sources, channels: aggHit.channels, sourceErrors: aggHit.sourceErrors || [] };
   }
-  return { sources, channels: iptvCache.channels || [], sourceErrors: iptvCache.sourceErrors || [] };
+  if (iptvCache.key === aggregateKey && Array.isArray(iptvCache.channels) && Date.now() - iptvCache.at < IPTV_CACHE_TTL_MS) {
+    return { sources, channels: iptvCache.channels || [], sourceErrors: iptvCache.sourceErrors || [] };
+  }
+  const state = await loadIptvChannelState(sources);
+  return { sources, ...state };
 }
+const M3U_ATTR_RE = new Map();
 function m3uAttr(meta, name) {
-  const m = new RegExp(`${name}="([^"]*)"`, 'i').exec(meta);
+  let re = M3U_ATTR_RE.get(name);
+  if (!re) { re = new RegExp(`${name}="([^"]*)"`, 'i'); M3U_ATTR_RE.set(name, re); }
+  const m = re.exec(meta);
   return m ? m[1] : '';
 }
 function m3uChannelFromPair(meta, streamUrl, idx) {
@@ -3770,6 +3788,32 @@ function hydrateXtreamEpgCache(key, sourceId = IPTV_LEGACY_SOURCE_ID) {
   xtreamEpgSourceCaches.set(sid, xtreamEpgCache);
   return xtreamEpgCache;
 }
+const xtreamEpgPersistTimers = new Map();
+function schedulePersistXtreamEpgCache(cache = xtreamEpgCache) {
+  if (!cache || cache._deleted) return;
+  const sourceId = cleanIptvSourceId(cache.sourceId);
+  if (xtreamEpgPersistTimers.has(sourceId)) return;
+  const timer = setTimeout(() => {
+    xtreamEpgPersistTimers.delete(sourceId);
+    persistXtreamEpgCache(cache);
+  }, 4000);
+  if (timer && typeof timer.unref === 'function') timer.unref();
+  xtreamEpgPersistTimers.set(sourceId, { timer, cache });
+}
+function flushPendingXtreamEpgPersists() {
+  for (const [sid, entry] of [...xtreamEpgPersistTimers]) {
+    clearTimeout(entry.timer);
+    xtreamEpgPersistTimers.delete(sid);
+    persistXtreamEpgCache(entry.cache);
+  }
+}
+function warmXmltvFromRam(src) {
+  if (!src || !xmltvGuideUrl(src)) return null;
+  const sourceId = cleanIptvSourceId(src.id);
+  const cached = epgSourceCaches.get(sourceId);
+  if (cached && cached.key === epgSourceKey(src) && cached.byChannel && cached.byChannel.size) return cached;
+  return null;
+}
 function persistXtreamEpgCache(cache = xtreamEpgCache) {
   // A guide fetch started before the source was deleted can resolve afterward and try to
   // re-write the disk entry we just purged — which would resurrect stale channels and, worse,
@@ -3873,7 +3917,7 @@ async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
         cache.guideBlockedReason = '';
         cache.byStream.set(id, { at: Date.now(), list });
         pruneXtreamEpgStreamCache(cache);
-        if (list.length) persistXtreamEpgCache(cache);
+        if (list.length) schedulePersistXtreamEpgCache(cache);
         return list;
       }).catch((e) => {
         // Stale-cache refresh is fire-and-forget; provider timeouts must not surface as
@@ -3894,7 +3938,7 @@ async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
     cache.guideBlockedReason = '';
     cache.byStream.set(id, { at: Date.now(), list });
     pruneXtreamEpgStreamCache(cache);
-    if (list.length) persistXtreamEpgCache(cache);
+    if (list.length) schedulePersistXtreamEpgCache(cache);
     return list;
   });
   cache.byStream.set(id, { at: 0, list: hit ? hit.list : [], promise: p });
@@ -3912,9 +3956,16 @@ async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
 async function epgNowNext(ch) {
   const s = sourceForIptvChannel(ch);
   if (!s) return {};
+  const now = Date.now();
+  // Check already-warm RAM XMLTV first (instant, zero upstream panel load).
+  const ramEpg = warmXmltvFromRam(s);
+  if (ramEpg) {
+    const list = xmltvListFor(ramEpg, ch);
+    const i = list.findIndex((p) => p.start <= now && p.stop > now);
+    if (i !== -1) return { now: list[i], next: list[i + 1] || null };
+  }
   if (s.iptvMode === 'xtream' && ch.xtreamId) {
     const list = await xtreamEpgList(ch, { limit: 24, allowBusy: true });
-    const now = Date.now();
     const i = list.findIndex((p) => p.start <= now && p.stop > now);
     if (i !== -1) return { now: list[i], next: list[i + 1] || null };
     const next = list.find((p) => p.start > now);
@@ -3923,7 +3974,6 @@ async function epgNowNext(ch) {
   if (xmltvGuideUrl(s)) {
     const epg = await ensureXmltv(s, (iptvSourceCaches.get(cleanIptvSourceId(s.id)) || {}).channels || []);
     const list = xmltvListFor(epg, ch);
-    const now = Date.now();
     const i = list.findIndex((p) => p.start <= now && p.stop > now);
     if (i === -1) return {};
     return { now: list[i], next: list[i + 1] || null };
@@ -3963,9 +4013,9 @@ function iptvGuideStatusForSource(src, channels = []) {
   const sourceId = cleanIptvSourceId(src.id);
   const out = { kind: 'none', cachedAt: 0, guideChannels: 0, xtreamGuideChannels: 0 };
   if (xmltvGuideUrl(src)) {
-    const disk = hydrateXmltvCache((store.read('epgcaches', {}) || {})[sourceId]
-      || (sourceId === IPTV_LEGACY_SOURCE_ID ? store.read('epgcache', null) : null), epgSourceKey(src));
-    const cache = epgSourceCaches.get(sourceId) || disk;
+    const cache = epgSourceCaches.get(sourceId)
+      || hydrateXmltvCache((store.read('epgcaches', {}) || {})[sourceId]
+        || (sourceId === IPTV_LEGACY_SOURCE_ID ? store.read('epgcache', null) : null), epgSourceKey(src));
     out.kind = 'xmltv';
     out.cachedAt = cache && Number(cache.at) || 0;
     out.guideChannels = cache && cache.byChannel ? cache.byChannel.size : 0;
@@ -4179,7 +4229,7 @@ function scheduleNextIptvWarm() {
   }, Math.max(1, iptvWarmNextAt - Date.now()));
   iptvWarmTimer.unref();
 }
-const tmdb = new TmdbProxy(store, () => settings.get().tmdbKey, process.env.TMDB_BASE || undefined);
+const tmdb = new TmdbProxy(store, () => settings.peek().tmdbKey, process.env.TMDB_BASE || undefined);
 const audible = new AudibleProxy(store, {
   audibleBase: process.env.AUDIBLE_BASE || undefined,
   audnexBase: process.env.AUDNEX_BASE || undefined,
@@ -4228,17 +4278,30 @@ function profileLevelFor(user, profileId, ctx) {
 // limit. Restricted profiles MUST send a TMDB id — omitting it used to fail OPEN, which let a
 // crafted /api/play or /api/search skip the gate. Unknown/unfetchable *certification* still fails
 // OPEN so a TMDB hiccup or a title with no rating data cannot false-block.
+const maturityCertCache = new Map(); // "type:id" -> { adult, cert, at } (6h TTL, max 5000)
+const MATURITY_CERT_TTL_MS = 6 * 3600 * 1000;
 async function maturityAllowsPlay(level, tmdbId, mediaType) {
   if (level >= 4) return true;
   const id = parseInt(tmdbId, 10);
   if (!id) return false;
-  if (!settings.get().tmdbKey) return true;
+  if (!settings.peek().tmdbKey) return true;
   const type = mediaType === 'tv' ? 'tv' : 'movie';
+  const ckey = `${type}:${id}`;
+  const cached = maturityCertCache.get(ckey);
+  if (cached && Date.now() - cached.at < MATURITY_CERT_TTL_MS) {
+    if (cached.adult) return false;
+    if (!cached.cert) return true;
+    return (MATURITY_CERT_RANK[cached.cert] ?? 4) <= level;
+  }
   let d;
   try { d = await tmdb.get(`/${type}/${id}?append_to_response=${type === 'tv' ? 'content_ratings' : 'release_dates'}`); }
   catch { return true; }
-  if (d && d.adult) return false;
+  const adult = !!(d && d.adult);
   const cert = usCertFromTmdb(d, type);
+  maturityCertCache.delete(ckey);
+  maturityCertCache.set(ckey, { adult, cert, at: Date.now() });
+  while (maturityCertCache.size > 5000) maturityCertCache.delete(maturityCertCache.keys().next().value);
+  if (adult) return false;
   if (!cert) return true;
   const rank = MATURITY_CERT_RANK[cert] ?? 4;
   return rank <= level; // matches client levelAllows()
@@ -4402,22 +4465,39 @@ function send(res, code, body, headers = {}) {
     && (type.includes('json') || type.startsWith('text/') || type.includes('javascript'))
     && (typeof out === 'string' || Buffer.isBuffer(out));
   const byteLength = compressible ? (Buffer.isBuffer(out) ? out.length : Buffer.byteLength(String(out))) : 0;
+  const finishSend = (payload) => {
+    const namedLength = Object.keys(finalHeaders).some((k) => {
+      const name = k.toLowerCase();
+      return name === 'content-length' || name === 'transfer-encoding';
+    });
+    if ((typeof payload === 'string' || Buffer.isBuffer(payload)) && !namedLength) {
+      finalHeaders['content-length'] = String(Buffer.isBuffer(payload) ? payload.length : Buffer.byteLength(payload));
+    }
+    if (res.writableEnded || res.destroyed) return;
+    res.writeHead(code, finalHeaders);
+    res.end(payload);
+  };
+  if (compressible && byteLength >= 32768) {
+    const rawBuf = Buffer.isBuffer(out) ? out : Buffer.from(String(out));
+    finalHeaders['content-encoding'] = 'gzip';
+    finalHeaders.vary = finalHeaders.vary ? `${finalHeaders.vary}, Accept-Encoding` : 'Accept-Encoding';
+    // Offload multi-MB JSON compression (IPTV lineups, large library pages, EPG) to libuv's
+    // threadpool so video Range reads and NNTP sockets never stall on gzipSync.
+    zlib.gzip(rawBuf, { level: 1 }, (err, gz) => {
+      if (err) {
+        delete finalHeaders['content-encoding'];
+        return finishSend(rawBuf);
+      }
+      finishSend(gz);
+    });
+    return;
+  }
   if (compressible && byteLength >= 512) {
-    out = zlib.gzipSync(Buffer.isBuffer(out) ? out : Buffer.from(String(out)));
+    out = zlib.gzipSync(Buffer.isBuffer(out) ? out : Buffer.from(String(out)), { level: 1 });
     finalHeaders['content-encoding'] = 'gzip';
     finalHeaders.vary = finalHeaders.vary ? `${finalHeaders.vary}, Accept-Encoding` : 'Accept-Encoding';
   }
-  // Name the exact size. A chunked reply can be cut after one carriage return,
-  // and the phone then quits the movie while it is still reading the list.
-  const namedLength = Object.keys(finalHeaders).some((k) => {
-    const name = k.toLowerCase();
-    return name === 'content-length' || name === 'transfer-encoding';
-  });
-  if ((typeof out === 'string' || Buffer.isBuffer(out)) && !namedLength) {
-    finalHeaders['content-length'] = String(Buffer.isBuffer(out) ? out.length : Buffer.byteLength(out));
-  }
-  res.writeHead(code, finalHeaders);
-  res.end(out);
+  finishSend(out);
 }
 async function readBody(req, limit = 50 * 1024 * 1024) {
   return await new Promise((resolve, reject) => {
@@ -4482,11 +4562,12 @@ function videoMime(name) {
   if (/\.mp4$/i.test(name)) return 'video/mp4';
   if (/\.webm$/i.test(name)) return 'video/webm';
   if (/\.mkv$/i.test(name)) return 'video/x-matroska';
-  // Local music libraries stream through the same route — give browsers playable types.
+  // Local music libraries & audiobooks stream through the same route — give browsers playable types.
   if (/\.mp3$/i.test(name)) return 'audio/mpeg';
   if (/\.flac$/i.test(name)) return 'audio/flac';
-  if (/\.m4a$/i.test(name)) return 'audio/mp4';
-  if (/\.(ogg|opus)$/i.test(name)) return 'audio/ogg';
+  if (/\.(m4a|m4b)$/i.test(name)) return 'audio/mp4';
+  if (/\.aac$/i.test(name)) return 'audio/aac';
+  if (/\.(ogg|oga|opus)$/i.test(name)) return 'audio/ogg';
   if (/\.wav$/i.test(name)) return 'audio/wav';
   return 'application/octet-stream';
 }
@@ -4557,7 +4638,7 @@ function mediaCorsHeaders(req) {
   const h = {
     'access-control-allow-origin': origin || '*',
     'access-control-allow-methods': 'GET, HEAD, OPTIONS',
-    'access-control-allow-headers': 'Range, Content-Type, Accept-Encoding',
+    'access-control-allow-headers': 'Range, Content-Type, Accept-Encoding, Authorization, X-Emby-Token, X-Emby-Authorization, X-MediaBrowser-Token',
     'access-control-expose-headers': 'Content-Range, Content-Length, Accept-Ranges',
     'access-control-max-age': '86400',
   };
@@ -4613,7 +4694,7 @@ function extendPlayRouteTimeout(ctx) {
 // A stream-scope token must be bound to the resource it's used on. Session tokens pass.
 // A group the admin hid is gone for regular users on every route that plays a channel, not only the
 // list. A stream token names a channel, so the check reads the live user, who may have lost access.
-function iptvChannelHiddenFor(user, ch, s = settings.get()) {
+function iptvChannelHiddenFor(user, ch, s = settings.peek()) {
   if (!user) return true;
   if (user.role === 'admin') return false;
   return iptvGroupHiddenGlobally(ch, new Set(s.iptvHiddenGroups || []));
@@ -4693,10 +4774,10 @@ function mountViewerOk(vf, uid) {
   return vf._ownerUid === uid || !!(vf._viewers && vf._viewers.has(uid));
 }
 // Tear down one HLS session (kill its ffmpeg + delete its temp segment dir). Safe to call twice.
-function highestHlsSegment(dir) {
+async function highestHlsSegment(dir) {
   let max = -1;
   let names = [];
-  try { names = fs.readdirSync(dir); } catch { return -1; }
+  try { names = await fs.promises.readdir(dir); } catch { return -1; }
   for (const name of names) {
     const m = /^seg(\d+)\.m4s$/.exec(name);
     if (!m) continue;
@@ -4757,11 +4838,13 @@ function repositionHls(sess, index) {
 }
 
 async function ensureHlsSegment(sess, index, req) {
-  const highest = highestHlsSegment(sess.dir);
+  while (sess.seekLock) await sess.seekLock;
+  const highest = await highestHlsSegment(sess.dir);
   const encodeAt = Number.isInteger(sess.encodeAt) ? sess.encodeAt : 0;
-  // The phone loads about a minute ahead. Only a drag past that starts over
-  // at the new minute. Starting over for the normal look-ahead would skip.
-  if (index > Math.max(highest, encodeAt) + 40) {
+  // The phone loads about a minute ahead. Only a drag past that — or backward into
+  // an unencoded gap earlier than encodeAt — starts over at the new minute. Starting
+  // over for the normal look-ahead would skip.
+  if (index < encodeAt || index > Math.max(highest, encodeAt) + 40) {
     if (!sess.seekLock) sess.seekLock = repositionHls(sess, index).finally(() => { sess.seekLock = null; });
     await sess.seekLock;
   }
@@ -4850,7 +4933,7 @@ function mountSubtitleTap(vf) {
   return vf._subTap.notMkv ? null : vf._subTap;
 }
 function builtInSubtitlesEnabledNow() {
-  try { return settings.get().builtInSubtitlesEnabled !== false; } catch { return true; }
+  try { return settings.peek().builtInSubtitlesEnabled !== false; } catch { return true; }
 }
 // The header (track list) from the first bytes: usually already read by the probe or the remux.
 async function ensureSubtitleTapHeader(vf, tap) {
@@ -4938,6 +5021,13 @@ async function readLocalSubtitlesAhead(vf, tap, at) {
 function releaseMountResources(vf) {
   if (!vf) return;
   try { pipeline.cancelPlaybackWarmups(vf); } catch {}
+  if (vf._audioStreams && vf._audioStreams.size) {
+    for (const s of vf._audioStreams.values()) {
+      try { s.cancelReadAhead(); } catch {}
+      try { if (s.cache && s.cache.clear) s.cache.clear(); } catch {}
+    }
+    vf._audioStreams.clear();
+  }
   closeMountHls(vf);
   closeMountFfmpegPipes(vf);
   // Callers delete the mount right after this; check retired pools once it is gone.
@@ -5297,6 +5387,7 @@ function sceneCountryFromTmdb(codes) {
   return '';
 }
 const catalogFactsCache = new Map();
+const catalogFactsInflight = new Map();
 const normFactTitle = (s) => pipelineFoldDiacritics(String(s || '')).toLowerCase().replace(/['’`]/g, '').replace(/&/g, ' and ')
   .replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter((w) => w && !['the', 'a', 'an'].includes(w)).join(' ');
 async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
@@ -5305,137 +5396,189 @@ async function catalogFactsFor(year, tmdbId, mediaType, season, ep) {
   if (!id || !settings.get().tmdbKey) return out;
   const type = mediaType === 'tv' ? 'tv' : 'movie';
   const key = `${type}:${id}`;
-  let facts = catalogFactsCache.get(key);
-  if (!facts) {
-    facts = { year: null, akaTitles: [], otherYears: [], articleSiblings: [], runtimeMin: 0, originCountry: '' };
-    try {
-      const d = await tmdb.get(`/${type}/${id}${type === 'movie' ? '?append_to_response=alternative_titles' : ''}`);
-      facts.year = parseCatalogYear(String((d && (d.release_date || d.first_air_date)) || '').slice(0, 4));
-      if (d) {
-        facts.originCountry = sceneCountryFromTmdb(type === 'tv' ? d.origin_country : d.production_countries);
-      }
-      // Film runtime feeds the post-probe "is this even the same film" check (runtimeMismatch).
-      if (type === 'movie' && d && Number.isFinite(Number(d.runtime)) && Number(d.runtime) > 0) facts.runtimeMin = Number(d.runtime);
-      if (type === 'tv' && d && facts.year) {
-        // Same-name SHOWS at the neighbouring first-air year: Utopia (UK, 2013) vs Utopia (AU
-        // sitcom, 2014) vs Utopia (US, 2020). The ±1 remake-year slack let the AU show play on
-        // the UK page. Plain search plus the two neighbouring years, like films.
-        const main = normFactTitle(d.name);
-        const queries = [
-          `/search/tv?query=${encodeURIComponent(d.name)}`,
-          `/search/tv?query=${encodeURIComponent(main || d.name)}&first_air_date_year=${facts.year - 1}`,
-          `/search/tv?query=${encodeURIComponent(main || d.name)}&first_air_date_year=${facts.year + 1}`,
-        ];
-        const flip = articleFlipQuery(d.name);
-        if (flip) queries.push(`/search/tv?query=${encodeURIComponent(flip)}`);
-        const pages = await Promise.all(queries.map((q) => tmdb.get(q).catch(() => null)));
-        for (const s of pages) {
-          for (const r of (s && s.results) || []) {
-            if (!r || Number(r.id) === id) continue;
-            const y = parseCatalogYear(String(r.first_air_date || '').slice(0, 4));
-            if (!y || y === facts.year) continue;
-            if (normFactTitle(r.name) === main || normFactTitle(r.original_name) === main) facts.otherYears.push(y);
+  const s = parseInt(season, 10), e = parseInt(ep, 10);
+  const wantEpisode = type === 'tv' && Number.isInteger(s) && s >= 0 && Number.isInteger(e) && e > 0;
+  const seasonKey = `${key}:season-names:${s}`;
+  const orderKey = `${key}:release-order:${s}`;
+  const orderMissKey = `${orderKey}:retry-at`;
+
+  const loadBase = async () => {
+    let facts = catalogFactsCache.get(key);
+    if (facts) return facts;
+    let p = catalogFactsInflight.get(key);
+    if (!p) {
+      p = (async () => {
+        const next = { year: null, akaTitles: [], otherYears: [], articleSiblings: [], runtimeMin: 0, originCountry: '' };
+        let ok = false;
+        try {
+          const d = await tmdb.get(`/${type}/${id}${type === 'movie' ? '?append_to_response=alternative_titles' : ''}`);
+          if (d) ok = true;
+          next.year = parseCatalogYear(String((d && (d.release_date || d.first_air_date)) || '').slice(0, 4));
+          if (d) {
+            next.originCountry = sceneCountryFromTmdb(type === 'tv' ? d.origin_country : d.production_countries);
           }
-        }
-        facts.otherYears = [...new Set(facts.otherYears)];
-        // "The Runner" the show must not play "Runner" the show when both exist in the same year.
-        for (const s of pages) {
-          for (const art of collectArticleSiblings(d.name, facts.year, s && s.results, id, { dateKey: 'first_air_date', titleKey: 'name', originalKey: 'original_name' })) {
-            if (!facts.articleSiblings.includes(art)) facts.articleSiblings.push(art);
-          }
-        }
-      }
-      if (type === 'movie' && d) {
-        const main = normFactTitle(d.title);
-        const orig = normFactTitle(d.original_title);
-        const alts = ((d.alternative_titles && d.alternative_titles.titles) || [])
-          .filter((t) => t && t.title && CATALOG_FACT_REGIONS.has(String(t.iso_3166_1 || '').toUpperCase()))
-          .map((t) => String(t.title).trim())
-          .filter((t) => {
-            const n = normFactTitle(t);
-            if (!n || n === main || n === orig) return false;
-            if (/\b(19|20)\d{2}\b|\b3d\b/i.test(t)) return false;
-            return n.startsWith(main + ' ') || (orig && n.startsWith(orig + ' '));
-          });
-        const seen = new Set();
-        for (const t of alts) { const n = normFactTitle(t); if (!seen.has(n)) { seen.add(n); facts.akaTitles.push(t); } if (facts.akaTitles.length >= 6) break; }
-        if (main && facts.year) {
-          // Plain search plus the two neighbouring years on the CORE title: TMDB's plain
-          // "The Odyssey" page never surfaced the 2025 film "Odyssey", which is exactly the
-          // ±1-drift neighbour the verifier must know about. Three cached calls per title.
-          const queries = [
-            `/search/movie?query=${encodeURIComponent(d.title)}`,
-            `/search/movie?query=${encodeURIComponent(main)}&year=${facts.year - 1}`,
-            `/search/movie?query=${encodeURIComponent(main)}&year=${facts.year + 1}`,
-          ];
-          const flip = articleFlipQuery(d.title);
-          if (flip) queries.push(`/search/movie?query=${encodeURIComponent(flip)}`);
-          const pages = await Promise.all(queries.map((q) => tmdb.get(q).catch(() => null)));
-          for (const s of pages) {
-            for (const r of (s && s.results) || []) {
-              if (!r || Number(r.id) === id) continue;
-              const y = parseCatalogYear(String(r.release_date || '').slice(0, 4));
-              if (!y || y === facts.year) continue;
-              if (normFactTitle(r.title) === main || normFactTitle(r.original_title) === main) facts.otherYears.push(y);
+          // Film runtime feeds the post-probe "is this even the same film" check (runtimeMismatch).
+          if (type === 'movie' && d && Number.isFinite(Number(d.runtime)) && Number(d.runtime) > 0) next.runtimeMin = Number(d.runtime);
+          if (type === 'tv' && d && next.year) {
+            // Same-name SHOWS at the neighbouring first-air year: Utopia (UK, 2013) vs Utopia (AU
+            // sitcom, 2014) vs Utopia (US, 2020). The ±1 remake-year slack let the AU show play on
+            // the UK page. Plain search plus the two neighbouring years, like films.
+            const main = normFactTitle(d.name);
+            const queries = [
+              `/search/tv?query=${encodeURIComponent(d.name)}`,
+              `/search/tv?query=${encodeURIComponent(main || d.name)}&first_air_date_year=${next.year - 1}`,
+              `/search/tv?query=${encodeURIComponent(main || d.name)}&first_air_date_year=${next.year + 1}`,
+            ];
+            const flip = articleFlipQuery(d.name);
+            if (flip) queries.push(`/search/tv?query=${encodeURIComponent(flip)}`);
+            const pages = await Promise.all(queries.map((q) => tmdb.get(q).catch(() => null)));
+            const selfVotes = Number(d.vote_count) || 0;
+            let hasDominantSibling = false;
+            for (const pg of pages) {
+              for (const r of (pg && pg.results) || []) {
+                if (!r || Number(r.id) === id) continue;
+                const y = parseCatalogYear(String(r.first_air_date || '').slice(0, 4));
+                if (!y || y === next.year) continue;
+                if (normFactTitle(r.name) === main || normFactTitle(r.original_name) === main) {
+                  next.otherYears.push(y);
+                  const rCountries = Array.isArray(r.origin_country) ? r.origin_country.map((c) => String(c || '').toUpperCase()) : [];
+                  const rVotes = Number(r.vote_count) || 0;
+                  if (rCountries.includes('US') || rCountries.includes('GB') || rVotes >= Math.max(50, selfVotes * 0.15)) {
+                    hasDominantSibling = true;
+                  }
+                }
+              }
+            }
+            next.otherYears = [...new Set(next.otherYears)];
+            next.hasDominantSibling = next.otherYears.length ? hasDominantSibling : false;
+            // "The Runner" the show must not play "Runner" the show when both exist in the same year.
+            for (const pg of pages) {
+              for (const art of collectArticleSiblings(d.name, next.year, pg && pg.results, id, { dateKey: 'first_air_date', titleKey: 'name', originalKey: 'original_name' })) {
+                if (!next.articleSiblings.includes(art)) next.articleSiblings.push(art);
+              }
             }
           }
-          facts.otherYears = [...new Set(facts.otherYears)];
-          // Runner (2026) must not play The.Runner.2026 when that other film exists the same year.
-          for (const s of pages) {
-            for (const art of collectArticleSiblings(d.title, facts.year, s && s.results, id, { dateKey: 'release_date', titleKey: 'title', originalKey: 'original_title' })) {
-              if (!facts.articleSiblings.includes(art)) facts.articleSiblings.push(art);
+          if (type === 'movie' && d) {
+            const main = normFactTitle(d.title);
+            const orig = normFactTitle(d.original_title);
+            const alts = ((d.alternative_titles && d.alternative_titles.titles) || [])
+              .filter((t) => t && t.title && CATALOG_FACT_REGIONS.has(String(t.iso_3166_1 || '').toUpperCase()))
+              .map((t) => String(t.title).trim())
+              .filter((t) => {
+                const n = normFactTitle(t);
+                if (!n || n === main || n === orig) return false;
+                if (/\b(19|20)\d{2}\b|\b3d\b/i.test(t)) return false;
+                return n.startsWith(main + ' ') || (orig && n.startsWith(orig + ' '));
+              });
+            const seen = new Set();
+            for (const t of alts) { const n = normFactTitle(t); if (!seen.has(n)) { seen.add(n); next.akaTitles.push(t); } if (next.akaTitles.length >= 6) break; }
+            if (main && next.year) {
+              // Plain search plus the two neighbouring years on the CORE title: TMDB's plain
+              // "The Odyssey" page never surfaced the 2025 film "Odyssey", which is exactly the
+              // ±1-drift neighbour the verifier must know about. Three cached calls per title.
+              const queries = [
+                `/search/movie?query=${encodeURIComponent(d.title)}`,
+                `/search/movie?query=${encodeURIComponent(main)}&year=${next.year - 1}`,
+                `/search/movie?query=${encodeURIComponent(main)}&year=${next.year + 1}`,
+              ];
+              const flip = articleFlipQuery(d.title);
+              if (flip) queries.push(`/search/movie?query=${encodeURIComponent(flip)}`);
+              const pages = await Promise.all(queries.map((q) => tmdb.get(q).catch(() => null)));
+              for (const pg of pages) {
+                for (const r of (pg && pg.results) || []) {
+                  if (!r || Number(r.id) === id) continue;
+                  const y = parseCatalogYear(String(r.release_date || '').slice(0, 4));
+                  if (!y || y === next.year) continue;
+                  if (normFactTitle(r.title) === main || normFactTitle(r.original_title) === main) next.otherYears.push(y);
+                }
+              }
+              next.otherYears = [...new Set(next.otherYears)];
+              // Runner (2026) must not play The.Runner.2026 when that other film exists the same year.
+              for (const pg of pages) {
+                for (const art of collectArticleSiblings(d.title, next.year, pg && pg.results, id, { dateKey: 'release_date', titleKey: 'title', originalKey: 'original_title' })) {
+                  if (!next.articleSiblings.includes(art)) next.articleSiblings.push(art);
+                }
+              }
             }
           }
+        } catch {}
+        if (ok) {
+          if (catalogFactsCache.size > 5000) catalogFactsCache.clear();
+          catalogFactsCache.set(key, next);
         }
-      }
-    } catch {}
-    if (catalogFactsCache.size > 5000) catalogFactsCache.clear();
-    catalogFactsCache.set(key, facts);
-  }
+        return next;
+      })().finally(() => {
+        if (catalogFactsInflight.get(key) === p) catalogFactsInflight.delete(key);
+      });
+      catalogFactsInflight.set(key, p);
+    }
+    return p;
+  };
+
+  const loadSeason = async () => {
+    if (!wantEpisode) return;
+    if (catalogFactsCache.has(seasonKey) && (catalogFactsCache.has(orderKey) || (catalogFactsCache.get(orderMissKey) > Date.now()))) return;
+    let p = catalogFactsInflight.get(seasonKey);
+    if (!p) {
+      p = (async () => {
+        // The season list and the show's episode groups load side by side (both cached per show), so
+        // the release-order check adds no wait in front of Play.
+        const [seasonDoc, groupList] = await Promise.all([
+          tmdb.get(`/tv/${id}/season/${s}`).catch(() => null),
+          tmdb.get(`/tv/${id}/episode_groups`).catch(() => null),
+        ]);
+        if (seasonDoc) {
+          const rows = (seasonDoc.episodes || []).map((row) => ({
+            n: Number(row && row.episode_number),
+            name: String(row && row.name || '').trim(),
+            runtime: Number(row && row.runtime) || 0,
+          })).filter((row) => Number.isInteger(row.n) && row.n > 0);
+          catalogFactsCache.set(seasonKey, rows);
+        }
+        const order = await releaseOrderFor(id, s, seasonDoc, groupList);
+        // A TMDB miss is asked again, but not on every Play while TMDB is down (10 minutes).
+        if (order !== undefined) catalogFactsCache.set(orderKey, order);
+        else catalogFactsCache.set(orderMissKey, Date.now() + 10 * 60 * 1000);
+      })().finally(() => {
+        if (catalogFactsInflight.get(seasonKey) === p) catalogFactsInflight.delete(seasonKey);
+      });
+      catalogFactsInflight.set(seasonKey, p);
+    }
+    await p;
+  };
+
+  // Run show/movie facts AND season episode-order facts in parallel (saves a full TMDB RTT on cold TV Play).
+  const [facts] = await Promise.all([loadBase(), loadSeason()]);
   if (!out.year && facts.year) out.year = facts.year;
   out.akaTitles = facts.akaTitles;
   out.otherYears = facts.otherYears;
   out.originCountry = facts.originCountry || '';
+  if (typeof facts.hasDominantSibling === 'boolean') out.hasDominantSibling = facts.hasDominantSibling;
   out.articleSiblings = facts.articleSiblings || [];
   out.runtimeMin = facts.runtimeMin || 0;
   // Episodes: only TMDB's PER-EPISODE runtime is trusted for the probe check (a show-level
-  // average would flag every 80-minute pilot). Cached per episode; missing → no check.
-  const s = parseInt(season, 10), e = parseInt(ep, 10);
-  if (type === 'tv' && Number.isInteger(s) && s >= 0 && Number.isInteger(e) && e > 0) {
+  // average would flag every 80-minute pilot). Read names and runtime from /season/S first
+  // to avoid an extra serial /episode/E round-trip on cold Play.
+  if (wantEpisode) {
+    const rows = catalogFactsCache.get(seasonKey) || [];
+    const mine = rows.find((row) => row.n === e);
+    out.episodeTitle = (mine && mine.name) || '';
+    out.otherEpisodeTitles = rows.filter((row) => row.n !== e && row.name).map((row) => row.name).slice(0, 40);
+    out.seasonEpisodes = rows.filter((row) => row.name).slice(0, 80);
     const ekey = `${key}:s${s}e${e}`;
-    if (!catalogFactsCache.has(ekey)) {
-      let rt = 0;
-      try { const epd = await tmdb.get(`/tv/${id}/season/${s}/episode/${e}`); rt = Number(epd && epd.runtime) || 0; } catch {}
-      catalogFactsCache.set(ekey, { runtimeMin: rt });
+    if (mine && mine.runtime > 0) {
+      catalogFactsCache.set(ekey, { runtimeMin: mine.runtime });
+      out.runtimeMin = mine.runtime;
+    } else {
+      if (!catalogFactsCache.has(ekey)) {
+        let rt = 0;
+        let epOk = false;
+        try { const epd = await tmdb.get(`/tv/${id}/season/${s}/episode/${e}`); if (epd) { epOk = true; rt = Number(epd.runtime) || 0; } } catch {}
+        if (epOk) catalogFactsCache.set(ekey, { runtimeMin: rt });
+        else return { ...out, runtimeMin: rt };
+      }
+      out.runtimeMin = (catalogFactsCache.get(ekey) || {}).runtimeMin || 0;
     }
-    out.runtimeMin = (catalogFactsCache.get(ekey) || {}).runtimeMin || 0;
-    // The whole season's episode names, so Play can skip a file that uses the right number
-    // for a different episode (Office S04E03 "Dunder Mifflin Infinity" is not Launch Party).
-    const seasonKey = `${key}:season-names:${s}`;
-    const orderKey = `${key}:release-order:${s}`;
-    const orderMissKey = `${orderKey}:retry-at`;
-    if (!catalogFactsCache.has(seasonKey) || (!catalogFactsCache.has(orderKey) && !(catalogFactsCache.get(orderMissKey) > Date.now()))) {
-      // The season list and the show's episode groups load side by side (both cached per show), so
-      // the release-order check adds no wait in front of Play.
-      const [seasonDoc, groupList] = await Promise.all([
-        tmdb.get(`/tv/${id}/season/${s}`).catch(() => null),
-        tmdb.get(`/tv/${id}/episode_groups`).catch(() => null),
-      ]);
-      const names = (seasonDoc && seasonDoc.episodes || []).map((row) => ({
-        n: Number(row && row.episode_number),
-        name: String(row && row.name || '').trim(),
-      })).filter((row) => Number.isInteger(row.n) && row.n > 0 && row.name);
-      catalogFactsCache.set(seasonKey, names);
-      const order = await releaseOrderFor(id, s, seasonDoc, groupList);
-      // A TMDB miss is asked again, but not on every Play while TMDB is down (10 minutes).
-      if (order !== undefined) catalogFactsCache.set(orderKey, order);
-      else catalogFactsCache.set(orderMissKey, Date.now() + 10 * 60 * 1000);
-    }
-    const names = catalogFactsCache.get(seasonKey) || [];
-    const mine = names.find((row) => row.n === e);
-    out.episodeTitle = mine ? mine.name : '';
-    out.otherEpisodeTitles = names.filter((row) => row.n !== e).map((row) => row.name).slice(0, 40);
-    out.seasonEpisodes = names.slice(0, 80);
     // TMDB and release numbering differ for this show (brief 127): search the release number(s).
     // A TMDB episode that merges a two-part hour-long maps to two release numbers; its runtime is the
     // whole hour, so a Part 1 file would wrongly fail the runtime check — that check is skipped then.
@@ -5496,6 +5639,7 @@ function armRuntimeCheck(vf, policy, candidate, body) {
   if (vf._tracks) noteRuntimeCheck(vf); // probe already landed (prepared mount reused)
 }
 function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, mediaType, akaTitles, otherYears, originCountry, articleSiblings, episodeTitle, otherEpisodeTitles, runtimeMin, tmdbId, season, ep, seasonEpisodes, releaseEpisodes, caps: rawCaps } = {}) {
+  const hasDominantSibling = arguments[1] && arguments[1].hasDominantSibling;
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
   // The admin's cap, kept apart from the per-play and per-device limits that narrow maxResolutionRank.
   // Those can be widened or overridden by a tap. This one cannot.
@@ -5505,6 +5649,7 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
   if (originCountry === 'us' || originCountry === 'uk' || originCountry === 'au' || originCountry === 'nz' || originCountry === 'ca' || originCountry === 'other') {
     policy.originCountry = originCountry;
   }
+  if (typeof hasDominantSibling === 'boolean') policy.hasDominantSibling = hasDominantSibling;
   if (Array.isArray(articleSiblings) && articleSiblings.length) {
     policy.articleSiblings = articleSiblings.map((a) => String(a || '').toLowerCase()).filter((a) => a === 'the' || a === 'a' || a === 'an').slice(0, 3);
   }
@@ -6134,11 +6279,14 @@ function withLocalActivityArt(ctx, row, foldTitle) {
   return out;
 }
 function withActivityPosters(rows, ctx, opts = {}) {
-  const idx = watchPosterIndex();
-  return (Array.isArray(rows) ? rows : []).map((row) => {
+  const list = Array.isArray(rows) ? rows : [];
+  let idx = opts.posterIdx || null;
+  const getIdx = opts.getPosterIdx || (() => (idx || (idx = watchPosterIndex())));
+  return list.map((row) => {
     if (row && /^local:\w+:\d+$/.test(String(row.key || ''))) return withLocalActivityArt(ctx, row, !!opts.foldTitle);
     if (!row || row.poster) return row;
-    const poster = idx.get(`${row.userId}|${row.key}`) || idx.get(`${row.userId}|${activityTitleKey(row.key)}`) || '';
+    const map = getIdx();
+    const poster = map.get(`${row.userId}|${row.key}`) || map.get(`${row.userId}|${activityTitleKey(row.key)}`) || '';
     return poster ? { ...row, poster } : row;
   });
 }
@@ -6204,7 +6352,7 @@ function envFlag(name) {
   return /^(1|true|yes|on)$/i.test(String(process.env[name] || '').trim());
 }
 function viewerGeolocationEnabled() {
-  return envFlag('TRIBOON_VIEWER_GEO') || settings.get().viewerGeolocationEnabled === true;
+  return envFlag('TRIBOON_VIEWER_GEO') || settings.peek().viewerGeolocationEnabled === true;
 }
 function geoCacheKey(ip) {
   return require('crypto').createHash('sha256').update(String(ip)).digest('hex');
@@ -6316,7 +6464,7 @@ function recordActivityHistory(row) {
   const histId = 'h' + idHash(`${row.userId}|${row.profile || ''}|${row.sessionId || ''}|${row.key || ''}|${row.startedAt || ''}`);
   store.update('activityHistory', { rows: [] }, (doc) => {
     if (!doc || typeof doc !== 'object' || Array.isArray(doc)) doc = { rows: [] };
-    const rows = pruneActivityHistoryRows(doc.rows, now);
+    const rows = Array.isArray(doc.rows) ? doc.rows.slice() : [];
     const saved = {
       id: histId,
       userId: row.userId,
@@ -6341,7 +6489,7 @@ function recordActivityHistory(row) {
       startedAt: row.startedAt,
       updatedAt: row.updatedAt,
     };
-    const ix = rows.findIndex((x) => x.id === histId);
+    const ix = rows.findIndex((x) => x && x.id === histId);
     if (ix >= 0) rows[ix] = { ...rows[ix], ...saved, startedAt: rows[ix].startedAt || saved.startedAt };
     else rows.unshift(saved);
     doc.rows = pruneActivityHistoryRows(rows, now);
@@ -6772,7 +6920,7 @@ function nextLocalEpisodes(ctx, profile = 'default') {
   return out;
 }
 async function nextWatchEpisodes(uid, profile = 'default') {
-  if (!settings.get().tmdbKey) return [];
+  if (!settings.peek().tmdbKey) return [];
   const all = store.read('watch', {});
   const rows = watchRowsForProfileFromAll(all, uid, profile);
   // A Map, NOT an object: showIds are numeric strings, and JS objects iterate integer-like keys in
@@ -6789,24 +6937,35 @@ async function nextWatchEpisodes(uid, profile = 'default') {
     const cur = byShow.get(ep.showId);
     if (!cur || ep.season > cur.season || (ep.season === cur.season && ep.episode > cur.episode)) byShow.set(ep.showId, { ...ep, w });
   }
-  const out = [];
+  const entries = [];
   for (const [showId, top] of [...byShow].slice(0, 20)) {
-    if (inProgress.has(showId)) continue;
+    if (!inProgress.has(showId)) entries.push([showId, top]);
+  }
+  const tmdbCacheNow = store.read('tmdb-cache', {});
+  const NEXT_REFRESH_GUARD_MS = 15 * 60 * 1000;
+  const results = await mapLimit(entries, 6, async ([showId, top]) => {
     try {
-      let d = await tmdb.get(`/tv/${showId}`);
+      const showPath = `/tv/${showId}`;
+      let d = await tmdb.get(showPath);
       let seasons = (d.seasons || []).filter((s) => s.season_number > 0 && s.episode_count > 0)
         .sort((a, b) => a.season_number - b.season_number);
       const lastSeason = seasons[seasons.length - 1];
-      if (lastSeason && lastSeason.season_number === top.season && lastSeason.episode_count <= top.episode) {
-        d = await tmdb.get(`/tv/${showId}`, { maxAge: 0 });
+      const ended = /^(ended|canceled|cancelled)$/i.test(String((d && d.status) || ''));
+      const showHit = tmdbCacheNow[showPath];
+      const showFresh = !!(showHit && Date.now() - (Number(showHit.at) || 0) < NEXT_REFRESH_GUARD_MS);
+      if (!ended && !showFresh && lastSeason && lastSeason.season_number === top.season && lastSeason.episode_count <= top.episode) {
+        d = await tmdb.get(showPath, { maxAge: 0 });
         seasons = (d.seasons || []).filter((s) => s.season_number > 0 && s.episode_count > 0)
           .sort((a, b) => a.season_number - b.season_number);
       }
       for (const s of seasons.filter((x) => x.season_number >= top.season)) {
-        let sd = await tmdb.get(`/tv/${showId}/season/${s.season_number}`);
+        const seasonPath = `/tv/${showId}/season/${s.season_number}`;
+        let sd = await tmdb.get(seasonPath);
         const laterEps = (episodes) => (episodes || []).filter((ep) => ep && ep.episode_number > 0 &&
           (s.season_number > top.season || ep.episode_number > top.episode));
-        if (!laterEps(sd.episodes).length && s.season_number === top.season) {
+        const seasonHit = tmdbCacheNow[seasonPath];
+        const seasonFresh = !!(seasonHit && Date.now() - (Number(seasonHit.at) || 0) < NEXT_REFRESH_GUARD_MS);
+        if (!ended && !seasonFresh && !laterEps(sd.episodes).length && s.season_number === top.season) {
           sd = await tmdb.get(`/tv/${showId}/season/${s.season_number}`, { maxAge: 0 });
         }
         const eps = laterEps(sd.episodes).filter((ep) => aired(ep.air_date))
@@ -6817,7 +6976,7 @@ async function nextWatchEpisodes(uid, profile = 'default') {
         });
         if (!next) continue;
         const title = String((d.name || (top.w.meta && top.w.meta.title) || '')).replace(/\s*—\s*S\d+E\d+.*$/i, '');
-        out.push({
+        return {
           key: `tmdb:tv:${showId}:s${s.season_number}e${next.episode_number}`,
           title,
           q: `${title} S${String(s.season_number).padStart(2, '0')}E${String(next.episode_number).padStart(2, '0')}`,
@@ -6833,12 +6992,12 @@ async function nextWatchEpisodes(uid, profile = 'default') {
           updatedAt: top.w.updatedAt || 0,
           _nextEp: true, _newEp: new Date(`${next.air_date}T00:00:00Z`).getTime() > (top.w.updatedAt || 0),
           season: s.season_number, episode: next.episode_number, episodeName: next.name || '',
-        });
-        break;
+        };
       }
     } catch { /* one bad show must not break the row */ }
-  }
-  return out;
+    return null;
+  });
+  return results.filter(Boolean);
 }
 
 const MUSIC_CHARTS = [
@@ -6894,7 +7053,7 @@ async function loadPersonalHomeShelves(uid, cookiesPath, { wait = true } = {}) {
   const now = Date.now();
   const hit = musicHomeShelfCache.get(uid);
   if (hit && hit.shelves && now < hit.expiresAt) return hit.shelves;
-  if (hit && hit.inflight) return wait ? hit.inflight : (hit.shelves || null);
+  if (hit && hit.inflight) return wait ? hit.inflight.catch(() => []) : (hit.shelves || null);
   const inflight = ytmusic.homeRows({ cookiesPath, limit: 8 })
     .then((rows) => {
       const shelves = normalizeHomeShelves(rows);
@@ -6906,6 +7065,7 @@ async function loadPersonalHomeShelves(uid, cookiesPath, { wait = true } = {}) {
       if (hit && hit.shelves) return hit.shelves;
       throw e;
     });
+  inflight.catch(() => {}); // prevent unhandled rejection when wait === false
   musicHomeShelfCache.set(uid, { ...(hit || {}), inflight });
   return wait ? inflight.catch(() => []) : (hit && hit.shelves) || null;
 }
@@ -6941,6 +7101,11 @@ async function loadMusicSearch(q, { limit = 20, cookiesPath, scope = 'public', p
     while (musicSearchCache.size > 80) musicSearchCache.delete(musicSearchCache.keys().next().value);
     return clean;
   }).catch((e) => {
+    const cur = musicSearchCache.get(key);
+    if (cur && cur.inflight === inflight) {
+      if (cur.rows) musicSearchCache.set(key, { rows: cur.rows, expiresAt: cur.expiresAt || 0 });
+      else musicSearchCache.delete(key);
+    }
     if (hit && hit.rows) return hit.rows;
     throw e;
   });
@@ -6957,6 +7122,11 @@ async function loadMusicChart(def) {
     musicChartCache.set(def.id, { rows: clean, expiresAt: nextMusicChartRefresh(def.id) });
     return clean;
   }).catch((e) => {
+    const cur = musicChartCache.get(def.id);
+    if (cur && cur.inflight === inflight) {
+      if (cur.rows) musicChartCache.set(def.id, { rows: cur.rows, expiresAt: cur.expiresAt || 0 });
+      else musicChartCache.delete(def.id);
+    }
     if (hit && hit.rows) return hit.rows;
     throw e;
   });
@@ -6996,6 +7166,11 @@ async function loadUserMusicPlaylists(uid, source, loader) {
       return clean;
     })
     .catch((e) => {
+      const cur = musicPlaylistListCache.get(key);
+      if (cur && cur.inflight === inflight) {
+        if (cur.playlists) musicPlaylistListCache.set(key, { playlists: cur.playlists, expiresAt: cur.expiresAt || 0 });
+        else musicPlaylistListCache.delete(key);
+      }
       if (hit && hit.playlists) return hit.playlists;
       throw e;
     });
@@ -7574,6 +7749,7 @@ const H = {
       debug.fail('play', `could not start ${body && body.q || '-'} — ${playFailDetail(e)}`);
       debug.issue(`could not start — "${body && body.q || 'playback'}" — reason: ${playFailDetail(e)}`);
       debug.log('play', `fail q=${body && body.q || '-'} ${e.message || 'error'}`);
+      if (ctx.res.writableEnded || ctx.res.destroyed) return;
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
@@ -7654,7 +7830,10 @@ const H = {
       return maturityBlockedResponse(ctx);
     }
     const t0 = Date.now();
+    const prepAc = new AbortController();
+    ctx.res.once('close', () => { if (!ctx.res.writableEnded) prepAc.abort(); });
     Object.assign(body, await catalogFactsFor(body.year, body.tmdbId, body.mediaType, body.season, body.ep));
+    if (prepAc.signal.aborted) return;
     const policy = playbackPolicyFor(ctx.user, body);
     try {
       const { vf, candidate, attempts, prepared } = await pipeline.prepare(
@@ -7663,10 +7842,12 @@ const H = {
           pick: body.pick, pickKey: body.pickKey,
           pinnedResume: !!body.pinnedResume,
           resumeFrac: resumeFracFromBody(body),
+          _signal: prepAc.signal,
         },
         policy,
         { nextUp: body.nextUp === true }
       );
+      if (ctx.res.writableEnded || ctx.res.destroyed) return;
       if (vf) {
         vf._q = body.q;
         vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
@@ -7675,6 +7856,18 @@ const H = {
         armRuntimeCheck(vf, policy, candidate, body);
         rememberMountOwner(vf, ctx.user.id);
         trimUserMounts(ctx.user.id, vf.id);
+        // Warm track metadata in the background once head+tail warmup lands, so Play with Auto-CC
+        // or surround audio gets instant /api/tracks (5ms instead of a 1.4s pre-handoff stall).
+        if (prepared && detectFfprobe() && !vf._tracks && !vf._tracksProbe && !vf._prepTrackTimer) {
+          const uid = ctx.user.id;
+          vf._prepTrackTimer = setTimeout(() => {
+            vf._prepTrackTimer = null;
+            if (!vf.streamable || mounts.get(vf.id) !== vf || vf._tracks || vf._tracksProbe) return;
+            if (pipeline._hasActiveForeignPlayback(vf)) return;
+            probeMountTracks(vf, uid).catch(() => {});
+          }, 600);
+          if (typeof vf._prepTrackTimer.unref === 'function') vf._prepTrackTimer.unref();
+        }
       }
       // Native pre-cache: a prepared DIRECT-PLAY mount is offered to the client as a tokened
       // prefetch target (the Android shell caches the opening bytes so press-play starts from
@@ -7705,6 +7898,7 @@ const H = {
         debug.fail('play', `prepare failed ${body.q || '-'} — ${playFailDetail(e)}`);
         debug.log('prepare', `fail q=${body.q} ${e.message || 'error'}`);
       }
+      if (ctx.res.writableEnded || ctx.res.destroyed) return;
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
@@ -7885,14 +8079,17 @@ const H = {
     if (hit && Date.now() - hit.at < 24 * 3600 * 1000) return send(ctx.res, 200, { available: hit.available, cached: true });
     if (throttleUserRoute(ctx, 'audiobook-avail', { max: 120, windowMs: 60000, lockMs: 30000 })) return;
     let available = false;
-    try { available = await pipeline.isAvailable({ title, author }); } catch {}
-    store.update('audiobook-avail', {}, (c) => {
-      c[cacheKey] = { at: Date.now(), available };
-      const ks = Object.keys(c);
-      if (ks.length > 4000) for (const k of ks.slice(0, ks.length - 3000)) delete c[k];
-      return c;
-    });
-    send(ctx.res, 200, { available });
+    let transient = false;
+    try { available = await pipeline.isAvailable({ title, author }); } catch { transient = true; }
+    if (!transient) {
+      store.update('audiobook-avail', {}, (c) => {
+        c[cacheKey] = { at: Date.now(), available };
+        const ks = Object.keys(c);
+        if (ks.length > 4000) for (const k of ks.slice(0, ks.length - 3000)) delete c[k];
+        return c;
+      });
+    }
+    send(ctx.res, 200, transient ? { available: false, transient: true } : { available });
   },
   pubaudioTracks: async (ctx) => {
     const source = ctx.url.searchParams.get('source');
@@ -7933,6 +8130,7 @@ const H = {
     const body = await readJson(ctx.req);
     if (!body.title) return send(ctx.res, 400, { error: 'title required' });
     if (throttleUserRoute(ctx, 'audiobook-play', { max: 20, windowMs: 60000, lockMs: 60000 })) return;
+    extendPlayRouteTimeout(ctx);
     const t0 = Date.now();
     try {
       const { session, vf, candidate, attempts } = await pipeline.playAudiobook({
@@ -7949,6 +8147,7 @@ const H = {
         attempts,
       }));
     } catch (e) {
+      if (ctx.res.writableEnded || ctx.res.destroyed) return;
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
@@ -8015,28 +8214,31 @@ const H = {
         hiddenGroups: (store.read('iptvgroups', {})[ctx.user.id]) || [],
         globalHidden: ctx.user.role === 'admin' ? [...globalHidden] : undefined,
         channels: list.map(({ url: _u, nativeUrl: _nu, nativeFallbackUrl: _nfu, ...c }) => {
+          const nativeMime = c.nativeMime || iptvNativeMime(_nu || _u);
+          const nativeFallbackMime = c.nativeFallbackMime || (_nfu ? iptvNativeMime(_nfu) : '');
+          const fav = favs.has(c.id);
+          if (!includeUrls) {
+            return {
+              idx: c.idx,
+              id: c.id,
+              name: c.name,
+              logo: c.logo || '',
+              group: c.group || 'Other',
+              sourceId: c.sourceId || '',
+              sourceName: c.sourceName || '',
+              nativeMime,
+              nativeFallbackMime,
+              fav,
+            };
+          }
           const channelScope = `iptv:${c.idx}:${c.id}`;
           const token = auth.streamToken(ctx.user.id, channelScope, deviceClaim);
           const cid = encodeURIComponent(c.id);
-          const nativeMime = c.nativeMime || iptvNativeMime(_nu || _u);
-          const nativeFallbackMime = c.nativeFallbackMime || (_nfu ? iptvNativeMime(_nfu) : '');
-          const row = { ...c, fav: favs.has(c.id), nativeMime, nativeFallbackMime };
-          if (!includeUrls) {
-            return {
-              idx: row.idx,
-              id: row.id,
-              name: row.name,
-              logo: row.logo || '',
-              group: row.group || 'Other',
-              sourceId: row.sourceId || '',
-              sourceName: row.sourceName || '',
-              nativeMime,
-              nativeFallbackMime,
-              fav: row.fav,
-            };
-          }
           return {
-            ...row,
+            ...c,
+            fav,
+            nativeMime,
+            nativeFallbackMime,
             streamUrl: `/api/iptv/stream/${c.idx}?cid=${cid}&t=${token}`,
             nativeUrl: `/api/iptv/native/${c.idx}?cid=${cid}&t=${token}`,
             nativeFallbackUrl: _nfu ? `/api/iptv/native/${c.idx}?alt=1&cid=${cid}&t=${token}` : undefined,
@@ -8321,8 +8523,9 @@ const H = {
       .split(',').map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 0).slice(0, 48);
     const cids = String(ctx.url.searchParams.get('cids') || '')
       .split(',').map((s) => s.trim()).filter(Boolean).slice(0, idxs.length);
+    let userChannels = iptvCache.channels || [];
     if (idxs.length) {
-      try { await ensureIptvChannelStateForUser(ctx.user); } catch {}
+      try { userChannels = (await ensureIptvChannelStateForUser(ctx.user)).channels || []; } catch {}
     }
     // Resolve each requested (idx, cid) to a live channel. If the index still maps to the
     // channel the client expects, use it directly. If the cache was rebuilt (source added /
@@ -8331,12 +8534,12 @@ const H = {
     // its rows. This self-heals the common transient-rebuild race that used to blank the guide.
     let cidIndex = null;
     const chans = idxs.map((i, n) => {
-      const ch = iptvCache.channels && iptvCache.channels[i];
+      const ch = userChannels[i];
       if (ch && (!cids[n] || String(ch.id) === cids[n])) return { ch, reqIdx: i };
       if (cids[n]) {
         if (!cidIndex) {
           cidIndex = new Map();
-          for (const c of iptvCache.channels || []) if (c && !cidIndex.has(String(c.id))) cidIndex.set(String(c.id), c);
+          for (const c of userChannels) if (c && !cidIndex.has(String(c.id))) cidIndex.set(String(c.id), c);
         }
         const byId = cidIndex.get(cids[n]);
         if (byId) return { ch: byId, reqIdx: i };
@@ -8347,22 +8550,30 @@ const H = {
     // partial resolve returns what we could find; a blank subset beats a blank whole guide.
     if (cids.length && !chans.length) return send(ctx.res, 409, { error: 'channel list changed - reopen Live TV' });
     // Admin-hidden channels get no guide data for regular users, as on the play routes.
-    const settingsNow = settings.get();
+    const settingsNow = settings.peek();
     const visible = chans.filter(({ ch }) => !iptvChannelHiddenFor(ctx.user, ch, settingsNow));
     if (!visible.length) return send(ctx.res, 200, { channels: [] });
     const from = Date.now() - 90 * 60000, to = Date.now() + 4 * 3600000;
     const channels = await mapLimit(visible, 8, async ({ ch, reqIdx }) => {
       const src = sourceForIptvChannel(ch);
       let progs = [];
-      if (src && src.iptvMode === 'xtream' && ch.xtreamId) {
+      // 1. Check already-warm RAM XMLTV first (instant, zero upstream panel requests).
+      const ramEpg = warmXmltvFromRam(src);
+      if (ramEpg) {
+        progs = xmltvListFor(ramEpg, ch).filter((p) => p.stop > from && p.start < to);
+      }
+      // 2. Fall back to Xtream per-channel EPG only when warm XMLTV had no programmes for this channel.
+      if (!progs.length && src && src.iptvMode === 'xtream' && ch.xtreamId) {
         progs = (await xtreamEpgList(ch, { limit: 24, allowBusy: true })).filter((p) => p.stop > from && p.start < to);
       }
-      let epg = null;
-      if (src && xmltvGuideUrl(src)) {
+      // 3. Only await a cold XMLTV fetch if we STILL have no programmes (never block on cold XMLTV
+      //    when Xtream already answered!).
+      if (!progs.length && src && xmltvGuideUrl(src)) {
+        let epg = null;
         try { epg = await ensureXmltv(src, (iptvSourceCaches.get(cleanIptvSourceId(src.id)) || {}).channels || []); } catch { epg = null; }
-      }
-      if (!progs.length && epg && xmltvListFor(epg, ch).length) {
-        progs = xmltvListFor(epg, ch).filter((p) => p.stop > from && p.start < to);
+        if (epg && xmltvListFor(epg, ch).length) {
+          progs = xmltvListFor(epg, ch).filter((p) => p.stop > from && p.start < to);
+        }
       }
       if (!progs.length) {
         const fallback = fallbackProgramme(ch, from, to);
@@ -8371,6 +8582,7 @@ const H = {
       // Key by the idx the CLIENT requested so a drifted-index resolve still maps to its row.
       return { idx: reqIdx, programmes: progs.slice(0, 24) };
     });
+    flushPendingXtreamEpgPersists();
     send(ctx.res, 200, { from, to, channels });
   },
 
@@ -8407,7 +8619,7 @@ const H = {
     const target = alt && ch.nativeFallbackUrl ? ch.nativeFallbackUrl : (ch.nativeUrl || ch.url);
     // Only a source someone else set up has a login to keep from this viewer. Their own playlist
     // keeps going straight to its provider, so it costs the server nothing.
-    const src = iptvSourcesFromSettings(settings.get()).find((x) => x.id === ch.sourceId);
+    const src = iptvSourcesFromSettings(settings.peek()).find((x) => x.id === ch.sourceId);
     const mediaUri = user.role === 'admin' || (src && src.ownerUserId === user.id) ? null : iptvMediaUriFor(ctx, user, ch);
     return proxyIptvNative(ctx, target, 0, { idx: ch.idx, name: ch.name, alt, mediaUri, sourceId: ch.sourceId });
   },
@@ -9401,6 +9613,7 @@ async function performScan(lib, state, mode = 'scan') {
       const nfoLocalShow = libraryNfoPrefersLocal(nfo, ovS);
       const localMetaShow = libraryScanUsesLocalMetaOnly(lib, ovS, nfoLocalShow);
       const prevShow = localMetaShow ? null : reuse(`show:${dir}`);
+      const eps = [];
       if (localMetaShow) { show.tmdbId = null; show.poster = null; show.backdrop = null; delete show.matchSource; }
       else if (prevShow && (typeof ovS !== 'number' || prevShow.tmdbId === ovS)) copyMatch(show, prevShow);
       else if (wantTmdb || manualTmdb(ovS)) lookupJobs.push(async () => {
@@ -9408,15 +9621,15 @@ async function performScan(lib, state, mode = 'scan') {
         if (found) applyHit(show, found, nfo);
         else keepPrev(show, `show:${dir}`);
         if (!show.tmdbId) return;
-        // Episodes were created before the lookup resolved — sync their show-derived fields.
-        for (const it of items) {
-          if (it.kind !== 'episode' || it.showIdx !== show.idx) continue;
-          Object.assign(it, showMatchFields(show));
+        // Episodes were created before the lookup resolved — sync their show-derived fields in O(eps)
+        // rather than scanning the entire library items array per show.
+        const fields = showMatchFields(show);
+        for (const it of eps) {
+          Object.assign(it, fields);
           it.title = `${show.title} · S${String(it.s).padStart(2, '0')}E${String(it.e).padStart(2, '0')}`;
         }
       });
       epFiles.sort((a, b) => a.s - b.s || a.e - b.e);
-      const eps = [];
       for (const ep of epFiles.slice(0, MAX_EPS)) {
         await maybeBreathe();
         const epNfo = nfoBeside(ep.file);
@@ -9531,11 +9744,15 @@ async function performScan(lib, state, mode = 'scan') {
     reconcileLibraryWatch(lib, unchangedPass ? items : keyedLibraryCopy(lib, prevItems), items,
       { why: mode, unchanged: unchangedPass });
     // Frames cached under the old position names (<libId>-<idx>.jpg) are never read again.
-    try {
-      const thumbDir = path.join(DATA_DIR, 'thumbs');
-      const legacy = new RegExp(`^${lib.id.replace(/[^\w-]/g, '')}-\\d+\\.jpg$`);
-      for (const f of fs.readdirSync(thumbDir)) if (legacy.test(f)) { try { fs.unlinkSync(path.join(thumbDir, f)); } catch {} }
-    } catch { /* no thumbs yet */ }
+    // Sweep once per library per process instead of calling fs.readdirSync on every auto-scan.
+    if (!legacyThumbsCleaned.has(lib.id)) {
+      legacyThumbsCleaned.add(lib.id);
+      try {
+        const thumbDir = path.join(DATA_DIR, 'thumbs');
+        const legacy = new RegExp(`^${lib.id.replace(/[^\w-]/g, '')}-\\d+\\.jpg$`);
+        for (const f of fs.readdirSync(thumbDir)) if (legacy.test(f)) { try { fs.unlinkSync(path.join(thumbDir, f)); } catch {} }
+      } catch { /* no thumbs yet */ }
+    }
     return { ok: true, count: items.length,
       shows: items.filter((i) => i.kind === 'show').length,
       matched: items.filter((i) => i.tmdbId).length,
@@ -9564,7 +9781,7 @@ function playbackActiveForAutoScan(now = Date.now()) {
   return { vod, live };
 }
 function autoScanTick(now = Date.now()) {
-  const mins = Number(settings.get().libAutoScanMin ?? 15);
+  const mins = Number(settings.peek().libAutoScanMin ?? 15);
   if (!mins || now - lastAutoScanAt < mins * 60000) return 'not-due';
   if (!autoScanDueSince) autoScanDueSince = now;
   const busy = playbackActiveForAutoScan(now);
@@ -9698,7 +9915,18 @@ async function pushLocalWatchToTrakt(uid, watched, playback) {
 // Never downgrades: locally-watched stays watched, a real local position beats an imported %.
 // Trakt stores playback progress as a PERCENT — kept as traktPct; the player seeks to it
 // once the real duration is known.
+const traktSyncInflight = new Map(); // uid -> Promise (prevents overlapping manual + 6h tick syncs)
+const traktSyncRetryAfter = new Map(); // uid -> epoch ms (short failure backoff instead of 6h lockout)
+
 async function traktSyncDown(uid) {
+  if (traktSyncInflight.has(uid)) return traktSyncInflight.get(uid);
+  const work = traktSyncDownRun(uid);
+  traktSyncInflight.set(uid, work);
+  try { return await work; }
+  finally { if (traktSyncInflight.get(uid) === work) traktSyncInflight.delete(uid); }
+}
+
+async function traktSyncDownRun(uid) {
   const st = trakt.status(uid);
   if (!st.linked) { const e = new Error('Trakt is not linked'); e.status = 400; throw e; }
   // A broken token would "succeed" with empty pulls + markSynced — a false "sync ✓ — 0 watched".
@@ -9768,14 +9996,24 @@ async function traktSyncDown(uid) {
 }
 // Auto-resync every 6h per linked user — one user per tick keeps the calls gentle.
 function traktSyncTick() {
+  const now = Date.now();
   const tokens = trakt.linkedTokens();
   for (const [uid, tok] of Object.entries(tokens)) {
     if (!tok || tok.broken) continue; // broken = user must relink; retrying churns for nothing
-    if (tok.syncedAt && Date.now() - tok.syncedAt < 6 * 3600000) continue;
-    trakt.markSynced(uid); // claim before the async work
+    if (traktSyncInflight.has(uid)) continue;
+    if ((traktSyncRetryAfter.get(uid) || 0) > now) continue;
+    if (tok.syncedAt && now - tok.syncedAt < 6 * 3600000) continue;
+    // Do NOT pre-stamp markSynced here: traktSyncDown stamps it once on success (eliminates
+    // double AES-GCM settings flush and 6h failure lockouts). On failure, back off 10 min.
     traktSyncDown(uid)
-      .then((r) => { if (r.watched || r.playback || r.watchlist || r.pushed) console.log(`[trakt] sync: +${r.watched} watched, +${r.playback} in-progress, +${r.watchlist} watchlist, ${r.pushed} pushed`); })
-      .catch((e) => console.error('[trakt sync]', e.message));
+      .then((r) => {
+        traktSyncRetryAfter.delete(uid);
+        if (r.watched || r.playback || r.watchlist || r.pushed) console.log(`[trakt] sync: +${r.watched} watched, +${r.playback} in-progress, +${r.watchlist} watchlist, ${r.pushed} pushed`);
+      })
+      .catch((e) => {
+        traktSyncRetryAfter.set(uid, Date.now() + 10 * 60000);
+        console.error('[trakt sync]', e.message);
+      });
     break;
   }
 }
@@ -9889,8 +10127,14 @@ function cachedTmdbTitles() {
     }
   }
   const libs = (store.read('libraries', { list: [] }).list || []);
-  for (const lib of libs) {
-    const rec = libraryRecord(lib && lib.id);
+  const libIds = libs.map((lib) => lib && lib.id).filter(Boolean);
+  if (libraryDb.available) {
+    for (const title of libraryDb.topTitles(libIds, 4000)) add(title);
+  }
+  const legacyLibs = store.read('libitems', {});
+  for (const libId of libIds) {
+    if (libraryDb.available && libraryDb.hasLibrary(libId)) continue;
+    const rec = legacyLibs[libId];
     for (const item of (rec && rec.items) || []) {
       if (!item || item.kind === 'episode') continue;
       add(item.title);
@@ -9986,9 +10230,13 @@ function searchLibraryItemMatch(query, item) {
     const squash = (s) => foldPersian(s).replace(/[^\p{L}\p{N}]+/gu, '');
     const q = squash(query);
     if (q.length >= 2) {
-      const names = [item.title, item.originalTitle, item.matchTitle,
-        item.dir ? path.basename(item.dir) : '', item.file ? path.basename(path.dirname(item.file)) : ''];
-      if (names.some((t) => t && squash(t).includes(q))) return true;
+      if (Array.isArray(item._persianSquashed)) {
+        if (item._persianSquashed.some((s) => s.includes(q))) return true;
+      } else {
+        const names = [item.title, item.originalTitle, item.matchTitle,
+          item.dir ? path.basename(item.dir) : '', item.file ? path.basename(path.dirname(item.file)) : ''];
+        if (names.some((t) => t && squash(t).includes(q))) return true;
+      }
     }
   }
   const raw = String(query || '').trim().toLowerCase();
@@ -10034,10 +10282,28 @@ Object.assign(H, {
     const q = String(ctx.url.searchParams.get('q') || '').trim();
     if (q.length < 2) return send(ctx.res, 200, { items: [] });
     const allowed = allowedLocalLibraryIds(ctx);
-    let found = libraryDb.available
-      ? libraryDb.search(q, allowed, 24)
-      : searchLibraryRecords(q, allowed, 24);
-    if (!found.length) found = searchLibraryRecords(q, allowed, 24);
+    let found = [];
+    if (libraryDb.available) {
+      const sqlLibs = [];
+      const legacyLibs = [];
+      for (const id of allowed) {
+        if (libraryDb.hasLibrary(id)) sqlLibs.push(id);
+        else legacyLibs.push(id);
+      }
+      if (sqlLibs.length) {
+        found = libraryDb.search(q, sqlLibs, 24);
+        // Missed fast SQL (e.g. matchTitle, originalTitle, or close Latin typo): walk the cached
+        // non-episode index — NEVER readLibrary(100000) with episodes on the event loop.
+        if (!found.length) {
+          found = libraryDb.searchByMatcher(sqlLibs, (entry) => searchLibraryItemMatch(q, entry), 24);
+        }
+      }
+      if (found.length < 24 && legacyLibs.length) {
+        found = found.concat(searchLibraryRecords(q, legacyLibs, 24 - found.length));
+      }
+    } else {
+      found = searchLibraryRecords(q, allowed, 24);
+    }
     found = found.filter((row) => searchLibraryItemMatch(q, row && row.item));
     const libs = new Map(store.read('libraries', { list: [] }).list.map((l) => [String(l.id), l]));
     send(ctx.res, 200, {
@@ -10204,11 +10470,12 @@ Object.assign(H, {
     const file = await queueLibraryThumb(ctx.m[1], ctx.m[2], libraryThumbSourceFile(ctx.m[1], found.item));
     if (!file) return send(ctx.res, 404, { error: 'no thumbnail' });
     let stat;
-    try { stat = fs.statSync(file); } catch { return send(ctx.res, 404, { error: 'thumbnail failed' }); }
+    try { stat = await fs.promises.stat(file); } catch { return send(ctx.res, 404, { error: 'thumbnail failed' }); }
     ctx.res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': stat.size,
       'cache-control': 'private, max-age=604800', 'x-content-type-options': 'nosniff' });
     const rs = fs.createReadStream(file);
     rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
+    ctx.res.once('close', () => { if (!ctx.res.writableEnded) rs.destroy(); });
     rs.pipe(ctx.res);
   },
 
@@ -10221,22 +10488,24 @@ Object.assign(H, {
     const item = found.item;
     if (item && item.artFile) {
       try {
-        const stat = fs.statSync(item.artFile);
+        const stat = await fs.promises.stat(item.artFile);
         ctx.res.writeHead(200, { 'content-type': /\.png$/i.test(item.artFile) ? 'image/png' : 'image/jpeg',
           'content-length': stat.size, 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' });
         const rs = fs.createReadStream(item.artFile);
         rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
+        ctx.res.once('close', () => { if (!ctx.res.writableEnded) rs.destroy(); });
         return rs.pipe(ctx.res);
       } catch {}
     }
     const file = await queueLibraryThumb(ctx.m[1], ctx.m[2], libraryThumbSourceFile(ctx.m[1], item));
     if (!file) return send(ctx.res, 404, { error: 'no art' });
     let stat;
-    try { stat = fs.statSync(file); } catch { return send(ctx.res, 404, { error: 'no art' }); }
+    try { stat = await fs.promises.stat(file); } catch { return send(ctx.res, 404, { error: 'no art' }); }
     ctx.res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': stat.size,
       'cache-control': 'private, max-age=604800', 'x-content-type-options': 'nosniff' });
     const rs = fs.createReadStream(file);
     rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
+    ctx.res.once('close', () => { if (!ctx.res.writableEnded) rs.destroy(); });
     rs.pipe(ctx.res);
   },
 
@@ -10249,7 +10518,7 @@ Object.assign(H, {
     const item = found.item;
     if (!item || !item.file) return send(ctx.res, 404, { error: 'item not found' });
     let stat;
-    try { stat = fs.statSync(item.file); } catch { return send(ctx.res, 404, { error: 'file missing on disk' }); }
+    try { stat = await fs.promises.stat(item.file); } catch { return send(ctx.res, 404, { error: 'file missing on disk' }); }
     const total = stat.size;
     let start = 0, end = total, code = 200;
     const headers = { 'content-type': videoMime(item.file), 'accept-ranges': 'bytes' };
@@ -10274,6 +10543,7 @@ Object.assign(H, {
     if (ctx.req.method === 'HEAD') return ctx.res.end();
     const rs = openLocalReadStream(item.file, start, end);
     rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
+    ctx.res.once('close', () => { if (!ctx.res.writableEnded) rs.destroy(); });
     rs.pipe(ctx.res);
   },
 
@@ -10387,10 +10657,12 @@ Object.assign(H, {
   activityList: async (ctx) => {
     const sessions = activeActivityRows();
     const online = activeOnlineRows();
+    let sharedPosterIdx = null;
+    const getPosterIdx = () => (sharedPosterIdx || (sharedPosterIdx = watchPosterIndex()));
     send(ctx.res, 200, {
-      sessions: withActivityPosters(sessions, ctx),
+      sessions: withActivityPosters(sessions, ctx, { getPosterIdx }),
       online,
-      history: withActivityPosters(activityHistoryRows(), ctx, { foldTitle: true }),
+      history: withActivityPosters(activityHistoryRows(), ctx, { foldTitle: true, getPosterIdx }),
       activeCount: sessions.length,
       onlineCount: online.length,
       retentionDays: ACTIVITY_HISTORY_DAYS,
@@ -11114,12 +11386,21 @@ Object.assign(H, {
     if (uid === ctx.user.id) return send(ctx.res, 400, { error: 'you cannot delete your own account' });
     try {
       const r = auth.deleteUser(uid);
+      const prefix = uid + ':';
       store.update('watch', {}, (all) => {
-        for (const k of Object.keys(all)) if (k.startsWith(uid + ':')) delete all[k];
+        for (const k of Object.keys(all)) if (k.startsWith(prefix)) delete all[k];
         return all;
       });
-      store.update('watchlist', {}, (all) => { delete all[uid]; return all; });
+      store.update('watchlist', {}, (all) => {
+        delete all[uid];
+        for (const k of Object.keys(all)) if (k.startsWith(prefix)) delete all[k];
+        return all;
+      });
       store.update('iptvfavs', {}, (all) => { delete all[uid]; return all; });
+      store.update('iptvgroups', {}, (all) => { delete all[uid]; return all; });
+      store.update('traktOutbox', {}, (all) => { delete all[uid]; return all; });
+      if (trakt.status(uid).linked) trakt.unlink(uid);
+      traktSyncRetryAfter.delete(uid);
       send(ctx.res, 200, r);
     } catch (e) { send(ctx.res, e.message === 'user not found' ? 404 : 400, { error: e.message }); }
   },
@@ -11243,7 +11524,10 @@ Object.assign(H, {
         if (readSignal.aborted || ctx.res.destroyed) break;
       }
       completedRead = !readSignal.aborted && !ctx.res.destroyed && sentBytes >= end - start;
-      if (completedRead) vf._streamHighWaterEnd = Math.max(Number(vf._streamHighWaterEnd || 0), end);
+      // Ignore small startup tail-index peeks (Cues/moov at >85% of file) so _streamHighWaterEnd
+      // does not permanently latch to vf.size and misclassify every later sequential Range as 'seek'.
+      const isTailPeek = vf.size > 32 * 1024 * 1024 && start > vf.size * 0.85 && (end - start) < 16 * 1024 * 1024;
+      if (completedRead && !isTailPeek) vf._streamHighWaterEnd = Math.max(Number(vf._streamHighWaterEnd || 0), end);
     } catch (e) {
       if (!readSignal.aborted) {
         // A read-ahead reader (the device pre-cache) gives way when a viewer of the same file needs
@@ -11553,36 +11837,44 @@ Object.assign(H, {
     let sess = vf._hls.get(key);
     if (!sess) {
       const dir = await fsp.mkdtemp(path.join(os2.tmpdir(), 'triboon-hls-'));
-      const aud = (vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack]) || (audioTrack === 0 ? audioHintFromName(vf._releaseName || vf.name) : undefined);
-      // Same as /api/remux: iOS sends audioSafe=1 to FORCE stereo-AAC (Safari can't decode AC3/EAC3 in a
-      // local <video>, even inside HLS — its canPlayType over-reports Dolby for AirPlay/passthrough only).
-      const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
-      const transcodeAudio = forceAudioSafe || !audioCopyOk(aud, vf._caps);
-      const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
-      let ff;
-      // 2 s segments keep time-to-first-frame down (Safari can start after the first segment).
-      // Jellyfin keeps the pieces (holdSegments) so a resume seek still has the start of the list.
-      try { ff = spawnHls(selfUrl, { startSeconds: sessionStart, audioTrack, transcodeAudio, safeStereo: true, outDir: dir, segmentTime: 2, holdSegments: jellyfinPlaylist }); }
-      catch (e) { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); return send(ctx.res, 503, { error: e.message }); }
-      sess = {
-        dir, ff, vf, createdAt: Date.now(), hold: jellyfinPlaylist, input: selfUrl,
-        audioTrack, transcodeAudio, segmentTime: 2, sessionStart, encodeAt: 0,
-        duration: knownDur,
-      };
-      let err = '';
-      ff.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
-      ff.on('error', (e) => { debug.fail('hls', `${vf.id} could not start ffmpeg: ${e.message}`); });
-      ff.on('close', (codeNum) => {
-        if (codeNum) noteFfmpegDeath('hls', vf, codeNum, err, { startSeconds: sessionStart, audio: transcodeAudio ? 'stereo-aac' : 'copy' });
-      });
-      vf._hls.set(key, sess);
-      // Cap concurrent HLS windows per mount. Drop the one nobody has pulled from the
-      // longest; the oldest by birth may be the one still playing.
-      if (vf._hls.size > 4) {
-        const idle = [...vf._hls.entries()]
-          .filter(([k]) => k !== key)
-          .sort((a, b) => (a[1].lastAccess || a[1].createdAt) - (b[1].lastAccess || b[1].createdAt))[0];
-        if (idle) { closeHlsSession(idle[1]); vf._hls.delete(idle[0]); }
+      // Re-check after awaiting mkdtemp: concurrent startup requests must reuse the first HLS
+      // session instead of spawning an orphaned ffmpeg process and leaking temp dirs.
+      const raced = vf._hls.get(key);
+      if (raced) {
+        fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+        sess = raced;
+      } else {
+        const aud = (vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack]) || (audioTrack === 0 ? audioHintFromName(vf._releaseName || vf.name) : undefined);
+        // Same as /api/remux: iOS sends audioSafe=1 to FORCE stereo-AAC (Safari can't decode AC3/EAC3 in a
+        // local <video>, even inside HLS — its canPlayType over-reports Dolby for AirPlay/passthrough only).
+        const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
+        const transcodeAudio = forceAudioSafe || !audioCopyOk(aud, vf._caps);
+        const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
+        let ff;
+        // 2 s segments keep time-to-first-frame down (Safari can start after the first segment).
+        // Jellyfin keeps the pieces (holdSegments) so a resume seek still has the start of the list.
+        try { ff = spawnHls(selfUrl, { startSeconds: sessionStart, audioTrack, transcodeAudio, safeStereo: true, outDir: dir, segmentTime: 2, holdSegments: jellyfinPlaylist }); }
+        catch (e) { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); return send(ctx.res, 503, { error: e.message }); }
+        sess = {
+          dir, ff, vf, uid: ctx.claims && ctx.claims.uid, createdAt: Date.now(), hold: jellyfinPlaylist, input: selfUrl,
+          audioTrack, transcodeAudio, segmentTime: 2, sessionStart, encodeAt: 0,
+          duration: knownDur,
+        };
+        let err = '';
+        ff.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
+        ff.on('error', (e) => { debug.fail('hls', `${vf.id} could not start ffmpeg: ${e.message}`); });
+        ff.on('close', (codeNum) => {
+          if (codeNum) noteFfmpegDeath('hls', vf, codeNum, err, { startSeconds: sessionStart, audio: transcodeAudio ? 'stereo-aac' : 'copy' });
+        });
+        vf._hls.set(key, sess);
+        // Cap concurrent HLS windows per mount. Drop the one nobody has pulled from the
+        // longest; the oldest by birth may be the one still playing.
+        if (vf._hls.size > 4) {
+          const idle = [...vf._hls.entries()]
+            .filter(([k]) => k !== key)
+            .sort((a, b) => (a[1].lastAccess || a[1].createdAt) - (b[1].lastAccess || b[1].createdAt))[0];
+          if (idle) { closeHlsSession(idle[1]); vf._hls.delete(idle[0]); }
+        }
       }
     }
     sess.lastAccess = Date.now();
@@ -12623,21 +12915,33 @@ Object.assign(H, {
   // its bytes with the client's Range header. googlevideo URLs are IP-locked + expire, so a
   // 403/410 means "stale" — we re-resolve and retry rather than failing the scrub.
   proxyResolvedYoutube(ctx, id, resolveFn, failLabel) {
+    // Disable HTTP idle timeout so pausing Music/trailers >30s never severs the socket.
+    try { ctx.req.setTimeout(0); ctx.res.setTimeout(0); if (ctx.req.socket) ctx.req.socket.setTimeout(0); } catch {}
+    const isHead = ctx.req.method === 'HEAD';
     const range = ctx.req.headers.range || null;
     const MAX_STREAM_ATTEMPTS = 3;
-    const retryLater = (attempt) => setTimeout(() => { if (!ctx.res.destroyed) pipeFrom(attempt + 1); }, 400 * (attempt + 1));
+    let activeUpstream = null;
+    let closed = false;
+    ctx.res.once('close', () => {
+      if (!ctx.res.writableEnded) {
+        closed = true;
+        if (activeUpstream) { try { activeUpstream.destroy(); } catch {} activeUpstream = null; }
+      }
+    });
+    const retryLater = (attempt) => setTimeout(() => { if (!closed && !ctx.res.destroyed) pipeFrom(attempt + 1); }, 400 * (attempt + 1));
     const pipeFrom = async (attempt = 0) => {
-      if (ctx.res.destroyed) return;
+      if (closed || ctx.res.destroyed) return;
       const force = attempt > 0;
       const lastResort = attempt + 1 >= MAX_STREAM_ATTEMPTS;
       const cookiesPath = lastResort ? null : cookiesFor(ctx.claims.uid); // public re-resolve as the last try
       let rec;
       try { rec = await resolveFn(id, { cookiesPath, force }); }
       catch (e) {
-        if (attempt + 1 < MAX_STREAM_ATTEMPTS && !ctx.res.headersSent && !ctx.res.destroyed) return void retryLater(attempt);
-        if (!ctx.res.headersSent) send(ctx.res, 502, { error: `could not resolve ${failLabel}`, detail: String(e.message).slice(0, 160) });
+        if (attempt + 1 < MAX_STREAM_ATTEMPTS && !ctx.res.headersSent && !closed && !ctx.res.destroyed) return void retryLater(attempt);
+        if (!ctx.res.headersSent && !closed && !ctx.res.destroyed) send(ctx.res, 502, { error: `could not resolve ${failLabel}`, detail: String(e.message).slice(0, 160) });
         return;
       }
+      if (closed || ctx.res.destroyed) return;
       const u = new URL(rec.url);
       const upstreamHeaders = {};
       for (const [k, v] of Object.entries(rec.headers || {})) {
@@ -12645,7 +12949,7 @@ Object.assign(H, {
       }
       if (range) upstreamHeaders.range = range;
       const client = u.protocol === 'http:' ? http : https;
-      const upstream = client.get(u, { headers: upstreamHeaders }, (up) => {
+      const upstream = client.request(u, { method: isHead ? 'HEAD' : 'GET', headers: upstreamHeaders }, (up) => {
         if ((up.statusCode === 403 || up.statusCode === 410) && attempt + 1 < MAX_STREAM_ATTEMPTS && !ctx.res.headersSent) {
           up.resume(); return void retryLater(attempt);
         }
@@ -12653,10 +12957,13 @@ Object.assign(H, {
         const h = { 'content-type': rec.mime, 'accept-ranges': 'bytes', 'cache-control': 'private, no-store' };
         for (const k of ['content-length', 'content-range']) if (up.headers[k]) h[k] = up.headers[k];
         ctx.res.writeHead(up.statusCode === 206 ? 206 : 200, h);
+        if (isHead) { up.resume(); ctx.res.end(); return; }
         up.pipe(ctx.res);
       });
+      activeUpstream = upstream;
+      upstream.setTimeout(25000, () => { try { upstream.destroy(new Error('upstream timeout')); } catch {} });
       upstream.on('error', () => { try { ctx.res.destroy(); } catch {} });
-      ctx.req.on('close', () => upstream.destroy());
+      upstream.end();
     };
     pipeFrom(0);
   },
@@ -12931,13 +13238,13 @@ function ensureSubtitleVtt(vf, track, uid, opts = {}) {
   const envForced = Number.isFinite(parseInt(process.env.TRIBOON_EMBEDDED_SUB_TIMEOUT_MS || '', 10));
   const hardCapMs = envForced ? timeoutMs : Math.min(20 * 60000, Math.max(timeoutMs, 10 * 60000));
   const job = new Promise((resolve, reject) => {
-    let ff; let done = false;
+    let ff; let done = false; let watchdog = null;
     const startedAt = Date.now();
     let lastActivity = startedAt;
     const finish = (fn, value) => {
       if (done) return;
       done = true;
-      clearInterval(watchdog);
+      if (watchdog) clearInterval(watchdog);
       fn(value);
     };
     const fail = (value) => {
@@ -12947,7 +13254,7 @@ function ensureSubtitleVtt(vf, track, uid, opts = {}) {
     };
     try { ff = spawnSubtitleExtract(selfUrl, track); } catch (e) { return fail(e); }
     const chunks = []; let err = '';
-    const watchdog = setInterval(() => {
+    watchdog = setInterval(() => {
       const now = Date.now();
       let reason = '';
       if (now - lastActivity > EMBEDDED_SUB_STALL_MS) reason = `embedded subtitle extraction stalled (no progress for ${Math.round(EMBEDDED_SUB_STALL_MS / 1000)}s)`;
@@ -13436,7 +13743,7 @@ async function jellyfinSubtitleBody(ctx, mountId, streamIndex) {
   const id = String(hit.releaseId);
   if (!vf._releaseSubCache.has(id)) {
     const buf = await vf.readReleaseSub(id);
-    vf._releaseSubCache.set(id, releaseSubtitleToVtt(buf, sub.ext));
+    vf._releaseSubCache.set(id, releaseSubtitleToVtt(buf, sub.ext, sub.lang || ''));
   }
   return vf._releaseSubCache.get(id);
 }
@@ -13672,16 +13979,26 @@ const embeddedSubtitleCache = new Map();
 function jellyfinEmbeddedSubtitle(file, rel) {
   const key = `${file}:${rel}`;
   if (!embeddedSubtitleCache.has(key)) {
-    embeddedSubtitleCache.set(key, new Promise((resolve) => {
+    const job = new Promise((resolve) => {
       let ff;
       try { ff = spawnSubtitleExtract(file, rel); } catch { return resolve(''); }
       const chunks = [];
+      let settled = false;
+      const done = (v) => { if (settled) return; settled = true; clearTimeout(timer); resolve(v); };
       ff.stdout.on('data', (d) => chunks.push(d));
-      const timer = setTimeout(() => { try { ff.kill('SIGKILL'); } catch {} resolve(''); }, 20000);
-      const finish = () => { clearTimeout(timer); resolve(Buffer.concat(chunks).toString('utf8')); };
-      ff.on('close', finish);
-      ff.on('error', () => { clearTimeout(timer); resolve(''); });
-    }));
+      // Drain stderr (-progress pipe:2) so ffmpeg never deadlocks on a full 64 KB pipe buffer.
+      if (ff.stderr) ff.stderr.resume();
+      const timer = setTimeout(() => { try { ff.kill('SIGKILL'); } catch {} done(''); }, 20000);
+      ff.on('close', () => done(Buffer.concat(chunks).toString('utf8')));
+      ff.on('error', () => done(''));
+    }).then((vtt) => {
+      if (!vtt || !vtt.includes('WEBVTT')) {
+        if (embeddedSubtitleCache.get(key) === job) embeddedSubtitleCache.delete(key);
+      }
+      return vtt;
+    });
+    embeddedSubtitleCache.set(key, job);
+    while (embeddedSubtitleCache.size > 120) embeddedSubtitleCache.delete(embeddedSubtitleCache.keys().next().value);
   }
   return embeddedSubtitleCache.get(key);
 }
@@ -13695,7 +14012,7 @@ async function jellyfinLocalSubtitleBody(ctx, libId, idx, streamIndex) {
   const src = streamsWithSubtitles(info && info.probe, sidecars).byIndex.get(streamIndex);
   if (!src) return null;
   if (src.file) {
-    try { return releaseSubtitleToVtt(fs.readFileSync(src.file), src.ext); } catch { return null; }
+    try { return releaseSubtitleToVtt(await fs.promises.readFile(src.file), src.ext, src.lang || ''); } catch { return null; }
   }
   if (Number.isInteger(src.embedded)) {
     const vtt = await jellyfinEmbeddedSubtitle(file, src.embedded);
@@ -13714,10 +14031,15 @@ function jellyfinLocalMedia(ctx, libId, idx) {
   try { stat = fs.statSync(file); } catch { return Promise.resolve({ seconds: minutes > 0 ? minutes * 60 : 0, probe: null }); }
   const key = `${file}:${stat.size}:${Math.round(stat.mtimeMs)}`;
   if (!localProbeCache.has(key)) {
-    localProbeCache.set(key, probeTracks(file).then((probe) => ({
-      seconds: (probe && probe.duration) || (minutes > 0 ? minutes * 60 : 0),
-      probe,
-    })).catch(() => ({ seconds: minutes > 0 ? minutes * 60 : 0, probe: null })));
+    const job = probeTracks(file).then((probe) => {
+      if (!probe && localProbeCache.get(key) === job) localProbeCache.delete(key);
+      return { seconds: (probe && probe.duration) || (minutes > 0 ? minutes * 60 : 0), probe };
+    }).catch(() => {
+      if (localProbeCache.get(key) === job) localProbeCache.delete(key);
+      return { seconds: minutes > 0 ? minutes * 60 : 0, probe: null };
+    });
+    localProbeCache.set(key, job);
+    while (localProbeCache.size > 400) localProbeCache.delete(localProbeCache.keys().next().value);
   }
   return localProbeCache.get(key);
 }
@@ -13727,10 +14049,28 @@ function jellyfinLocalFacets(ctx, libId) {
   return libraryDb.facets(libId);
 }
 
+// Tear down active HLS ffmpeg sessions owned by this viewer when a Jellyfin client sends
+// DELETE /Videos/ActiveEncodings or POST /Sessions/Playing/Stopped, so software libx264
+// doesn't burn CPU + /tmp disk + NNTP bandwidth for 45+ minutes after playback stops.
+function jellyfinStopPlayback(ctx, mountId) {
+  const uid = ctx && ctx.user && ctx.user.id;
+  if (!uid) return;
+  const targets = mountId && mounts.has(String(mountId)) ? [mounts.get(String(mountId))] : [...mounts.values()];
+  for (const vf of targets) {
+    if (!vf || !vf._hls || !vf._hls.size) continue;
+    for (const [k, sess] of [...vf._hls.entries()]) {
+      if (sess && (!sess.uid || sess.uid === uid)) {
+        closeHlsSession(sess);
+        vf._hls.delete(k);
+      }
+    }
+  }
+}
+
 const mediaAppDeps = {
   auth, settings, send, readJson, throttled, clientIp, tmdb, loginIpLocked, noteLoginFailure, directGrantAddress,
   jellyfinPlay, jellyfinPrepare, jellyfinStream, jellyfinLocalPlay, jellyfinNextCatalog, jellyfinCoverFile: jellyfinCoverCustom,
-  jellyfinSubtitleStreams, jellyfinSubtitleBody, jellyfinSubtitleWarm, jellyfinTracks,
+  jellyfinSubtitleStreams, jellyfinSubtitleBody, jellyfinSubtitleWarm, jellyfinTracks, jellyfinStopPlayback,
   localLibraries: jellyfinLocalLibraries,
   localPage: jellyfinLocalPage,
   localOne: jellyfinLocalOne,
@@ -13873,7 +14213,7 @@ const server = http.createServer(async (req, res) => {
     // The door is a 404 until an admin turns jellyfinApps on. Signed-in calls
     // use the same session token as the Triboon app, read from the Jellyfin header.
     if (isJellyfinPath(p)) {
-      if (!jellyfinEnabled(settings.get())) {
+      if (!jellyfinEnabled(settings.peek())) {
         req.on('error', () => {});
         req.resume();
         return send(res, 404, { error: 'not found' });
@@ -13931,7 +14271,7 @@ const server = http.createServer(async (req, res) => {
     // Jellyfin's page. Never hand it Triboon's page: Triboon's script name
     // looks like Jellyfin's, so the phone would stay on the wrong site.
     // The browser and the Triboon app keep Triboon's page.
-    const jellyfinShell = jellyfinEnabled(settings.get()) && jellyfinClientShell(req);
+    const jellyfinShell = jellyfinEnabled(settings.peek()) && jellyfinClientShell(req);
     const jfDir = jellyfinShell ? jellyfinWebDir() : null;
     if (jellyfinShell && !jfDir && (p === '/' || p === '/web' || p.startsWith('/web/'))) {
       res.writeHead(503, {
@@ -14057,8 +14397,18 @@ attachJellyfinSocket(server);
 // past the TTL (or oldest-idle beyond the cap), drop their live-mount reuse entries, expire
 // old play sessions, and purge expired Quick Connect codes.
 const MOUNT_IDLE_MS = 45 * 60000;   // idle = no stream/remux/tracks/subtitle touch
+const HLS_IDLE_MS = 3 * 60000;      // kill abandoned HLS encoders whose client stopped pulling segments
 const MOUNT_CAP = 16;
 function sweep(now = Date.now()) {
+  for (const vf of mounts.values()) {
+    if (!vf || !vf._hls || !vf._hls.size) continue;
+    for (const [k, sess] of [...vf._hls.entries()]) {
+      if (sess && now - (sess.lastAccess || sess.createdAt || 0) > HLS_IDLE_MS) {
+        closeHlsSession(sess);
+        vf._hls.delete(k);
+      }
+    }
+  }
   const evicted = [];
   const protectedIds = sessionProtectedMountIds(now);
   const idle = [...mounts.values()].filter((vf) =>
@@ -14192,9 +14542,12 @@ async function shutdown() {
   iptvWarmTimer = null;
   iptvWarmNextAt = 0;
   closeAllIptvLiveStreams('shutdown');
+  flushPendingXtreamEpgPersists();
   await shutdownXmltvGuideJobs();
   await closeJellyfinSockets();
   cleanupYtCookieFiles();
+  try { ytmusic.killAllChildren(); } catch {}
+  try { trakt.destroyAgents(); } catch {}
   for (const vf of mounts.values()) releaseMountResources(vf); // cancel warm jobs + HLS ffmpeg/temp dirs
   if (pool) { pool.close(); pool = null; }
   for (const old of retiredPools.keys()) { try { old.close(); } catch {} }

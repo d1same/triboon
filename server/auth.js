@@ -836,14 +836,17 @@ class SecureSettings {
     const ct = Buffer.concat([cipher.update(JSON.stringify(obj), 'utf8'), cipher.final()]);
     return { iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: ct.toString('base64') };
   }
-  _decryptWithKey(blob, key) {
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(blob.iv, 'base64'));
-    decipher.setAuthTag(Buffer.from(blob.tag, 'base64'));
-    return JSON.parse(Buffer.concat([decipher.update(Buffer.from(blob.data, 'base64')), decipher.final()]).toString('utf8'));
+  _decryptRaw(blob) {
+    const open = (key) => {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(blob.iv, 'base64'));
+      decipher.setAuthTag(Buffer.from(blob.tag, 'base64'));
+      return Buffer.concat([decipher.update(Buffer.from(blob.data, 'base64')), decipher.final()]).toString('utf8');
+    };
+    try { return open(this.key); }
+    catch { return open(this.legacyKey); }
   }
   _decrypt(blob) {
-    try { return this._decryptWithKey(blob, this.key); }
-    catch (e) { return this._decryptWithKey(blob, this.legacyKey); }
+    return JSON.parse(this._decryptRaw(blob));
   }
   // Reads the blob and reports whether it opens. A MISSING file is the normal first run (defaults,
   // not unreadable). A file that is there but damaged/locked (the store gives up and returns null
@@ -854,6 +857,7 @@ class SecureSettings {
   _load() {
     const blob = this.store.read('settings', null);
     if (!blob) {
+      this._cachedBlob = null; this._cachedRaw = null; this._cachedReadonly = null;
       if (!this.store.readFailed('settings')) return { value: null, unreadable: false };
       // A 0-byte or whitespace-only file holds nothing to lose: treat it like a missing file (defaults,
       // no flag, no side copy). Any other file that does not open, or a raw read that fails (a lock),
@@ -861,8 +865,26 @@ class SecureSettings {
       return { value: null, unreadable: !this._settingsFileBlank() };
     }
     if (!blob.iv) return { value: null, unreadable: true };
-    try { return { value: this._decrypt(blob), unreadable: false }; }
-    catch { return { value: null, unreadable: true }; }
+    if (blob === this._cachedBlob && this._cachedRaw != null) {
+      return { value: JSON.parse(this._cachedRaw), unreadable: false };
+    }
+    try {
+      const raw = this._decryptRaw(blob);
+      const parsed = JSON.parse(raw);
+      this._cachedBlob = blob;
+      this._cachedRaw = raw;
+      this._cachedReadonly = parsed;
+      return { value: JSON.parse(raw), unreadable: false };
+    } catch {
+      this._cachedBlob = null; this._cachedRaw = null; this._cachedReadonly = null;
+      return { value: null, unreadable: true };
+    }
+  }
+  // Fast read-only snapshot for hot checks (e.g., debugLogging) — avoids both AES decrypt and JSON.parse.
+  peek() {
+    const blob = this.store.read('settings', null);
+    if (blob && blob === this._cachedBlob && this._cachedReadonly) return this._cachedReadonly;
+    return this.get();
   }
   _note(unreadable) {
     this.unreadable = unreadable;

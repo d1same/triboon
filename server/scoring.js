@@ -60,7 +60,8 @@ const CODEC = [
 
 // HDR / audio enrichers (additive, like TRaSH custom formats).
 const FEATURE = [
-  { key: 'dovi', score: 18, re: /\b(dv|dolby[ .]?vision|dovi)\b/i },
+  // Avoid false-matching a trailing `-DV` release group as Dolby Vision.
+  { key: 'dovi', score: 18, re: /(?:(?<!-)\bdv\b|\bdolby[ .]?vision\b|\bdovi\b)/i },
   { key: 'hdr10plus', score: 14, re: /\b(hdr10\+|hdr10plus)\b/i },
   // Plain HDR / HDR10 (the SDR-vs-HDR baseline). HDR10+ and Dolby Vision are their own richer entries
   // above, so the (?!\+|plus) guard keeps "HDR10+" from ALSO scoring here (no double-count).
@@ -216,7 +217,7 @@ const LANGUAGE_ALIASES = new Map([
   ['ger', 'de'], ['german', 'de'], ['deu', 'de'],
   ['fre', 'fr'], ['fra', 'fr'], ['french', 'fr'], ['truefrench', 'fr'], ['vff', 'fr'], ['vfq', 'fr'], ['vf2', 'fr'],
   ['italian', 'it'], ['ita', 'it'],
-  ['spanish', 'es'], ['castellano', 'es'], ['latino', 'es'],
+  ['spanish', 'es'], ['castellano', 'es'], ['latino', 'es'], ['spa', 'es'], ['esp', 'es'],
   ['hindi', 'hi'], ['tamil', 'ta'], ['telugu', 'te'],
   ['polish', 'pl'], ['turkish', 'tr'],
   ['swedish', 'sv'], ['norwegian', 'no'], ['danish', 'da'], ['finnish', 'fi'], ['nordic', 'nordic'],
@@ -225,16 +226,20 @@ const LANGUAGE_ALIASES = new Map([
   ['czech', 'cs'], ['hungarian', 'hu'],
   ['korean', 'ko'], ['japanese', 'ja'],
   ['arabic', 'ar'], ['ara', 'ar'],
-  ['spanish', 'es'], ['castellano', 'es'], ['latino', 'es'],
-  ['hindi', 'hi'], ['tamil', 'ta'], ['telugu', 'te'],
-  ['polish', 'pl'], ['turkish', 'tr'],
-  ['swedish', 'sv'], ['norwegian', 'no'], ['danish', 'da'], ['finnish', 'fi'], ['nordic', 'nordic'],
-  ['dutch', 'nl'], ['flemish', 'nl'],
-  ['russian', 'ru'], ['rus', 'ru'],
-  ['czech', 'cs'], ['hungarian', 'hu'],
-  ['korean', 'ko'], ['japanese', 'ja'],
+  ['persian', 'fa'], ['farsi', 'fa'], ['fas', 'fa'], ['per', 'fa'], ['fa', 'fa'],
+  ['portuguese', 'pt'], ['por', 'pt'], ['dublado', 'pt'], ['ptbr', 'pt'], ['pt', 'pt'],
+  ['chinese', 'zh'], ['chi', 'zh'], ['zho', 'zh'], ['mandarin', 'zh'], ['cantonese', 'zh'], ['zh', 'zh'],
+  ['greek', 'el'], ['gre', 'el'], ['ell', 'el'], ['el', 'el'],
+  ['hebrew', 'he'], ['heb', 'he'], ['he', 'he'],
+  ['thai', 'th'], ['tha', 'th'], ['th', 'th'],
+  ['romanian', 'ro'], ['rum', 'ro'], ['ron', 'ro'], ['ro', 'ro'],
+  ['ukrainian', 'uk'], ['ukr', 'uk'], ['uk', 'uk'],
+  ['vietnamese', 'vi'], ['vie', 'vi'], ['vi', 'vi'],
+  ['indonesian', 'id'], ['ind', 'id'], ['id', 'id'],
 ]);
-const LANG_TAG = /\b(english|eng|german|ger|deu|french|fre|fra|vff|vfq|vf2|truefrench|italian|ita|spanish|castellano|latino|hindi|tamil|telugu|polish|turkish|nordic|swedish|norwegian|danish|finnish|dutch|flemish|russian|rus|czech|hungarian|korean|japanese|arabic|ara)\b/i;
+const LANG_TAG = /\b(english|eng|german|ger|deu|french|fre|fra|vff|vfq|vf2|truefrench|italian|ita|spanish|castellano|latino|hindi|tamil|telugu|polish|turkish|nordic|swedish|norwegian|danish|finnish|dutch|flemish|russian|rus|czech|hungarian|korean|japanese|arabic|ara|persian|farsi|portuguese|dublado|ptbr|chinese|mandarin|cantonese|greek|hebrew|thai|romanian|ukrainian|vietnamese|indonesian)\b/i;
+// Dub/scene codes that never appear as ordinary English movie title words (safe to scan anywhere).
+const UNAMBIGUOUS_LANG_TAG = /\b(truefrench|vff|vfq|vf2|castellano|latino|dublado|ptbr|nordic|ger|deu|fre|fra|ita|rus|ara|eng)\b/i;
 const VOST_TAG = /\b(vostfr|vost)\b/i;
 function isDualAudio(name) {
   const n = String(name || '');
@@ -247,27 +252,65 @@ function normalizeLanguageCode(raw) {
   if (!s) return '';
   return LANGUAGE_ALIASES.get(s) || s.slice(0, 2);
 }
-function releaseLanguageTags(name) {
+// Slice a release name into { head, tail } at the first structural boundary (year or SxxEyy) after
+// the opening title token, so nationality words inside English titles ("The Italian Job", "The
+// French Dispatch", "The Danish Girl") are never misread as foreign-dub audio tags.
+function splitTitleForLangScan(name, wantedTitle) {
+  const s = String(name || '');
+  const boundaryRe = /(?:^|[ ._\-(\[])((?:19|20)\d{2}|s\d{1,2}(?:[ ._-]?e\d{1,3})?|\d{1,2}x\d{1,3})(?=$|[ ._\-)\]])/gi;
+  let m;
+  while ((m = boundaryRe.exec(s))) {
+    // Skip a year sitting at the very start of the title (1917, 2001 A Space Odyssey, 1923).
+    if (m.index === 0 && /^(?:19|20)\d{2}$/.test(m[1])) continue;
+    return { head: s.slice(0, m.index), tail: s.slice(m.index) };
+  }
+  if (wantedTitle) {
+    const titleWords = String(wantedTitle).toLowerCase().replace(/['’`]/g, '').match(/[a-z0-9]+/g) || [];
+    if (titleWords.length) {
+      // Strip matching leading title tokens when there is no year/SxxEyy marker.
+      let pos = 0;
+      let wi = 0;
+      const tokRe = /[A-Za-z0-9]+/g;
+      let tm;
+      while ((tm = tokRe.exec(s)) && wi < titleWords.length) {
+        const tok = tm[0].toLowerCase();
+        if (tok === titleWords[wi]) { pos = tm.index + tm[0].length; wi++; continue; }
+        if (['the', 'a', 'an', 'and'].includes(titleWords[wi])) { wi++; tokRe.lastIndex = tm.index; continue; }
+        break;
+      }
+      if (pos > 0) return { head: s.slice(0, pos), tail: s.slice(pos) };
+    }
+  }
+  return { head: '', tail: s };
+}
+function releaseLanguageTags(name, wantedTitle) {
+  const { head, tail } = splitTitleForLangScan(name, wantedTitle);
   const out = [];
   const seen = new Set();
-  const re = new RegExp(LANG_TAG.source, 'gi');
-  let m;
-  while ((m = re.exec(String(name || '')))) {
-    const code = normalizeLanguageCode(m[1]);
-    if (!code || seen.has(code)) continue;
-    seen.add(code);
-    out.push(code);
-  }
+  const scan = (text, pattern) => {
+    if (!text) return;
+    const re = new RegExp(pattern.source, 'gi');
+    let m;
+    while ((m = re.exec(text))) {
+      const code = normalizeLanguageCode(m[1]);
+      if (!code || seen.has(code)) continue;
+      seen.add(code);
+      out.push(code);
+    }
+  };
+  scan(head, UNAMBIGUOUS_LANG_TAG);
+  scan(tail, LANG_TAG);
   return out;
 }
-function releaseLanguageTag(name) {
-  return releaseLanguageTags(name)[0] || '';
+function releaseLanguageTag(name, wantedTitle) {
+  return releaseLanguageTags(name, wantedTitle)[0] || '';
 }
-function hasEnglishAudioHint(name) {
-  const n = String(name || '');
-  if (VOST_TAG.test(n) && !/\b(truefrench|vff|vfq|vf2)\b/i.test(n)) return false;
+function hasEnglishAudioHint(name, wantedTitle) {
+  const { tail } = splitTitleForLangScan(name, wantedTitle);
+  const n = tail || String(name || '');
+  if (VOST_TAG.test(String(name || '')) && !/\b(truefrench|vff|vfq|vf2)\b/i.test(String(name || ''))) return false;
   // "English" next to a sub token is captions, not an English soundtrack.
-  if (/\b(?:eng(?:lish)?[ ._-]?subs?|subs?[ ._-]?eng(?:lish)?|engsub)\b/i.test(n) && !isDualAudio(n)) return false;
+  if (/\b(?:eng(?:lish)?[ ._-]?subs?|subs?[ ._-]?eng(?:lish)?|engsub)\b/i.test(n) && !isDualAudio(name)) return false;
   return /\b(english|eng)\b/i.test(n) || /\b(en[ ._-]?ita|ita[ ._-]?eng)\b/i.test(n);
 }
 
@@ -364,13 +407,16 @@ function scoreRelease(candidate, policy = {}) {
   // and inflated the passthrough bonus. Skip them in the flat loop; the passthrough block is authority.
   // Dolby Vision is the same class of problem: a +18 boost made Profile-5 remuxes jump the queue
   // on Chrome/mixed TVs. Only boost when the device said it can do DV.
+  const hasHdrFallback = a.features.includes('hdr') || a.features.includes('hdr10plus');
   for (const f of FEATURE) {
     if (f.key === 'atmos' || f.key === 'truehd' || f.key === 'dts-hd') continue;
     if (f.key === 'dovi') {
       if (!f.re.test(candidate.name)) continue;
       if (policy.dolbyVision === true) add('dovi', f.score);
-      else if (policy.dolbyVision === false) add('dv-compat', -30);
-      else add('dv-unverified', -8);
+      // Separate DV-only (Profile 5 — green/purple on non-DV displays/browsers) from DV+HDR10
+      // hybrid (falls back cleanly to HDR10 on non-DV screens).
+      else if (policy.dolbyVision === false) add(hasHdrFallback ? 'dv-hdr-compat' : 'dv-compat', hasHdrFallback ? -15 : -120);
+      else add('dv-unverified', hasHdrFallback ? -8 : -45);
       continue;
     }
     if (f.re.test(candidate.name)) add(f.key, f.score);
@@ -385,6 +431,7 @@ function scoreRelease(candidate, policy = {}) {
   const hasDtsHd = a.features.includes('dts-hd');
   const hasAtmos = a.features.includes('atmos');
   const hasDdp = a.features.includes('ddp');
+  const hasPlainDts = a.audio === 'dts' && !hasDtsHd;
   if ((hasTrueHd || hasDtsHd || hasAtmos) && policy.audioDecodesLossless) {
     // The Windows app (libmpv) decodes TrueHD and DTS-HD itself, so lossless sound is not a reason
     // to mark a source down there. Not a boost either: a lossless remux is big and often dead, and a
@@ -396,8 +443,15 @@ function scoreRelease(candidate, policy = {}) {
     if (hasDtsHd) add(policy.audioDtsHd && pass ? 'passthrough-dts-hd' : 'unsupported-dts-hd', policy.audioDtsHd && pass ? 90 : -110);
     if (hasAtmos) {
       const atmosOk = pass && ((hasTrueHd && policy.audioTrueHd) || (hasDdp && policy.audioEac3Joc) || (!hasTrueHd && !hasDtsHd && policy.audioEac3Joc));
-      add(atmosOk ? 'passthrough-atmos' : 'unsupported-atmos', atmosOk ? 55 : -45);
+      // DDP+Atmos (E-AC-3 JOC) is backwards-compatible with plain E-AC-3 receivers/TVs: when the
+      // client explicitly declared E-AC-3 support, do not penalize it just because Atmos passthrough
+      // is off. Unknown/browser clients (audioEac3 !== true) keep the full -45.
+      if (atmosOk) add('passthrough-atmos', 55);
+      else if (!(hasDdp && !hasTrueHd && !hasDtsHd && policy.audioEac3 === true)) add('unsupported-atmos', -45);
     }
+  }
+  if (hasPlainDts && policy.audioDts === false && !policy.audioDecodesLossless) {
+    add('unsupported-dts', -65);
   }
   if (policy.lowPowerDevice && a.resolutionRank >= 4 && a.resolution !== 'unknown') {
     if (a.source === 'remux') add('device-heavy-remux', -180);
@@ -438,10 +492,10 @@ function scoreRelease(candidate, policy = {}) {
   const preferredAudio = normalizeLanguageCode(policy.preferredAudioLanguage || 'en') || 'en';
   const dual = isDualAudio(candidate.name);
   const vost = VOST_TAG.test(candidate.name) && !/\b(truefrench|vff|vfq|vf2)\b/i.test(candidate.name);
-  const tags = vost ? [] : releaseLanguageTags(candidate.name);
+  const tags = vost ? [] : releaseLanguageTags(candidate.name, policy.wantedTitle);
   const taggedLang = tags[0] || '';
   const foreignDubTags = tags.filter((t) => t !== preferredAudio && (!originalLang || t !== originalLang));
-  const englishHint = hasEnglishAudioHint(candidate.name);
+  const englishHint = hasEnglishAudioHint(candidate.name, policy.wantedTitle);
   const matchesPreferred = tags.includes(preferredAudio) || (preferredAudio === 'en' && englishHint && !foreignDubTags.length);
   const matchesOriginal = originalLang && tags.includes(originalLang) && originalLang !== preferredAudio;
   if (vost && (!originalLang || originalLang === 'en' || originalLang === preferredAudio)) {
@@ -548,12 +602,21 @@ function scoreRelease(candidate, policy = {}) {
     // CLAMPED at -400: enough to keep a 50GB remux from ever auto-playing, but unclamped it
     // sank legit remuxes below outright junk and out of the Sources drawer entirely —
     // "I can't find any big 4K movies". Hiding is the manual cap's job, not the shaper's.
-    const target = policy.sizePreferenceGB || (cap >= 4 ? 15 : cap >= 3 ? 8 : 3.5);
-    const overshoot = Math.max(0, gb - target * 1.6);
-    if (overshoot > 0) add(`oversized ${gb.toFixed(1)}GB`, -Math.min(400, Math.round(overshoot * 25)));
-    if (policy.lowPowerDevice && a.resolutionRank >= 4 && a.resolution !== 'unknown') {
-      const heavy4k = Math.max(0, gb - 18);
-      if (heavy4k > 0) add(`device-4k-size ${gb.toFixed(1)}GB`, -Math.min(700, Math.round(heavy4k * 35)));
+    // Whole-season packs (capExempt) stream only ONE episode, so skip full-season size shaping;
+    // the -80 season-pack penalty above already keeps equal-quality singles ahead.
+    if (!capExempt) {
+      const rankForSize = a.resolution !== 'unknown' ? a.resolutionRank : cap;
+      const baseTarget = rankForSize >= 4 ? 15 : rankForSize >= 3 ? 8 : 3.5;
+      const runtimeScale = (!policy.sizePreferenceGB && Number(policy.wantedRuntimeMin) > 0)
+        ? Math.max(0.5, Math.min(1.6, Number(policy.wantedRuntimeMin) / 110))
+        : 1;
+      const target = policy.sizePreferenceGB || (baseTarget * runtimeScale);
+      const overshoot = Math.max(0, gb - target * 1.6);
+      if (overshoot > 0) add(`oversized ${gb.toFixed(1)}GB`, -Math.min(400, Math.round(overshoot * 25)));
+      if (policy.lowPowerDevice && a.resolutionRank >= 4 && a.resolution !== 'unknown') {
+        const heavy4k = Math.max(0, gb - 18);
+        if (heavy4k > 0) add(`device-4k-size ${gb.toFixed(1)}GB`, -Math.min(700, Math.round(heavy4k * 35)));
+      }
     }
     // Sample/stub disqualifier: nothing real is <80MB. A labelled 1080p/4K under 300MB used
     // to be hard-rejected, which hid short films (Sintel 4K ~180MB) and then Play relaxed to
@@ -637,6 +700,18 @@ function scoreAudiobook(cand, policy = {}) {
   const add = (label, pts) => { score += pts; if (pts) reasons.push(`${label} ${pts > 0 ? '+' : ''}${pts}`); };
 
   if (a.ebookOnly) add('ebook-not-audiobook', -100000);
+  const badContainer = unstreamableContainer(cand.name || '');
+  if (badContainer) add(`unstreamable-container:${badContainer}`, -100000);
+  if (cand.streamClass && cand.streamClass in STREAM_SCORE) {
+    add(`stream:${cand.streamClass}`, STREAM_SCORE[cand.streamClass]);
+  }
+  if (cand.health && cand.health in HEALTH_SCORE) {
+    add(`health:${cand.health}`, HEALTH_SCORE[cand.health]);
+  } else if (cand.health === 'unstreamable' || cand.health === 'encrypted') {
+    add(`health:${cand.health}`, -100000);
+  } else if (cand.health === 'compressed') {
+    add('health:compressed', -300);
+  }
   // Language: audiobooks default to English. A foreign-language edition is heavily demoted so an
   // English (or untagged) edition always wins when both exist — but stays playable as a last resort.
   const wantLang = policy.language || 'en';
