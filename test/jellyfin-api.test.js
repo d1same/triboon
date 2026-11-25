@@ -1113,16 +1113,114 @@ test('apple PWA manifest, safe-area tags, jellyfin 4K/Live TV settings, and /api
   const home = await httpSend(srv.port, 'GET', '/');
   assert.strictEqual(home.status, 200);
   assert.match(home.raw, /apple-mobile-web-app-capable/);
-  assert.match(home.raw, /apple-touch-icon/);
+  assert.match(home.raw, /apple-touch-icon" sizes="180x180" href="apple-touch-icon\.png"/);
   assert.match(home.raw, /manifest\.webmanifest/);
   assert.match(home.raw, /viewport-fit=cover/);
   assert.match(home.raw, /id="extPlayBtn"/);
+  assert.match(home.raw, /id="tvSendBtn"/);
+  assert.match(home.raw, /id="dSendTv"/);
+  assert.match(home.raw, /id="ipadRailToggle"/);
+  assert.match(home.raw, /id="video"[^>]+x-webkit-airplay="allow"/);
   assert.match(home.raw, /syncNativeIosFullscreenCaptions/);
+  assert.match(home.raw, /webkitCurrentPlaybackTargetIsWireless[\s\S]+p\._textTrack\.mode/);
+  assert.match(home.raw, /function updateAirPlayButton\(\)/);
+  assert.match(home.raw, /hlsTranscodePlaybackUrl\(p, seekStart/);
+  assert.match(home.raw, /v\.disableRemotePlayback = false/);
+
+  // Square opaque icons exist and match declared sizes
+  for (const [iconPath, dim] of [['/apple-touch-icon.png', 180], ['/icon-192.png', 192], ['/icon-512.png', 512]]) {
+    const ic = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: srv.port, path: iconPath, method: 'GET' }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, buf: Buffer.concat(chunks) }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.strictEqual(ic.status, 200, `${iconPath} served`);
+    assert.strictEqual(ic.buf.readUInt32BE(16), dim, `${iconPath} width=${dim}`);
+    assert.strictEqual(ic.buf.readUInt32BE(20), dim, `${iconPath} height=${dim}`);
+  }
 
   const anonHls = await httpSend(srv.port, 'GET', '/api/iptv/hls/0/index.m3u8');
   assert.strictEqual(anonHls.status, 401);
   const badFile = await httpSend(srv.port, 'GET', `/api/iptv/hls/0/..%2F..%2Fetc%2Fpasswd?t=${encodeURIComponent(admin)}`);
   assert.ok([401, 404].includes(badFile.status));
+
+  // Play on TV (Triboon Connect): per-account discovery, command handoff, drain, and strict cross-user isolation
+  const inv2 = await httpJson(srv.port, 'POST', '/api/invites', { policy: {} }, admin);
+  const user2Res = await httpJson(srv.port, 'POST', '/api/invite/accept', { token: inv2.json.token, name: 'otheruser', password: 'other-user-pass1' });
+  const otherTok = user2Res.json.token;
+
+  await httpJson(srv.port, 'POST', '/api/presence', {
+    deviceId: 'shield-tv-1', deviceName: 'NVIDIA Shield', state: 'browsing', view: 'home', isTv: true,
+  }, admin);
+  await httpJson(srv.port, 'POST', '/api/presence', {
+    deviceId: 'iphone-1', deviceName: 'iPhone', state: 'browsing', view: 'detail', isTv: false,
+  }, admin);
+  await httpJson(srv.port, 'POST', '/api/presence', {
+    deviceId: 'other-tv-1', deviceName: 'Other User TV', state: 'browsing', view: 'home', isTv: true,
+  }, otherTok);
+
+  // Admin from iPhone sees only admin's Shield (excludes self and otheruser's TV)
+  const tAdmin = await httpJson(srv.port, 'GET', '/api/remote/targets?deviceId=iphone-1', null, admin);
+  assert.strictEqual(tAdmin.status, 200);
+  assert.strictEqual(tAdmin.json.targets.length, 1);
+  assert.strictEqual(tAdmin.json.targets[0].deviceId, 'shield-tv-1');
+  assert.strictEqual(tAdmin.json.targets[0].isTv, true);
+
+  // Other user cannot see or command admin's Shield
+  const tOther = await httpJson(srv.port, 'GET', '/api/remote/targets?deviceId=other-tv-1', null, otherTok);
+  assert.strictEqual(tOther.status, 200);
+  assert.strictEqual(tOther.json.targets.length, 0);
+  const hijack = await httpJson(srv.port, 'POST', '/api/remote/send', {
+    targetDeviceId: 'shield-tv-1', action: 'play_live', chid: 'default:1',
+  }, otherTok);
+  assert.strictEqual(hijack.status, 404, 'cross-user remote send must fail closed');
+
+  // Invalid action rejected
+  const badAct = await httpJson(srv.port, 'POST', '/api/remote/send', {
+    targetDeviceId: 'shield-tv-1', action: 'exec_shell',
+  }, admin);
+  assert.strictEqual(badAct.status, 400);
+
+  // Valid VOD + Live + control commands round-trip and drain once on poll
+  const sendVod = await httpJson(srv.port, 'POST', '/api/remote/send', {
+    targetDeviceId: 'shield-tv-1', fromDeviceId: 'iphone-1', fromName: 'iPhone',
+    action: 'play_vod', item: { key: 'tmdb:movie:550', type: 'movie', tmdbId: 550, title: 'Fight Club', resume: 120 },
+  }, admin);
+  assert.strictEqual(sendVod.status, 200);
+  assert.strictEqual(sendVod.json.ok, true);
+  const sendLive = await httpJson(srv.port, 'POST', '/api/remote/send', {
+    targetDeviceId: 'shield-tv-1', fromDeviceId: 'iphone-1', fromName: 'iPhone',
+    action: 'play_live', chid: 'default:7', channel: 7, title: 'News HD',
+  }, admin);
+  assert.strictEqual(sendLive.status, 200);
+  const sendSeek = await httpJson(srv.port, 'POST', '/api/remote/send', {
+    targetDeviceId: 'shield-tv-1', action: 'seek', delta: 30,
+  }, admin);
+  assert.strictEqual(sendSeek.status, 200);
+
+  const poll1 = await httpJson(srv.port, 'GET', '/api/remote/poll?deviceId=shield-tv-1', null, admin);
+  assert.strictEqual(poll1.status, 200);
+  assert.strictEqual(poll1.json.commands.length, 3);
+  assert.strictEqual(poll1.json.commands[0].action, 'play_vod');
+  assert.strictEqual(poll1.json.commands[0].item.resume, 120);
+  assert.strictEqual(poll1.json.commands[1].action, 'play_live');
+  assert.strictEqual(poll1.json.commands[1].chid, 'default:7');
+  assert.strictEqual(poll1.json.commands[2].action, 'seek');
+  assert.strictEqual(poll1.json.commands[2].delta, 30);
+
+  // Second poll is empty (commands drained cleanly)
+  const poll2 = await httpJson(srv.port, 'GET', '/api/remote/poll?deviceId=shield-tv-1', null, admin);
+  assert.strictEqual(poll2.status, 200);
+  assert.strictEqual(poll2.json.commands.length, 0);
+
+  // Offline presence cleans up device so it disappears from targets
+  await httpJson(srv.port, 'POST', '/api/presence', { deviceId: 'shield-tv-1', state: 'offline' }, admin);
+  const tAfter = await httpJson(srv.port, 'GET', '/api/remote/targets?deviceId=iphone-1', null, admin);
+  assert.strictEqual(tAfter.json.targets.length, 0);
 });
 
 test('jellyfin door closes with the server', async () => {
@@ -1907,4 +2005,56 @@ test('jellyfin episodes expose own still thumbnails without ChildCount:0 and sea
     if (prevStub === undefined) delete process.env.TRIBOON_POSTER_STUB;
     else process.env.TRIBOON_POSTER_STUB = prevStub;
   }
+});
+
+test('Safari HLS transcode, AirPlay availability across Live TV/VOD, and AirPlay caption switching', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const extract = (name) => {
+    const start = html.indexOf(`function ${name}(`);
+    assert.ok(start >= 0, `${name} exists in web/index.html`);
+    let depth = 0;
+    for (let i = html.indexOf(') {', start) + 2; i < html.length; i++) {
+      if (html[i] === '{') depth++;
+      else if (html[i] === '}' && --depth === 0) return html.slice(start, i + 1);
+    }
+    throw new Error(`${name} has no end`);
+  };
+  const src = `${extract('hlsPlaybackUrl')}\n${extract('hlsTranscodePlaybackUrl')}\n${extract('syncNativeIosFullscreenCaptions')}\n${extract('updateAirPlayButton')}`;
+  const video = { webkitDisplayingFullscreen: false, webkitCurrentPlaybackTargetIsWireless: false };
+  const airplayBtn = { style: { display: 'none' } };
+  let rendered = 0;
+  const S = { _airplayAvailable: true, playing: { hlsUrl: '/api/hls/m1?t=abc', audioTrack: 1, quality: 720, usingLiveMse: false, _textTrack: { mode: 'hidden' } } };
+  const fns = new Function('S', '$', 'iosWebkitVideo', 'macSafariVideo', 'castEligible', 'renderSubCues',
+    `${src}\nreturn { hlsPlaybackUrl, hlsTranscodePlaybackUrl, syncNativeIosFullscreenCaptions, updateAirPlayButton };`)(
+    S,
+    (id) => (id === 'video' ? video : (id === 'airplayBtn' ? airplayBtn : null)),
+    () => true,
+    () => false,
+    () => true,
+    () => { rendered += 1; },
+  );
+
+  // 1. Safari HLS URL stays untouched for remux and adds transcode=1&height=720 via hlsTranscodePlaybackUrl
+  assert.strictEqual(fns.hlsPlaybackUrl(S.playing, 42.5), '/api/hls/m1?t=abc&start=42.5&audio=1&audioSafe=1');
+  assert.strictEqual(fns.hlsTranscodePlaybackUrl(S.playing, 42.5, 720),
+    '/api/hls/m1?t=abc&start=42.5&audio=1&audioSafe=1&transcode=1&height=720');
+
+  // 2. AirPlay button shows for VOD and Live TV HLS, hides for ManagedMediaSource MSE, and restores afterward
+  fns.updateAirPlayButton();
+  assert.strictEqual(airplayBtn.style.display, '', 'AirPlay visible for VOD/Live HLS');
+  S.playing.usingLiveMse = true;
+  fns.updateAirPlayButton();
+  assert.strictEqual(airplayBtn.style.display, 'none', 'AirPlay hidden when ManagedMediaSource MSE is active');
+  S.playing.usingLiveMse = false;
+  fns.updateAirPlayButton();
+  assert.strictEqual(airplayBtn.style.display, '', 'AirPlay restores when returning from MSE to HLS/VOD');
+
+  // 3. AirPlay wireless target switches native WebVTT <track> to showing so captions appear on the TV
+  video.webkitCurrentPlaybackTargetIsWireless = true;
+  fns.syncNativeIosFullscreenCaptions();
+  assert.strictEqual(S.playing._textTrack.mode, 'showing', 'AirPlay enables native track captions');
+  video.webkitCurrentPlaybackTargetIsWireless = false;
+  fns.syncNativeIosFullscreenCaptions();
+  assert.strictEqual(S.playing._textTrack.mode, 'hidden', 'exiting AirPlay returns to inline HTML captions');
+  assert.strictEqual(rendered, 1, 'inline captions re-rendered on AirPlay exit');
 });

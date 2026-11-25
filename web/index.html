@@ -14,7 +14,7 @@
 <title>Triboon</title>
 <script src="/main.triboon.bundle.js" defer></script>
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="triboon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
 <link rel="icon" href="T-Logo.svg"><link rel="alternate icon" href="T-Logo.png">
 <link rel="preload" href="fonts/Sora.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/AlbertSans.woff2" as="font" type="font/woff2" crossorigin>
@@ -1484,7 +1484,7 @@ body.screensaverOn{cursor:none}
   #ssDeck .ssTile{--ssY:0;--ssR:0deg;border-radius:10px}
   #ssDeck .ssTile:nth-child(n+4){display:none}
 }
-#vlcPanel{position:absolute;inset:0;display:none;place-items:center;background:rgba(0,0,0,.82);padding:24px;box-sizing:border-box}
+#vlcPanel{position:absolute;inset:0;z-index:40;display:none;place-items:center;background:rgba(0,0,0,.82);padding:24px;box-sizing:border-box}
 #vlcPanel.show{display:grid}
 #vlcPanel .gateCard{text-align:center;margin-left:0;width:min(520px,calc(100vw - 48px))}
 body.tv #vlcCopy{display:none}
@@ -1493,9 +1493,34 @@ body.tv #vlcCopy{display:none}
 #vlcApps.show{display:flex}
 #vlcApps .btn{flex:1 1 120px;justify-content:center;text-decoration:none}
 @media (display-mode: standalone){
-  body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-  #player .osd{padding-bottom:calc(18px + env(safe-area-inset-bottom,0px))}
+  #player #osd{padding-bottom:calc(18px + env(safe-area-inset-bottom,0px))}
+  #toast{bottom:calc(36px + env(safe-area-inset-bottom,0px))}
 }
+#ipadRailToggle{display:none}
+body.iosTablet:not(.mobileShell):not(.tv) #ipadRailToggle{display:flex}
+#tvConnectMenu{position:fixed;inset:0;z-index:75;display:none;place-items:center;padding:20px;
+  background:rgba(6,4,10,.72);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+#tvConnectMenu.open{display:grid}
+#tvConnectMenu .tvcCard{width:min(420px,calc(100vw - 32px));max-height:min(76vh,540px);overflow:auto;
+  background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;
+  box-shadow:0 24px 64px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:12px}
+#tvConnectMenu .tvcHead{display:flex;align-items:center;justify-content:space-between;gap:10px}
+#tvConnectMenu .tvcHead h3{font:700 17px "Sora";margin:0}
+#tvConnectMenu .tvcClose{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
+  background:rgba(var(--fg),.08);color:var(--text)}
+#tvConnectMenu .tvcSub{font-size:13px;color:var(--muted);line-height:1.4}
+#tvConnectMenu .tvcList{display:flex;flex-direction:column;gap:8px}
+#tvConnectMenu .tvcItem{width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:12px 14px;border-radius:12px;background:rgba(var(--fg),.06);border:1px solid var(--line);
+  text-align:left;transition:background .15s,border-color .15s}
+#tvConnectMenu .tvcItem:hover,#tvConnectMenu .tvcItem.active{background:rgba(var(--fg),.12);border-color:var(--focus)}
+#tvConnectMenu .tvcName{font:600 14px "Sora";color:var(--text)}
+#tvConnectMenu .tvcMeta{font-size:12px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px}
+#tvConnectMenu .tvcBadge{font:600 11px "JetBrains Mono",monospace;padding:3px 7px;border-radius:999px;
+  background:rgba(251,139,60,.18);color:var(--amber);flex:none}
+#tvConnectMenu .tvcRemote{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px}
+#tvConnectMenu .tvcRemoteRow{display:flex;gap:8px;flex-wrap:nowrap}
+#tvConnectMenu .tvcRemoteRow .btn{flex:1 1 auto;justify-content:center;padding:10px 8px;font-size:12.5px;white-space:nowrap}
 
 /* ---------- toast ---------- */
 #toast{position:fixed;z-index:60;left:50%;bottom:36px;transform:translate(-50%,80px);opacity:0;background:var(--panel);color:var(--text);
@@ -2404,7 +2429,7 @@ body.mobileShell #upNext .un-play,body.mobileShell #upNext .un-ic,body.mobileShe
 body.mobileShell #upNext .un-cancel{width:36px}
 /* iPhone Safari is not mobileShell. Same compact OSD as the Android phone
    shell, plus Fullscreen parked in the top-right so it cannot clip away. */
-body.iosPhone #osd{padding:14px 12px calc(14px + env(safe-area-inset-bottom));gap:10px}
+body.iosPhone #osd{padding:calc(14px + var(--safeT)) calc(12px + var(--safeR)) calc(14px + var(--safeB)) calc(12px + var(--safeL));gap:10px}
 body.iosPhone #osd .top{gap:10px}
 body.iosPhone #osd .topLeft{gap:8px;max-width:calc(100% - 58px);min-width:0}
 body.iosPhone .osdRight{display:flex;flex-direction:row;align-items:flex-start;gap:10px}
@@ -2427,6 +2452,26 @@ body.iosPhone .cbtn{width:44px;height:44px;flex:0 0 44px}
 body.iosPhone .cbtn.big{width:52px;height:52px;flex-basis:52px}
 body.iosPhone .volWrap{flex:0 0 auto}
 body.iosPhone #volSlider{display:none}
+body.iosPhone #appClock{display:none!important}
+body.iosPhone,body.iosTablet{touch-action:manipulation}
+body.iosPhone input,body.iosPhone select,body.iosPhone textarea,
+body.iosTablet input,body.iosTablet select,body.iosTablet textarea{font-size:16px!important}
+body.iosPhone #home,body.iosPhone #discover,body.iosPhone #settings,body.iosPhone #prefs,
+body.iosPhone #music,body.iosPhone #audiobooks,body.iosPhone #person{padding-top:calc(62px + var(--safeT))!important}
+body.iosPhone #home,body.iosPhone #discover,body.iosPhone #browse,body.iosPhone #person,
+body.iosPhone #settings,body.iosPhone #prefs,body.iosPhone #music,body.iosPhone #audiobooks{
+  padding-left:calc(16px + var(--safeL))!important;padding-right:calc(16px + var(--safeR))!important}
+body.iosPhone #searchBar{top:calc(62px + var(--safeT))!important;left:calc(16px + var(--safeL));right:calc(16px + var(--safeR))}
+body.iosPhone #detail .back,body.iosPhone #person .back{position:fixed;top:calc(14px + var(--safeT));left:calc(66px + var(--safeL))!important;z-index:55;display:inline-flex;align-items:center;justify-content:center;padding:0}
+body.iosPhone #detail .detailScroll{padding:0 calc(16px + var(--safeR)) calc(44px + var(--safeB)) calc(16px + var(--safeL))!important}
+body.iosPhone #detail .detailHero{padding-top:calc(64px + var(--safeT))!important}
+body.iosPhone #detail .dInfo{padding-left:0!important;--infoCap:calc(100vw - 32px - var(--safeL) - var(--safeR))}
+body.iosPhone #dBtns{flex-wrap:wrap!important;overflow:visible!important;margin-left:0!important;width:100%!important;max-width:100%!important;padding:4px 0 8px!important;gap:8px!important}
+body.iosPhone #dBtns .btn{min-height:46px;padding:10px 18px;font-size:13.5px}
+body.iosPhone #dBtns .btn.primary{padding:10px 22px}
+body.iosPhone #dBtns .iconBtn{flex:0 0 46px;width:46px;height:46px}
+body.iosPhone .qToggle{min-height:46px;padding:3px}
+body.iosPhone .qToggle button{height:38px;padding:0 12px}
 
 /* Phones: tighter guide + overlay panels, smaller channel tiles. (#guide prefix keeps these
    winning over the base rules that appear later in the sheet.) */
@@ -4776,6 +4821,8 @@ body[data-theme="graphite"].mobileShell:not(.tv) #prefs .hint{font:400 13px/1.45
 <button id="burger" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
 <nav id="rail">
   <div id="railMain">
+  <button id="ipadRailToggle" class="railBtn" type="button" title="Expand menu" aria-label="Expand menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span class="rlabel">Menu</span></button>
   <!-- Profile avatar sits at the TOP (was the Triboon logo): one account entry point, and it frees the
        footer so the nav list rises into the reclaimed bottom space. Opens Preferences; admins get
        Server settings there. Home keeps its own nav button below, so no logo-as-home is lost. -->
@@ -5240,7 +5287,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <button class="abTool focusable" id="abChapList" title="Chapters">Chapters</button>
     </div>
   </div>
-  <audio id="abAudio" preload="metadata"></audio>
+  <audio id="abAudio" preload="metadata" x-webkit-airplay="allow"></audio>
 </div>
 
 <!-- Mini "now playing" bar — shown on the Audiobooks browse/detail while a book plays and the full
@@ -5302,7 +5349,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 </div>
 
 <!-- Music audio lives globally; controls open in the full-screen Music player. -->
-<audio id="musicAudio" preload="auto"></audio>
+<audio id="musicAudio" preload="auto" x-webkit-airplay="allow"></audio>
 <div id="trailer">
   <button id="trailerBack" class="trailerBack focusable" title="Back" aria-label="Back">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
@@ -5581,6 +5628,8 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></button>
           <button class="iconBtn focusable" id="dTrailer" title="Trailer" style="display:none" data-label="Trailer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5Z" fill="currentColor" stroke="none"/></svg></button>
+          <button class="iconBtn focusable" id="dSendTv" title="Play on TV" aria-label="Play on TV" style="display:none" data-label="Play on TV">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 18v3"/><path d="m10 9 5 2.5-5 2.5V9Z" fill="currentColor" stroke="none"/></svg></button>
           <button class="btn ghost focusable" id="dUseLibInfo" style="display:none">Use library info</button>
           <button class="iconBtn focusable" id="dFixMatch" title="Fix TMDB match (library item)" style="display:none" data-label="Fix match">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18v3h3l5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3z"/></svg></button>
@@ -6105,7 +6154,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 <div id="player">
   <!-- transparent poster: Android WebView otherwise paints its DEFAULT gray play-button
        bitmap whenever the element has no frame — a giant icon flashing on every seek -->
-  <video id="video" playsinline poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></video>
+  <video id="video" playsinline webkit-playsinline x-webkit-airplay="allow" poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></video>
   <video id="liveSplitVideo" playsinline muted aria-hidden="true" poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></video>
   <div id="liveSplitHud">
     <div class="liveSplitPane" data-live-pane="0"><span id="liveSplitPrimaryLabel">Main channel</span></div>
@@ -6215,6 +6264,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
             <input type="range" id="volSlider" min="0" max="100" value="100" title="Volume">
           </div>
           <button class="cbtn focusable" id="extPlayBtn" title="Open in external player (Infuse / IINA / VLC)" aria-label="External player" data-label="Open in app" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 14L20 4"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
+          <button class="cbtn focusable" id="tvSendBtn" title="Play on TV" aria-label="Play on TV" data-label="Play on TV" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 18v3"/><path d="m10 9 5 2.5-5 2.5V9Z" fill="currentColor" stroke="none"/></svg></button>
           <button class="cbtn focusable" id="fsBtn" title="Fullscreen (F)" aria-label="Fullscreen" data-label="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
           <button class="cbtn focusable" id="statsBtn" title="Playback stats" aria-label="Playback stats" data-label="Stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg></button>
         </div>
@@ -6351,6 +6401,25 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   </div>
 </div>
 <div id="toast" role="status" aria-live="polite"><div class="dot"></div><span id="toastMsg"></span></div>
+<div id="tvConnectMenu" role="dialog" aria-modal="true" aria-label="Play on TV">
+  <div class="tvcCard">
+    <div class="tvcHead">
+      <h3 id="tvcTitle">Play on TV</h3>
+      <button type="button" class="tvcClose" id="tvcClose" aria-label="Close">✕</button>
+    </div>
+    <div class="tvcSub" id="tvcSub">Choose an open Triboon TV or desktop app on your account.</div>
+    <div class="tvcList" id="tvcList"></div>
+    <div class="tvcRemote" id="tvcRemote" style="display:none">
+      <div class="tvcSub" id="tvcRemoteLabel">Remote control</div>
+      <div class="tvcRemoteRow">
+        <button type="button" class="btn ghost" id="tvcBack10">-10s</button>
+        <button type="button" class="btn primary" id="tvcToggle">Play / Pause</button>
+        <button type="button" class="btn ghost" id="tvcFwd30">+30s</button>
+        <button type="button" class="btn ghost" id="tvcStop">Stop</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 'use strict';
@@ -6371,9 +6440,17 @@ try { if (window.TriboonTV && window.TriboonTV.__triboonWindowsBridge === true) 
 // off the right edge, so park the expand control in the top-right chrome.
 if (/iPhone|iPod/.test(navigator.userAgent)) {
   document.body.classList.add('iosPhone');
+  document.body.classList.add('mobileShell');
+  const vp = document.querySelector('meta[name="viewport"]');
+  if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover');
   const iosFsBtn = $('fsBtn');
   const iosOsdRight = document.querySelector('#osd .osdRight');
   if (iosFsBtn && iosOsdRight) iosOsdRight.insertBefore(iosFsBtn, iosOsdRight.firstChild);
+} else if (!document.body.classList.contains('tv')
+    && (/iPad/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1))) {
+  document.body.classList.add('iosTablet');
+  const vp = document.querySelector('meta[name="viewport"]');
+  if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover');
 }
 // XSS guards: ALL remote strings (TMDB fields, indexer release names, M3U/Xtream channel
 // data, scanned-library titles, user/profile names) must pass esc() before innerHTML, and
@@ -10426,12 +10503,15 @@ function clientCaps() {
   S._capsBridge = !!window.TriboonTV;
   const v = document.createElement('video');
   const ok = (t) => !!v.canPlayType(t);
+  const iosSafari = typeof iosWebkitVideo === 'function' && iosWebkitVideo();
   const webCaps = {
     mkv: ok('video/x-matroska; codecs="avc1.640029"'),
     hevc: ok('video/mp4; codecs="hvc1.1.6.L123.B0"') || ok('video/mp4; codecs="hev1.1.6.L123.B0"'),
-    ac3: ok('audio/mp4; codecs="ac-3"'),
-    eac3: ok('audio/mp4; codecs="ec-3"'),
-    dts: ok('audio/mp4; codecs="dtsc"'),
+    // Safari on iOS/iPadOS over-reports Dolby in canPlayType() for passthrough only; local <video>
+    // decodes AAC/MP3 only. Report false here so decidePlayback() routes straight to stereo-AAC HLS.
+    ac3: iosSafari ? false : ok('audio/mp4; codecs="ac-3"'),
+    eac3: iosSafari ? false : ok('audio/mp4; codecs="ec-3"'),
+    dts: iosSafari ? false : ok('audio/mp4; codecs="dtsc"'),
   };
   const nativeCaps = nativePlaybackCaps();
   S._caps = nativeCaps ? { ...webCaps, ...nativeCaps, web: webCaps } : webCaps;
@@ -11666,6 +11746,7 @@ async function openDetail(it, push = true, opts = {}) {
   $('detail').style.visibility = ''; // openPerson hides the detail page UNDER it — coming
   // from a person credit, the new detail rendered invisible and the D-pad worked a ghost page
   S.view = 'detail'; S.detailItem = it; S.detailData = null; S.detailSeason = null; S.detailSeasons = null;
+  syncTvConnectButtons();
   S.detailColMem = {}; // fresh page → every row's per-row column memory starts at the beginning
   S.detailEpisodeAutoFocusDone = false;
   $('detail').classList.add('open'); document.body.classList.add('detailOpen');
@@ -13356,6 +13437,10 @@ function cleanupLiveMse(slot = 'main') {
   try { const c = st.reader && st.reader.cancel(); if (c && typeof c.catch === 'function') c.catch(() => {}); } catch {}
   if (st.objectUrl) {
     setTimeout(() => { try { URL.revokeObjectURL(st.objectUrl); } catch {} }, 0);
+  }
+  if (!String(slot || 'main').startsWith('multi')) {
+    const v = slot === 'split' ? $('liveSplitVideo') : $('video');
+    if (v) { try { v.disableRemotePlayback = false; } catch {} }
   }
 }
 function requestLiveMsePlay(v, opts = {}) {
@@ -15378,8 +15463,8 @@ async function openPlayer(it, mount, opts = {}) {
   const playingRef = S.playing; // identity of THIS playback attempt and its media callbacks
   updatePlayerMeta();
   applyVolume();
-  // Refresh cast/AirPlay availability for this title (hidden for Live TV — Phase 1 is VOD only).
-  try { updateCastButtons(); if (!castVodEligible() && $('airplayBtn')) $('airplayBtn').style.display = 'none'; } catch {}
+  // Refresh cast/AirPlay/Play-on-TV availability for this title.
+  try { updateCastButtons(); updateAirPlayButton(); syncTvConnectButtons(); } catch {}
   // Branded buffering overlay (cover + spinner) so mount/transcode latency never looks frozen.
   $('plCover').style.backgroundImage = artBackground(it.backdrop, it.poster, artFallback(it.key || it.title, 41));
   $('plTitle').textContent = it.title;
@@ -15681,10 +15766,11 @@ function startSource(kind, atSeconds, opts = {}) {
   return startSourceMedia(p, v, kind, askedStart, serverSeek, atSeconds);
 }
 function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
+  try { v.disableRemotePlayback = false; } catch {}
   if (p.item && p.item.type === 'live') {
-    // iPhone/iPad only: play the tokened provider HLS in <video>. MSE remux stays on every
-    // other browser (desktop Chrome/Edge/Firefox, Windows WebView2). Android never reaches
-    // this function for Live TV — tryNativeLivePlayer / ExoPlayer owns that path.
+    // iPhone/iPad only: play native HLS in <video> so AVPlayer, AirPlay 2, and PiP work cleanly.
+    // MSE remux stays on every other browser (desktop Chrome/Edge/Firefox, Windows WebView2).
+    // Android never reaches this function for Live TV — tryNativeLivePlayer / ExoPlayer owns it.
     if (iosWebkitVideo()) {
       const hls = iosLiveHlsUrl(p);
       if (hls) {
@@ -15692,13 +15778,12 @@ function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
         v.src = hls;
         applySubtitleTrack();
         applyVolume();
+        updateAirPlayButton();
         requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); }).catch(() => showLivePlayPrompt());
         return true;
       }
-      // iOS 17+ Managed Media Source can take the same fMP4 remux desktop uses.
-      // Provider "HLS" through /api/iptv/native is often TS and will not play.
-      if (startLiveMseSource(p.streamUrl)) return true;
-      // Fallback for iOS without MSE or providers with TS-only streams: server rolling MPEG-TS HLS.
+      // Prefer server rolling MPEG-TS HLS on iOS/iPadOS BEFORE ManagedMediaSource: native HLS
+      // keeps AirPlay 2 and native PiP enabled (ManagedMediaSource forces disableRemotePlayback=true).
       const srvHls = (p.hlsUrl || (p.item && p.item._hlsUrl))
         || (p.streamUrl && p.streamUrl.includes('/api/iptv/stream/')
           ? p.streamUrl.replace('/api/iptv/stream/', '/api/iptv/hls/').replace('?', '/index.m3u8?')
@@ -15708,9 +15793,12 @@ function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
         v.src = srvHls;
         applySubtitleTrack();
         applyVolume();
+        updateAirPlayButton();
         requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); }).catch(() => showLivePlayPrompt());
         return true;
       }
+      // Fallback for iOS 17+ Managed Media Source when no server HLS URL is available.
+      if (startLiveMseSource(p.streamUrl)) { updateAirPlayButton(); return true; }
       showLiveProviderError('This channel has no iPhone-playable stream');
       return true;
     }
@@ -15723,10 +15811,11 @@ function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
       : 'Live TV playback is not supported by this browser');
     return true;
   } else if (kind === 'transcode') {
-    // startSource is browser-only (it bails for the native player above), so forceAacRemux is true here
-    // for every real browser → request stereo AAC on the full-transcode fallback too (an HEVC/10-bit
-    // source that skips remux would otherwise hit the same silent-5.1-AAC bug).
-    v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${p.forceAacRemux ? '&audioSafe=1' : ''}`;
+    // Safari (iOS/iPadOS/macOS) refuses the non-rangeable 200 transcode pipe too -> serve the
+    // transcoded H.264+AAC ladder via /api/hls so codec walls and quality picks work on Apple.
+    p._playsHls = !!((iosWebkitVideo() || macSafariVideo()) && p.hlsUrl);
+    if (p._playsHls) v.src = hlsTranscodePlaybackUrl(p, seekStart, p.quality || 1080);
+    else v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${p.forceAacRemux ? '&audioSafe=1' : ''}`;
   } else if (kind === 'remux') {
     // Apple Safari (iOS AND Mac desktop) can't consume the 200-streamed remux pipe (no byte-range) →
     // deliver the SAME copy-remux as native HLS instead, which Safari plays. Every OTHER browser
@@ -15735,11 +15824,14 @@ function startSourceMedia(p, v, kind, seekStart, serverSeek, atSeconds) {
     p._playsHls = !!((iosWebkitVideo() || macSafariVideo()) && p.hlsUrl);
     v.src = p._playsHls ? hlsPlaybackUrl(p, seekStart) : remuxPlaybackUrl(p, seekStart);
   } else {
+    p._playsHls = false;
     v.src = p.streamUrl;
   }
   applySubtitleTrack(); // re-attach CC after the src swap
   applyVolume();
   syncExternalPlayerButton();
+  updateAirPlayButton();
+  syncTvConnectButtons();
   requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); hideSeekHoldFrame(); if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());
   return true;
 }
@@ -16348,6 +16440,10 @@ function hlsPlaybackUrl(p, seekStart = 0) {
   // Milliseconds, like remuxPlaybackUrl: a floored start began a whole keyframe group early, so
   // captions, the time bar and saved progress ran ahead of the picture (SUBG-1).
   return `${p.hlsUrl}&start=${Math.max(0, Math.round((seekStart || 0) * 1000) / 1000)}&audio=${audio}&audioSafe=1`;
+}
+function hlsTranscodePlaybackUrl(p, seekStart = 0, height = 1080) {
+  const h = Math.max(360, parseInt(height || (p && p.quality) || 1080, 10) || 1080);
+  return `${hlsPlaybackUrl(p, seekStart)}&transcode=1&height=${h}`;
 }
 function selectedPlayerAudioTrack(p) {
   const audio = p && p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
@@ -19492,6 +19588,7 @@ function presencePayload(state) {
     clientVersion: clientVersionLabel(),
     device: navigator.userAgent || '',
     deviceName: deviceFriendlyName(),
+    isTv: document.body.classList.contains('tv') || document.body.classList.contains('windowsDesktop'),
   };
 }
 function sendPresence(state, opts = {}) {
@@ -19507,9 +19604,11 @@ function startPresence() {
   if (S.presenceTimer) clearInterval(S.presenceTimer);
   sendPresence();
   S.presenceTimer = setInterval(() => sendPresence(), 25000);
+  startRemoteControlLoop();
 }
 function stopPresence(opts = {}) {
   if (S.presenceTimer) { clearInterval(S.presenceTimer); S.presenceTimer = null; }
+  stopRemoteControlLoop();
   return sendPresence('offline', opts);
 }
 function collectPlayerStats() {
@@ -21443,7 +21542,7 @@ function playerCcCanOpen() {
 function playerQualityHasOptions() {
   const p = S.playing;
   if (!p || !p.item || p.item.type === 'live' || !p.transcodeUrl) return false;
-  if (!p.tracks) return false;
+  if (!p.tracks) return true;
   const h = p.tracks.video && p.tracks.video[0] && +p.tracks.video[0].height;
   return !h || h >= 480;
 }
@@ -21500,7 +21599,7 @@ function openTrackMenu(kind, restore = {}) {
   if (kind === 'cc' && !playerCcCanOpen()) return;
   if (kind === 'audio' && !playerAudioHasOptions()) return;
   if (kind === 'quality' && !playerQualityHasOptions()) return;
-  if (!p.tracks && kind !== 'cc') return; // CC works without a probe (online subtitles)
+  if (!p.tracks && kind !== 'cc' && kind !== 'quality') return; // CC and Quality work before the track probe finishes
   closePlayerStats();
   const ccProbePending = nativeFileSubtitlesOn(p) && kind === 'cc' && !p.tracks && !!p.tracksUrl;
   if (ccProbePending) {
@@ -21603,8 +21702,9 @@ function openTrackMenu(kind, restore = {}) {
         p.audioTrack === a.rel, () => setAudio(a.rel));
     });
   } else if (kind === 'quality') {
-    const srcH = (p.tracks.video && p.tracks.video[0] && p.tracks.video[0].height) || 2160;
-    mkRow('Original' + (p.tracks.video && p.tracks.video[0] ? ` (${p.tracks.video[0].codec}${srcH ? ' ' + srcH + 'p' : ''})` : ''),
+    const v0 = p.tracks && p.tracks.video && p.tracks.video[0];
+    const srcH = (v0 && v0.height) || 2160;
+    mkRow('Original' + (v0 ? ` (${v0.codec}${srcH ? ' ' + srcH + 'p' : ''})` : ''),
       !p.usingTranscode, () => setQuality('orig'));
     [1080, 720, 480].filter((h) => h <= srcH || h === 480).forEach((h) => {
       mkRow(`${h}p · optimized stream`, p.usingTranscode && p.quality === h, () => setQuality(h));
@@ -22530,13 +22630,14 @@ function isPlayerFullscreen() {
 function syncNativeIosFullscreenCaptions() {
   const v = $('video');
   const p = S.playing;
-  if (!v || !p || !p._textTrack || !iosWebkitVideo()) return;
+  if (!v || !p || !p._textTrack || !(iosWebkitVideo() || macSafariVideo())) return;
   try {
-    // Native iOS <video> fullscreen hides Triboon's custom HTML #subOverlay. Switch the WebVTT
-    // TextTrack to 'showing' during native fullscreen (and AirPlay) so captions stay visible,
-    // then return to 'hidden' on exit so custom captions never double-render.
-    p._textTrack.mode = v.webkitDisplayingFullscreen ? 'showing' : 'hidden';
-    if (!v.webkitDisplayingFullscreen) renderSubCues();
+    // Native iOS <video> fullscreen AND AirPlay bypass Triboon's HTML #subOverlay. Switch the
+    // WebVTT TextTrack to 'showing' while on a native/wireless surface so captions stay visible
+    // on the TV or fullscreen player, then return to 'hidden' inline so they never double-render.
+    const nativeSurface = !!(v.webkitDisplayingFullscreen || v.webkitCurrentPlaybackTargetIsWireless);
+    p._textTrack.mode = nativeSurface ? 'showing' : 'hidden';
+    if (!nativeSurface) renderSubCues();
   } catch {}
 }
 function syncFullscreenButton() {
@@ -22790,16 +22891,259 @@ function castApplyVolume() {
   } catch {}
 }
 /* AirPlay (Safari/iOS/macOS) — routes the local <video> element itself; the element's tokened src is
-   what the Apple TV pulls, so VOD works with no session bookkeeping (timeupdate keeps firing, so the
-   watch/scrobble heartbeats stay correct). Button appears only when a route is actually available. */
+   what the Apple TV / AirPlay 2 TV pulls, so both VOD and Live TV HLS work with no session
+   bookkeeping (timeupdate keeps firing, so watch/scrobble heartbeats stay correct). Availability is
+   cached so switching between Live TV and VOD never loses the button. */
+function updateAirPlayButton() {
+  const btn = $('airplayBtn'); if (!btn) return;
+  const p = S.playing;
+  const ok = !!(S._airplayAvailable && castEligible() && p && !p.usingLiveMse);
+  btn.style.display = ok ? '' : 'none';
+}
 function initAirPlay() {
   const v = $('video'), btn = $('airplayBtn'); if (!v || !btn) return;
   if (!('WebKitPlaybackTargetAvailabilityEvent' in window) || typeof v.webkitShowPlaybackTargetPicker !== 'function') return;
   v.addEventListener('webkitplaybacktargetavailabilitychanged', (e) => {
-    btn.style.display = (castEligible() && castVodEligible() && e.availability === 'available') ? '' : 'none';
+    S._airplayAvailable = (e.availability === 'available');
+    updateAirPlayButton();
   });
-  v.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', () => { btn.classList.toggle('on', !!v.webkitCurrentPlaybackTargetIsWireless); });
+  v.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', () => {
+    btn.classList.toggle('on', !!v.webkitCurrentPlaybackTargetIsWireless);
+    syncNativeIosFullscreenCaptions();
+  });
   btn.addEventListener('click', () => { try { v.webkitShowPlaybackTargetPicker(); } catch {} });
+}
+
+/* ============ Play on TV (Triboon Connect) — send VOD or Live TV to another open Triboon device ============ */
+function remoteTargetsList() { return Array.isArray(S._remoteTargets) ? S._remoteTargets : []; }
+function syncTvConnectButtons() {
+  const isTv = document.body.classList.contains('tv');
+  const hasTargets = !isTv && remoteTargetsList().length > 0;
+  const dBtn = $('dSendTv');
+  if (dBtn) dBtn.style.display = (hasTargets && S.detailItem) ? '' : 'none';
+  const pBtn = $('tvSendBtn');
+  if (pBtn) pBtn.style.display = (hasTargets && S.playing && !S.playing.usingNative) ? '' : 'none';
+}
+async function refreshRemoteTargets() {
+  const tok = tokenStore.get();
+  if (!tok || document.body.classList.contains('tv')) {
+    S._remoteTargets = [];
+    syncTvConnectButtons();
+    return [];
+  }
+  try {
+    const r = await api('/api/remote/targets?deviceId=' + encodeURIComponent(triboonDeviceId()));
+    S._remoteTargets = Array.isArray(r && r.targets) ? r.targets : [];
+  } catch {
+    S._remoteTargets = [];
+  }
+  syncTvConnectButtons();
+  return S._remoteTargets;
+}
+function closeTvConnectMenu() {
+  const el = $('tvConnectMenu');
+  if (el) el.classList.remove('open');
+}
+function remoteVodItemPayload(it, resumeSec) {
+  if (!it) return null;
+  const out = {};
+  for (const k of ['key', 'type', 'tmdbId', 'title', 'year', 'poster', 'backdrop', 'season', 'episode', 'epTitle', 'epLabel', 'imdbId', 'libId', 'localId', 'runtime']) {
+    if (it[k] !== undefined && it[k] !== null) out[k] = it[k];
+  }
+  const pos = Number.isFinite(Number(resumeSec)) ? Math.max(0, Math.floor(Number(resumeSec))) : (Number(it.resume) || 0);
+  if (pos > 0) out.resume = pos;
+  return out;
+}
+async function sendRemoteCommand(targetDeviceId, payload) {
+  return api('/api/remote/send', {
+    method: 'POST',
+    body: {
+      targetDeviceId,
+      fromDeviceId: triboonDeviceId(),
+      fromName: deviceFriendlyName(),
+      ...payload,
+    },
+  });
+}
+function renderTvConnectRemoteBar() {
+  const wrap = $('tvcRemote');
+  if (!wrap) return;
+  const tid = S._lastRemoteTargetId;
+  const tname = S._lastRemoteTargetName || 'TV';
+  if (!tid) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  if ($('tvcRemoteLabel')) $('tvcRemoteLabel').textContent = `Controlling ${tname}`;
+}
+async function openTvConnectMenu(source = 'player') {
+  const el = $('tvConnectMenu');
+  if (!el) return;
+  S._tvcSource = source;
+  el.classList.add('open');
+  if ($('tvcList')) $('tvcList').innerHTML = '<div class="tvcSub">Looking for open Triboon devices…</div>';
+  renderTvConnectRemoteBar();
+  const targets = await refreshRemoteTargets();
+  const list = $('tvcList');
+  if (!list) return;
+  if (!targets.length) {
+    list.innerHTML = '<div class="tvcSub">No other open Triboon TV or desktop app is online on your account right now. Open Triboon on your TV and try again.</div>';
+    return;
+  }
+  const p = S.playing;
+  const live = source === 'player' && p && p.item && p.item.type === 'live';
+  const vodTarget = source === 'detail' ? (detailPlayTarget || S.detailItem) : (p && p.item);
+  const label = live
+    ? ((p.item && (p.item.title || p.item.name)) || 'Live channel')
+    : ((vodTarget && vodTarget.title) || 'this title');
+  if ($('tvcSub')) $('tvcSub').textContent = `Send "${label}" to:`;
+  list.innerHTML = targets.map((t) => {
+    const active = t.deviceId === S._lastRemoteTargetId ? ' active' : '';
+    const sub = t.state === 'watching' && t.title ? `Watching · ${t.title}` : (t.view ? `Open · ${t.view}` : 'Online');
+    return `<button type="button" class="tvcItem${active}" data-dev="${esc(t.deviceId)}" data-name="${esc(t.deviceName)}">`
+      + `<div><div class="tvcName">${esc(t.deviceName)}</div><div class="tvcMeta">${esc(sub)}</div></div>`
+      + `<span class="tvcBadge">${t.isTv ? 'TV' : 'APP'}</span></button>`;
+  }).join('');
+  list.querySelectorAll('.tvcItem').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const targetId = btn.dataset.dev;
+      const targetName = btn.dataset.name || 'TV';
+      try {
+        if (live) {
+          await sendRemoteCommand(targetId, {
+            action: 'play_live',
+            chid: (p.item && p.item._chid) || '',
+            channel: p.item && Number.isInteger(Number(p.item._channel)) ? Number(p.item._channel) : undefined,
+            title: (p.item && (p.item.title || p.item.name)) || '',
+          });
+        } else if (vodTarget) {
+          const resumeSec = (source === 'player' && p) ? currentTime() : (Number(vodTarget.resume) || 0);
+          await sendRemoteCommand(targetId, {
+            action: 'play_vod',
+            item: remoteVodItemPayload(vodTarget, resumeSec),
+          });
+        } else {
+          toast('Nothing selected to send');
+          return;
+        }
+        S._lastRemoteTargetId = targetId;
+        S._lastRemoteTargetName = targetName;
+        renderTvConnectRemoteBar();
+        if (source === 'player' && S.playing && !S.playing.usingNative) {
+          try { $('video').pause(); } catch {}
+        }
+        toast(`Sent to ${targetName}`);
+      } catch (e) {
+        toast(e.message || 'Could not reach device');
+      }
+    });
+  });
+}
+async function handleRemoteCommand(cmd) {
+  if (!cmd || !cmd.action) return;
+  const from = cmd.fromName || 'Another device';
+  if (cmd.action === 'play_vod' && cmd.item) {
+    toast(`Playing from ${from}`);
+    try {
+      let item = cmd.item;
+      if (item.key && /^local:/i.test(String(item.key)) && !localPlaybackForItem(item)) {
+        try {
+          const hit = await api('/api/libraries/local-lookup?key=' + encodeURIComponent(item.key));
+          if (hit && hit.streamUrl) item = { ...item, _local: hit };
+        } catch {}
+      }
+      await play(item);
+    } catch (e) { toast(e.message || 'Could not play sent title'); }
+  } else if (cmd.action === 'play_live') {
+    toast(`Tuning Live TV from ${from}`);
+    try {
+      let list = S.iptvChannels || S.liveList || [];
+      if (!list.length) {
+        const r = await api('/api/iptv/channels');
+        list = (r && r.channels) || [];
+        S.iptvChannels = list;
+      }
+      const ch = list.find((c) => (cmd.chid && (c.chid === cmd.chid || c._chid === cmd.chid))
+        || (cmd.channel !== undefined && (c.idx === cmd.channel || c._channel === cmd.channel)));
+      if (!ch) { toast('Live channel not found on this device'); return; }
+      const item = ch._channel !== undefined ? ch : {
+        type: 'live', _channel: ch.idx, _chid: ch.chid || String(ch.idx),
+        title: ch.name || cmd.title || 'Live TV', name: ch.name || cmd.title || 'Live TV',
+        poster: ch.logo || '', group: ch.group || '',
+      };
+      await playChannel(item, list);
+    } catch (e) { toast(e.message || 'Could not tune live channel'); }
+  } else if (cmd.action === 'toggle_pause') {
+    if (S.playing) togglePlay();
+  } else if (cmd.action === 'pause') {
+    if (S.playing && !isPlayerPausedState()) togglePlay();
+  } else if (cmd.action === 'resume') {
+    if (S.playing && isPlayerPausedState()) togglePlay();
+  } else if (cmd.action === 'seek') {
+    if (S.playing && !(S.playing.item && S.playing.item.type === 'live')) {
+      const target = Number.isFinite(Number(cmd.position))
+        ? Number(cmd.position)
+        : Math.max(0, (currentTime() || 0) + (Number(cmd.delta) || 0));
+      seekTo(target);
+    }
+  } else if (cmd.action === 'stop') {
+    if (S.playing || S.view === 'player') closePlayer();
+  }
+}
+function isPlayerPausedState() {
+  const p = S.playing;
+  if (!p) return true;
+  if (p.usingNative) return !!p.nativePaused;
+  if (p.usingJellyfinDesktop) return !!p.jfPaused;
+  const v = activePlayerVideo();
+  return !v || v.paused;
+}
+async function pollRemoteCommands() {
+  const tok = tokenStore.get();
+  if (!tok || S._remotePollBusy) return;
+  if (!document.body.classList.contains('tv') && !document.body.classList.contains('windowsDesktop')
+      && document.visibilityState === 'hidden') return;
+  S._remotePollBusy = true;
+  try {
+    const r = await api('/api/remote/poll?deviceId=' + encodeURIComponent(triboonDeviceId()));
+    const cmds = Array.isArray(r && r.commands) ? r.commands : [];
+    for (const c of cmds) await handleRemoteCommand(c);
+  } catch {}
+  finally { S._remotePollBusy = false; }
+}
+function startRemoteControlLoop() {
+  if (S._remotePollTimer) clearInterval(S._remotePollTimer);
+  if (S._remoteTargetsTimer) clearInterval(S._remoteTargetsTimer);
+  refreshRemoteTargets().catch(() => {});
+  S._remoteTargetsTimer = setInterval(() => { refreshRemoteTargets().catch(() => {}); }, 25000);
+  S._remotePollTimer = setInterval(() => { pollRemoteCommands().catch(() => {}); }, 2500);
+}
+function stopRemoteControlLoop() {
+  if (S._remotePollTimer) { clearInterval(S._remotePollTimer); S._remotePollTimer = null; }
+  if (S._remoteTargetsTimer) { clearInterval(S._remoteTargetsTimer); S._remoteTargetsTimer = null; }
+  S._remoteTargets = [];
+  syncTvConnectButtons();
+}
+if ($('vlcPanel')) $('vlcPanel').addEventListener('click', (e) => { if (e.target && e.target.id === 'vlcPanel') $('vlcPanel').classList.remove('show'); });
+if ($('dSendTv')) $('dSendTv').addEventListener('click', () => openTvConnectMenu('detail'));
+if ($('tvSendBtn')) $('tvSendBtn').addEventListener('click', () => openTvConnectMenu('player'));
+if ($('tvcClose')) $('tvcClose').addEventListener('click', closeTvConnectMenu);
+if ($('tvConnectMenu')) $('tvConnectMenu').addEventListener('click', (e) => { if (e.target && e.target.id === 'tvConnectMenu') closeTvConnectMenu(); });
+if ($('tvcToggle')) $('tvcToggle').addEventListener('click', () => S._lastRemoteTargetId && sendRemoteCommand(S._lastRemoteTargetId, { action: 'toggle_pause' }).catch(() => {}));
+if ($('tvcBack10')) $('tvcBack10').addEventListener('click', () => S._lastRemoteTargetId && sendRemoteCommand(S._lastRemoteTargetId, { action: 'seek', delta: -10 }).catch(() => {}));
+if ($('tvcFwd30')) $('tvcFwd30').addEventListener('click', () => S._lastRemoteTargetId && sendRemoteCommand(S._lastRemoteTargetId, { action: 'seek', delta: 30 }).catch(() => {}));
+if ($('tvcStop')) $('tvcStop').addEventListener('click', () => S._lastRemoteTargetId && sendRemoteCommand(S._lastRemoteTargetId, { action: 'stop' }).then(() => toast('Stopped on TV')).catch(() => {}));
+if ($('ipadRailToggle')) {
+  $('ipadRailToggle').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = document.body.classList.toggle('railOpen');
+    $('rail').classList.toggle('expanded', open);
+  });
+  document.addEventListener('click', (e) => {
+    if (document.body.classList.contains('iosTablet') && document.body.classList.contains('railOpen')
+        && !$('rail').contains(e.target)) {
+      document.body.classList.remove('railOpen');
+      $('rail').classList.remove('expanded');
+    }
+  });
 }
 $('castBtn').addEventListener('click', startCast);
 initCastSender();
@@ -24735,6 +25079,7 @@ function openLocalDetail(it) {
   pushLocalDetailRoute(it);
   captureDetailReturn();
   S.view = 'detail'; S.detailItem = it; S.detailData = null; S.detailReq = (S.detailReq || 0) + 1;
+  syncTvConnectButtons();
   $('bdInfo').classList.remove('show');
   $('person').classList.remove('open');
   $('detail').classList.add('open'); document.body.classList.add('detailOpen');
@@ -24781,6 +25126,7 @@ async function openLocalShowDetail(it) {
   const show = { ...it, _localShow: true, type: 'local-tv' };
   const reqId = (S.detailReq = (S.detailReq || 0) + 1);
   S.view = 'detail'; S.detailItem = show; S.detailData = null; S.detailSeason = null; S.detailSeasons = null; S.localDetailEpisodes = [];
+  syncTvConnectButtons();
   S.detailEpisodeAutoFocusDone = false;
   detailPlayTarget = null;
   $('bdInfo').classList.remove('show');
@@ -29864,24 +30210,28 @@ function renderDashTrial(data, el = $('dashTrial')) {
     b.addEventListener('click', () => openDashRecent(b.dataset.dashKey, b.querySelector('.dashRecentTitle')?.textContent));
   });
 }
-function openDashRecent(key, title) {
+async function openDashRecent(key, title) {
   const movie = /^tmdb:movie:(\d+)$/i.exec(key || '');
   const show = /^tmdb:tv:(\d+)/i.exec(key || '');
   if (movie) return openDetail({ type: 'movie', tmdbId: +movie[1], title, key });
   if (show) return openDetail({ type: 'tv', tmdbId: +show[1], title, key: `tmdb:tv:${show[1]}` });
   const stable = parseStableLocalKey(key);
-  if (stable) {
-    const lib = (S.libraries || []).find((l) => String(l.id) === stable.libId);
-    const x = lib && (((S.libCache || {})[lib.id] || {}).data || {}).items?.find((it) => it.key === key || it.watchKey === key);
-    if (lib && x) return openDetail(mapLocal(lib, x));
-    return;
+  const local = stable ? null : /^local:([^:]+):(\d+)$/.exec(key || '');
+  const libId = stable ? stable.libId : (local ? local[1] : '');
+  if (!libId) return;
+  const lib = (S.libraries || []).find((l) => String(l.id) === libId);
+  if (!lib) return;
+  let items = (((S.libCache || {})[lib.id] || {}).data || {}).items;
+  if (!Array.isArray(items)) {
+    try {
+      const r = await api(`/api/libraries/${encodeURIComponent(lib.id)}/items`);
+      items = (r && r.items) || [];
+    } catch { return; }
   }
-  const local = /^local:(\w+):(\d+)$/.exec(key || '');
-  if (local) {
-    const lib = (S.libraries || []).find((l) => String(l.id) === local[1]);
-    const x = lib && (((S.libCache || {})[lib.id] || {}).data || {}).items?.find((it) => String(it.idx) === local[2]);
-    if (lib && x) return openDetail(mapLocal(lib, x));
-  }
+  const x = stable
+    ? items.find((it) => it.key === key || it.watchKey === key || it.key === `local:${stable.libId}:${stable.id}`)
+    : items.find((it) => String(it.idx) === local[2]);
+  if (x) return openDetail(mapLocal(lib, x));
 }
 function paintDashTop(data, box) {
   if (!box) return;
@@ -36405,10 +36755,12 @@ async function enterAppShell() {
     // explicit D-pad state (railOpen/.expanded), never hover (the WebView can latch :hover).
     $('rail').addEventListener('mouseenter', () => {
       if (document.body.classList.contains('tv')) return; // TV drives expand via D-pad, not hover
+      if (document.body.classList.contains('iosTablet')) return; // iPad uses #ipadRailToggle (synthesized mouseenter would double-toggle)
       document.body.classList.add('railOpen'); // PUSH the content right (the Plex-style slide, all pages)
       $('rail').classList.add('expanded');     // widen the rail so the labels show
     });
     $('rail').addEventListener('mouseleave', () => {
+      if (document.body.classList.contains('iosTablet')) return;
       // Desktop: leaving the rail slides the content back LEFT and closes the labels.
       if (!document.body.classList.contains('tv')) { document.body.classList.remove('railOpen'); $('rail').classList.remove('expanded'); return; }
       if (S.zone === 'rail') return;

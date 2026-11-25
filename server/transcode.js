@@ -622,17 +622,41 @@ function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudi
 // to a temp dir and the /api/hls route serves the playlist + segments over HTTP Range. hls_flags
 // delete_segments keeps the on-disk footprint bounded (a rolling window) even for a long movie; the
 // route re-spawns from a seek offset when the player seeks past the retained window.
-function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, outDir, playlistName = 'index.m3u8', segmentTime = 4, holdSegments = false, startNumber = 0, initName = 'init.mp4', tsOffset = 0 } = {}) {
+function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, transcodeVideo = false, height = 1080, hdr = false, safeStereo = false, outDir, playlistName = 'index.m3u8', segmentTime = 4, holdSegments = false, startNumber = 0, initName = 'init.mp4', tsOffset = 0 } = {}) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
   if (!outDir) throw new Error('spawnHls requires an output directory');
+  let vaapiPre = [];
+  let tcVideoArgs = ['-c:v', 'copy'];
+  if (!holdSegments && transcodeVideo) {
+    const enc = detectEncoder();
+    if (!enc) throw new Error('no H.264 encoder available');
+    const lad = LADDER[height] || LADDER[1080];
+    const isVaapi = enc.name === 'h264_vaapi';
+    if (isVaapi) vaapiPre = ['-vaapi_device', '/dev/dri/renderD128'];
+    const filters = [];
+    if (hdr) filters.push('zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv');
+    filters.push(`scale=-2:'min(${lad.h},ih)'`, isVaapi ? 'format=nv12,hwupload' : 'format=yuv420p');
+    const encArgs = enc.name === 'libx264'
+      ? ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-profile:v', 'high', '-level:v', '4.1', '-maxrate', lad.maxb, '-bufsize', '24M']
+      : ['-c:v', enc.name, '-b:v', lad.vb, '-maxrate', lad.maxb];
+    tcVideoArgs = [
+      '-vf', filters.join(','),
+      ...encArgs,
+      '-force_key_frames', `expr:gte(t,n_forced*${Math.max(1, parseInt(segmentTime, 10) || 2)})`,
+    ];
+  }
+  const seekArgs = startSeconds > 0
+    ? (transcodeVideo && !holdSegments ? ['-ss', String(startSeconds)] : ['-noaccurate_seek', '-ss', String(startSeconds)])
+    : [];
   // A rolling window is right for a live-style player that stays on the newest
   // pieces. Jellyfin's player seeks to a clock time, so it needs every piece
   // from the start kept until the watch is over. Throwing the start away makes
   // the picture stay black at 0:00.
   const args = [
     '-hide_banner', '-loglevel', 'error',
-    ...(startSeconds > 0 ? ['-noaccurate_seek', '-ss', String(startSeconds)] : []),
+    ...vaapiPre,
+    ...seekArgs,
     '-i', streamUrl,
     '-map', '0:v:0', '-map', `0:a:${audioTrack}?`,
     // The phone asks for one piece at a time. A copied piece is about as big as
@@ -644,8 +668,8 @@ function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio 
       '-profile:v', 'high', '-level:v', '4.1', '-pix_fmt', 'yuv420p',
       '-force_key_frames', 'expr:gte(t,n_forced*2)',
       '-b:v', '2500k', '-maxrate', '3000k', '-bufsize', '3000k',
-    ] : ['-c:v', 'copy']),
-    ...(transcodeAudio
+    ] : tcVideoArgs),
+    ...(transcodeAudio || transcodeVideo
       ? ['-c:a', 'aac', '-ar', '48000', '-b:a', safeStereo ? '192k' : '384k', '-ac', safeStereo ? '2' : '6']
       : ['-c:a', 'copy']),
     // A restart mid-list must stamp piece N at N*segmentTime like the first run did.

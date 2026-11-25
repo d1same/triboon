@@ -3267,6 +3267,8 @@ public class MainActivity extends Activity {
         if (nativePlayerLayer != null) return;
         nativePlayerLayer = new FrameLayout(this);
         nativePlayerLayer.setBackgroundColor(Color.BLACK);
+        nativePlayerLayer.setClipChildren(false);
+        nativePlayerLayer.setClipToPadding(false);
         nativePlayerLayer.setFocusable(true);
         nativePlayerLayer.setFocusableInTouchMode(true);
         nativePlayerLayer.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
@@ -3694,8 +3696,8 @@ public class MainActivity extends Activity {
                 android.view.Gravity.END | android.view.Gravity.BOTTOM);
         // Default LOW (chrome is normally hidden during credits, when this card appears) — it used
         // to sit at a fixed dp(120), which on a phone in landscape floats near mid-screen.
-        // updateNativeUpNextPosition() lifts it above the seek bar whenever the chrome is up.
-        upNextLp.setMargins(0, 0, dp(40), dp(36));
+        // Match updateNativeUpNextPosition()'s resting dp(48) so first display never jumps vertically.
+        upNextLp.setMargins(0, 0, dp(40), dp(48));
         nativePlayerLayer.addView(nativeUpNextCard, upNextLp);
 
         nativeLoading = new FrameLayout(this);
@@ -4273,7 +4275,8 @@ public class MainActivity extends Activity {
         row.setVisibility(View.GONE);
         row.setClipChildren(false);
         row.setClipToPadding(false);
-        row.setElevation(dp(12));
+        row.setClipToOutline(false);
+        row.setElevation(0);
 
         TextView play = new TextView(this);
         play.setText("Next Episode");
@@ -4284,6 +4287,7 @@ public class MainActivity extends Activity {
         play.setPadding(dp(16), dp(8), dp(16), dp(8));
         play.setMinHeight(dp(36));
         play.setIncludeFontPadding(true);
+        play.setClipToOutline(false);
         play.setBackground(nativeUpNextPlayBg(false));
         play.setFocusable(true);
         play.setFocusableInTouchMode(false);
@@ -4325,6 +4329,7 @@ public class MainActivity extends Activity {
         dismiss.setMinWidth(dp(36));
         dismiss.setMinHeight(dp(36));
         dismiss.setPadding(dp(8), dp(8), dp(8), dp(8));
+        dismiss.setClipToOutline(false);
         nativeUpNextDismiss = dismiss;
         row.addView(dismiss, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -4363,17 +4368,51 @@ public class MainActivity extends Activity {
         // Compact Play/X circles do not show a still.
     }
 
+    // Refresh pixel metrics from current display density before showing — a 4K/HDR display-mode
+    // switch between episodes changes density without recreating the activity.
+    private void refreshNativeUpNextMetrics() {
+        if (nativeUpNextPlay instanceof TextView) {
+            TextView play = (TextView) nativeUpNextPlay;
+            play.setPadding(dp(16), dp(8), dp(16), dp(8));
+            play.setMinHeight(dp(36));
+            play.setBackground(nativeUpNextPlayBg(play.hasFocus()));
+            ViewGroup.LayoutParams plp = play.getLayoutParams();
+            if (plp instanceof LinearLayout.LayoutParams) ((LinearLayout.LayoutParams) plp).rightMargin = dp(8);
+        }
+        if (nativeUpNextDismiss instanceof TextView) {
+            TextView dismiss = (TextView) nativeUpNextDismiss;
+            dismiss.setMinWidth(dp(36));
+            dismiss.setMinHeight(dp(36));
+            dismiss.setPadding(dp(8), dp(8), dp(8), dp(8));
+            dismiss.setBackground(nativeUpNextDismissBg(dismiss.hasFocus()));
+        }
+        if (nativeUpNextCard != null) {
+            ViewGroup.LayoutParams raw = nativeUpNextCard.getLayoutParams();
+            if (raw instanceof FrameLayout.LayoutParams) {
+                ((FrameLayout.LayoutParams) raw).rightMargin = dp(40);
+            }
+            nativeUpNextCard.requestLayout();
+        }
+    }
+
     private void showNativeUpNext(String json) {
         if (nativeUpNextCard == null || !"video".equals(nativeMode) || !nativePlayerOpen()) return;
         boolean wasVisible = nativeUpNextVisible;
+        if (!wasVisible) refreshNativeUpNextMetrics();
         updateNativeUpNextPosition();
         nativeUpNextCard.bringToFront();
         nativeUpNextCard.setVisibility(View.VISIBLE);
         nativeUpNextVisible = true;
         if (!wasVisible) {
+            // Pure alpha fade with zero translationY: sliding upward over a SurfaceView during
+            // layout/display-mode switches on Android TV clipped the top ~10dp of both pills.
+            nativeUpNextCard.animate().cancel();
+            nativeUpNextCard.setTranslationY(0f);
             nativeUpNextCard.setAlpha(0f);
-            nativeUpNextCard.setTranslationY(dp(10));
-            nativeUpNextCard.animate().alpha(1f).translationY(0).setDuration(240).start();
+            nativeUpNextCard.animate().alpha(1f).setDuration(200).withEndAction(() -> {
+                if (nativeUpNextCard != null) nativeUpNextCard.invalidate();
+                if (nativePlayerLayer != null) nativePlayerLayer.invalidate();
+            }).start();
             nativeUpNextPlay.requestFocus();
         }
     }
@@ -9358,7 +9397,7 @@ public class MainActivity extends Activity {
         clearNativeEpisodes();
         hideNativeTitleInfo(false);
         nativeUpNextVisible = false;
-        if (nativeUpNextCard != null) nativeUpNextCard.setVisibility(View.GONE);
+        hideNativeUpNextCard();
         if (nativeControlShade != null) nativeControlShade.setVisibility(View.GONE);
         if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
         nativeSheetReturnFocus = null;

@@ -193,6 +193,33 @@ function runThumbSlot(work) {
 }
 const activitySessions = new Map(); // heartbeat-only "now watching"; short TTL, not the retained history
 const presenceSessions = new Map(); // online presence (browsing OR watching), keyed `${uid}:${deviceId}`, short TTL
+const remoteCommands = new Map(); // queued "Play on TV" commands, keyed `${uid}:${deviceId}`, short TTL
+const REMOTE_CMD_TTL_MS = 60000;
+const REMOTE_ACTIONS = new Set(['play_vod', 'play_live', 'pause', 'resume', 'toggle_pause', 'seek', 'stop']);
+function presenceIsTv(row = {}) {
+  if (row.isTv) return true;
+  const s = `${row.deviceName || ''} ${row.device || ''}`;
+  return /TriboonTV|Android TV|Google TV|Shield|Fire TV|Chromecast|Windows|Tizen|webOS|Roku/i.test(s);
+}
+function scrubRemoteItem(it) {
+  if (!it || typeof it !== 'object') return null;
+  const out = {};
+  for (const k of ['key', 'type', 'title', 'epTitle', 'epLabel', 'poster', 'backdrop', 'imdbId', 'libId']) {
+    if (it[k] !== undefined && it[k] !== null) out[k] = scrubActivityText(String(it[k]), k === 'poster' || k === 'backdrop' ? 300 : 180);
+  }
+  for (const k of ['tmdbId', 'year', 'season', 'episode', 'resume', 'localId', 'runtime', 'duration']) {
+    const n = Number(it[k]);
+    if (Number.isFinite(n) && n >= 0) out[k] = n;
+  }
+  return Object.keys(out).length ? out : null;
+}
+function pruneRemoteCommands(now = Date.now()) {
+  for (const [key, list] of remoteCommands) {
+    const keep = (list || []).filter((c) => c && now - (c.at || 0) <= REMOTE_CMD_TTL_MS);
+    if (keep.length) remoteCommands.set(key, keep);
+    else remoteCommands.delete(key);
+  }
+}
 const DATA_DIR = process.env.TRIBOON_DATA || path.join(__dirname, '..', 'data');
 const libraryDb = new LibraryDb(DATA_DIR);
 const MAX_PROVIDER_CONNECTIONS = 150;
@@ -6271,25 +6298,38 @@ function watchPosterIndex() {
   }
   return map;
 }
-// A folder-library row is keyed per episode (local:<lib>:<idx>) and its poster is a tokened
-// /api/local/ URL the heartbeat scrub drops. Fold episodes onto their show and hand the admin
-// a fresh art URL bound to the viewing admin, so Activity shows one covered card per show.
+// A folder-library row is keyed per item/episode (legacy `local:<lib>:<idx>` or stable 3.4.16
+// `local:<lib>:<12hex>` / `local:<lib>:<12hex>:s<N>e<M>`) and its poster is a tokened /api/local/
+// URL the heartbeat scrub drops. Fold episodes onto their show and hand the viewing user/admin a
+// fresh art URL bound to them, so Activity, History, and Dashboard show covered cards for local
+// movies and shows too.
 function withLocalActivityArt(ctx, row, foldTitle) {
-  const m = /^local:(\w+):(\d+)$/.exec(String((row && row.key) || ''));
-  if (!m) return row;
-  let item;
-  try { item = libraryItemByIndex(m[1], m[2]); } catch { item = null; }
+  const lk = parseLocalKey(row && row.key);
+  if (!lk) return row;
+  let item = null;
+  try {
+    if (lk.legacy) {
+      item = libraryItemByIndex(lk.libId, lk.pos);
+    } else {
+      item = libraryItemByKey(lk.libId, String(row.key))
+        || (lk.season != null ? libraryItemByKey(lk.libId, `local:${lk.libId}:${lk.id}`) : null);
+    }
+  } catch { item = null; }
   if (!item) return row;
   let owner = item;
   if (item.kind === 'episode' && item.showIdx != null) {
-    try { owner = libraryItemByIndex(m[1], item.showIdx) || item; } catch { owner = item; }
+    try { owner = libraryItemByIndex(lk.libId, item.showIdx) || item; } catch { owner = item; }
   }
-  const ownerIdx = owner.idx != null ? owner.idx : +m[2];
-  const out = { ...row, key: `local:${m[1]}:${ownerIdx}` };
+  const ownerIdx = owner.idx != null ? owner.idx : (lk.legacy ? lk.pos : null);
+  const ownerKey = owner.key || (ownerIdx != null ? `local:${lk.libId}:${ownerIdx}` : String(row.key));
+  const out = { ...row, key: ownerKey };
   if (foldTitle && owner !== item && owner.title) out.title = scrubActivityText(owner.title, 180);
-  if (!row.poster) {
+  if (!row.poster || tokenizedLocalUrl(row.poster)) {
+    const artVer = owner.artFile ? `&v=${idHash(owner.artFile)}` : '';
     out.poster = tmdbImageUrl(owner.poster, 'w342')
-      || (ctx && ctx.user ? `/api/local/${m[1]}/art/${ownerIdx}?t=${auth.stableStreamToken(ctx.user.id, `art:${m[1]}:${ownerIdx}`)}` : '');
+      || (ctx && ctx.user && ownerIdx != null
+        ? `/api/local/${lk.libId}/art/${ownerIdx}?t=${auth.stableStreamToken(ctx.user.id, `art:${lk.libId}:${ownerIdx}`)}${artVer}`
+        : '');
   }
   return out;
 }
@@ -6298,10 +6338,11 @@ function withActivityPosters(rows, ctx, opts = {}) {
   let idx = opts.posterIdx || null;
   const getIdx = opts.getPosterIdx || (() => (idx || (idx = watchPosterIndex())));
   return list.map((row) => {
-    if (row && /^local:\w+:\d+$/.test(String(row.key || ''))) return withLocalActivityArt(ctx, row, !!opts.foldTitle);
+    if (row && parseLocalKey(row.key)) return withLocalActivityArt(ctx, row, !!opts.foldTitle);
     if (!row || row.poster) return row;
     const map = getIdx();
-    const poster = map.get(`${row.userId}|${row.key}`) || map.get(`${row.userId}|${activityTitleKey(row.key)}`) || '';
+    const uid = row.userId || opts.userId || '';
+    const poster = map.get(`${uid}|${row.key}`) || map.get(`${uid}|${activityTitleKey(row.key)}`) || '';
     return poster ? { ...row, poster } : row;
   });
 }
@@ -10696,7 +10737,11 @@ Object.assign(H, {
       if (!found) return send(ctx.res, 404, { error: 'user not found' });
       userId = found.id;
     }
-    send(ctx.res, 200, watchStats.summarize(store, userId, range));
+    const summary = watchStats.summarize(store, userId, range);
+    if (summary && Array.isArray(summary.recent)) {
+      summary.recent = withActivityPosters(summary.recent, ctx, { foldTitle: true, userId });
+    }
+    send(ctx.res, 200, summary);
   },
 
   watchSet: async (ctx) => {
@@ -10803,22 +10848,109 @@ Object.assign(H, {
     const device = scrubActivityText(b.deviceId || '', 80);
     if (!device) return send(ctx.res, 400, { error: 'deviceId required' });
     const key = `${ctx.user.id}:${device}`;
-    if (b.state === 'offline' || b.stop) { presenceSessions.delete(key); return send(ctx.res, 200, { ok: true }); }
+    if (b.state === 'offline' || b.stop) { presenceSessions.delete(key); remoteCommands.delete(key); return send(ctx.res, 200, { ok: true }); }
     const watching = b.state === 'watching';
+    const deviceStr = scrubActivityText(b.device || ctx.req.headers['user-agent'] || '', 90);
+    const deviceName = activityDeviceName(b, ctx.req);
     presenceSessions.set(key, {
       id: key,
       uid: ctx.user.id,
+      deviceId: device,
       userName: activityUserName(ctx.user.id),
       profile: scrubActivityText(b.profile || '', 40),
       state: watching ? 'watching' : 'browsing',
       title: watching ? scrubActivityText(b.title || '', 180) : '',
       view: scrubActivityText(b.view || '', 40),
       clientVersion: activityClientVersion(b, ctx.req),
-      device: scrubActivityText(b.device || ctx.req.headers['user-agent'] || '', 90),
-      deviceName: activityDeviceName(b, ctx.req),
+      device: deviceStr,
+      deviceName,
+      isTv: !!b.isTv || presenceIsTv({ device: deviceStr, deviceName }),
       lastSeen: Date.now(),
     });
     send(ctx.res, 200, { ok: true });
+  },
+
+  // ---- Play on TV (Triboon Connect): per-account device discovery + command handoff ----
+  // Strictly scoped to ctx.user.id: one user can never list or control another user's devices.
+  remoteTargets: async (ctx) => {
+    const now = Date.now();
+    const selfId = scrubActivityText(ctx.url.searchParams.get('deviceId') || '', 80);
+    const targets = [];
+    for (const row of presenceSessions.values()) {
+      if (!row || row.uid !== ctx.user.id) continue;
+      if (now - (row.lastSeen || 0) > PRESENCE_TTL_MS) continue;
+      const devId = row.deviceId || String(row.id || '').slice(String(ctx.user.id).length + 1);
+      if (!devId || (selfId && devId === selfId)) continue;
+      targets.push({
+        deviceId: devId,
+        deviceName: row.deviceName || 'Triboon device',
+        state: row.state || 'browsing',
+        title: row.title || '',
+        view: row.view || '',
+        profile: row.profile || '',
+        isTv: presenceIsTv(row),
+        lastSeen: row.lastSeen,
+      });
+    }
+    targets.sort((a, b) => (Number(b.isTv) - Number(a.isTv)) || ((b.lastSeen || 0) - (a.lastSeen || 0)));
+    send(ctx.res, 200, { targets });
+  },
+
+  remoteSend: async (ctx) => {
+    const b = await readJson(ctx.req).catch(() => ({}));
+    const targetDeviceId = scrubActivityText(b.targetDeviceId || '', 80);
+    const action = scrubActivityText(b.action || '', 30);
+    if (!targetDeviceId || !REMOTE_ACTIONS.has(action)) {
+      return send(ctx.res, 400, { error: 'valid targetDeviceId and action required' });
+    }
+    const targetKey = `${ctx.user.id}:${targetDeviceId}`;
+    const target = presenceSessions.get(targetKey);
+    const now = Date.now();
+    if (!target || target.uid !== ctx.user.id || now - (target.lastSeen || 0) > PRESENCE_TTL_MS) {
+      return send(ctx.res, 404, { error: 'target device is not online' });
+    }
+    const cmd = {
+      id: require('crypto').randomBytes(6).toString('hex'),
+      at: now,
+      action,
+      fromDeviceId: scrubActivityText(b.fromDeviceId || '', 80),
+      fromName: scrubActivityText(b.fromName || 'Another device', 60),
+    };
+    if (action === 'play_vod') {
+      const item = scrubRemoteItem(b.item);
+      if (!item || (!item.key && !item.tmdbId && !item.localId)) {
+        return send(ctx.res, 400, { error: 'item required for play_vod' });
+      }
+      cmd.item = item;
+    } else if (action === 'play_live') {
+      const chid = scrubActivityText(b.chid || '', 120);
+      const channel = Number.isInteger(Number(b.channel)) ? Number(b.channel) : null;
+      const title = scrubActivityText(b.title || '', 140);
+      if (!chid && channel === null) return send(ctx.res, 400, { error: 'chid or channel required for play_live' });
+      if (chid) cmd.chid = chid;
+      if (channel !== null) cmd.channel = channel;
+      if (title) cmd.title = title;
+    } else if (action === 'seek') {
+      if (Number.isFinite(Number(b.position))) cmd.position = Math.max(0, Number(b.position));
+      if (Number.isFinite(Number(b.delta))) cmd.delta = Math.max(-600, Math.min(600, Number(b.delta)));
+    }
+    const existing = (remoteCommands.get(targetKey) || []).filter((c) => c && now - (c.at || 0) <= REMOTE_CMD_TTL_MS);
+    existing.push(cmd);
+    remoteCommands.set(targetKey, existing.slice(-10));
+    send(ctx.res, 200, { ok: true, id: cmd.id, targetDeviceName: target.deviceName || 'Triboon device' });
+  },
+
+  remotePoll: async (ctx) => {
+    const deviceId = scrubActivityText(ctx.url.searchParams.get('deviceId') || '', 80);
+    if (!deviceId) return send(ctx.res, 400, { error: 'deviceId required' });
+    const now = Date.now();
+    const key = `${ctx.user.id}:${deviceId}`;
+    const row = presenceSessions.get(key);
+    if (row && row.uid === ctx.user.id) row.lastSeen = now;
+    const queued = remoteCommands.get(key);
+    if (queued) remoteCommands.delete(key);
+    const commands = (queued || []).filter((c) => c && now - (c.at || 0) <= REMOTE_CMD_TTL_MS);
+    send(ctx.res, 200, { commands });
   },
 
   activitySet: async (ctx) => {
@@ -11909,18 +12041,30 @@ Object.assign(H, {
     // of the file, so the phone sat on a black picture at 0:00.
     const jellyfinPlaylist = fileReq === 'master.m3u8' || ctx.url.searchParams.get('vod') === '1';
     if (fileReq === 'master.m3u8') fileReq = '';
+    const transcodeVideo = !jellyfinPlaylist && ctx.url.searchParams.get('transcode') === '1';
+    const reqHeight = parseInt(ctx.url.searchParams.get('height') || '1080', 10) || 1080;
+    const height = LADDER[reqHeight] ? reqHeight : 1080;
+    if (transcodeVideo) {
+      if (ctx.user && ctx.user.policy && ctx.user.policy.allowTranscode === false) {
+        return send(ctx.res, 403, { error: 'transcoding is disabled for this account' });
+      }
+      if (/\b(2160p|4k|uhd)\b/i.test(String(vf.name || '')) && !canTranscode4k()) {
+        return send(ctx.res, 403, { error: '4K transcode needs a GPU encoder on this server' });
+      }
+      if (!detectEncoder()) return send(ctx.res, 503, { error: 'no H.264 encoder available' });
+    }
     const sessionStart = startSeconds;
     const askedDur = Math.min(10 * 3600, Math.max(0, parseFloat(ctx.url.searchParams.get('dur') || '') || 0));
     const probedDur = vf._tracks && Number(vf._tracks.duration) > 0 ? Math.min(10 * 3600, Number(vf._tracks.duration)) : 0;
     const knownDur = Math.max(askedDur, probedDur);
 
-    // Per-mount HLS sessions, keyed by (start,audio) so a seek spins up its own window.
+    // Per-mount HLS sessions, keyed by (start,audio,variant) so a seek or quality change spins up its own window.
     vf._hls = vf._hls || new Map();
     // One millisecond value for the session key AND the rewritten segment query, so a list and its
     // segments meet the same session. A floored key let two starts inside one second share a window
     // that began up to a second early (SUBG-1). sessionStart itself still goes to ffmpeg unchanged.
     const startKey = Math.round(sessionStart * 1000) / 1000;
-    const key = `${startKey}:${audioTrack}:${jellyfinPlaylist ? 'vod' : 'roll'}`;
+    const key = `${startKey}:${audioTrack}:${jellyfinPlaylist ? 'vod' : (transcodeVideo ? `tc${height}` : 'roll')}`;
 
     // --- segment / init request: serve the file from the session dir with Range + CORS.
     if (fileReq) {
@@ -11986,7 +12130,7 @@ Object.assign(H, {
         let ff;
         // 2 s segments keep time-to-first-frame down (Safari can start after the first segment).
         // Jellyfin keeps the pieces (holdSegments) so a resume seek still has the start of the list.
-        try { ff = spawnHls(selfUrl, { startSeconds: sessionStart, audioTrack, transcodeAudio, safeStereo: true, outDir: dir, segmentTime: 2, holdSegments: jellyfinPlaylist }); }
+        try { ff = spawnHls(selfUrl, { startSeconds: sessionStart, audioTrack, transcodeAudio, transcodeVideo, height, safeStereo: true, outDir: dir, segmentTime: 2, holdSegments: jellyfinPlaylist }); }
         catch (e) { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); return send(ctx.res, 503, { error: e.message }); }
         sess = {
           dir, ff, vf, uid: ctx.claims && ctx.claims.uid, createdAt: Date.now(), hold: jellyfinPlaylist, input: selfUrl,
@@ -12111,7 +12255,8 @@ Object.assign(H, {
     // Rewrite bare segment/init filenames to tokened, same-scope route URLs the receiver can pull.
     const token = ctx.url.searchParams.get('t') || auth.streamToken(ctx.claims.uid, vf.id);
     const vod = jellyfinPlaylist ? '&vod=1' : '';
-    const q = `?t=${encodeURIComponent(token)}&start=${startKey}&audio=${audioTrack}${vod}`;
+    const tc = transcodeVideo ? `&transcode=1&height=${height}` : '';
+    const q = `?t=${encodeURIComponent(token)}&start=${startKey}&audio=${audioTrack}${vod}${tc}`;
     // Keep the movie id on every piece. The phone reads it from the address,
     // and a piece without one makes play say "source error".
     const movie = ctx.m[2] ? `/${ctx.m[2]}` : '';
@@ -13519,6 +13664,9 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/activity$/, auth: 'admin', h: H.activityList },
   { m: 'POST', re: /^\/api\/activity$/, auth: 'user', h: H.activitySet },
   { m: 'POST', re: /^\/api\/presence$/, auth: 'user', h: H.presenceSet },
+  { m: 'GET', re: /^\/api\/remote\/targets$/, auth: 'user', h: H.remoteTargets },
+  { m: 'POST', re: /^\/api\/remote\/send$/, auth: 'user', h: H.remoteSend },
+  { m: 'GET', re: /^\/api\/remote\/poll$/, auth: 'user', h: H.remotePoll },
   { m: 'GET', re: /^\/api\/trakt\/status$/, auth: 'user', h: H.traktStatus },
   { m: 'POST', re: /^\/api\/trakt\/link$/, auth: 'user', h: H.traktLink },
   { m: 'POST', re: /^\/api\/trakt\/poll$/, auth: 'user', h: H.traktPoll },
@@ -14801,6 +14949,7 @@ function sweep(now = Date.now()) {
   // rows here too so the maps can't accumulate on a server whose admin never opens the screen.
   for (const [id, row] of activitySessions) if (now - ((row && row.updatedAt) || 0) > ACTIVITY_TTL_MS) activitySessions.delete(id);
   for (const [key, row] of presenceSessions) if (now - ((row && row.lastSeen) || 0) > PRESENCE_TTL_MS) presenceSessions.delete(key);
+  pruneRemoteCommands(now);
   // Prune expired digest-keyed location labels and cap the in-memory cache as a backstop.
   for (const [key, hit] of geoCache) if (now - ((hit && hit.at) || 0) > GEO_TTL_MS) geoCache.delete(key);
   if (geoCache.size > 500) {

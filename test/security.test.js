@@ -212,7 +212,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/me'], ['GET', '/api/me/security'], ['GET', '/api/app/latest'], ['POST', '/api/me/totp/setup'], ['POST', '/api/me/totp/enable'],
     ['POST', '/api/me/totp/disable'], ['POST', '/api/me/totp/recovery'], ['GET', '/api/status'], ['GET', '/api/search?q=x'],
     ['POST', '/api/play'], ['POST', '/api/play/stop'], ['GET', '/api/playback-story'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
-    ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['GET', '/api/watch-stats'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['GET', '/api/mounts'],
+    ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['GET', '/api/watch-stats'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['POST', '/api/presence'], ['GET', '/api/remote/targets'], ['POST', '/api/remote/send'], ['GET', '/api/remote/poll?deviceId=d1'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'], ['POST', '/api/settings/side-copy/dismiss'],
     ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
@@ -453,6 +453,65 @@ test('activity: local folder episodes fold into one show card with a working cov
   await httpJson(srv.port, 'POST', '/api/activity', { sessionId, state: 'stopped' }, user);
   srv.store.write('libraries', libs);
   delete libitems.actlib;
+  srv.store.write('libitems', libitems);
+});
+
+test('activity & watch-stats: stable 12-hex local library movies and shows resolve fresh covers', async () => {
+  const login = await httpJson(srv.port, 'POST', '/api/login', { name: 'fam', password: 'fam-pass' });
+  const user = login.json.token;
+  const famId = login.json.user.id;
+  const libs = srv.store.read('libraries', { list: [] });
+  srv.store.write('libraries', { list: [...libs.list.filter((l) => l.id !== 'irlib'), { id: 'irlib', name: 'IR Movies', path: '/no/such/irlib', kind: 'movie' }] });
+  const libitems = srv.store.read('libitems', {});
+  const movieKey = 'local:irlib:a1b2c3d4e5f6';
+  const showKey = 'local:irlib:0123456789ab';
+  const epKey = 'local:irlib:0123456789ab:s1e2';
+  libitems.irlib = { scannedAt: Date.now(), items: [
+    { idx: 0, kind: 'movie', key: movieKey, title: 'Khab Nama', poster: null },
+    { idx: 1, kind: 'show', key: showKey, title: 'Ostokhan Sooz', poster: null },
+    { idx: 2, kind: 'episode', key: epKey, showIdx: 1, s: 1, e: 2, title: 'Ostokhan Sooz · S01E02', poster: null },
+  ] };
+  srv.store.write('libitems', libitems);
+  const now = Date.now();
+  srv.store.write('activityHistory', { rows: [
+    { id: 'ir-m1', userId: famId, userName: 'fam', title: 'Khab Nama', key: movieKey, type: 'movie', updatedAt: now - 20 },
+    { id: 'ir-e2', userId: famId, userName: 'fam', title: 'Ostokhan Sooz · S01E02', key: epKey, type: 'episode', updatedAt: now },
+  ] });
+  const sessionId = 'test-stable-local-activity';
+  await httpJson(srv.port, 'POST', '/api/activity', {
+    sessionId, state: 'watching', title: 'Khab Nama', key: movieKey, type: 'movie',
+    poster: '/api/local/irlib/art/0?t=stale-user-token', position: 120, duration: 5400,
+  }, user);
+
+  const view = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  const movieHist = view.json.history.find((r) => r.key === movieKey);
+  const showHist = view.json.history.find((r) => r.key === showKey);
+  assert.ok(movieHist && /^\/api\/local\/irlib\/art\/0\?t=/.test(movieHist.poster),
+    'stable-key local movie gets a fresh local art URL in Recently watched');
+  assert.ok(showHist && showHist.title === 'Ostokhan Sooz' && /^\/api\/local\/irlib\/art\/1\?t=/.test(showHist.poster),
+    'stable-key local episode folds to its parent show with the show cover URL in Recently watched');
+  const liveRow = view.json.sessions.find((s) => s.sessionId === sessionId);
+  assert.ok(liveRow && /^\/api\/local\/irlib\/art\/0\?t=/.test(liveRow.poster) && !liveRow.poster.includes('stale-user-token'),
+    'Now watching re-signs the local cover URL for the viewing admin');
+
+  // Watch-stats (Dashboard / Users peek -> Just finished) resolves local covers too.
+  const prevWatch = JSON.parse(JSON.stringify(srv.store.read('watch', {})));
+  const prevStats = JSON.parse(JSON.stringify(srv.store.read('watchStats', { users: {} })));
+  await httpJson(srv.port, 'POST', '/api/watch', {
+    key: movieKey, position: 5300, duration: 5400, watched: true,
+    meta: { title: 'Khab Nama', type: 'movie' },
+  }, user);
+  const stats = await httpJson(srv.port, 'GET', `/api/watch-stats?range=month&user=${encodeURIComponent(famId)}`, null, admin);
+  assert.strictEqual(stats.status, 200);
+  const recentMovie = (stats.json.recent || []).find((r) => r.key === movieKey);
+  assert.ok(recentMovie && /^\/api\/local\/irlib\/art\/0\?t=/.test(recentMovie.poster),
+    'Dashboard / Users peek Just finished resolves local library covers too');
+
+  await httpJson(srv.port, 'POST', '/api/activity', { sessionId, state: 'stopped' }, user);
+  srv.store.write('watch', prevWatch);
+  srv.store.write('watchStats', prevStats);
+  srv.store.write('libraries', libs);
+  delete libitems.irlib;
   srv.store.write('libitems', libitems);
 });
 

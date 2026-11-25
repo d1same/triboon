@@ -10536,6 +10536,9 @@ test('android Next Episode chip sizes to its text so a display-mode switch canno
   assert.match(card, /LinearLayout\.LayoutParams playLp = new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, LinearLayout\.LayoutParams\.WRAP_CONTENT\);/);
   assert.match(card, /row\.addView\(dismiss, new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, LinearLayout\.LayoutParams\.WRAP_CONTENT\)\);/);
   assert.doesNotMatch(card, /LayoutParams\([^)]*dp\(36\)\)/, 'no fixed-pixel chip height');
+  const showFn = android.slice(android.indexOf('private void showNativeUpNext('), android.indexOf('private void hideNativeUpNextCard('));
+  assert.doesNotMatch(showFn, /setTranslationY\(dp\(/, 'Up Next fades in place without vertical translation over SurfaceView');
+  assert.match(showFn, /refreshNativeUpNextMetrics\(\)/, 'Up Next refreshes current density metrics before showing');
 });
 
 test('next-episode prepare tries once more when the first warm-up misses', async () => {
@@ -10583,6 +10586,9 @@ test('android Next Episode chip sizes to its text so a display-mode switch canno
   assert.match(card, /LinearLayout\.LayoutParams playLp = new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, LinearLayout\.LayoutParams\.WRAP_CONTENT\);/);
   assert.match(card, /row\.addView\(dismiss, new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, LinearLayout\.LayoutParams\.WRAP_CONTENT\)\);/);
   assert.doesNotMatch(card, /LayoutParams\([^)]*dp\(36\)\)/, 'no fixed-pixel chip height');
+  const showFn = android.slice(android.indexOf('private void showNativeUpNext('), android.indexOf('private void hideNativeUpNextCard('));
+  assert.doesNotMatch(showFn, /setTranslationY\(dp\(/, 'Up Next fades in place without vertical translation over SurfaceView');
+  assert.match(showFn, /refreshNativeUpNextMetrics\(\)/, 'Up Next refreshes current density metrics before showing');
 });
 
 test('player: a repeated failure at the same spot switches release; stalls need a 3rd and never carry over to a new release', () => {
