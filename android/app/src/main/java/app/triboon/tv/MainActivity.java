@@ -899,7 +899,29 @@ public class MainActivity extends Activity {
         return UpdateVerifier.allowedGithubReleasePath(path);
     }
 
+    private void openPlayStoreListing() {
+        String pkg = getPackageName();
+        try {
+            Intent market = new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=" + pkg));
+            market.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(market);
+        } catch (Exception ignored) {
+            try {
+                Intent web = new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://play.google.com/store/apps/details?id=" + pkg));
+                web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(web);
+            } catch (Exception e) {
+                Toast.makeText(this, "Updates are delivered through Google Play", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
     private void openExternalUrl(String rawUrl) {
+        if (BuildConfig.PLAY_DISTRIBUTION) {
+            openPlayStoreListing();
+            return;
+        }
         try {
             Uri uri = Uri.parse(rawUrl == null ? "" : rawUrl.trim());
             if (!allowedAppUpdateUrl(uri)) {
@@ -922,6 +944,10 @@ public class MainActivity extends Activity {
     // it straight to the system package installer — no browser/downloader detour. A failed
     // download or verification never reaches Package Installer.
     private void downloadAndInstallUpdate(String rawUrl) {
+        if (BuildConfig.PLAY_DISTRIBUTION) {
+            openPlayStoreListing();
+            return;
+        }
         final String url = rawUrl == null ? "" : rawUrl.trim();
         Uri uri = Uri.parse(url);
         if (!allowedAppUpdateUrl(uri)) { Toast.makeText(this, "Update link was blocked", Toast.LENGTH_SHORT).show(); return; }
@@ -1594,7 +1620,8 @@ public class MainActivity extends Activity {
                 if (!trustedBridgeOrigin()) return "{}";
                 return "{\"versionName\":\"" + jsonEscape(BuildConfig.VERSION_NAME)
                         + "\",\"versionCode\":" + BuildConfig.VERSION_CODE
-                        + ",\"tv\":" + (isTvDevice() ? "true" : "false") + "}";
+                        + ",\"tv\":" + (isTvDevice() ? "true" : "false")
+                        + ",\"distribution\":\"" + (BuildConfig.PLAY_DISTRIBUTION ? "play" : "direct") + "\"}";
             }
 
             @android.webkit.JavascriptInterface

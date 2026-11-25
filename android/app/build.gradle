@@ -15,6 +15,13 @@ def releaseKeyPassword = releaseSetting('TRIBOON_RELEASE_KEY_PASSWORD')
 def hasReleaseSigning = [releaseStoreFilePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword]
     .every { it != null && String.valueOf(it).trim() }
 
+def playStoreFilePath = releaseSetting('TRIBOON_PLAY_STORE_FILE') ?: releaseStoreFilePath
+def playStorePassword = releaseSetting('TRIBOON_PLAY_STORE_PASSWORD') ?: releaseStorePassword
+def playKeyAlias = releaseSetting('TRIBOON_PLAY_KEY_ALIAS') ?: releaseKeyAlias
+def playKeyPassword = releaseSetting('TRIBOON_PLAY_KEY_PASSWORD') ?: releaseKeyPassword
+def hasPlaySigning = [playStoreFilePath, playStorePassword, playKeyAlias, playKeyPassword]
+    .every { it != null && String.valueOf(it).trim() }
+
 android {
     namespace = 'app.triboon.tv'
     compileSdk {
@@ -29,6 +36,7 @@ android {
         targetSdk = 36
         versionCode = 458
         versionName = "3.5.13"
+        buildConfigField "boolean", "PLAY_DISTRIBUTION", "false"
     }
 
     signingConfigs {
@@ -40,6 +48,14 @@ android {
                 keyPassword = releaseKeyPassword
             }
         }
+        playRelease {
+            if (hasPlaySigning) {
+                storeFile = file(playStoreFilePath)
+                storePassword = playStorePassword
+                keyAlias = playKeyAlias
+                keyPassword = playKeyPassword
+            }
+        }
     }
 
     buildTypes {
@@ -49,6 +65,17 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.release
+            }
+        }
+        // Google Play Store universal distribution (Phone + Tablet + Android TV).
+        // Inherits R8/shrinking from release, strips REQUEST_INSTALL_PACKAGES + FileProvider via
+        // src/playRelease/AndroidManifest.xml, and routes updates through Google Play.
+        playRelease {
+            initWith release
+            matchingFallbacks = ['release']
+            buildConfigField "boolean", "PLAY_DISTRIBUTION", "true"
+            if (hasPlaySigning) {
+                signingConfig = signingConfigs.playRelease
             }
         }
     }
@@ -75,6 +102,20 @@ tasks.matching { it.name == 'assembleRelease' || it.name == 'bundleRelease' }.co
         }
         if (!file(releaseStoreFilePath).isFile()) {
             throw new GradleException("Release keystore not found: ${releaseStoreFilePath}")
+        }
+    }
+}
+
+tasks.matching { it.name == 'assemblePlayRelease' || it.name == 'bundlePlayRelease' }.configureEach {
+    doFirst {
+        if (project.hasProperty('triboonAllowUnsignedPlayCheck')) {
+            return
+        }
+        if (!hasPlaySigning) {
+            throw new GradleException('Play release signing is required. Set TRIBOON_PLAY_STORE_FILE (or TRIBOON_RELEASE_STORE_FILE) and signing passwords outside git.')
+        }
+        if (!file(playStoreFilePath).isFile()) {
+            throw new GradleException("Play release keystore not found: ${playStoreFilePath}")
         }
     }
 }

@@ -29754,8 +29754,15 @@ function isWindowsHost() {
   if (isAndroidAppShell()) return false;
   return isWindowsDesktopClient() || /Windows/i.test(navigator.userAgent || '');
 }
+function isPlayStoreAndroidShell() {
+  try {
+    if (!isAndroidAppShell() || !(window.TriboonTV && typeof TriboonTV.appVersion === 'function')) return false;
+    const ver = JSON.parse(TriboonTV.appVersion() || '{}') || {};
+    return ver.distribution === 'play';
+  } catch { return false; }
+}
 function nativeAppUpdateKind() {
-  if (isAndroidAppShell()) return 'android';
+  if (isAndroidAppShell()) return isPlayStoreAndroidShell() ? '' : 'android';
   if (isWindowsDesktopClient()) return 'windows';
   return '';
 }
@@ -29765,17 +29772,19 @@ function isAppleAppShell() {
 }
 function syncAppUpdateButtons() {
   const android = isAndroidAppShell();
+  const playAndroid = isPlayStoreAndroidShell();
   const apple = isAppleAppShell();
   const windows = isWindowsHost();
   const admin = !!(S.user && S.user.role === 'admin');
-  const showApk = !apple && (android || !windows);
-  const showWin = !apple && windows && !android;
+  const showApk = !apple && !playAndroid && (android || !windows);
+  const showWin = !apple && !playAndroid && windows && !android;
   if ($('apkUpdate')) $('apkUpdate').style.display = showApk ? '' : 'none';
   if ($('winClientUpdate')) $('winClientUpdate').style.display = showWin ? '' : 'none';
   if ($('winServerUpdate')) $('winServerUpdate').style.display = (showWin && admin) ? '' : 'none';
   const copy = $('appUpdateCopy');
   if (copy) {
     if (apple) copy.textContent = 'Triboon for iPhone & iPad updates through TestFlight or the App Store.';
+    else if (playAndroid) copy.textContent = 'Triboon updates automatically through Google Play.';
     else if (android) copy.textContent = 'Install the latest Triboon app — one build runs on both Android TV and phone.';
     else if (showWin) copy.textContent = 'Install the latest Windows app or server from the same GitHub release.';
     else copy.textContent = 'Download the latest Triboon Android app.';

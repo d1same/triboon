@@ -1,0 +1,127 @@
+name: play store aab
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_signed:
+        description: 'Build signed Play Store AAB (requires release environment signing secrets)'
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/play.yml'
+      - 'test/play-store.test.js'
+  pull_request:
+    paths:
+      - 'android/**'
+      - '.github/workflows/play.yml'
+      - 'test/play-store.test.js'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: play-aab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  play-policy-check:
+    name: Play Store AAB compliance check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - name: Lint and build unsigned playRelease AAB to verify manifest policy
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew lintPlayRelease bundlePlayRelease -PtriboonAllowUnsignedPlayCheck=true --console=plain
+      - name: Verify merged Play manifest strips REQUEST_INSTALL_PACKAGES and supports Phone + Tablet + TV
+        run: |
+          manifest=android/app/build/intermediates/merged_manifest/playRelease/processPlayReleaseMainManifest/AndroidManifest.xml
+          test -f "$manifest" || { echo "Merged playRelease manifest not found at $manifest"; exit 1; }
+          if grep -q "REQUEST_INSTALL_PACKAGES" "$manifest"; then
+            echo "FAIL: REQUEST_INSTALL_PACKAGES must not be present in Play Store builds"
+            exit 1
+          fi
+          if grep -q "updateprovider" "$manifest"; then
+            echo "FAIL: updateprovider FileProvider must not be present in Play Store builds"
+            exit 1
+          fi
+          grep -q 'android.software.leanback' "$manifest"
+          grep -q 'android.hardware.touchscreen' "$manifest"
+          grep -q 'android.intent.category.LEANBACK_LAUNCHER' "$manifest"
+          grep -q 'android.intent.category.LAUNCHER' "$manifest"
+          grep -q 'android:resizeableActivity="true"' "$manifest"
+          aab=android/app/build/outputs/bundle/playRelease/app-playRelease.aab
+          test -s "$aab" || { echo "Expected Play AAB at $aab"; exit 1; }
+          echo "Play policy check passed for $aab"
+
+  play-signed-aab:
+    name: Build signed Play Store AAB
+    needs: [play-policy-check]
+    if: github.event_name == 'workflow_dispatch' && inputs.build_signed
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - name: Decode Play/Release keystore
+        env:
+          PLAY_KEYSTORE_B64: ${{ secrets.TRIBOON_PLAY_KEYSTORE_B64 }}
+          RELEASE_KEYSTORE_B64: ${{ secrets.TRIBOON_RELEASE_KEYSTORE_B64 }}
+        run: |
+          b64="${PLAY_KEYSTORE_B64:-$RELEASE_KEYSTORE_B64}"
+          test -n "$b64" || { echo "Missing TRIBOON_PLAY_KEYSTORE_B64 / TRIBOON_RELEASE_KEYSTORE_B64 secret"; exit 1; }
+          printf '%s' "$b64" | tr -d '[:space:]' | base64 -d > "${{ runner.temp }}/triboon-play.jks"
+          test -s "${{ runner.temp }}/triboon-play.jks" || { echo "Keystore decode produced an empty file"; exit 1; }
+      - name: Build signed playRelease AAB
+        env:
+          TRIBOON_PLAY_STORE_FILE: ${{ runner.temp }}/triboon-play.jks
+          TRIBOON_PLAY_STORE_PASSWORD: ${{ secrets.TRIBOON_PLAY_STORE_PASSWORD || secrets.TRIBOON_RELEASE_STORE_PASSWORD }}
+          TRIBOON_PLAY_KEY_ALIAS: ${{ secrets.TRIBOON_PLAY_KEY_ALIAS || secrets.TRIBOON_RELEASE_KEY_ALIAS }}
+          TRIBOON_PLAY_KEY_PASSWORD: ${{ secrets.TRIBOON_PLAY_KEY_PASSWORD || secrets.TRIBOON_RELEASE_KEY_PASSWORD }}
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew bundlePlayRelease --console=plain
+      - name: Verify signed AAB integrity and policy compliance
+        run: |
+          aab=android/app/build/outputs/bundle/playRelease/app-playRelease.aab
+          test -s "$aab" || { echo "Signed AAB not found"; exit 1; }
+          jarsigner -verify -strict "$aab"
+          manifest=android/app/build/intermediates/merged_manifest/playRelease/processPlayReleaseMainManifest/AndroidManifest.xml
+          ! grep -q "REQUEST_INSTALL_PACKAGES" "$manifest"
+          ! grep -q "updateprovider" "$manifest"
+          ver=$(node -p "require('./package.json').version")
+          mkdir -p dist
+          cp "$aab" "dist/triboon-play-v${ver}.aab"
+          sha256sum "dist/triboon-play-v${ver}.aab" > "dist/triboon-play-v${ver}.aab.sha256"
+          ls -lh dist/
+      - name: Upload signed Play Store AAB artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        with:
+          name: Triboon-Play-AAB
+          path: |
+            dist/triboon-play-*.aab
+            dist/triboon-play-*.aab.sha256
+          retention-days: 30
+          if-no-files-found: error
