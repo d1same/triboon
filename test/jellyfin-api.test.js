@@ -2187,3 +2187,58 @@ test('jellyfin iOS/Swiftfin fixes: scoped NextUp, LibrarySeriesId LiveTv, local 
   assert.match(serverSrc, /jellyfinPath\s*=\s*p === '\/web' \|\| p === '\/web\/' \|\| p\.startsWith\('\/web\/'\)/,
     'server serves /web/ as jellyfin-web for iOS WKWebView when jellyfinApps is enabled');
 });
+
+test('jellyfin performance optimizations: scoped NextUp, playSpec metadata reuse, and season backdrop art skip', async () => {
+  let nextUpArg = 'unset';
+  const tmdbCalls = [];
+  const door = fakeDoor({
+    deps: {
+      tmdb: {
+        async get(p) {
+          tmdbCalls.push(p);
+          if (p.startsWith('/movie/8801')) {
+            return { id: 8801, title: 'Fast Film', release_date: '2025-04-01', runtime: 112, poster_path: '/fast.jpg', backdrop_path: '/fastbg.jpg' };
+          }
+          if (p === '/tv/8802') {
+            return { id: 8802, name: 'Fast Show', first_air_date: '2024-01-01', poster_path: '/show.jpg', backdrop_path: '/showbg.jpg', seasons: [{ season_number: 1, episode_count: 2 }] };
+          }
+          if (p === '/tv/8802/season/1') {
+            return { season_number: 1, episodes: [{ episode_number: 1, name: 'Pilot', runtime: 45 }] };
+          }
+          return {};
+        },
+      },
+      jellyfinNextCatalog(_ctx, onlyShowId) {
+        nextUpArg = onlyShowId;
+        return [];
+      },
+      jellyfinPrepare() {},
+      jellyfinWatchGet() { return { position: 60, duration: 6720, watched: false, favorite: false, meta: { title: 'Fast Film' } }; },
+      jellyfinWatchSave() {},
+    },
+  });
+
+  // 1. Scoped NextUp passes the series TMDB id through to jellyfinNextCatalog
+  const nu = await door.call('nextup', 'GET', '/Shows/NextUp?SeriesId=t8802');
+  assert.strictEqual(nu.status, 200);
+  assert.strictEqual(nextUpArg, 8802, 'NextUp?SeriesId passes onlyShowId to jellyfinNextCatalog');
+
+  // 2. Opening movie detail warms playSpecMetaCache so warmJellyfinPlay skips a duplicate /movie/8801 fetch
+  tmdbCalls.length = 0;
+  const det = await door.call('item', 'GET', '/Items/m8801');
+  assert.strictEqual(det.status, 200);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepStrictEqual(tmdbCalls, ['/movie/8801?append_to_response=credits,release_dates'],
+    'movie detail warm-up reuses detail metadata without a second /movie/:id TMDB call');
+
+  // 3. Favorite toggle skips itemById TMDB fetch when watch row already has duration + title
+  tmdbCalls.length = 0;
+  const fav = await door.call('favorite', 'POST', '/UserFavoriteItems/m8801');
+  assert.strictEqual(fav.status, 200);
+  assert.strictEqual(tmdbCalls.length, 0, 'favorite toggle skips TMDB lookup when duration & title are already stored');
+
+  // 4. Season backdrop image skips unused /tv/:id/season/:s fetch
+  tmdbCalls.length = 0;
+  await door.call('image', 'HEAD', '/Items/n8802s1/Images/Backdrop').catch(() => {});
+  assert.ok(!tmdbCalls.some((p) => p.includes('/season/1')), 'season backdrop never fetches /tv/:id/season/:s');
+});

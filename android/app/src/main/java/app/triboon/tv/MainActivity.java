@@ -364,6 +364,12 @@ public class MainActivity extends Activity {
     private boolean nativeHasWyzieSubtitle;
     private boolean nativeLiveStarted;
     private boolean nativeUserSeeking;
+    private long nativePendingTouchSeekMs = -1L;
+    private String nativeLastSubtitleText;
+    private int nativeLastSubtitleVisibility = -1;
+    private String nativeLastEpgKey;
+    private int nativeLastPlayBtnStateKey;
+    private final SimpleDateFormat nativeClockFmt = new SimpleDateFormat("h:mm a", Locale.US);
     private boolean nativeSeekDpadMode;
     private boolean nativeBackConsumedChromeDown;
     private boolean nativeGuideMode;
@@ -3505,14 +3511,27 @@ public class MainActivity extends Activity {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (!fromUser || nativePlayer == null) return;
                 long d = nativeDurationMs();
-                if (d > 0 && d != C.TIME_UNSET) nativeSeekToDisplayPosition((d * progress) / 1000);
+                if (d <= 0 || d == C.TIME_UNSET) return;
+                long targetMs = (d * progress) / 1000;
+                nativePendingTouchSeekMs = targetMs;
+                if (nativeElapsed != null) nativeElapsed.setText(fmtNative(targetMs / 1000));
+                if (nativeEndsAt != null && !"live".equals(nativeMode)) {
+                    long remainMs = Math.max(0L, d - targetMs);
+                    nativeEndsAt.setText(getString(R.string.ends_at, fmtNativeClock(System.currentTimeMillis() + remainMs)));
+                }
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {
                 nativeUserSeeking = true;
+                nativePendingTouchSeekMs = -1L;
                 showNativeChrome(false);
             }
             @Override public void onStopTrackingTouch(SeekBar seekBar) {
                 nativeUserSeeking = false;
+                long targetMs = nativePendingTouchSeekMs;
+                nativePendingTouchSeekMs = -1L;
+                if (targetMs >= 0L && nativePlayer != null) {
+                    nativeSeekToDisplayPosition(targetMs);
+                }
                 scheduleNativeChromeHide();
             }
         });
@@ -3591,6 +3610,7 @@ public class MainActivity extends Activity {
         nativeLiveBtn.setClickable(true);
         nativeLiveBtn.setOnFocusChangeListener((v, has) -> {
             v.setBackground(nativeButtonBg(has, false));
+            ((TextView) v).setTextColor(has ? 0xFF14161A : 0xFFF3EFF7);
             v.setElevation(has ? dp(4) : 0);
             if (has) showNativeChrome(false);
         });
@@ -4697,7 +4717,10 @@ public class MainActivity extends Activity {
             buildNativePlayerLayer();
             boolean keepVideoLoader = !guide && "video".equals(mode) && !quietSeek;
             if (keepVideoLoader) showNativeLoading(title, backdropUrl);
-            try { precache().cancel(); } catch (Throwable ignored) {}
+            try {
+                StreamPrecache existingPrecache = STREAM_PRECACHE.peek();
+                if (existingPrecache != null) existingPrecache.cancel();
+            } catch (Throwable ignored) {}
             String nextKind = j.optString("kind", "direct");
             String nextQuality = qualityLabel.isEmpty() ? ("live".equals(mode) ? "LIVE" : "1080p") : qualityLabel;
             boolean sameLoadProfile = nextKind.equals(nativeKind)
@@ -6059,10 +6082,13 @@ public class MainActivity extends Activity {
 
     private void renderNativeEpgStrip() {
         if (nativeEpgStrip == null) return;
-        nativeEpgStrip.removeAllViews();
         org.json.JSONArray data = nativeEpgData;
         if (!"live".equals(nativeMode) || data == null || data.length() == 0) {
-            nativeEpgStrip.setVisibility(View.GONE);
+            if (!"".equals(nativeLastEpgKey) || nativeEpgStrip.getVisibility() != View.GONE) {
+                nativeLastEpgKey = "";
+                nativeEpgStrip.removeAllViews();
+                nativeEpgStrip.setVisibility(View.GONE);
+            }
             return;
         }
         long now = System.currentTimeMillis();
@@ -6071,12 +6097,26 @@ public class MainActivity extends Activity {
         int dpWidth = (int) (getResources().getDisplayMetrics().widthPixels
                 / getResources().getDisplayMetrics().density);
         int maxCells = dpWidth < 600 ? 2 : 4;
-        int shown = 0;
-        for (int i = 0; i < data.length() && shown < maxCells; i++) {
+        StringBuilder key = new StringBuilder();
+        key.append(maxCells).append('|');
+        java.util.ArrayList<org.json.JSONObject> visible = new java.util.ArrayList<>(maxCells);
+        for (int i = 0; i < data.length() && visible.size() < maxCells; i++) {
             org.json.JSONObject p = data.optJSONObject(i);
             if (p == null) continue;
             long start = p.optLong("start", 0), stop = p.optLong("stop", 0);
             if (stop <= now || start >= horizon) continue;
+            boolean isNow = start <= now && stop > now;
+            visible.add(p);
+            key.append(isNow ? 'N' : 'U').append(':').append(start).append(':').append(p.optString("title", "")).append('|');
+        }
+        String epgKey = key.toString();
+        if (epgKey.equals(nativeLastEpgKey)) return;
+        nativeLastEpgKey = epgKey;
+        nativeEpgStrip.removeAllViews();
+        int shown = 0;
+        for (int i = 0; i < visible.size() && shown < maxCells; i++) {
+            org.json.JSONObject p = visible.get(i);
+            long start = p.optLong("start", 0), stop = p.optLong("stop", 0);
             boolean isNow = start <= now && stop > now;
             LinearLayout cell = new LinearLayout(this);
             cell.setOrientation(LinearLayout.VERTICAL);
@@ -6316,7 +6356,13 @@ public class MainActivity extends Activity {
                 if (e.getAction() == KeyEvent.ACTION_UP) nativeIgnoreNextPlayClick = false;
                 return true;
             }
-            if (e.getAction() == KeyEvent.ACTION_UP && clickNativeControlFocus()) return true;
+            if (e.getAction() == KeyEvent.ACTION_UP) {
+                if (!clickNativeControlFocus() && nativePlayer != null) {
+                    nativeTogglePlayPause();
+                    updateNativeChrome();
+                }
+                return true;
+            }
             return true;
         }
         }
@@ -6393,7 +6439,9 @@ public class MainActivity extends Activity {
     }
 
     private String fmtNativeClock(long whenMs) {
-        return new SimpleDateFormat("h:mm a", Locale.US).format(new Date(whenMs));
+        synchronized (nativeClockFmt) {
+            return nativeClockFmt.format(new Date(whenMs));
+        }
     }
 
     private int nativeSupportedTrackCount(int trackType) {
@@ -6512,12 +6560,18 @@ public class MainActivity extends Activity {
             }
         }
         if (nativePlayBtn != null) {
-            int icon = nativePlayer.isPlaying()
+            boolean playing = nativePlayer.isPlaying();
+            int icon = playing
                     ? R.drawable.ic_player_pause
                     : R.drawable.ic_player_play;
-            nativePlayBtn.setTag(icon);
-            nativePlayBtn.setContentDescription(nativePlayer.isPlaying() ? "Pause" : "Play");
-            setNativeButtonIcon(nativePlayBtn, icon, true, nativePlayBtn.hasFocus());
+            boolean focused = nativePlayBtn.hasFocus();
+            int stateKey = (icon * 31) + (focused ? 2 : 0) + (nativePlayBtn.isEnabled() ? 1 : 0);
+            if (stateKey != nativeLastPlayBtnStateKey) {
+                nativeLastPlayBtnStateKey = stateKey;
+                nativePlayBtn.setTag(icon);
+                nativePlayBtn.setContentDescription(playing ? "Pause" : "Play");
+                setNativeButtonIcon(nativePlayBtn, icon, true, focused);
+            }
         }
     }
 
@@ -7380,30 +7434,41 @@ public class MainActivity extends Activity {
     private void updateNativeSubtitleOverlay() {
         if (nativeSubtitleOverlay == null) return;
         if (nativePercentResumePending) {
-            nativeSubtitleOverlay.setText("");
-            nativeSubtitleOverlay.setVisibility(View.GONE);
+            if (!"".equals(nativeLastSubtitleText)) {
+                nativeLastSubtitleText = "";
+                nativeSubtitleOverlay.setText("");
+            }
+            if (nativeLastSubtitleVisibility != View.GONE) {
+                nativeLastSubtitleVisibility = View.GONE;
+                nativeSubtitleOverlay.setVisibility(View.GONE);
+            }
             return;
         }
-        if (nativePlayer == null || nativeGuideMode || !"video".equals(nativeMode)
-                || !nativeHasWyzieSubtitle || nativeSubtitleCues.isEmpty()) {
-            nativeSubtitleOverlay.setText("");
-            nativeSubtitleOverlay.setVisibility(View.GONE);
-            return;
-        }
-        double t = Math.max(0, nativeSubtitleMediaMs() / 1000.0 - nativeSubtitleShift);
-        java.util.ArrayList<String> active = new java.util.ArrayList<>();
-        for (NativeCue cue : nativeSubtitleCues) {
-            if (t + 0.05 < cue.start) {
-                if (!active.isEmpty()) break;
-                continue;
+        String text = "";
+        if (nativePlayer != null && !nativeGuideMode && "video".equals(nativeMode)
+                && nativeHasWyzieSubtitle && !nativeSubtitleCues.isEmpty()) {
+            double t = Math.max(0, nativeSubtitleMediaMs() / 1000.0 - nativeSubtitleShift);
+            java.util.ArrayList<String> active = new java.util.ArrayList<>();
+            for (NativeCue cue : nativeSubtitleCues) {
+                if (t + 0.05 < cue.start) {
+                    if (!active.isEmpty()) break;
+                    continue;
+                }
+                if (t <= cue.end + 0.05) {
+                    active.add(cue.text);
+                }
             }
-            if (t <= cue.end + 0.05) {
-                active.add(cue.text);
-            }
+            text = SubtitleText.lastLines(active);
         }
-        String text = SubtitleText.lastLines(active);
-        nativeSubtitleOverlay.setText(text);
-        nativeSubtitleOverlay.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
+        int vis = text.isEmpty() ? View.GONE : View.VISIBLE;
+        if (!text.equals(nativeLastSubtitleText)) {
+            nativeLastSubtitleText = text;
+            nativeSubtitleOverlay.setText(text);
+        }
+        if (vis != nativeLastSubtitleVisibility) {
+            nativeLastSubtitleVisibility = vis;
+            nativeSubtitleOverlay.setVisibility(vis);
+        }
     }
 
     private void applyNativeSubtitleSize() {
@@ -10549,7 +10614,13 @@ public class MainActivity extends Activity {
     @Override
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
-        if (isInPictureInPictureMode) hideNativeChromeNow();
+        if (isInPictureInPictureMode) {
+            if (nativeSheetOpen()) hideNativeSheet();
+            if (nativeAboutOpen) hideNativeTitleInfo(false);
+            if (nativeEpisodeStripOpen) closeNativeEpisodeStrip();
+            hideNativeUpNextCard();
+            hideNativeChromeNow();
+        }
         else if (nativePlayerOpen()) showNativeChrome(false);
     }
 

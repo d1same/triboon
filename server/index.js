@@ -3181,7 +3181,7 @@ async function refreshXtreamChannelForPlayback(staleCh, reason = 'playback rejec
 }
 function sourceForIptvChannel(ch = {}) {
   const id = ch && ch.sourceId ? cleanIptvSourceId(ch.sourceId) : IPTV_LEGACY_SOURCE_ID;
-  return iptvSourcesFromSettings(settings.get()).find((src) => src.id === id) || null;
+  return iptvSourcesFromSettings(settings.peek()).find((src) => src.id === id) || null;
 }
 function scopeIptvChannels(src, channels) {
   const sourceId = cleanIptvSourceId(src.id);
@@ -3339,7 +3339,7 @@ async function ensureIptvChannelStateForUser(user) {
   if (!user) {
     return { sources: [], channels: [], sourceErrors: [] };
   }
-  const sources = iptvSourcesForUser(user, settings.get());
+  const sources = iptvSourcesForUser(user, settings.peek());
   const aggregateKey = iptvAggregateKeyForSources(sources);
   if (!aggregateKey) {
     return { sources, channels: [], sourceErrors: [] };
@@ -6873,15 +6873,20 @@ function jellyfinWatchProfileIds(user) {
 }
 function watchRowsForProfilesFromAll(all, uid, profileIds) {
   const rows = new Map();
-  for (const profile of profileIds || []) {
-    const prefix = `${uid}:${profile}:`;
-    for (const [fullKey, value] of Object.entries(all || {})) {
-      if (!fullKey.startsWith(prefix) || !value) continue;
-      const key = fullKey.slice(prefix.length);
-      const prev = rows.get(key);
-      if (!prev || (value.updatedAt || 0) >= (prev.updatedAt || 0)) {
-        rows.set(key, { key, _profile: profile, ...value });
-      }
+  const profileSet = new Set(profileIds || []);
+  if (!profileSet.size || !all) return [];
+  const uidPrefix = `${uid}:`;
+  for (const [fullKey, value] of Object.entries(all)) {
+    if (!value || !fullKey.startsWith(uidPrefix)) continue;
+    const rest = fullKey.slice(uidPrefix.length);
+    const sep = rest.indexOf(':');
+    if (sep <= 0) continue;
+    const profile = rest.slice(0, sep);
+    if (!profileSet.has(profile)) continue;
+    const key = rest.slice(sep + 1);
+    const prev = rows.get(key);
+    if (!prev || (value.updatedAt || 0) >= (prev.updatedAt || 0)) {
+      rows.set(key, { key, _profile: profile, ...value });
     }
   }
   return [...rows.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -6975,10 +6980,11 @@ function nextLocalEpisodes(ctx, profile = 'default') {
   }
   return out;
 }
-async function nextWatchEpisodes(uid, profile = 'default') {
+async function nextWatchEpisodes(uid, profile = 'default', onlyShowId = null) {
   if (!settings.peek().tmdbKey) return [];
   const all = store.read('watch', {});
   const rows = watchRowsForProfileFromAll(all, uid, profile);
+  const targetShow = onlyShowId ? String(onlyShowId) : '';
   // A Map, NOT an object: showIds are numeric strings, and JS objects iterate integer-like keys in
   // ASCENDING NUMERIC order regardless of insertion — the .slice(0, 20) below was silently taking
   // the 20 LOWEST TMDB ids instead of the 20 most recently watched shows (rows arrive sorted by
@@ -6988,6 +6994,7 @@ async function nextWatchEpisodes(uid, profile = 'default') {
   for (const w of rows) {
     const ep = parseEpisodeKey(w.key);
     if (!ep) continue;
+    if (targetShow && ep.showId !== targetShow) continue;
     if (!w.watched && ((w.position || 0) > 30 || (w.traktPct || 0) > 2)) { inProgress.add(ep.showId); continue; }
     if (!w.watched) continue;
     const cur = byShow.get(ep.showId);
@@ -13851,19 +13858,49 @@ function jellyfinLocalSearch(ctx, query, limit) {
   return searchLibraryRecords(query, libs.map((lib) => lib.id), limit);
 }
 
-async function jellyfinNextCatalog(ctx) {
+const jellyfinNextCatalogCache = new Map();
+const jellyfinNextCatalogInflight = new Map();
+const JELLYFIN_NEXT_TTL_MS = 10000;
+function invalidateJellyfinNextCatalog(uid) {
+  if (!uid) return;
+  jellyfinNextCatalogCache.delete(String(uid));
+}
+
+async function jellyfinNextCatalog(ctx, onlyShowId = null) {
   if (!ctx || !ctx.user) return [];
-  const seen = new Set();
-  const out = [];
-  for (const profile of jellyfinWatchProfileIds(ctx.user)) {
-    for (const row of await nextWatchEpisodes(ctx.user.id, profile)) {
-      const id = String(row && row.tmdbId || '');
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      out.push(row);
+  const uid = String(ctx.user.id);
+  const profiles = jellyfinWatchProfileIds(ctx.user);
+  const load = async () => {
+    const lists = await Promise.all(profiles.map((profile) => nextWatchEpisodes(ctx.user.id, profile, onlyShowId)));
+    const seen = new Set();
+    const out = [];
+    for (const rows of lists) {
+      for (const row of rows || []) {
+        const id = String(row && row.tmdbId || '');
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        out.push(row);
+      }
     }
+    return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  };
+  if (onlyShowId) return load();
+  const hit = jellyfinNextCatalogCache.get(uid);
+  if (hit && hit.exp > Date.now()) return hit.rows;
+  let job = jellyfinNextCatalogInflight.get(uid);
+  if (!job) {
+    job = load().then((rows) => {
+      jellyfinNextCatalogCache.set(uid, { rows, exp: Date.now() + JELLYFIN_NEXT_TTL_MS });
+      while (jellyfinNextCatalogCache.size > 100) {
+        jellyfinNextCatalogCache.delete(jellyfinNextCatalogCache.keys().next().value);
+      }
+      return rows;
+    }).finally(() => {
+      if (jellyfinNextCatalogInflight.get(uid) === job) jellyfinNextCatalogInflight.delete(uid);
+    });
+    jellyfinNextCatalogInflight.set(uid, job);
   }
-  return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return await job;
 }
 
 const JELLYFIN_TEXT_SUB = new Set(['srt', 'vtt', 'ass', 'ssa']);
@@ -14057,6 +14094,14 @@ function jellyfinLocalAllowed(ctx, libId) {
   return jellyfinLocalLibraries(ctx).some((lib) => lib.id === String(libId));
 }
 
+function jellyfinUnboundItem(item) {
+  const out = unboundLibraryItem(item);
+  if (out && item) {
+    Object.defineProperty(out, '_watchKey', { value: libraryWatchKeyOf(item), enumerable: false });
+  }
+  return out;
+}
+
 function jellyfinLocalPage(ctx, libId, start, limit, showIdx, view) {
   if (!jellyfinLocalAllowed(ctx, libId)) return null;
   const offset = Math.max(0, start || 0);
@@ -14073,14 +14118,14 @@ function jellyfinLocalPage(ctx, libId, start, limit, showIdx, view) {
     });
     if (!page) return { items: [], total: 0 };
     return {
-      items: page.items.map((item) => unboundLibraryItem(item)).filter(Boolean),
+      items: page.items.map((item) => jellyfinUnboundItem(item)).filter(Boolean),
       total: page.total,
     };
   }
   const rec = libraryRecord(libId);
   const all = ((rec && rec.items) || [])
     .filter((item) => item && (Number.isFinite(showIdx) ? item.kind === 'episode' && item.showIdx === showIdx : item.kind !== 'episode'))
-    .map((item) => unboundLibraryItem(item));
+    .map((item) => jellyfinUnboundItem(item));
   return { items: all.slice(offset, offset + size), total: all.length };
 }
 
@@ -14088,7 +14133,7 @@ function jellyfinLocalOne(ctx, libId, idx) {
   if (!jellyfinLocalAllowed(ctx, libId)) return null;
   const item = libraryItemByIndex(libId, idx);
   if (!item) return null;
-  return unboundLibraryItem(item);
+  return jellyfinUnboundItem(item);
 }
 
 function jellyfinLocalPlay(ctx, libId, idx) {
@@ -14106,11 +14151,11 @@ function jellyfinLocalPlay(ctx, libId, idx) {
   };
 }
 
-function jellyfinWatchGet(ctx, key) {
+function jellyfinWatchGet(ctx, key, canonKey) {
   if (!ctx || !ctx.user || !key) return null;
   const all = store.read('watch', {});
   const ids = jellyfinWatchProfileIds(ctx.user);
-  const canon = canonicalLocalWatchKey(key, null, { trustPosition: true });
+  const canon = (typeof canonKey === 'string' && canonKey) ? canonKey : canonicalLocalWatchKey(key, null, { trustPosition: true });
   const own = watchRowForKeyFromProfiles(all, ctx.user.id, ids, canon);
   if (canon === key) return own;
   // A row an older page or app wrote under the position before the next pass moved it.
@@ -14155,6 +14200,7 @@ function jellyfinWatchSave(ctx, key, patch) {
     if (prev.fromTrakt) all[storeKey].fromTrakt = true;
     return all;
   });
+  invalidateJellyfinNextCatalog(ctx.user.id);
 }
 
 function jellyfinWatchRows(ctx) {
@@ -14343,14 +14389,14 @@ async function jellyfinLocalSubtitleBody(ctx, libId, idx, streamIndex) {
   return null;
 }
 
-function jellyfinLocalMedia(ctx, libId, idx) {
+async function jellyfinLocalMedia(ctx, libId, idx) {
   const row = jellyfinLocalOne(ctx, libId, idx);
-  if (!row) return Promise.resolve(null);
+  if (!row) return null;
   const minutes = Number(row.runtime) || 0;
   const file = row.file ? existingMediaPath(row.file) : '';
-  if (!file) return Promise.resolve({ seconds: minutes > 0 ? minutes * 60 : 0, probe: null });
+  if (!file) return { seconds: minutes > 0 ? minutes * 60 : 0, probe: null };
   let stat;
-  try { stat = fs.statSync(file); } catch { return Promise.resolve({ seconds: minutes > 0 ? minutes * 60 : 0, probe: null }); }
+  try { stat = await fs.promises.stat(file); } catch { return { seconds: minutes > 0 ? minutes * 60 : 0, probe: null }; }
   const key = `${file}:${stat.size}:${Math.round(stat.mtimeMs)}`;
   if (!localProbeCache.has(key)) {
     const job = probeTracks(file).then((probe) => {
@@ -14363,7 +14409,7 @@ function jellyfinLocalMedia(ctx, libId, idx) {
     localProbeCache.set(key, job);
     while (localProbeCache.size > 400) localProbeCache.delete(localProbeCache.keys().next().value);
   }
-  return localProbeCache.get(key);
+  return await localProbeCache.get(key);
 }
 
 function jellyfinLocalFacets(ctx, libId) {
@@ -14401,9 +14447,10 @@ async function jellyfinLiveChannels(ctx) {
   let state;
   try { state = await ensureIptvChannelStateForUser(ctx.user); } catch { return []; }
   const favs = new Set((store.read('iptvfavs', {})[ctx.user.id]) || []);
+  const hiddenGroups = ctx.user.role === 'admin' ? null : new Set(s.iptvHiddenGroups || []);
   const out = [];
   for (const ch of (state && state.channels) || []) {
-    if (!ch || iptvChannelHiddenFor(ctx.user, ch, s)) continue;
+    if (!ch || (hiddenGroups && hiddenGroups.size && iptvGroupHiddenGlobally(ch, hiddenGroups))) continue;
     const nativeMime = ch.nativeMime || iptvNativeMime(ch.nativeUrl || ch.url);
     out.push({
       idx: ch.idx,
@@ -14428,10 +14475,16 @@ function jellyfinLivePrograms(ctx, channels, { from, to } = {}) {
   if (!ctx || !ctx.user || !Array.isArray(channels) || !channels.length) return byId;
   const startMs = Number(from) || (Date.now() - 60 * 60000);
   const endMs = Number(to) || (Date.now() + 6 * 3600000);
+  const srcById = new Map();
+  for (const src of iptvSourcesFromSettings(settings.peek())) {
+    srcById.set(src.id, { src, ramEpg: warmXmltvFromRam(src) });
+  }
   const warmedSources = new Set();
   for (const ch of channels) {
-    const src = sourceForIptvChannel(ch);
-    const ramEpg = warmXmltvFromRam(src);
+    const sid = ch && ch.sourceId ? cleanIptvSourceId(ch.sourceId) : IPTV_LEGACY_SOURCE_ID;
+    const entry = srcById.get(sid) || null;
+    const src = entry ? entry.src : null;
+    const ramEpg = entry ? entry.ramEpg : null;
     let progs = [];
     if (ramEpg) {
       progs = xmltvListFor(ramEpg, ch).filter((p) => p.stop > startMs && p.start < endMs);
@@ -14481,6 +14534,8 @@ function jellyfinLiveFavorite(ctx, ch, wantFav) {
 const jellyfinLiveLogoCache = new Map();
 const jellyfinLiveLogoInflight = new Map();
 const jellyfinLiveLogoIndex = new WeakMap();
+const liveLogoHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 16 });
+const liveLogoHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 16 });
 const JELLYFIN_LOGO_CAP = 500;
 const JELLYFIN_LOGO_BYTES_MAX = 16 * 1024 * 1024;
 let jellyfinLiveLogoBytes = 0;
@@ -14545,6 +14600,7 @@ async function jellyfinLiveLogo(uuid, idForChannel) {
           hostname: u.hostname,
           port: u.port || undefined,
           path: `${u.pathname}${u.search}`,
+          agent: u.protocol === 'https:' ? liveLogoHttpsAgent : liveLogoHttpAgent,
           headers: { 'user-agent': 'Triboon/1.0' },
           lookup: pin.lookup,
           timeout: 4000,

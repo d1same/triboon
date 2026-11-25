@@ -13,4 +13,8 @@ final class ProcessOnce<T> {
         if (value == null) value = factory.create();
         return value;
     }
+
+    synchronized T peek() {
+        return value;
+    }
 }

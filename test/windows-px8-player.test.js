@@ -693,3 +693,51 @@ test('Desktop Live TV: Browser and Windows players expose Ch-/Ch+ buttons, [/] s
   api.cancelPendingLiveZap();
   assert.strictEqual(timers.filter((t) => !t.cleared).length, 0, 'cancelPendingLiveZap clears pending tune');
 });
+
+test('Platform UX & performance polish contracts hold across Web, Android, and Windows', () => {
+  const webHtml = read('web/index.html');
+  const winRust = read('clients/windows-px8/src-tauri/src/player.rs');
+  const winJs = read('clients/windows-px8/ui/player.js');
+  const androidJava = read('android/app/src/main/java/app/triboon/tv/MainActivity.java');
+  const processOnce = read('android/app/src/main/java/app/triboon/tv/ProcessOnce.java');
+
+  // Web/Mobile UX & perf fixes
+  assert.match(webHtml, /body\.mobileShell:not\(\.tv\) #prefs>\.setGrid:not\(\[hidden\]\)\{display:grid!important\}/,
+    'mobile landscape Settings keeps two-column layout visible');
+  assert.match(webHtml, /document\.body\.classList\.remove\('personOpen'\)/,
+    'navigating away from Person view clears body.personOpen blur');
+  assert.doesNotMatch(webHtml, /window\.addEventListener\('wheel',/,
+    'non-passive wheel listener is scoped to audiobook containers, not window');
+  assert.match(webHtml, /const inflightKey = fav \? '_liveCombinedFavJob' : '_liveCombinedJob';/,
+    'loadLiveChannelsCombined deduplicates concurrent channel fetches');
+  assert.match(webHtml, /S\._guideIO\.disconnect\(\)/,
+    'parking Live TV disconnects the guide IntersectionObserver');
+
+  // Android fixes
+  assert.match(processOnce, /synchronized T peek\(\)/,
+    'ProcessOnce exposes peek() so cancel never initializes SimpleCache on the UI thread');
+  assert.match(androidJava, /nativePendingTouchSeekMs/,
+    'Android phone touch-scrubbing previews during drag and commits on release');
+  assert.match(androidJava, /nativeLiveBtn\.setOnFocusChangeListener[\s\S]{0,200}0xFF14161A/,
+    'Android LIVE pill switches to dark text on bright focus background');
+  assert.match(androidJava, /nativeLastSubtitleText[\s\S]+nativeLastEpgKey/,
+    'Android memoizes subtitle overlay and live EPG strip updates');
+  assert.match(androidJava, /if \(isInPictureInPictureMode\)[\s\S]{0,260}hideNativeSheet\(\)[\s\S]{0,120}hideNativeTitleInfo\(false\)/,
+    'Android phone PiP hides open player overlays');
+
+  // Windows fixes
+  assert.match(winRust, /let was_pip = stored_guide_pip\(app\)\.is_some\(\);[\s\S]+if !player\.is_visible\(\)\.unwrap_or\(false\) \|\| was_pip \{[\s\S]+restore_windowed_player/,
+    'Windows show_player preserves fullscreen and bounds across zaps, episodes, and seeks');
+  assert.match(winRust, /set_min_size\(None::<tauri::LogicalSize<f64>>\)/,
+    'Windows PiP clears min-size clamp before resizing to the guide slot');
+  assert.match(winRust, /if session\.ui\.event_type != "source_replacing" \{[\s\S]+session\.ui\.event_type = "loading"\.into\(\)/,
+    'Windows quiet_seek keeps source_replacing instead of flashing the loading logo');
+  assert.match(winJs, /let lastLiveEpgKey = '';[\s\S]+if \(epgKey === lastLiveEpgKey\) return;/,
+    'Windows renderLiveEpg memoizes DOM updates');
+  assert.match(winJs, /let lastAboutKey = '';[\s\S]+if \(aboutKey === lastAboutKey\) return;/,
+    'Windows renderAbout memoizes DOM updates to preserve cast scroll');
+  assert.match(winJs, /if \(!controlsWereHidden && activeControl && \(event\.key === 'ArrowLeft' \|\| event\.key === 'ArrowRight'\)\)/,
+    'Windows hidden-OSD Left/Right arrows seek instead of cycling hidden buttons');
+  assert.match(winJs, /if \(document\.visibilityState !== 'visible' \|\| state\.playback === 'idle'\) return;/,
+    'Windows gamepad polling skips work when hidden or idle');
+});

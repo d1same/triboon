@@ -529,11 +529,24 @@
     if (justShown) play.focus({ preventScroll: true });
   }
 
+  let lastLiveEpgKey = '';
   function renderLiveEpg() {
     const strip = $('liveEpg');
-    if (state.mode !== 'live') { strip.replaceChildren(); return; }
+    if (state.mode !== 'live') {
+      if (lastLiveEpgKey !== '') {
+        lastLiveEpgKey = '';
+        strip.replaceChildren();
+      }
+      return;
+    }
     const now = Date.now();
     const programs = (state.liveEpg || []).filter((program) => program && finite(program.stop) > now).slice(0, 4);
+    const epgKey = programs.map((program) => {
+      const current = finite(program.start) <= now && finite(program.stop) > now;
+      return `${current ? 'N' : finite(program.start)}:${text(program.title || 'Programme', 140)}`;
+    }).join('|');
+    if (epgKey === lastLiveEpgKey) return;
+    lastLiveEpgKey = epgKey;
     strip.replaceChildren(...programs.map((program) => {
       const cell = document.createElement('span');
       const current = finite(program.start) <= now && finite(program.stop) > now;
@@ -548,7 +561,13 @@
   function showControls(forceFocus) {
     document.body.classList.remove('controls-hidden');
     scheduleHide();
-    if (forceFocus && !isPanelOpen()) setTimeout(() => $('playPause').focus({ preventScroll: true }), 0);
+    if (forceFocus && !isPanelOpen()) {
+      setTimeout(() => {
+        const active = document.activeElement;
+        if (active === $('chPrev') || active === $('chNext')) return;
+        $('playPause').focus({ preventScroll: true });
+      }, 0);
+    }
   }
 
   function canHideControls() {
@@ -561,7 +580,11 @@
     clearTimeout(hideTimer);
     if (!canHideControls()) return;
     hideTimer = setTimeout(() => {
-      if (canHideControls()) document.body.classList.add('controls-hidden');
+      if (canHideControls()) {
+        document.body.classList.add('controls-hidden');
+        const active = document.activeElement;
+        if (active && active.closest && active.closest('#controls') && active.blur) active.blur();
+      }
     }, 2400);
   }
 
@@ -771,13 +794,19 @@
     }));
   }
 
+  let lastAboutKey = '';
   function renderAbout() {
     const panel = $('aboutPanel');
     const info = state.titleInfo;
     if (!panel || !info) return;
     const subline = text(info.subline, 200);
+    const aboutTitle = text(info.title || state.title, 200);
+    const cast = Array.isArray(info.cast) ? info.cast.slice(0, 40) : [];
+    const aboutKey = `${aboutTitle}|${subline}|${text(info.overview, 120)}|${text(info.poster, 160)}|${cast.length}:${cast[0] ? text(cast[0].name, 60) : ''}`;
+    if (aboutKey === lastAboutKey) return;
+    lastAboutKey = aboutKey;
     $('aboutKicker').textContent = subline ? 'This episode' : 'About';
-    $('aboutTitle').textContent = text(info.title || state.title, 200);
+    $('aboutTitle').textContent = aboutTitle;
     const sub = $('aboutSub');
     sub.textContent = subline;
     sub.hidden = !subline;
@@ -797,7 +826,6 @@
       return chip;
     }));
     $('aboutPlot').textContent = text(info.overview, 1600);
-    const cast = Array.isArray(info.cast) ? info.cast.slice(0, 40) : [];
     const castEl = $('aboutCast');
     castEl.replaceChildren(...cast.map((person) => {
       const card = document.createElement('div');
@@ -982,6 +1010,7 @@
     const rangeFocused = tag === 'INPUT' && document.activeElement.type === 'range';
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) return;
+    const controlsWereHidden = document.body.classList.contains('controls-hidden');
     showControls(false);
 
     if (event.key === 'Escape' || event.key === 'Backspace' || event.key === 'BrowserBack') {
@@ -1008,7 +1037,7 @@
     if (rangeFocused) return;
     const activeControl = document.activeElement && document.activeElement.closest
       ? document.activeElement.closest('#controls') : null;
-    if (activeControl && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+    if (!controlsWereHidden && activeControl && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
       event.preventDefault();
       moveFocus(event.key === 'ArrowRight' ? 1 : -1);
       return;
@@ -1062,22 +1091,26 @@
       return down && !previous;
     }
     setInterval(() => {
+      if (document.visibilityState !== 'visible' || state.playback === 'idle') return;
       const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
       pads.forEach((pad) => {
         const i = pad.index;
+        let hit = false;
         if (edge(i, 0)) {
+          hit = true;
           const active = document.activeElement;
           if (active && /^(BUTTON|INPUT)$/.test(active.tagName) && active.click) active.click();
           else togglePlayback();
         }
-        if (edge(i, 1)) handleBack();
-        if (edge(i, 4)) seekRelative(-10);
-        if (edge(i, 5)) seekRelative(30);
-        if (edge(i, 9)) togglePlayback();
-        if (edge(i, 12)) moveFocus(-1);
-        if (edge(i, 13)) moveFocus(1);
-        if (edge(i, 14)) moveFocus(-1);
-        if (edge(i, 15)) moveFocus(1);
+        if (edge(i, 1)) { hit = true; handleBack(); }
+        if (edge(i, 4)) { hit = true; seekRelative(-10); }
+        if (edge(i, 5)) { hit = true; seekRelative(30); }
+        if (edge(i, 9)) { hit = true; togglePlayback(); }
+        if (edge(i, 12)) { hit = true; moveFocus(-1); }
+        if (edge(i, 13)) { hit = true; moveFocus(1); }
+        if (edge(i, 14)) { hit = true; moveFocus(-1); }
+        if (edge(i, 15)) { hit = true; moveFocus(1); }
+        if (hit) showControls(false);
       });
     }, 90);
   }

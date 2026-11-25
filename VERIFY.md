@@ -128,6 +128,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-11-25, v3.5.13 — Cross-platform UX & performance polish across Web/Mobile, Android, Windows, and Jellyfin:
+- What changed:
+  - **Web / TV / Mobile (`web/index.html`):**
+    - Scoped the non-passive `wheel` listener to `#audiobooks` / `#abDetail` (restoring compositor-threaded scrolling app-wide), marked `#grid` scroll listener `{ passive: true }`, and throttled `--tf` scroll-fade updates.
+    - Cleared `body.personOpen` on detail open and view switches so full-screen backdrop blur never sticks after leaving Person pages.
+    - Fixed Mobile Portrait focused/hovered Settings tab contrast (including active `.on` row) and Mobile Landscape 680–760px two-column Settings layout.
+    - Deduplicated concurrent `loadLiveChannelsCombined()` calls, disconnected parked Live TV `IntersectionObserver`s, restarted the live guide clock on restore, updated only `.gTl` during guide hydration to stop logo flicker, made Global Search non-blocking on cold IPTV with early-exit channel scan (12 hits), bounded Calendar TMDB fan-out to 6 concurrent workers, stopped Discover trailer checks and Admin Activity polling on leave, throttled `window.resize` via rAF, fixed Music rapid-click races/failure lockout, and eliminated Audiobooks `abRows()` sort reflows + `#abSearch` caret lock.
+  - **Android TV & Phone (`android/app/src/main/java/app/triboon/tv/MainActivity.java`, `ProcessOnce.java`):**
+    - Switched phone SeekBar touch scrubbing to live preview during drag with a single seek on release; fixed D-pad focused `● LIVE` pill text contrast; added Play/Pause fallback on TV D-pad `OK`; memoized 4 Hz subtitle overlay and 1 Hz live EPG strip updates + cached `SimpleDateFormat` + play-button icon state; added `ProcessOnce.peek()` so `cancel()` avoids main-thread `SimpleCache` SQLite init; and hid open overlays when entering phone PiP.
+  - **Windows Native Client (`clients/windows-px8/src-tauri/src/player.rs`, `clients/windows-px8/ui/player.js`):**
+    - Preserved fullscreen and custom window bounds in `show_player()` across channel zaps, episode/quality switches, and remux seeks; cleared `880×560` min-size clamp during Live TV guide PiP (and hid PiP when catalog is minimized); preserved `"source_replacing"` on quiet seeks; memoized `renderAbout()` and `renderLiveEpg()`; made hidden-OSD Left/Right arrows seek; kept `Ch-`/`Ch+` focus during zapping; and gated the 90 ms gamepad interval when hidden/idle.
+  - **Jellyfin Server Speedups (`server/jellyfin-api.js`, `server/index.js`, `server/library-db.js`):**
+    - Parallelized + cached (10 s TTL + single-flight) `jellyfinNextCatalog`, scoped `NextUp?SeriesId=...` to a single show, made `watchRowsForProfilesFromAll` single-pass, and eliminated per-row SQLite queries in `diskPlayNext`.
+    - Cached `LibraryDb.item()` prepared statement, forwarded canonical watch keys through `localJellyItem` / `paintWatch` / filtered browse to avoid N+1 SQLite lookups, and switched `jellyfinLocalMedia` from `fs.statSync` to `await fs.promises.stat`.
+    - Raised `liveChannelUuidCache` cap to 100k, memoized `doorServerId`/`jellyfinUserId`/`liveLogoTag`, hoisted hidden-group `Set` and source EPG maps out of Live TV loops, switched read-only IPTV lookups to `settings.peek()`, added keep-alive HTTP/HTTPS agents for Live TV logos, parallelized TMDB awaits in `playSpec`/`episodesFor`/`itemsFor`, bounded multi-ID/all-season fan-outs to 6 workers, reused detail metadata in `playSpec`, skipped unnecessary TMDB lookups on Favorite/Watched toggles and season backdrops, and added `ETag`/`304` on local/cover images.
+- Automated verification:
+  - **Node test suites:** 59/59 suites passing, 1425/1425 tests passing, 0 failures (`GITHUB_REF_NAME=v3.5.13`), including `test/jellyfin-api.test.js` (33/33), `test/windows-px8-player.test.js` (21/21), `test/security.test.js` + `test/iptv-cache.test.js` (248/248), and `test/release-contract.test.js` (11/11).
+  - **Syntax & isolated runtime smoke:** `git diff --check` clean; `node --check` clean on `server/index.js`, `server/jellyfin-api.js`, `server/library-db.js`, and `clients/windows-px8/ui/player.js`; isolated `/api/server` smoke reported `version=3.5.13 phase=4`.
+  - **Android (`3.5.13` / `versionCode 458`):** `gradlew.bat --no-daemon lintDebug testDebugUnitTest assembleDebug` — `BUILD SUCCESSFUL in 30s`.
+  - **Windows client (`triboon-px8` `3.5.13`):** `cargo test --no-default-features` 46/46 passed, 0 failed; `cargo check --features player` compiled cleanly.
+  - **Live Browser Visual QA (`http://localhost:7783`):** verified Desktop (`1440×900` `personOpen` cleanup + rail navigation), Mobile Portrait (`390×844` drawer `#railUser` alignment, active `.on` Settings row contrast, drill-down & Back), and Mobile Landscape (`740×390` & `844×390` two-column Settings), with zero app console errors.
+- Not run locally on this commit:
+  - Automated household `verify:full` live CLI + physical Android TV ADB stress (no ADB device connected), real iOS/Android hardware playback smoke, Docker image build, and Windows `libmpv` runtime GPU decode (`hwdec-current`) / Windows ARM64 (owner testing post-push).
+- Version contract: `package.json` 3.5.13; Android `versionName` 3.5.13 / `versionCode` 458; Windows client `package.json` / `package-lock.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` 3.5.13.
+
 2026-11-24, v3.5.12 — Jellyfin Mobile (iOS/iPadOS) & Swiftfin (iOS/iPadOS/Apple TV) compatibility fixes verified on real iPhone hardware:
 - What changed:
   - **iOS/iPadOS Jellyfin Mobile `WKWebView` shell detection (`server/index.js`, `web/index.html`):**

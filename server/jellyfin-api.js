@@ -59,16 +59,48 @@ function isJellyfinPath(pathname) {
   return PREFIXES.some((pre) => p === pre || p.startsWith(pre + '/'));
 }
 
+const serverIdCache = new Map();
 function serverId(secret) {
-  return crypto.createHash('sha256').update(`triboon-jellyfin-id:${String(secret || '')}`).digest('hex').slice(0, 32);
+  const key = `triboon-jellyfin-id:${String(secret || '')}`;
+  let id = serverIdCache.get(key);
+  if (!id) {
+    id = crypto.createHash('sha256').update(key).digest('hex').slice(0, 32);
+    if (serverIdCache.size > 64) serverIdCache.clear();
+    serverIdCache.set(key, id);
+  }
+  return id;
 }
 
 function doorServerId() {
   const ctx = doorStore.getStore();
   const salt = ctx && ctx.brand && ctx.brand.idSalt;
   const secret = deps && deps.auth ? deps.auth.secret : '';
-  if (salt) return crypto.createHash('sha256').update(`${salt}:${String(secret || '')}`).digest('hex').slice(0, 32);
+  if (salt) {
+    const key = `${salt}:${String(secret || '')}`;
+    let id = serverIdCache.get(key);
+    if (!id) {
+      id = crypto.createHash('sha256').update(key).digest('hex').slice(0, 32);
+      if (serverIdCache.size > 64) serverIdCache.clear();
+      serverIdCache.set(key, id);
+    }
+    return id;
+  }
   return serverId(secret);
+}
+
+async function mapLimit(list, limit, fn) {
+  const items = Array.isArray(list) ? list : [];
+  if (!items.length) return [];
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit || 6), items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 function settingsPeek() {
@@ -229,9 +261,17 @@ function publicInfo(ctx) {
   };
 }
 
+const jellyfinUserIdCache = new Map();
 function jellyfinUserId(user) {
-  const hex = crypto.createHash('sha256').update(`triboon-jf-user:${user.id}`).digest('hex').slice(0, 32);
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  const key = String(user.id);
+  let id = jellyfinUserIdCache.get(key);
+  if (!id) {
+    const hex = crypto.createHash('sha256').update(`triboon-jf-user:${key}`).digest('hex').slice(0, 32);
+    id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+    if (jellyfinUserIdCache.size > 2000) jellyfinUserIdCache.clear();
+    jellyfinUserIdCache.set(key, id);
+  }
+  return id;
 }
 
 function userFromJellyfinId(id) {
@@ -1763,7 +1803,7 @@ function liveChannelItemId(chId) {
   const hash = crypto.createHash('sha256').update(`triboon-jf-ch:${key}`).digest().subarray(0, 16);
   hash[0] = 12;
   const uuid = uuidFromBytes(hash);
-  if (liveChannelUuidCache.size > 20000) liveChannelUuidCache.clear();
+  if (liveChannelUuidCache.size > 100000) liveChannelUuidCache.clear();
   liveChannelUuidCache.set(key, uuid);
   return uuid;
 }
@@ -1804,8 +1844,17 @@ function defaultLiveStreams() {
   ];
 }
 
+const liveLogoTagCache = new Map();
 function liveLogoTag(ch) {
-  return ch && ch.logo ? crypto.createHash('sha256').update(String(ch.logo)).digest('hex').slice(0, 12) : '';
+  if (!ch || !ch.logo) return '';
+  const logo = String(ch.logo);
+  let tag = liveLogoTagCache.get(logo);
+  if (!tag) {
+    tag = crypto.createHash('sha256').update(logo).digest('hex').slice(0, 12);
+    if (liveLogoTagCache.size > 25000) liveLogoTagCache.clear();
+    liveLogoTagCache.set(logo, tag);
+  }
+  return tag;
 }
 
 function tvProgramItem(ch, prog) {
@@ -1973,11 +2022,27 @@ async function itemById(id, ctx) {
   if (!parsed) return null;
   if (parsed.type === 'movie') {
     const d = await tmdbGet(`/movie/${parsed.tmdbId}?append_to_response=credits,release_dates`);
-    return d && d.id ? movieItem(d) : null;
+    if (d && d.id) {
+      rememberPlaySpecMeta(`m:${parsed.tmdbId}`, {
+        title: d.title || '',
+        year: Number(String(d.release_date || '').slice(0, 4)) || undefined,
+        runtime: Number(d.runtime) || 0,
+      });
+      return movieItem(d);
+    }
+    return null;
   }
   if (parsed.type === 'series') {
     const d = await tmdbGet(`/tv/${parsed.tmdbId}?append_to_response=credits,content_ratings`);
-    return d && d.id ? seriesItem(d) : null;
+    if (d && d.id) {
+      rememberPlaySpecMeta(`t:${parsed.tmdbId}`, {
+        name: d.name || '',
+        year: Number(String(d.first_air_date || '').slice(0, 4)) || undefined,
+        typical: Array.isArray(d.episode_run_time) ? Number(d.episode_run_time[0]) : 0,
+      });
+      return seriesItem(d);
+    }
+    return null;
   }
   if (parsed.type === 'season') {
     const seasons = await seasonsFor(parsed.tmdbId);
@@ -2055,9 +2120,11 @@ function userDataFromRow(row, fallbackSeconds, itemId) {
   };
 }
 
+const localItemWatchKey = new WeakMap();
+
 function paintWatch(ctx, item) {
   if (!item || !item.Id || typeof deps.jellyfinWatchGet !== 'function') return item;
-  const row = deps.jellyfinWatchGet(ctx, watchKeyFromId(item.Id));
+  const row = deps.jellyfinWatchGet(ctx, watchKeyFromId(item.Id), localItemWatchKey.get(item));
   if (!row) return item;
   const fallback = item.RunTimeTicks ? item.RunTimeTicks / 10000000 : 0;
   item.UserData = userDataFromRow(row, fallback, item.Id);
@@ -2175,19 +2242,23 @@ function localJellyItem(row, libId) {
     poster: poster || (hasArt ? 'local' : ''),
     backdrop,
   };
+  const tagKey = (item) => {
+    if (item && typeof row._watchKey === 'string' && row._watchKey) localItemWatchKey.set(item, row._watchKey);
+    return item;
+  };
   if (kind === 'show') {
-    return baseItem({
+    return tagKey(baseItem({
       ...common,
       type: 'Series',
       aspect: 0.6666667,
       extra: { IsFolder: true, CommunityRating: Number(row.rating) > 0 ? Number(row.rating) : undefined },
-    });
+    }));
   }
   if (kind === 'episode') {
     const season = Number(row.s || row.season) || 1;
     const episodeNumber = Number(row.e || row.episode) || null;
     const showName = seriesLabel(row.title);
-    return baseItem({
+    return tagKey(baseItem({
       ...common,
       name: row.epTitle || (episodeNumber ? `Episode ${episodeNumber}` : row.title || ''),
       type: 'Episode',
@@ -2206,9 +2277,9 @@ function localJellyItem(row, libId) {
         IndexNumber: episodeNumber,
         CommunityRating: Number(row.rating) > 0 ? Number(row.rating) : undefined,
       },
-    });
+    }));
   }
-  return baseItem({
+  return tagKey(baseItem({
     ...common,
     type: 'Movie',
     runtime: row.runtime,
@@ -2219,7 +2290,7 @@ function localJellyItem(row, libId) {
       LocationType: 'File',
       CommunityRating: Number(row.rating) > 0 ? Number(row.rating) : undefined,
     },
-  });
+  }));
 }
 
 // Every episode of one local show, in season then episode order (F2-2). The browse clamp of
@@ -2249,22 +2320,30 @@ function seriesLabel(title) {
 }
 
 function diskPlayNext(ctx) {
+  if (typeof deps.localLibraries === 'function' && !deps.localLibraries(ctx).length) return [];
   const rows = typeof deps.jellyfinWatchRows === 'function' ? deps.jellyfinWatchRows(ctx) : [];
   const busy = new Set();
   const byShow = new Map();
+  const stableBusy = new Set();
+  const stableByShow = new Map();
   for (const row of rows) {
     const key = String(row && row.key || '');
     const stable = parseLocalKey(key);
-    let match = null;
-    let disk = null;
     if (stable && !stable.legacy && typeof deps.localByKey === 'function') {
-      const hit = deps.localByKey(ctx, key);
-      if (hit) { match = [key, hit.libId]; disk = hit.item; }
-    } else {
-      match = /^local:([a-f0-9]{8,40}):(\d{1,5})$/.exec(key);
-      if (match && typeof deps.localOne === 'function') disk = deps.localOne(ctx, match[1], Number(match[2]));
+      if (stable.season === undefined) continue;
+      const stableShowKey = `local:${stable.libId}:${stable.id}`;
+      if (!row.watched && Number(row.position) > 30) { stableBusy.add(stableShowKey); continue; }
+      if (!row.watched) continue;
+      const order = episodeOrder(stable.season, stable.episode);
+      const cur = stableByShow.get(stableShowKey);
+      if (!cur || order > cur.order) {
+        stableByShow.set(stableShowKey, { key, order, updatedAt: row.updatedAt || 0 });
+      }
+      continue;
     }
+    const match = /^local:([a-f0-9]{8,40}):(\d{1,5})$/.exec(key);
     if (!match) continue;
+    const disk = typeof deps.localOne === 'function' ? deps.localOne(ctx, match[1], Number(match[2])) : null;
     if (!disk || disk.kind !== 'episode') continue;
     const showKey = `${match[1]}:${disk.showIdx}`;
     if (!row.watched && Number(row.position) > 30) { busy.add(showKey); continue; }
@@ -2273,6 +2352,18 @@ function diskPlayNext(ctx) {
     const cur = byShow.get(showKey);
     if (!cur || order > cur.order) {
       byShow.set(showKey, { libId: match[1], showIdx: Number(disk.showIdx), order, updatedAt: row.updatedAt || 0 });
+    }
+  }
+  for (const [stableShowKey, top] of stableByShow.entries()) {
+    if (stableBusy.has(stableShowKey)) continue;
+    const hit = deps.localByKey(ctx, top.key);
+    if (!hit || !hit.item || hit.item.kind !== 'episode') continue;
+    const showKey = `${hit.libId}:${hit.item.showIdx}`;
+    if (busy.has(showKey)) continue;
+    const order = episodeOrder(hit.item.s, hit.item.e);
+    const cur = byShow.get(showKey);
+    if (!cur || order > cur.order) {
+      byShow.set(showKey, { libId: hit.libId, showIdx: Number(hit.item.showIdx), order, updatedAt: top.updatedAt });
     }
   }
   const out = [];
@@ -2285,7 +2376,7 @@ function diskPlayNext(ctx) {
     const next = eps[0];
     if (!next) continue;
     const saved = typeof deps.jellyfinWatchGet === 'function'
-      ? deps.jellyfinWatchGet(ctx, `local:${top.libId}:${next.row.idx}`) : null;
+      ? deps.jellyfinWatchGet(ctx, `local:${top.libId}:${next.row.idx}`, next.row._watchKey) : null;
     if (saved && (saved.watched || Number(saved.position) > 30)) continue;
     const item = localJellyItem(next.row, top.libId);
     if (!item) continue;
@@ -2302,7 +2393,7 @@ async function nextUpItems(ctx) {
   const ranked = [];
   const catalogOk = parentRaw !== 'viewmovies' && (!parent || parent.type !== 'locallib') && (!series || series.type === 'series');
   if (catalogOk && typeof deps.jellyfinNextCatalog === 'function') {
-      const catalog = await deps.jellyfinNextCatalog(ctx);
+      const catalog = await deps.jellyfinNextCatalog(ctx, series && series.type === 'series' ? series.tmdbId : null);
       for (const row of catalog || []) {
         if (series && series.type === 'series' && Number(row.tmdbId) !== series.tmdbId) continue;
         ranked.push({
@@ -2388,7 +2479,7 @@ async function itemsFor(ctx, opts = {}) {
   const rawIds = String((q && (q.get('Ids') || q.get('ids'))) || '').trim();
   if (rawIds) {
     const ids = rawIds.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 50);
-    const loaded = (await Promise.all(ids.map((id) => itemById(id, ctx).catch(() => null)))).filter(Boolean);
+    const loaded = (await mapLimit(ids, 6, (id) => itemById(id, ctx).catch(() => null))).filter(Boolean);
     return { items: loaded, total: loaded.length, paged: true };
   }
   const parent = internalItemId(String((q && (q.get('ParentId') || q.get('parentId'))) || ''));
@@ -2425,7 +2516,7 @@ async function itemsFor(ctx, opts = {}) {
       const all = deps.localPage(ctx, localParent.libId, 0, 8000, undefined, { ...wanted, scan: true });
       const rows = ((all && all.items) || []).filter((row) => {
         const saved = typeof deps.jellyfinWatchGet === 'function'
-          ? deps.jellyfinWatchGet(ctx, `local:${localParent.libId}:${row.idx}`) : null;
+          ? deps.jellyfinWatchGet(ctx, `local:${localParent.libId}:${row.idx}`, row._watchKey) : null;
         return savedMatches(saved, view.filters);
       });
       return {
@@ -2478,8 +2569,10 @@ async function itemsFor(ctx, opts = {}) {
   if (parsed && parsed.type === 'series') return seasonsFor(parsed.tmdbId);
   if (parsed && parsed.type === 'season') return episodesFor(parsed.tmdbId, parsed.season);
   if (!parent && !types) {
-    const movies = await catalogList('movie', start, limit);
-    const shows = await catalogList('series', start, limit);
+    const [movies, shows] = await Promise.all([
+      catalogList('movie', start, limit),
+      catalogList('series', start, limit),
+    ]);
     return { items: movies.items.concat(shows.items), total: movies.total + shows.total, paged: true };
   }
   return [];
@@ -2534,10 +2627,26 @@ async function seasonsFor(tmdbId) {
 }
 
 async function episodesFor(tmdbId, season, preloadedShow = null) {
-  const show = preloadedShow || await tmdbGet(`/tv/${tmdbId}`);
-  const data = await tmdbGet(`/tv/${tmdbId}/season/${season}`);
+  const [show, data] = await Promise.all([
+    preloadedShow ? Promise.resolve(preloadedShow) : tmdbGet(`/tv/${tmdbId}`),
+    tmdbGet(`/tv/${tmdbId}/season/${season}`),
+  ]);
   const eps = data && Array.isArray(data.episodes) ? data.episodes : [];
-  if (show) rememberTmdbArt(`t${tmdbId}`, { poster: show.poster_path, backdrop: show.backdrop_path });
+  if (show) {
+    rememberTmdbArt(`t${tmdbId}`, { poster: show.poster_path, backdrop: show.backdrop_path });
+    rememberPlaySpecMeta(`t:${tmdbId}`, {
+      name: show.name || '',
+      year: Number(String(show.first_air_date || '').slice(0, 4)) || undefined,
+      typical: Array.isArray(show.episode_run_time) ? Number(show.episode_run_time[0]) : 0,
+    });
+  }
+  if (eps.length) {
+    const runtimes = new Map();
+    for (const ep of eps) {
+      if (ep && ep.episode_number) runtimes.set(Number(ep.episode_number), Number(ep.runtime) || 0);
+    }
+    rememberPlaySpecMeta(`s:${tmdbId}:${season}`, { runtimes });
+  }
   return eps.filter((ep) => ep && ep.episode_number).map((ep) => {
     const epPoster = ep.still_path || (show && show.backdrop_path) || (show && show.poster_path);
     const epBackdrop = ep.still_path || (show && show.backdrop_path);
@@ -2658,36 +2767,75 @@ function chosenSubtitleIndex(streams, wanted) {
   return (streams || []).some((row) => row.Type === 'Subtitle' && row.Index === n) ? n : -1;
 }
 
+const playSpecMetaCache = new Map();
+const PLAY_SPEC_META_CAP = 1000;
+const PLAY_SPEC_META_TTL_MS = 30 * 60 * 1000;
+function rememberPlaySpecMeta(key, val) {
+  if (!key || !val) return;
+  playSpecMetaCache.delete(key);
+  playSpecMetaCache.set(key, { val, exp: Date.now() + PLAY_SPEC_META_TTL_MS });
+  while (playSpecMetaCache.size > PLAY_SPEC_META_CAP) {
+    playSpecMetaCache.delete(playSpecMetaCache.keys().next().value);
+  }
+}
+function getPlaySpecMeta(key) {
+  const hit = playSpecMetaCache.get(key);
+  if (!hit) return null;
+  if (hit.exp <= Date.now()) { playSpecMetaCache.delete(key); return null; }
+  return hit.val;
+}
+
 async function playSpec(parsed) {
   if (!parsed) return null;
   if (parsed.type === 'movie') {
-    const d = await tmdbGet(`/movie/${parsed.tmdbId}`);
-    if (!d || !d.title) return null;
-    const year = Number(String(d.release_date || '').slice(0, 4)) || undefined;
+    const cached = getPlaySpecMeta(`m:${parsed.tmdbId}`);
+    let title = cached && cached.title;
+    let year = cached && cached.year;
+    let runtime = cached ? cached.runtime : 0;
+    if (!title) {
+      const d = await tmdbGet(`/movie/${parsed.tmdbId}`);
+      if (!d || !d.title) return null;
+      title = d.title;
+      year = Number(String(d.release_date || '').slice(0, 4)) || undefined;
+      runtime = Number(d.runtime) || 0;
+      rememberPlaySpecMeta(`m:${parsed.tmdbId}`, { title, year, runtime });
+    }
     return {
-      q: `${d.title}${year ? ` ${year}` : ''}`,
+      q: `${title}${year ? ` ${year}` : ''}`,
       tmdbId: parsed.tmdbId,
       mediaType: 'movie',
       year,
-      runtime: Number(d.runtime) || 0,
+      runtime,
     };
   }
   if (parsed.type !== 'episode') return null;
-  const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
-  if (!show || !show.name) return null;
-  const season = await tmdbGet(`/tv/${parsed.tmdbId}/season/${parsed.season}`);
-  const ep = season && Array.isArray(season.episodes) && season.episodes.find((row) => row.episode_number === parsed.episode);
-  const year = Number(String(show.first_air_date || '').slice(0, 4)) || undefined;
+  const cachedShow = getPlaySpecMeta(`t:${parsed.tmdbId}`);
+  const cachedSeason = getPlaySpecMeta(`s:${parsed.tmdbId}:${parsed.season}`);
+  const [show, season] = await Promise.all([
+    cachedShow && cachedShow.name ? Promise.resolve(null) : tmdbGet(`/tv/${parsed.tmdbId}`),
+    cachedSeason ? Promise.resolve(null) : tmdbGet(`/tv/${parsed.tmdbId}/season/${parsed.season}`),
+  ]);
+  const showName = (cachedShow && cachedShow.name) || (show && show.name) || '';
+  if (!showName) return null;
+  const year = cachedShow ? cachedShow.year : (Number(String((show && show.first_air_date) || '').slice(0, 4)) || undefined);
+  const typical = cachedShow ? cachedShow.typical : (Array.isArray(show && show.episode_run_time) ? Number(show.episode_run_time[0]) : 0);
+  if (show && show.name) rememberPlaySpecMeta(`t:${parsed.tmdbId}`, { name: show.name, year, typical });
+  let epRuntime = 0;
+  if (cachedSeason && cachedSeason.runtimes) {
+    epRuntime = Number(cachedSeason.runtimes.get(Number(parsed.episode))) || 0;
+  } else if (season && Array.isArray(season.episodes)) {
+    const ep = season.episodes.find((row) => row.episode_number === parsed.episode);
+    epRuntime = Number(ep && ep.runtime) || 0;
+  }
   const code = `S${pad2(parsed.season)}E${pad2(parsed.episode)}`;
-  const typical = Array.isArray(show.episode_run_time) ? Number(show.episode_run_time[0]) : 0;
   return {
-    q: `${show.name} ${code}`,
+    q: `${showName} ${code}`,
     tmdbId: parsed.tmdbId,
     mediaType: 'tv',
     season: parsed.season,
     ep: parsed.episode,
     year,
-    runtime: Number(ep && ep.runtime) || typical || 0,
+    runtime: epRuntime || typical || 0,
   };
 }
 
@@ -3141,6 +3289,7 @@ async function handleKind(kind, ctx) {
     if (isLiveProgramUuid(itemId)) {
       const key = String(itemId).toLowerCase();
       let cached = recentLivePrograms.get(key);
+      let verifiedChannel = false;
       if (!cached && typeof deps.jellyfinLiveChannels === 'function' && typeof deps.jellyfinLivePrograms === 'function') {
         const chans = await deps.jellyfinLiveChannels(ctx);
         const slice = (chans || []).slice(0, 200);
@@ -3150,13 +3299,14 @@ async function handleKind(kind, ctx) {
           for (const p of (progMap && progMap.get(ch.id)) || []) {
             if (liveProgramItemId(ch.id, p.start) === key) {
               cached = tvProgramItem(ch, p);
+              verifiedChannel = true;
               break;
             }
           }
           if (cached) break;
         }
       }
-      if (!cached || !(await findLiveChannel(ctx, cached.ChannelId))) {
+      if (!cached || (!verifiedChannel && !(await findLiveChannel(ctx, cached.ChannelId)))) {
         return send(ctx.res, 404, { error: 'not found' }, cors);
       }
       return send(ctx.res, 200, cached, cors);
@@ -3263,7 +3413,7 @@ async function handleKind(kind, ctx) {
     if (!n) {
       const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
       const nums = ((show && show.seasons) || []).map((row) => Number(row.season_number)).filter((row) => row > 0);
-      const groups = await Promise.all(nums.map((row) => episodesFor(parsed.tmdbId, row, show)));
+      const groups = await mapLimit(nums, 6, (row) => episodesFor(parsed.tmdbId, row, show));
       return send(ctx.res, 200, fullPageOf(groups.flat(), ctx), cors);
     }
     return send(ctx.res, 200, fullPageOf(await episodesFor(parsed.tmdbId, n), ctx), cors);
@@ -3298,8 +3448,14 @@ async function handleKind(kind, ctx) {
     const pipeFile = async (imgFile) => {
       let stat;
       try { stat = await fs.promises.stat(imgFile); } catch { return false; }
+      const etag = `W/"${stat.size}-${Math.round(stat.mtimeMs || 0)}"`;
+      if (ctx.req && ctx.req.headers && ctx.req.headers['if-none-match'] === etag) {
+        ctx.res.writeHead(304, { ...cors, etag, 'cache-control': 'private, max-age=86400' });
+        ctx.res.end();
+        return true;
+      }
       const type = imageMime(imgFile, Math.floor(stat.mtimeMs || 0));
-      ctx.res.writeHead(200, { ...cors, 'content-type': type, 'content-length': stat.size, 'cache-control': 'private, max-age=86400' });
+      ctx.res.writeHead(200, { ...cors, etag, 'content-type': type, 'content-length': stat.size, 'cache-control': 'private, max-age=86400' });
       if (ctx.req.method === 'HEAD') { ctx.res.end(); return true; }
       const rs = fs.createReadStream(imgFile);
       rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
@@ -3358,17 +3514,25 @@ async function handleKind(kind, ctx) {
       const cached = tmdbArtCache.get(`n${parsed.tmdbId}s${parsed.season}`);
       file = cached && (wide ? cached.backdrop : cached.poster);
       if (!file) {
-        const d = await tmdbGet(`/tv/${parsed.tmdbId}/season/${parsed.season}`);
         if (wide) {
-          const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
-          if (show) rememberTmdbArt(`t${parsed.tmdbId}`, { poster: show.poster_path, backdrop: show.backdrop_path });
-          file = show && show.backdrop_path;
-        } else {
-          file = d && d.poster_path;
+          const cachedShow = tmdbArtCache.get(`t${parsed.tmdbId}`);
+          file = cachedShow && cachedShow.backdrop;
           if (!file) {
             const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
             if (show) rememberTmdbArt(`t${parsed.tmdbId}`, { poster: show.poster_path, backdrop: show.backdrop_path });
-            file = show && show.poster_path;
+            file = show && show.backdrop_path;
+          }
+        } else {
+          const d = await tmdbGet(`/tv/${parsed.tmdbId}/season/${parsed.season}`);
+          file = d && d.poster_path;
+          if (!file) {
+            const cachedShow = tmdbArtCache.get(`t${parsed.tmdbId}`);
+            file = cachedShow && cachedShow.poster;
+            if (!file) {
+              const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
+              if (show) rememberTmdbArt(`t${parsed.tmdbId}`, { poster: show.poster_path, backdrop: show.backdrop_path });
+              file = show && show.poster_path;
+            }
           }
         }
         if (file) rememberTmdbArt(`n${parsed.tmdbId}s${parsed.season}`, wide ? { backdrop: file } : { poster: file });
@@ -3381,11 +3545,16 @@ async function handleKind(kind, ctx) {
         const ep = season && Array.isArray(season.episodes) && season.episodes.find((row) => row.episode_number === parsed.episode);
         file = (ep && ep.still_path) || '';
         if (!file) {
-          const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
           const landscape = wide || imageKind === 'thumb';
-          file = (show && (landscape ? (show.backdrop_path || show.poster_path) : (show.poster_path || show.backdrop_path)))
-            || (season && season.poster_path)
-            || '';
+          const cachedShow = tmdbArtCache.get(`t${parsed.tmdbId}`);
+          file = (cachedShow && (landscape ? (cachedShow.backdrop || cachedShow.poster) : (cachedShow.poster || cachedShow.backdrop))) || '';
+          if (!file) {
+            const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
+            if (show) rememberTmdbArt(`t${parsed.tmdbId}`, { poster: show.poster_path, backdrop: show.backdrop_path });
+            file = (show && (landscape ? (show.backdrop_path || show.poster_path) : (show.poster_path || show.backdrop_path)))
+              || (season && season.poster_path)
+              || '';
+          }
         }
         if (file) rememberTmdbArt(`e${parsed.tmdbId}s${parsed.season}e${parsed.episode}`, wide ? { backdrop: file } : { poster: file });
       }
@@ -3884,7 +4053,9 @@ async function handleKind(kind, ctx) {
       }
       const prev = (typeof deps.jellyfinWatchGet === 'function' && deps.jellyfinWatchGet(ctx, key)) || {};
       let item = null;
-      try { item = await itemById(itemId, ctx); } catch { item = null; }
+      if (!Number(prev.duration) || !(prev.meta && prev.meta.title)) {
+        try { item = await itemById(itemId, ctx); } catch { item = null; }
+      }
       const duration = Number(prev.duration) || (item && item.RunTimeTicks ? Math.round(item.RunTimeTicks / 10000000) : 0);
       const meta = { ...(prev.meta || {}) };
       if (item && item.Name && !meta.title) meta.title = item.Name;

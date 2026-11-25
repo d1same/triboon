@@ -1647,6 +1647,7 @@ fn player_surface_id(_window: &WebviewWindow) -> Result<i64, String> {
 fn restore_windowed_player(app: &tauri::AppHandle, player: &WebviewWindow) {
     let _ = player.set_always_on_top(false);
     let _ = player.set_fullscreen(false);
+    let _ = player.set_min_size(Some(tauri::LogicalSize::new(880.0, 560.0)));
     // Play stays windowed. The OS title bar must stay so the owner can drag,
     // minimize, and maximize. Exclusive fullscreen (F) hides decorations.
     let _ = player.set_decorations(true);
@@ -1744,9 +1745,12 @@ fn show_player(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
     // A leftover Live TV guide slot must not steal the next VOD/live session into PiP.
     // Play stays windowed; exclusive fullscreen is only the F / fullscreen button.
     // Cover the catalog first, then hide it — hiding first flashes the desktop.
+    let was_pip = stored_guide_pip(app).is_some();
     clear_guide_pip(app);
     let player = ensure_player_window(app)?;
-    restore_windowed_player(app, &player);
+    if !player.is_visible().unwrap_or(false) || was_pip {
+        restore_windowed_player(app, &player);
+    }
     player.show().map_err(|e| e.to_string())?;
     let _ = player.set_focus();
     if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
@@ -2053,6 +2057,15 @@ fn apply_stored_guide_pip(app: &tauri::AppHandle) -> Result<(), String> {
     let Some(payload) = stored_guide_pip(app) else {
         return Ok(());
     };
+    if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
+        if main.is_minimized().unwrap_or(false) || !main.is_visible().unwrap_or(true) {
+            if let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
+                let _ = player.set_always_on_top(false);
+                let _ = player.hide();
+            }
+            return Ok(());
+        }
+    }
     let Some((origin_x, origin_y, client_w, client_h, scale)) = catalog_client_metrics(app) else {
         return Ok(());
     };
@@ -2063,6 +2076,7 @@ fn apply_stored_guide_pip(app: &tauri::AppHandle) -> Result<(), String> {
     let player = ensure_player_window(app)?;
     let _ = player.set_fullscreen(false);
     let _ = player.set_decorations(false);
+    let _ = player.set_min_size(None::<tauri::LogicalSize<f64>>);
     let _ = player.set_position(tauri::PhysicalPosition::new(
         (x * scale).round() as i32,
         (y * scale).round() as i32,
@@ -2769,7 +2783,9 @@ fn load_session(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> Result<(), S
     session.loaded_at = Instant::now();
     session.buffering_since = None;
     session.last_paused = None;
-    session.ui.event_type = "loading".into();
+    if session.ui.event_type != "source_replacing" {
+        session.ui.event_type = "loading".into();
+    }
     session.ui.buffering = true;
     session.ui.playing = false;
     Ok(())

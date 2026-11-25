@@ -4218,9 +4218,14 @@ body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
     width:100%!important;min-width:0;flex:0 0 auto!important;min-height:48px;padding:11px 12px;border-radius:12px;
     grid-template-columns:22px minmax(0,1fr) 16px;gap:12px;opacity:1;color:var(--text)!important;
     border-bottom:1px solid rgba(255,255,255,.05)!important}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) #prefTabs button.on{background:rgba(255,255,255,.06)!important}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) #prefTabs button:is(:hover,.focus,:focus,:focus-visible),
+  body:not(.tv) #prefs:not(.mobileDetailOpen) #prefTabs button.on:is(:hover,.focus,:focus,:focus-visible){
+    background:var(--btnHover)!important;color:var(--btnFocusText)!important}
   body:not(.tv) #prefs:not(.mobileDetailOpen) #prefTabs button::after{
     content:"\203A";justify-self:end;font:600 20px/1 "Albert Sans",sans-serif;color:rgba(var(--fg),.42)}
-  body:not(.tv) #prefs:not(.mobileDetailOpen) #prefTabs button.on{background:rgba(255,255,255,.06)!important}
+  body:not(.tv) #prefs:not(.mobileDetailOpen) #prefTabs button:is(:hover,.focus,:focus,:focus-visible)::after{
+    color:var(--btnFocusText);opacity:.72}
   body:not(.tv) #prefs:not(.mobileDetailOpen) .setGrid{display:none!important}
   body:not(.tv) #prefs.mobileDetailOpen #prefTabs{display:none!important}
   body:not(.tv) #prefs.mobileDetailOpen #prefMobileBar{display:flex}
@@ -4249,6 +4254,26 @@ body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
     padding:0 4px 28px 20px!important}
   body:not(.tv) #prefs #playbackStory{max-height:52vh}
 }
+@media (orientation:landscape) and (min-width:680px) and (max-width:760px){
+  body:not(.tv) #prefs.open{
+    display:grid!important;grid-template-columns:192px minmax(0,1fr)!important;gap:0 20px!important;
+    padding-top:calc(56px + var(--safeT))!important;padding-right:20px!important;
+    overflow:hidden!important;align-content:stretch!important}
+  body:not(.tv) #prefs #prefMobileBar{display:none!important}
+  body:not(.tv) #prefs #prefTabs{
+    display:flex!important;flex-direction:column!important;position:relative;top:auto;
+    overflow-x:hidden;overflow-y:auto;max-height:100%;margin:0;padding-bottom:24px}
+  body:not(.tv) #prefs .prefTabDivider{border:0!important;margin:12px 0 4px!important;padding:4px 10px 2px!important}
+  body:not(.tv) #prefs #prefMyDivider{margin-top:0!important}
+  body:not(.tv) #prefs .prefTabDivider span{display:inline-block!important}
+  body:not(.tv) #prefs #prefTabs button{width:100%!important;min-width:0!important;white-space:nowrap}
+  body:not(.tv) #prefs>.setGrid:not([hidden]){display:grid!important}
+  body:not(.tv) #prefs>.setGrid{
+    grid-column:2!important;grid-row:1!important;min-height:0;max-height:100%;
+    overflow-y:auto;border-left:1px solid rgba(255,255,255,.08)!important;border-top:0!important;
+    padding:0 4px 28px 20px!important}
+  body:not(.tv) #prefs #playbackStory{max-height:52vh}
+}
 @media (orientation:landscape) and (min-width:680px){
   body.mobileShell:not(.tv) #prefs.open{
     display:grid!important;grid-template-columns:196px minmax(0,1fr)!important;gap:0 20px!important;
@@ -4262,6 +4287,7 @@ body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
   body.mobileShell:not(.tv) #prefs #prefMyDivider{margin-top:0!important}
   body.mobileShell:not(.tv) #prefs .prefTabDivider span{display:inline-block!important}
   body.mobileShell:not(.tv) #prefs #prefTabs button{width:100%!important;min-width:0!important;white-space:nowrap}
+  body.mobileShell:not(.tv) #prefs>.setGrid:not([hidden]){display:grid!important}
   body.mobileShell:not(.tv) #prefs>.setGrid{
     grid-column:2!important;grid-row:1!important;min-height:0;max-height:100%;
     overflow-y:auto;border-left:1px solid rgba(255,255,255,.08)!important;border-top:0!important;
@@ -9677,9 +9703,14 @@ function sizeRowsWindow(root) {
   root.style.maxHeight = rowsWindowHeight(root, rows, n, gap) + 'px';
   syncTvBackdropInfoBand();
 }
+let _resizeRaf = 0;
 window.addEventListener('resize', () => {
-  sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); fitRailToFullIcons(); fitRailWidth();
-  if (S.nativeGuideMode) scheduleNativeGuidePipSync();
+  if (_resizeRaf) return;
+  _resizeRaf = requestAnimationFrame(() => {
+    _resizeRaf = 0;
+    sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); fitRailToFullIcons(); fitRailWidth();
+    if (S.nativeGuideMode) scheduleNativeGuidePipSync();
+  });
 });
 function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }; }
 function rowsViewBelongsToCurrentView() {
@@ -11753,7 +11784,7 @@ async function openDetail(it, push = true, opts = {}) {
   // NOT browser history) return to the cast page instead of restoreDetailReturn's stale home.
   if (S.view === 'person') capturePersonReturnForDetail();
   S.detailFromPerson = (S.view === 'person') ? (S.personId || null) : null;
-  $('person').classList.remove('open');
+  $('person').classList.remove('open'); document.body.classList.remove('personOpen');
   $('detail').style.visibility = ''; // openPerson hides the detail page UNDER it — coming
   // from a person credit, the new detail rendered invisible and the D-pad worked a ghost page
   S.view = 'detail'; S.detailItem = it; S.detailData = null; S.detailSeason = null; S.detailSeasons = null;
@@ -12991,7 +13022,9 @@ function edgeScroll(el) {
   let dir = 0, raf = null;
   const step = () => {
     if (!dir || !el.isConnected) { dir = 0; raf = null; return; }
+    const before = el.scrollLeft;
     el.scrollLeft += dir * 14;
+    if (el.scrollLeft === before) { dir = 0; raf = null; return; }
     raf = requestAnimationFrame(step);
   };
   el.addEventListener('mousemove', (e) => {
@@ -23552,13 +23585,16 @@ async function discoverCoverItems(rawList, limit = 16, opts = {}) {
   const items = [];
   const seen = new Set();
   for (let i = 0; i < rawList.length && items.length < limit; i += 5) {
+    if (opts.current && !opts.current()) return items;
     const hits = await Promise.all(rawList.slice(i, i + 5).map(async (x) => {
+      if (opts.current && !opts.current()) return null;
       const it = mapTmdb(x);
       if (!it || !it.key || isWatched(it) || seen.has(it.key)) return null;
       const type = it.type === 'tv' ? 'tv' : 'movie';
       if (requireTrailer && !await discoverHasTrailer(type, x.id, x.title || x.name)) return null;
       return it;
     }));
+    if (opts.current && !opts.current()) return items;
     for (const it of hits) {
       if (!it || seen.has(it.key)) continue;
       seen.add(it.key);
@@ -23644,10 +23680,10 @@ async function loadDiscover() {
     ]);
     if (!current()) return;
     const [newMovies, newSeries, gemMovies, gemSeries, soonMovies, soonSeries] = await Promise.all([
-      discoverCoverItems(tmdbPosterResults(newM)),
-      discoverCoverItems(tmdbPosterResults(newT)),
-      discoverCoverItems(tmdbPosterResults(gemM)),
-      discoverCoverItems(tmdbPosterResults(gemT)),
+      discoverCoverItems(tmdbPosterResults(newM), 16, { current }),
+      discoverCoverItems(tmdbPosterResults(newT), 16, { current }),
+      discoverCoverItems(tmdbPosterResults(gemM), 16, { current }),
+      discoverCoverItems(tmdbPosterResults(gemT), 16, { current }),
       discoverCoverItems(tmdbPosterResults(soonM), 18, { requireTrailer: false, scan: 60 }),
       discoverCoverItems(tmdbPosterResults(soonT), 18, { requireTrailer: false, scan: 60 }),
     ]);
@@ -24099,7 +24135,7 @@ $('grid').addEventListener('scroll', () => {
   scheduleVirtualGridFromScroll(g);
   if (!browseGridCanPage() || !browseGridNearLoadedEnd(g)) return;
   requestBrowseGridPage();
-});
+}, { passive: true });
 
 const VIRTUAL_GRID_VIEWS = new Set(['movies', 'tv', 'kids', 'watchlist', 'library']);
 const VIRTUAL_GRID_OVERSCAN_ROWS = 4;
@@ -24756,23 +24792,28 @@ async function loadCalendar() {
   const weekEnd = weekDates[weekDates.length - 1];
   const restricted = (S.maxLevel ?? 4) < 4;
   const upcoming = [];
-  await Promise.all(ordered.slice(0, 40).map(async (m) => {
-    try {
-      const qs = restricted ? `?append_to_response=${m.type === 'tv' ? 'content_ratings' : 'release_dates'}` : '';
-      const d = await api(`/api/tmdb/${m.type}/${m.tmdbId}${qs}`);
-      if (!calCurrent()) return;
-      if (restricted && (d.adult || !levelAllows(certOf(d, m.type)))) return;
-      if (m.type === 'tv' && d.next_episode_to_air && d.next_episode_to_air.air_date) {
-        const ne = d.next_episode_to_air;
-        if (ne.air_date >= today && ne.air_date <= weekEnd) {
-          upcoming.push({ ...mapTmdb(d), tmdbId: m.tmdbId, type: 'tv', _date: ne.air_date,
-            badge: `S${pad2(ne.season_number)}E${pad2(ne.episode_number)}`,
-            sub: ne.name ? `"${ne.name}"` : `Season ${ne.season_number}` });
+  const calBatch = ordered.slice(0, 40);
+  let calNext = 0;
+  await Promise.all(Array.from({ length: Math.min(6, calBatch.length) }, async () => {
+    while (calNext < calBatch.length && calCurrent()) {
+      const m = calBatch[calNext++];
+      try {
+        const qs = restricted ? `?append_to_response=${m.type === 'tv' ? 'content_ratings' : 'release_dates'}` : '';
+        const d = await api(`/api/tmdb/${m.type}/${m.tmdbId}${qs}`);
+        if (!calCurrent()) return;
+        if (restricted && (d.adult || !levelAllows(certOf(d, m.type)))) continue;
+        if (m.type === 'tv' && d.next_episode_to_air && d.next_episode_to_air.air_date) {
+          const ne = d.next_episode_to_air;
+          if (ne.air_date >= today && ne.air_date <= weekEnd) {
+            upcoming.push({ ...mapTmdb(d), tmdbId: m.tmdbId, type: 'tv', _date: ne.air_date,
+              badge: `S${pad2(ne.season_number)}E${pad2(ne.episode_number)}`,
+              sub: ne.name ? `"${ne.name}"` : `Season ${ne.season_number}` });
+          }
+        } else if (m.type === 'movie' && d.release_date && d.release_date >= today && d.release_date <= weekEnd) {
+          upcoming.push({ ...mapTmdb(d), tmdbId: m.tmdbId, type: 'movie', _date: d.release_date, badge: 'Premiere', sub: 'Theatrical / digital release' });
         }
-      } else if (m.type === 'movie' && d.release_date && d.release_date >= today && d.release_date <= weekEnd) {
-        upcoming.push({ ...mapTmdb(d), tmdbId: m.tmdbId, type: 'movie', _date: d.release_date, badge: 'Premiere', sub: 'Theatrical / digital release' });
-      }
-    } catch {}
+      } catch {}
+    }
   }));
   if (!calCurrent()) return;
   upcoming.sort((a, b) => (a._date || '').localeCompare(b._date || ''));
@@ -25092,7 +25133,7 @@ function openLocalDetail(it) {
   S.view = 'detail'; S.detailItem = it; S.detailData = null; S.detailReq = (S.detailReq || 0) + 1;
   syncTvConnectButtons();
   $('bdInfo').classList.remove('show');
-  $('person').classList.remove('open');
+  $('person').classList.remove('open'); document.body.classList.remove('personOpen');
   $('detail').classList.add('open'); document.body.classList.add('detailOpen');
   $('home').classList.remove('show'); $('searchBar').classList.remove('show');
   $('browse').classList.remove('open'); $('discover').classList.remove('open');
@@ -25141,7 +25182,7 @@ async function openLocalShowDetail(it) {
   S.detailEpisodeAutoFocusDone = false;
   detailPlayTarget = null;
   $('bdInfo').classList.remove('show');
-  $('person').classList.remove('open');
+  $('person').classList.remove('open'); document.body.classList.remove('personOpen');
   $('detail').style.visibility = '';
   $('detail').classList.add('open'); document.body.classList.add('detailOpen');
   $('home').classList.remove('show'); $('searchBar').classList.remove('show');
@@ -25956,33 +25997,39 @@ function loadPersonalIptvChannels(timeoutMs = 18000) {
   return joined;
 }
 async function loadLiveChannelsCombined({ fav = false } = {}) {
-  const allowServer = !!(S.serverInfo && S.serverInfo.iptv && (!S.user || S.user.iptvAllowed !== false));
-  const emptyServer = { configured: false, epg: false, channels: [], hiddenGroups: [], globalHidden: [], sourceErrors: [] };
-  const serverPromise = allowServer ? (async () => {
-    try {
-      const q = new URLSearchParams({ lean: '1' });
-      if (fav) q.set('fav', '1');
-      return await api('/api/iptv/channels?' + q.toString());
-    } catch (e) {
-      return { ...emptyServer, configured: true, sourceErrors: [{ sourceName: 'Server Live TV', error: e.message || 'server playlist failed' }] };
-    }
-  })() : Promise.resolve(emptyServer);
-  const personalPromise = loadPersonalIptvChannels(fav ? 12000 : 18000);
-  let [server, personal] = await Promise.all([serverPromise, personalPromise]);
-  if (fav) personal = { ...personal, channels: (personal.channels || []).filter((c) => c.fav) };
-  const personalHidden = personalHiddenSet();
-  const channels = [
-    ...(Array.isArray(server.channels) ? server.channels : []),
-    ...(personal.channels || []),
-  ];
-  return {
-    configured: !!server.configured || !!personal.configured,
-    epg: !!server.epg || !!personal.epg,
-    channels,
-    hiddenGroups: [...new Set([...(server.hiddenGroups || []), ...personalHidden])],
-    globalHidden: server.globalHidden || [],
-    sourceErrors: [...(server.sourceErrors || []), ...(personal.sourceErrors || [])],
-  };
+  const inflightKey = fav ? '_liveCombinedFavJob' : '_liveCombinedJob';
+  if (S[inflightKey]) return S[inflightKey];
+  const job = (async () => {
+    const allowServer = !!(S.serverInfo && S.serverInfo.iptv && (!S.user || S.user.iptvAllowed !== false));
+    const emptyServer = { configured: false, epg: false, channels: [], hiddenGroups: [], globalHidden: [], sourceErrors: [] };
+    const serverPromise = allowServer ? (async () => {
+      try {
+        const q = new URLSearchParams({ lean: '1' });
+        if (fav) q.set('fav', '1');
+        return await api('/api/iptv/channels?' + q.toString());
+      } catch (e) {
+        return { ...emptyServer, configured: true, sourceErrors: [{ sourceName: 'Server Live TV', error: e.message || 'server playlist failed' }] };
+      }
+    })() : Promise.resolve(emptyServer);
+    const personalPromise = loadPersonalIptvChannels(fav ? 12000 : 18000);
+    let [server, personal] = await Promise.all([serverPromise, personalPromise]);
+    if (fav) personal = { ...personal, channels: (personal.channels || []).filter((c) => c.fav) };
+    const personalHidden = personalHiddenSet();
+    const channels = [
+      ...(Array.isArray(server.channels) ? server.channels : []),
+      ...(personal.channels || []),
+    ];
+    return {
+      configured: !!server.configured || !!personal.configured,
+      epg: !!server.epg || !!personal.epg,
+      channels,
+      hiddenGroups: [...new Set([...(server.hiddenGroups || []), ...personalHidden])],
+      globalHidden: server.globalHidden || [],
+      sourceErrors: [...(server.sourceErrors || []), ...(personal.sourceErrors || [])],
+    };
+  })().finally(() => { if (S[inflightKey] === job) S[inflightKey] = null; });
+  S[inflightKey] = job;
+  return job;
 }
 function clearLiveClientCaches({ channels = false } = {}) {
   epgMemo.clear();
@@ -26089,6 +26136,8 @@ function prefetchMusic() {
   api('/api/music/home').catch(() => {});
 }
 function parkLiveTvDom() {
+  if (S._guideIO) { try { S._guideIO.disconnect(); } catch {} S._guideIO = null; }
+  if (S._guideNowTimer) { clearInterval(S._guideNowTimer); S._guideNowTimer = null; }
   const grid = $('grid');
   if (!grid || !grid.querySelector('#chBar')) return;
   if (!S._liveHost) S._liveHost = document.createElement('div');
@@ -26106,6 +26155,8 @@ function restoreLiveTvDom() {
   $('browse').classList.add('liveTvBrowse');
   S.gridRoot = grid;
   S._gridKind = 'livetv';
+  const guideWrap = $('guide');
+  if (guideWrap && typeof guideWrap._startClock === 'function') guideWrap._startClock();
   bootReady();
   if (S.zone === 'rail') paintRailPreviewHero();
   else setTimeout(() => { if (S.view === 'livetv' && S.zone !== 'rail') focusContent(); }, 80);
@@ -26458,9 +26509,10 @@ async function renderGuideProgressive(body, pool) {
       backdrop: procBackdrop(210, 320, (Math.abs(ch.idx) % 12) + 9), poster: null };
     S.gridItems.push(it);
     const logo = safeUrl(ch.logo);
+    row.innerHTML = `<div class="gCh">${logo ? `<img src="${logo}" loading="lazy">` : `<span class="pgInit">${esc((liveNameParts(ch.name).name || '?')[0])}</span>`}${liveChannelLabelHtml(ch.name)}</div><div class="gTl"></div>`;
+    const tlEl = row.querySelector('.gTl');
     row._fillGuide = (nextProgs, isLoading) => {
-      row.innerHTML = `<div class="gCh">${logo ? `<img src="${logo}" loading="lazy">` : `<span class="pgInit">${esc((liveNameParts(ch.name).name || '?')[0])}</span>`}${liveChannelLabelHtml(ch.name)}</div>
-        <div class="gTl"><div class="gNow" style="left:${pct(now)}%"></div>${blocksFor(nextProgs, isLoading)}</div>`;
+      if (tlEl) tlEl.innerHTML = `<div class="gNow" style="left:${pct(Date.now())}%"></div>${blocksFor(nextProgs, isLoading)}`;
     };
     row._fillGuide(progs, loading);
     row.addEventListener('click', () => playChannel(it));
@@ -26474,26 +26526,51 @@ async function renderGuideProgressive(body, pool) {
   // ended an hour ago. A light minute tick repositions .gNow and retoggles .live from the data-s/e
   // stamps (no refetch); when the window is nearly consumed, do ONE full re-render (fresh window +
   // programmes) — deferred while the user is actively navigating so focus never jumps underfoot.
-  if (S._guideNowTimer) clearInterval(S._guideNowTimer);
-  S._guideNowTimer = setInterval(() => {
-    if (!wrap.isConnected || S.view !== 'livetv' || S.liveGuide !== true) {
-      clearInterval(S._guideNowTimer); S._guideNowTimer = null; return;
-    }
-    const t = Date.now();
-    if (t > w1 - 30 * 60000) {
-      if (t - (S._guideNavAt || 0) < 5000) return; // mid-navigation: try again next tick
-      clearInterval(S._guideNowTimer); S._guideNowTimer = null;
-      renderLiveTvBody();
-      return;
-    }
-    const left = pct(t) + '%';
-    wrap.querySelectorAll('.gNow').forEach((el) => { el.style.left = left; });
-    wrap.querySelectorAll('.gProg[data-s]').forEach((el) => {
-      const live = +el.dataset.s <= t && +el.dataset.e > t;
-      if (el.classList.contains('live') !== live) el.classList.toggle('live', live);
-      el.classList.toggle('past', +el.dataset.e <= t); // 3.5.1 guide C: shows that ended dim
-    });
-  }, 60000);
+  wrap._startClock = () => {
+    if (S._guideNowTimer) { clearInterval(S._guideNowTimer); S._guideNowTimer = null; }
+    const tick = () => {
+      if (!wrap.isConnected || S.view !== 'livetv' || S.liveGuide !== true) {
+        if (S._guideNowTimer) { clearInterval(S._guideNowTimer); S._guideNowTimer = null; }
+        return;
+      }
+      const t = Date.now();
+      if (t > w1 - 30 * 60000) {
+        if (t - (S._guideNavAt || 0) < 5000) return; // mid-navigation: try again next tick
+        clearInterval(S._guideNowTimer); S._guideNowTimer = null;
+        renderLiveTvBody();
+        return;
+      }
+      const left = pct(t) + '%';
+      wrap.querySelectorAll('.gNow').forEach((el) => { el.style.left = left; });
+      wrap.querySelectorAll('.gProg[data-s]').forEach((el) => {
+        const live = +el.dataset.s <= t && +el.dataset.e > t;
+        if (el.classList.contains('live') !== live) el.classList.toggle('live', live);
+        el.classList.toggle('past', +el.dataset.e <= t); // 3.5.1 guide C: shows that ended dim
+      });
+    };
+    S._guideNowTimer = setInterval(() => {
+      if (!wrap.isConnected || S.view !== 'livetv' || S.liveGuide !== true) {
+        clearInterval(S._guideNowTimer); S._guideNowTimer = null;
+        return;
+      }
+      const t = Date.now();
+      if (t > w1 - 30 * 60000) {
+        if (t - (S._guideNavAt || 0) < 5000) return; // mid-navigation: try again next tick
+        clearInterval(S._guideNowTimer); S._guideNowTimer = null;
+        renderLiveTvBody();
+        return;
+      }
+      const left = pct(t) + '%';
+      wrap.querySelectorAll('.gNow').forEach((el) => { el.style.left = left; });
+      wrap.querySelectorAll('.gProg[data-s]').forEach((el) => {
+        const live = +el.dataset.s <= t && +el.dataset.e > t;
+        if (el.classList.contains('live') !== live) el.classList.toggle('live', live);
+        el.classList.toggle('past', +el.dataset.e <= t); // 3.5.1 guide C: shows that ended dim
+      });
+    }, 60000);
+    if (wrap.isConnected) tick();
+  };
+  wrap._startClock();
 
   const hydrateRows = (rows) => {
     fetchGuideBatch(rows).then((progsByIdx) => {
@@ -26541,7 +26618,9 @@ async function renderGuideProgressive(body, pool) {
         if (sr.top < gr.bottom + 80) setTimeout(extend, 120);
       }
     };
+    if (S._guideIO) { try { S._guideIO.disconnect(); } catch {} S._guideIO = null; }
     const io = new IntersectionObserver((en) => { if (en.some((x) => x.isIntersecting)) extend(); }, { root: wrap, rootMargin: '240px 0px' });
+    S._guideIO = io;
     io.observe(sentinel);
   }
   body.appendChild(wrap);
@@ -27771,7 +27850,10 @@ function loadMusic() {
         if (S.view === 'music' && S.zone !== 'rail' && !$('musicSearch').value.trim()) focusContent();
       });
     }).catch(async () => {
-      S.musicHome = await loadMusicHomeFallback().catch(() => false);
+      try {
+        S.musicHome = await loadMusicHomeFallback();
+        if (!S.musicHome) S.musicHome = undefined;
+      } catch { S.musicHome = undefined; }
       renderMusicBrowse();
       refreshMusicChartsAfterFirstPaint();
     });
@@ -27804,14 +27886,15 @@ function showMusicHome() {
 }
 async function startMusicPlaylist(id, title, meta = {}) {
   S.musicPage = 'home';
-  S.musicPlaylist = { id, title, count: meta.count || null, cover: meta.cover || null, tracks: [], offset: 0, hasMore: true, loading: false };
+  const target = { id, title, count: meta.count || null, cover: meta.cover || null, tracks: [], offset: 0, hasMore: true, loading: false };
+  S.musicPlaylist = target;
   $('musicSearch').value = '';
   $('musicBrowse').classList.remove('hide');
   $('musicList').innerHTML = '';
   toast(`Loading ${title}...`);
   await loadMusicPlaylistPage(true);
-  const p = S.musicPlaylist;
-  if (p && p.tracks.length) playMusic(p.tracks, 0, { autoplay: false });
+  if (S.musicPlaylist !== target) return;
+  if (target.tracks.length) playMusic(target.tracks, 0, { autoplay: false });
   else toast('That playlist looks empty.');
 }
 async function loadMusicPlaylistPage(reset = false) {
@@ -30072,7 +30155,9 @@ function mergeServerSettingsIntoPrefs() {
 }
 mergeServerSettingsIntoPrefs();
 function isPhoneSettingsDrilldown() {
-  return !document.body.classList.contains('tv') && window.innerWidth <= 760;
+  if (document.body.classList.contains('tv')) return false;
+  if (window.innerWidth >= 680 && window.innerWidth > window.innerHeight) return false;
+  return window.innerWidth <= 760;
 }
 function syncPrefMobileHeader(b) {
   const title = $('prefMobileTitle');
@@ -31559,9 +31644,12 @@ async function searchChannels(q) {
       if (r.configured) fillLiveState(r);
       else S._chSearchCache = [];
     }
-    return S._chSearchCache
-      .filter((ch) => liveChannelMatchesQuery(ch, q)).slice(0, 12)
-      .map((ch, i) => ({ key: 'live:' + ch.idx, title: ch.name, genre: liveChannelSubtitle(ch), rating: '—',
+    const hits = [];
+    for (let j = 0; j < S._chSearchCache.length && hits.length < 12; j++) {
+      const ch = S._chSearchCache[j];
+      if (liveChannelMatchesQuery(ch, q)) hits.push(ch);
+    }
+    return hits.map((ch, i) => ({ key: 'live:' + ch.idx, title: ch.name, genre: liveChannelSubtitle(ch), rating: '—',
         _channel: ch.idx, _logo: ch.logo, _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
         _nativeFallbackUrl: ch.nativeFallbackUrl, _nativeFallbackMime: ch.nativeFallbackMime || '', _chid: ch.id,
         _sourceName: ch.sourceName || '',
@@ -31962,14 +32050,17 @@ async function doSearch() {
       const qs = encodeURIComponent(q) + '&include_adult=false';
       // Query /search/movie and /search/tv in parallel instead of /search/multi so popular actors
       // and directors never crowd movies or shows out of the 20-slot page.
-      const [rm, rt, live, lib] = await Promise.all([
+      const liveJob = searchChannels(q).catch(() => []);
+      const liveFast = S._chSearchCache && Date.now() - (S._liveAt || 0) < LIVE_TTL;
+      const [rm, rt, liveNow, lib] = await Promise.all([
         api('/api/tmdb/search/movie?query=' + qs, { signal: sig, timeoutMs: 12000 }).catch(() => null),
         api('/api/tmdb/search/tv?query=' + qs, { signal: sig, timeoutMs: 12000 }).catch(() => null),
-        searchChannels(q),
+        liveFast ? liveJob : Promise.resolve([]),
         libJob,
       ]);
       if (!current()) return;
       if (!rm && !rt) throw new Error('tmdb search failed');
+      const live = liveNow;
       const r = {
         didYouMean: (rm && rm.didYouMean) || (rt && rt.didYouMean) || '',
         originalQuery: (rm && rm.originalQuery) || (rt && rt.originalQuery) || q,
@@ -32014,11 +32105,23 @@ async function doSearch() {
         : [{ name: 'Movies', items: movies }, { name: 'TV Shows', items: shows }];
       if (libHits.length || movies.length || shows.length || live.length) {
         if (searchAbort === ac) searchAbort = null;
-        return renderSearchSections([
-          { name: 'Library', items: libHits },
-          ...catalogSecs,
-          { name: 'Live TV', items: live },
-        ]);
+        const baseSecs = [{ name: 'Library', items: libHits }, ...catalogSecs];
+        renderSearchSections([...baseSecs, { name: 'Live TV', items: live }]);
+        if (!liveFast && liveTvAvailable()) {
+          liveJob.then((lateLive) => {
+            if (!current() || !lateLive || !lateLive.length) return;
+            renderSearchSections([...baseSecs, { name: 'Live TV', items: lateLive }]);
+          });
+        }
+        return;
+      }
+      if (!liveFast && liveTvAvailable()) {
+        const lateLive = await liveJob;
+        if (!current()) return;
+        if (lateLive && lateLive.length) {
+          if (searchAbort === ac) searchAbort = null;
+          return renderSearchSections([{ name: 'Live TV', items: lateLive }]);
+        }
       }
     } catch (e) {
       if ((ac && ac.signal.aborted) || !current()) return;
@@ -32444,7 +32547,7 @@ function paintUserRecentCovers() {
 function startActivityLive() {
   if (S._activityLiveT) return;
   S._activityLiveT = setInterval(() => {
-    if (accountTabKey() === 'activity') refreshActivity();
+    if (S.view === 'prefs' && accountTabKey() === 'activity') refreshActivity();
     else stopActivityLive();
   }, 15000);
 }
@@ -33675,7 +33778,8 @@ function switchView(v, push = true, opts = {}) {
     if (prevView !== 'player') S._playIntent = (S._playIntent || 0) + 1;
     S.detailItem = null; S.qualityPref = null;
   }
-  $('detail').classList.remove('open'); document.body.classList.remove('detailOpen'); $('person').classList.remove('open');
+  if (prevView === 'prefs' && v !== 'prefs' && typeof stopActivityLive === 'function') stopActivityLive();
+  $('detail').classList.remove('open'); document.body.classList.remove('detailOpen'); $('person').classList.remove('open'); document.body.classList.remove('personOpen');
   document.querySelectorAll('.railBtn[data-nav]').forEach((b) => b.classList.toggle('active', b.dataset.nav === v));
   document.querySelectorAll('.railBtn[data-libid]').forEach((b) =>
     b.classList.toggle('active', v === 'library' && S.currentLib && b.dataset.libid === S.currentLib.id));
@@ -34067,7 +34171,7 @@ addEventListener('wheel', () => { S.pointer = true; }, { passive: true, capture:
 // couldn't move them left/right. Translate a vertical wheel over one of these rows into horizontal
 // scroll; at the row's start/end, fall through so the wheel scrolls the PAGE normally. Scoped to
 // .abRowScroll only, so the rest of the app keeps its wheel-stays-vertical behavior.
-addEventListener('wheel', (e) => {
+const handleAbRowWheel = (e) => {
   const row = e.target.closest && e.target.closest('.abRowScroll');
   if (!row || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
   if (row.scrollWidth <= row.clientWidth + 1) return; // nothing to scroll horizontally
@@ -34075,7 +34179,8 @@ addEventListener('wheel', (e) => {
   if ((e.deltaY < 0 && atStart) || (e.deltaY > 0 && atEnd)) return; // let the page scroll past the edges
   row.scrollLeft += e.deltaY;
   e.preventDefault();
-}, { passive: false });
+};
+['audiobooks', 'abDetail'].forEach((id) => { const n = $(id); if (n) n.addEventListener('wheel', handleAbRowWheel, { passive: false }); });
 function pointerHover() { return S.pointer && performance.now() - _mouseAt < 150; }
 function smoothFocusScrollOk() {
   try {
@@ -36790,7 +36895,13 @@ async function enterAppShell() {
   for (const id of ['rows', 'discoverRows', 'grid', 'personGrid']) {
     const el = $(id); if (!el || el._fadeWired) continue;
     el._fadeWired = true;
-    el.addEventListener('scroll', () => el.style.setProperty('--tf', Math.min(72, el.scrollTop) + 'px'), { passive: true });
+    let lastTf = -1;
+    el.addEventListener('scroll', () => {
+      const next = Math.min(72, Math.round(el.scrollTop));
+      if (next === lastTf) return;
+      lastTf = next;
+      el.style.setProperty('--tf', next + 'px');
+    }, { passive: true });
   }
   // 3.5.1 (owner, Android TV): building Home under the splash froze the logo build on the Shield
   // (screen recordings: the letters stalled 100-300 ms at a time). Start the network work now, but
@@ -38043,14 +38154,17 @@ function abFocusEl(el) { // focus a specific card, keeping the flat AB.focusIdx 
 // on DOWN and landed geometrically on UP — the owner's "goes up/down in the same page" complaint.)
 function abRows() {
   const rows = [];
-  abBrowseCards().forEach((el) => {
-    const top = Math.round(el.getBoundingClientRect().top);
-    let row = rows.find((r) => Math.abs(r.top - top) < 40);
-    if (!row) { row = { top, cards: [] }; rows.push(row); }
-    row.cards.push(el);
+  const measured = abBrowseCards().map((el) => {
+    const r = el.getBoundingClientRect();
+    return { el, top: Math.round(r.top), left: r.left };
+  });
+  measured.forEach((m) => {
+    let row = rows.find((r) => Math.abs(r.top - m.top) < 40);
+    if (!row) { row = { top: m.top, cards: [] }; rows.push(row); }
+    row.cards.push(m);
   });
   rows.sort((a, b) => a.top - b.top);
-  rows.forEach((r) => r.cards.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left));
+  rows.forEach((r) => { r.cards.sort((a, b) => a.left - b.left); r.cards = r.cards.map((m) => m.el); });
   return rows;
 }
 function abRowColOf(rows, el) {
@@ -38194,6 +38308,11 @@ function abHandleKey(e, k) {
         return true;
       }
       if (k === 'ArrowRight' || k === 'ArrowLeft') {
+        if (onField && !document.body.classList.contains('tv')) {
+          const val = ae.value || '';
+          if (k === 'ArrowLeft' && ae.selectionStart > 0) return false;
+          if (k === 'ArrowRight' && ae.selectionStart < val.length) return false;
+        }
         e.preventDefault(); e.stopPropagation();
         const chain = [abMicVisible() ? $('abMicBtn') : null, $('abSearch'), $('abClearBtn').hidden ? null : $('abClearBtn')].filter(Boolean);
         let ci = chain.indexOf(ae);

@@ -207,8 +207,10 @@ class LibraryDb {
 
   item(libId, idx) {
     if (!this.available || !this.db) return null;
-    const row = this.db.prepare('SELECT payload FROM library_items WHERE lib_id = ? AND idx = ?')
-      .get(libId, parseInt(idx, 10));
+    if (!this._byIdxStmt) {
+      this._byIdxStmt = this.db.prepare('SELECT payload FROM library_items WHERE lib_id = ? AND idx = ?');
+    }
+    const row = this._byIdxStmt.get(libId, parseInt(idx, 10));
     return this._parsePayload(row);
   }
 
