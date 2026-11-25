@@ -127,7 +127,7 @@ test('Apple client: web/index.html wires AVPlayer HLS handoff, hides APK/EXE dow
   assert.match(html, /function appleHlsVodUrl\(/);
   assert.match(html, /appleAvPlayer && p\.hlsUrl\) nativeUrl = appleHlsVodUrl\(p, seekStart\)/);
   assert.match(html, /if \(appleVodHls\) \{\s*\n\s*p\.startOffset = 0;\s*\n\s*payload\.startOffset = 0;/);
-  assert.match(html, /plat === 'ios' \|\| plat === 'tvos' \|\| TriboonTV\.__triboonAppleBridge === true/);
+  assert.match(html, /kind === 'android' && \(plat === 'ios' \|\| plat === 'tvos' \|\| TriboonTV\.__triboonAppleBridge === true\)/);
   assert.match(html, /if \(id === 'avplayer'\) return 'AVPlayer'/);
   assert.match(html, /addLiveFallback\(it\._hlsUrl, 'application\/vnd\.apple\.mpegurl'\)/);
   assert.match(html, /function isAppleAppShell\(\)/);

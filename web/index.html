@@ -4433,15 +4433,6 @@ body[data-theme="graphite"] #filterMenuList button:is(.focus,:hover){background:
 body[data-theme="graphite"] #filterMenuList button:is(.focus,:hover) .mark{color:#14161A}
 body[data-theme="graphite"] .filterBar select{min-height:46px;padding:0 44px 0 18px;border:0;border-radius:6px;background-color:rgba(237,239,243,.08);font:600 15px "Sora",system-ui,sans-serif;color:var(--text);box-shadow:none}
 body[data-theme="graphite"] .filterBar select:is(.focus,:focus,:hover){background-color:#EDEFF3;color:#14161A;outline:0;box-shadow:none}
-/* Phones: keep genre + sort compact on ONE row beside the menu button so Sort never wraps over the poster grid. */
-@media (max-width:600px){
-  body:not(.tv) #browse .browseHead{flex:0 0 auto;min-height:38px;margin-left:48px;margin-bottom:10px;align-items:center}
-  body:not(.tv) #browse .filterBar{display:flex;flex-wrap:nowrap;align-items:center;gap:6px;width:100%;max-width:100%;overflow-x:auto;scrollbar-width:none}
-  body:not(.tv) #browse .filterBar::-webkit-scrollbar{display:none}
-  body:not(.tv) #browse .filterBar select{flex:1 1 110px;min-width:108px;max-width:none;min-height:36px;height:36px;padding:0 26px 0 10px;background-position:right 9px center;font-size:13px!important;line-height:36px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  body:not(.tv) #browse .filterBar .libAdminCtl{flex:0 0 auto;height:36px;padding:0 10px;font-size:12px;white-space:nowrap}
-  body:not(.tv) #grid,body:not(.tv) #personGrid{-webkit-mask:none;mask:none}
-}
 /* 3.5.1 (owner, browser): the round back button on title/person pages becomes the same 6px square as the profile tile above it. */
 body[data-theme="graphite"] :is(#detail .back,#person .back){border-radius:6px;box-shadow:none}
 /* 3.5.1 (owner pick "guide C", Live TV page + in-player guide): short channel names with small tags,
@@ -4746,6 +4737,15 @@ body[data-theme="graphite"].mobileShell:not(.tv) #prefs .setGrid{border:0;paddin
 body[data-theme="graphite"].mobileShell:not(.tv) #prefs .hint{font:400 13px/1.45 "Albert Sans",system-ui,sans-serif;letter-spacing:0;word-break:normal;overflow-wrap:break-word;color:rgba(237,239,243,.6)}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* Phones: keep genre + sort compact on ONE row beside the menu button so Sort never wraps over the poster grid. */
+@media (max-width:600px){
+  body:not(.tv) #browse .browseHead{flex:0 0 auto;min-height:38px;margin-left:48px;margin-bottom:10px;align-items:center}
+  body:not(.tv) #browse .filterBar{display:flex;flex-wrap:nowrap;align-items:center;gap:6px;width:100%;max-width:100%;overflow-x:auto;scrollbar-width:none}
+  body:not(.tv) #browse .filterBar::-webkit-scrollbar{display:none}
+  body:not(.tv) #browse .filterBar select{flex:1 1 110px;min-width:108px;max-width:none;min-height:36px;height:36px;padding:0 26px 0 10px;background-position:right 9px center;font-size:13px!important;line-height:36px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  body:not(.tv) #browse .filterBar .libAdminCtl{flex:0 0 auto;height:36px;padding:0 10px;font-size:12px;white-space:nowrap}
+  body:not(.tv) #grid,body:not(.tv) #personGrid{-webkit-mask:none;mask:none}
+}
 </style>
 </head>
 <body data-theme="graphite" data-spotlight>
@@ -15168,10 +15168,11 @@ function playbackClientKind() {
   let kind;
   try {
     const app = TriboonTV.appVersion ? JSON.parse(TriboonTV.appVersion() || '{}') : {};
+    kind = app && app.platform === 'windows' ? 'windows' : 'android';
     const plat = app && typeof app.platform === 'string' ? app.platform.toLowerCase() : '';
-    if (plat === 'windows') kind = 'windows';
-    else if (plat === 'ios' || plat === 'tvos' || TriboonTV.__triboonAppleBridge === true) kind = plat || 'ios';
-    else kind = 'android';
+    if (kind === 'android' && (plat === 'ios' || plat === 'tvos' || TriboonTV.__triboonAppleBridge === true)) {
+      kind = (plat === 'ios' || plat === 'tvos') ? plat : 'ios';
+    }
   } catch { kind = TriboonTV.__triboonAppleBridge === true ? 'ios' : 'android'; }
   S._clientKind = kind;
   return kind;
