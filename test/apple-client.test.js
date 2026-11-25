@@ -124,9 +124,13 @@ test('Apple client: bridge.js enforces same-origin VOD URLs, sanitizes Live TV, 
 test('Apple client: web/index.html wires AVPlayer HLS handoff, hides APK/EXE downloads, and guards Jellyfin redirect', () => {
   const html = read('web/index.html');
   assert.match(html, /window\.TriboonTV && window\.TriboonTV\.__triboonAppleBridge === true/);
-  assert.match(html, /appleAvPlayer && p\.hlsUrl/);
+  assert.match(html, /function appleHlsVodUrl\(/);
+  assert.match(html, /appleAvPlayer && p\.hlsUrl\) nativeUrl = appleHlsVodUrl\(p, seekStart\)/);
+  assert.match(html, /if \(appleVodHls\) \{\s*\n\s*p\.startOffset = 0;\s*\n\s*payload\.startOffset = 0;/);
+  assert.match(html, /plat === 'ios' \|\| plat === 'tvos' \|\| TriboonTV\.__triboonAppleBridge === true/);
   assert.match(html, /if \(id === 'avplayer'\) return 'AVPlayer'/);
   assert.match(html, /addLiveFallback\(it\._hlsUrl, 'application\/vnd\.apple\.mpegurl'\)/);
   assert.match(html, /function isAppleAppShell\(\)/);
   assert.match(html, /updates through TestFlight or the App Store/);
+  assert.match(html, /body:not\(\.tv\) #browse \.filterBar\{display:flex;flex-wrap:nowrap/);
 });

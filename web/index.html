@@ -4433,6 +4433,15 @@ body[data-theme="graphite"] #filterMenuList button:is(.focus,:hover){background:
 body[data-theme="graphite"] #filterMenuList button:is(.focus,:hover) .mark{color:#14161A}
 body[data-theme="graphite"] .filterBar select{min-height:46px;padding:0 44px 0 18px;border:0;border-radius:6px;background-color:rgba(237,239,243,.08);font:600 15px "Sora",system-ui,sans-serif;color:var(--text);box-shadow:none}
 body[data-theme="graphite"] .filterBar select:is(.focus,:focus,:hover){background-color:#EDEFF3;color:#14161A;outline:0;box-shadow:none}
+/* Phones: keep genre + sort compact on ONE row beside the menu button so Sort never wraps over the poster grid. */
+@media (max-width:600px){
+  body:not(.tv) #browse .browseHead{flex:0 0 auto;min-height:38px;margin-left:48px;margin-bottom:10px;align-items:center}
+  body:not(.tv) #browse .filterBar{display:flex;flex-wrap:nowrap;align-items:center;gap:6px;width:100%;max-width:100%;overflow-x:auto;scrollbar-width:none}
+  body:not(.tv) #browse .filterBar::-webkit-scrollbar{display:none}
+  body:not(.tv) #browse .filterBar select{flex:1 1 110px;min-width:108px;max-width:none;min-height:36px;height:36px;padding:0 26px 0 10px;background-position:right 9px center;font-size:13px!important;line-height:36px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  body:not(.tv) #browse .filterBar .libAdminCtl{flex:0 0 auto;height:36px;padding:0 10px;font-size:12px;white-space:nowrap}
+  body:not(.tv) #grid,body:not(.tv) #personGrid{-webkit-mask:none;mask:none}
+}
 /* 3.5.1 (owner, browser): the round back button on title/person pages becomes the same 6px square as the profile tile above it. */
 body[data-theme="graphite"] :is(#detail .back,#person .back){border-radius:6px;box-shadow:none}
 /* 3.5.1 (owner pick "guide C", Live TV page + in-player guide): short channel names with small tags,
@@ -15159,8 +15168,11 @@ function playbackClientKind() {
   let kind;
   try {
     const app = TriboonTV.appVersion ? JSON.parse(TriboonTV.appVersion() || '{}') : {};
-    kind = app && app.platform === 'windows' ? 'windows' : 'android';
-  } catch { kind = 'android'; }
+    const plat = app && typeof app.platform === 'string' ? app.platform.toLowerCase() : '';
+    if (plat === 'windows') kind = 'windows';
+    else if (plat === 'ios' || plat === 'tvos' || TriboonTV.__triboonAppleBridge === true) kind = plat || 'ios';
+    else kind = 'android';
+  } catch { kind = TriboonTV.__triboonAppleBridge === true ? 'ios' : 'android'; }
   S._clientKind = kind;
   return kind;
 }
@@ -16486,6 +16498,10 @@ function hlsPlaybackUrl(p, seekStart = 0) {
   // captions, the time bar and saved progress ran ahead of the picture (SUBG-1).
   return `${p.hlsUrl}&start=${Math.max(0, Math.round((seekStart || 0) * 1000) / 1000)}&audio=${audio}&audioSafe=1`;
 }
+function appleHlsVodUrl(p, seekStart = 0) {
+  const dur = Math.max(0, Math.round(Number(p && (p.duration || p.nativeDuration)) || 0));
+  return `${hlsPlaybackUrl(p, seekStart)}&vod=1${dur > 0 ? `&dur=${dur}` : ''}`;
+}
 function hlsTranscodePlaybackUrl(p, seekStart = 0, height = 1080) {
   const h = Math.max(360, parseInt(height || (p && p.quality) || 1080, 10) || 1080);
   return `${hlsPlaybackUrl(p, seekStart)}&transcode=1&height=${h}`;
@@ -16744,13 +16760,14 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
   const baseUrl = kind === 'remux' ? p.remuxUrl : (kind === 'transcode' ? p.transcodeUrl : p.streamUrl);
   const serverSeek = kind === 'remux' || kind === 'transcode';
   const appleAvPlayer = !!(window.TriboonTV && window.TriboonTV.__triboonAppleBridge === true && nativePlayerTelemetryId() === 'avplayer');
+  const appleVodHls = appleAvPlayer && kind === 'remux' && !!p.hlsUrl;
   let nativeUrl = baseUrl;
   if (kind === 'transcode') {
     nativeUrl = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
     if (appleAvPlayer && p.hlsUrl) nativeUrl = hlsTranscodePlaybackUrl(p, seekStart, p.quality || 1080);
   } else if (kind === 'remux') {
     nativeUrl = remuxPlaybackUrl(p, seekStart, { native: true }); // native ExoPlayer → 5.1, not the stereo audioSafe path
-    if (appleAvPlayer && p.hlsUrl) nativeUrl = hlsPlaybackUrl(p, seekStart);
+    if (appleAvPlayer && p.hlsUrl) nativeUrl = appleHlsVodUrl(p, seekStart);
   }
   p._nativeStartSkew = 0;
   const subPayload = nativeSubtitlePayload(p, sub.rel || '', 'startup');
@@ -16814,6 +16831,16 @@ function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
   // track it plays as it is (nativeDirectPlayableTwin), ask for that language, or a file with no
   // track in the saved one can start on another language's track (second check 3.5.5).
   if (kind === 'direct' && p._directTwinLang) payload.preferredAudioLanguage = p._directTwinLang;
+  // Apple AVPlayer cannot play endless HTTP 200 fMP4 remux/transcode pipes — swap fallbacks to
+  // Apple-native HLS VOD URLs so a startup hiccup never falls back to a hanging black screen.
+  if (appleAvPlayer) {
+    if (appleVodHls) {
+      p.startOffset = 0;
+      payload.startOffset = 0;
+    }
+    payload.remuxUrl = p.hlsUrl ? new URL(appleHlsVodUrl(p, seekStart), location.origin).href : '';
+    payload.transcodeUrl = p.hlsUrl && p.transcodeUrl ? new URL(hlsTranscodePlaybackUrl(p, seekStart, p.quality || 1080), location.origin).href : '';
+  }
   if (sub.rel) {
     if (!(typeof p.subTrack === 'string' && p.subTrack)) p._subAutoPick = sub.rel; // the start-up pick (brief 143)
     p.subTrack = sub.rel;
