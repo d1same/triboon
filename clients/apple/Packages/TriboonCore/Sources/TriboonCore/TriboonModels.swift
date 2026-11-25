@@ -64,6 +64,36 @@ public struct TMDBTitle: Codable, Identifiable, Hashable, Sendable {
     public let numberOfSeasons: Int?
     public let seasons: [TMDBSeasonSummary]?
 
+    public init(
+        id: Int,
+        mediaType: String? = nil,
+        title: String? = nil,
+        name: String? = nil,
+        overview: String? = nil,
+        posterPath: String? = nil,
+        backdropPath: String? = nil,
+        releaseDate: String? = nil,
+        firstAirDate: String? = nil,
+        voteAverage: Double? = nil,
+        runtime: Int? = nil,
+        numberOfSeasons: Int? = nil,
+        seasons: [TMDBSeasonSummary]? = nil
+    ) {
+        self.id = id
+        self.mediaType = mediaType
+        self.title = title
+        self.name = name
+        self.overview = overview
+        self.posterPath = posterPath
+        self.backdropPath = backdropPath
+        self.releaseDate = releaseDate
+        self.firstAirDate = firstAirDate
+        self.voteAverage = voteAverage
+        self.runtime = runtime
+        self.numberOfSeasons = numberOfSeasons
+        self.seasons = seasons
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, title, name, overview, runtime, seasons
         case mediaType = "media_type"
@@ -147,6 +177,26 @@ public struct TMDBEpisode: Codable, Identifiable, Hashable, Sendable {
     public let stillPath: String?
     public let runtime: Int?
     public let airDate: String?
+
+    public init(
+        id: Int? = nil,
+        episodeNumber: Int,
+        seasonNumber: Int? = nil,
+        name: String? = nil,
+        overview: String? = nil,
+        stillPath: String? = nil,
+        runtime: Int? = nil,
+        airDate: String? = nil
+    ) {
+        self.id = id
+        self.episodeNumber = episodeNumber
+        self.seasonNumber = seasonNumber
+        self.name = name
+        self.overview = overview
+        self.stillPath = stillPath
+        self.runtime = runtime
+        self.airDate = airDate
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, name, overview, runtime
@@ -255,6 +305,42 @@ public struct LocalItem: Codable, Identifiable, Hashable, Sendable {
     public let thumbUrl: String?
     public let tmdbId: Int?
     public let episodeCount: Int?
+
+    public init(
+        idx: Int,
+        showIdx: Int? = nil,
+        kind: String? = nil,
+        title: String,
+        epTitle: String? = nil,
+        year: Int? = nil,
+        s: Int? = nil,
+        e: Int? = nil,
+        runtime: Double? = nil,
+        overview: String? = nil,
+        poster: String? = nil,
+        backdrop: String? = nil,
+        artUrl: String? = nil,
+        thumbUrl: String? = nil,
+        tmdbId: Int? = nil,
+        episodeCount: Int? = nil
+    ) {
+        self.idx = idx
+        self.showIdx = showIdx
+        self.kind = kind
+        self.title = title
+        self.epTitle = epTitle
+        self.year = year
+        self.s = s
+        self.e = e
+        self.runtime = runtime
+        self.overview = overview
+        self.poster = poster
+        self.backdrop = backdrop
+        self.artUrl = artUrl
+        self.thumbUrl = thumbUrl
+        self.tmdbId = tmdbId
+        self.episodeCount = episodeCount
+    }
 
     public var id: String { "\(idx)-\(title)" }
 
