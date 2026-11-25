@@ -1,0 +1,97 @@
+name: apple client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'clients/apple/**'
+      - '.github/workflows/apple.yml'
+  pull_request:
+    paths:
+      - 'clients/apple/**'
+      - '.github/workflows/apple.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apple-build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run TriboonCore Swift unit tests
+        working-directory: clients/apple/Packages/TriboonCore
+        run: swift test
+
+      - name: Install XcodeGen and generate project
+        working-directory: clients/apple
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build TriboonIOS (iPhone & iPad Simulator)
+        working-directory: clients/apple
+        run: |
+          xcodebuild \
+            -project TriboonApple.xcodeproj \
+            -scheme TriboonIOS \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/ios-sim \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/ios-sim/Build/Products/Debug-iphonesimulator/Triboon.app \
+            build/TriboonIOS-Simulator.app.zip
+
+      - name: Build TriboonIOS (iPhone & iPad Device ARM64 unsigned)
+        working-directory: clients/apple
+        run: |
+          xcodebuild \
+            -project TriboonApple.xcodeproj \
+            -scheme TriboonIOS \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios-dev \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Build TriboonTV (Apple TV Simulator)
+        working-directory: clients/apple
+        run: |
+          xcodebuild \
+            -project TriboonApple.xcodeproj \
+            -scheme TriboonTV \
+            -configuration Debug \
+            -destination 'generic/platform=tvOS Simulator' \
+            -derivedDataPath build/tvos-sim \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build TriboonTV (Apple TV Device ARM64 unsigned)
+        working-directory: clients/apple
+        run: |
+          xcodebuild \
+            -project TriboonApple.xcodeproj \
+            -scheme TriboonTV \
+            -configuration Release \
+            -destination 'generic/platform=tvOS' \
+            -derivedDataPath build/tvos-dev \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Upload iOS Simulator build for TestingBot / Xcode testing
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        with:
+          name: TriboonIOS-Simulator
+          path: clients/apple/build/TriboonIOS-Simulator.app.zip
+          retention-days: 14

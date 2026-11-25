@@ -16,6 +16,7 @@
 (function () {
   function jumpJellyfin() {
     if (location.pathname !== '/' || window.TriboonAndroid || window.__TAURI__) return false;
+    if (window.TriboonTV && window.TriboonTV.__triboonAppleBridge === true) return false;
     if (!window.NativeShell && !window.ReactNativeWebView) return false;
     fetch('/System/Info/Public').then(function (r) { if (r.ok) location.replace('/web/' + location.search + location.hash); }).catch(function () {});
     return true;
@@ -16742,11 +16743,14 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
 function nativeVideoHandoff(p, kind, atSeconds, seekStart, sub, opts) {
   const baseUrl = kind === 'remux' ? p.remuxUrl : (kind === 'transcode' ? p.transcodeUrl : p.streamUrl);
   const serverSeek = kind === 'remux' || kind === 'transcode';
+  const appleAvPlayer = !!(window.TriboonTV && window.TriboonTV.__triboonAppleBridge === true && nativePlayerTelemetryId() === 'avplayer');
   let nativeUrl = baseUrl;
   if (kind === 'transcode') {
     nativeUrl = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
+    if (appleAvPlayer && p.hlsUrl) nativeUrl = hlsTranscodePlaybackUrl(p, seekStart, p.quality || 1080);
   } else if (kind === 'remux') {
     nativeUrl = remuxPlaybackUrl(p, seekStart, { native: true }); // native ExoPlayer → 5.1, not the stereo audioSafe path
+    if (appleAvPlayer && p.hlsUrl) nativeUrl = hlsPlaybackUrl(p, seekStart);
   }
   p._nativeStartSkew = 0;
   const subPayload = nativeSubtitlePayload(p, sub.rel || '', 'startup');
@@ -19476,13 +19480,19 @@ function nativePlayerTelemetryId() {
   const caps = nativePlaybackCaps();
   const player = String(caps && caps.player || '').toLowerCase();
   if (player === 'libmpv') return 'libmpv';
+  if (player === 'avplayer' || player === 'vlckit') return player;
   try {
     if (window.TriboonTV && TriboonTV.__triboonWindowsBridge === true) return 'libmpv';
+    if (window.TriboonTV && TriboonTV.__triboonAppleBridge === true) return 'avplayer';
   } catch {}
   return 'exo';
 }
 function nativePlayerModeLabel() {
-  return nativePlayerTelemetryId() === 'libmpv' ? 'libmpv' : 'ExoPlayer';
+  const id = nativePlayerTelemetryId();
+  if (id === 'libmpv') return 'libmpv';
+  if (id === 'avplayer') return 'AVPlayer';
+  if (id === 'vlckit') return 'VLCKit';
+  return 'ExoPlayer';
 }
 function playerStreamKind(p = S.playing) {
   if (!p || !p.item) return '';
@@ -19505,6 +19515,7 @@ function clientVersionLabel() {
       const app = JSON.parse(TriboonTV.appVersion() || '{}');
       if (app.versionName) {
         if (app.platform === 'windows') return `Windows ${app.versionName}`;
+        if (app.platform === 'ios') return `${app.tablet ? 'iPadOS' : 'iOS'} ${app.versionName}`;
         return `${app.tv ? 'Android TV' : 'Android app'} ${app.versionName}${app.versionCode ? ` (${app.versionCode})` : ''}`;
       }
     }
@@ -26819,6 +26830,7 @@ function tryNativeLivePlayer(it, guide = false) {
       liveFallbacks.push({ url: abs, mime: mime || '' });
     };
     addLiveFallback(it._nativeFallbackUrl, it._nativeFallbackMime || '');
+    addLiveFallback(it._hlsUrl, 'application/vnd.apple.mpegurl');
     // Final Android-TV fallback: server-side fMP4 remux. It costs a tiny ffmpeg process, but
     // saves Onn/Chromecast-class devices when raw provider TS/HLS stalls or the extractor chokes.
     addLiveFallback(it._streamUrl, 'video/mp4');
@@ -29719,18 +29731,24 @@ function nativeAppUpdateKind() {
   if (isWindowsDesktopClient()) return 'windows';
   return '';
 }
+function isAppleAppShell() {
+  try { return !!(window.TriboonTV && window.TriboonTV.__triboonAppleBridge === true); }
+  catch { return false; }
+}
 function syncAppUpdateButtons() {
   const android = isAndroidAppShell();
+  const apple = isAppleAppShell();
   const windows = isWindowsHost();
   const admin = !!(S.user && S.user.role === 'admin');
-  const showApk = android || !windows;
-  const showWin = windows && !android;
+  const showApk = !apple && (android || !windows);
+  const showWin = !apple && windows && !android;
   if ($('apkUpdate')) $('apkUpdate').style.display = showApk ? '' : 'none';
   if ($('winClientUpdate')) $('winClientUpdate').style.display = showWin ? '' : 'none';
   if ($('winServerUpdate')) $('winServerUpdate').style.display = (showWin && admin) ? '' : 'none';
   const copy = $('appUpdateCopy');
   if (copy) {
-    if (android) copy.textContent = 'Install the latest Triboon app — one build runs on both Android TV and phone.';
+    if (apple) copy.textContent = 'Triboon for iPhone & iPad updates through TestFlight or the App Store.';
+    else if (android) copy.textContent = 'Install the latest Triboon app — one build runs on both Android TV and phone.';
     else if (showWin) copy.textContent = 'Install the latest Windows app or server from the same GitHub release.';
     else copy.textContent = 'Download the latest Triboon Android app.';
   }
