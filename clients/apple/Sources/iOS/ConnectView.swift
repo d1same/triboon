@@ -61,7 +61,11 @@ struct ConnectView: View {
                             .foregroundStyle(.white.opacity(0.65))
                             .tracking(1.1)
 
-                        TextField("http://192.168.1.20:7777", text: $serverInput)
+                        TextField(
+                            "",
+                            text: $serverInput,
+                            prompt: Text(verbatim: "http://192.168.1.20:7777").foregroundColor(.white.opacity(0.35))
+                        )
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled(true)

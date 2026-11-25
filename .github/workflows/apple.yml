@@ -45,6 +45,8 @@ jobs:
             -derivedDataPath build/ios-sim \
             CODE_SIGNING_ALLOWED=NO \
             build
+          plutil -p build/ios-sim/Build/Products/Debug-iphonesimulator/Triboon.app/Info.plist | grep -q "UILaunchScreen"
+          plutil -p build/ios-sim/Build/Products/Debug-iphonesimulator/Triboon.app/Info.plist | grep -q "NSAllowsArbitraryLoads"
           ditto -c -k --sequesterRsrc --keepParent \
             build/ios-sim/Build/Products/Debug-iphonesimulator/Triboon.app \
             build/TriboonIOS-Simulator.app.zip

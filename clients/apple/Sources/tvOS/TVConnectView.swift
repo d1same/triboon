@@ -34,7 +34,11 @@ struct TVConnectView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 760)
 
-            TextField("http://192.168.1.20:7777", text: $serverInput)
+            TextField(
+                "",
+                text: $serverInput,
+                prompt: Text(verbatim: "http://192.168.1.20:7777")
+            )
                 .frame(maxWidth: 680)
                 .autocorrectionDisabled(true)
 

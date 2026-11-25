@@ -48,13 +48,20 @@ function loadAppleBridge({ origin = 'https://triboon.example', bootstrap = {} } 
   return { bridge: windowObj.TriboonTV, windowObj, posted, callbacks };
 }
 
-test('Apple client: project.yml versions stay aligned with package.json and Android', () => {
+test('Apple client: project.yml versions and Info.plist preservation stay aligned with package.json', () => {
   const pkg = JSON.parse(read('package.json'));
   const yml = read('clients/apple/project.yml');
   const marketing = /MARKETING_VERSION:\s*"([^"]+)"/.exec(yml);
   assert.strictEqual(marketing && marketing[1], pkg.version, 'Apple MARKETING_VERSION matches package.json');
   assert.match(yml, /PRODUCT_BUNDLE_IDENTIFIER:\s*app\.triboon\.ios/);
   assert.match(yml, /PRODUCT_BUNDLE_IDENTIFIER:\s*app\.triboon\.appletv/);
+  assert.match(yml, /GENERATE_INFOPLIST_FILE:\s*NO/);
+  assert.match(yml, /INFOPLIST_FILE:\s*Sources\/iOS\/Resources\/Info\.plist/);
+  assert.match(yml, /INFOPLIST_FILE:\s*Sources\/tvOS\/Resources\/Info\.plist/);
+  assert.doesNotMatch(yml, /^\s+info:\s*$/m, 'XcodeGen info: block must not overwrite hand-authored Info.plist');
+  const iosPlist = read('clients/apple/Sources/iOS/Resources/Info.plist');
+  assert.match(iosPlist, /<key>UILaunchScreen<\/key>/);
+  assert.match(iosPlist, /<key>NSAllowsArbitraryLoads<\/key>/);
   assert.ok(fs.existsSync(path.join(root, 'clients/apple/Packages/TriboonCore/Package.swift')));
   assert.ok(fs.existsSync(path.join(root, 'clients/apple/Sources/iOS/TriboonIOSApp.swift')));
   assert.ok(fs.existsSync(path.join(root, 'clients/apple/Sources/tvOS/TriboonTVApp.swift')));
