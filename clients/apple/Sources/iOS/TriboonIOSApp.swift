@@ -216,7 +216,7 @@ struct TriboonShellView: View {
 
             TriboonWebView(session: session, serverOrigin: serverOrigin)
                 .id(session.reloadToken)
-                .ignoresSafeArea(.container, edges: .bottom)
+                .ignoresSafeArea()
 
             if let errorText = session.webLoadError {
                 VStack(spacing: 16) {

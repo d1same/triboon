@@ -76,7 +76,7 @@ struct ConnectView: View {
                             )
                             .foregroundStyle(.white)
 
-                        Text("Example: http://192.168.1.20:7777 or https://stream.example.com")
+                        Text(verbatim: "Example: http://192.168.1.20:7777 or https://stream.example.com")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.5))
                     }
@@ -115,9 +115,11 @@ struct ConnectView: View {
                         .stroke(Color.white.opacity(0.1), lineWidth: 1)
                 )
                 .padding(.horizontal, 20)
-                .padding(.vertical, 48)
+                .padding(.top, 24)
+                .padding(.bottom, 24)
                 .frame(maxWidth: .infinity)
             }
+            .scrollDismissesKeyboard(.interactively)
         }
     }
 
