@@ -12,6 +12,17 @@
      send origin-only cross-origin so those thumbnails load. Same-origin requests keep the full referrer. -->
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Triboon</title>
+<script>
+(function () {
+  function jumpJellyfin() {
+    if (location.pathname !== '/' || window.TriboonAndroid || window.__TAURI__) return false;
+    if (!window.NativeShell && !window.ReactNativeWebView) return false;
+    fetch('/System/Info/Public').then(function (r) { if (r.ok) location.replace('/web/' + location.search + location.hash); }).catch(function () {});
+    return true;
+  }
+  if (!jumpJellyfin()) document.addEventListener('DOMContentLoaded', jumpJellyfin, { once: true });
+})();
+</script>
 <script src="/main.triboon.bundle.js" defer></script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">

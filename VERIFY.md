@@ -128,6 +128,28 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-11-24, v3.5.12 — Jellyfin Mobile (iOS/iPadOS) & Swiftfin (iOS/iPadOS/Apple TV) compatibility fixes verified on real iPhone hardware:
+- What changed:
+  - **iOS/iPadOS Jellyfin Mobile `WKWebView` shell detection (`server/index.js`, `web/index.html`):**
+    - Served `jellyfin-web` for `/web` and `/web/*` whenever `settings.jellyfinApps === true` (and `jellyfinWebDir()` exists), while keeping `/` on Triboon for normal browsers and Triboon's iOS Home Screen PWA.
+    - Added a guarded head redirect in `web/index.html` for Jellyfin WebView shells (`window.NativeShell || window.ReactNativeWebView`, excluded on `window.TriboonAndroid` and `window.__TAURI__`) that verifies `GET /System/Info/Public` is active before redirecting `/` → `/web/`.
+  - **Jellyfin API fixes (`server/jellyfin-api.js`, `test/jellyfin-api.test.js`):**
+    - Scoped `nextUpItems()` so TMDB `SeriesId` queries no longer leak unrelated local-library Next Up episodes onto catalog TV show detail pages.
+    - Honored `LibrarySeriesId` on `GET`/`POST /LiveTv/Programs` (returning an empty page when a series detail page queries "Upcoming On TV") so unrelated Live TV listings no longer appear on TV show pages.
+    - Included `SeasonName` (and `SeasonId`) on local, watch-row, Next Up, and resume episode DTOs so episode detail headings render `Season N - ...` instead of `undefined - ...`.
+    - Implemented TMDB `Person` item details (`GET /Items/:personId`) and `PersonIds` combined credits filmography (`GET /Items?PersonIds=...`), plus named-GUID resolution (`Genre` / `Studio`) and UUID `GenreIds` mapping so tapping Cast/Crew, Genres, or Studios loads cleanly instead of hanging on 404.
+- Automated verification:
+  - **Node test suites:** 59/59 suites passing, 1422/1422 tests passing, 0 failures (`npm.cmd test`), including `test/jellyfin-api.test.js` (32/32 with new regression coverage for all 6 Jellyfin iOS/Swiftfin fixes) and `test/release-contract.test.js` (`GITHUB_REF_NAME=v3.5.12`, 11/11).
+  - **Syntax & isolated runtime smoke:** `git diff --check` clean; `node --check server/index.js` and `server/jellyfin-api.js` clean; 3/3 inline scripts in `web/index.html` parsed cleanly; isolated `/api/server` smoke reported `version=3.5.12 phase=4`.
+  - **Android (`3.5.12` / `versionCode 457`):** `gradlew.bat --no-daemon lintDebug testDebugUnitTest assembleDebug` — `BUILD SUCCESSFUL in 42s`.
+  - **Windows client (`triboon-px8` `3.5.12`):** `cargo test --no-default-features` 46/46 passed, 0 failed; `cargo check --features player` compiled cleanly.
+- Live verification (real Apple device via TestingBot against isolated temporary real-data copy):
+  - **Real iPhone Air (iOS 26.2, Jellyfin Mobile 1.8.0):** verified redirect into real `jellyfin-web`, sign-in, Home/Search/posters, Usenet movie playback + auto-landscape + seeking + CC/Subtitles + Quality/Settings, Usenet TV shows (clean detail pages with no bogus Next Up or Live TV, Season 1 episode lists/thumbnails, warm-mount episode playback, Cast/Crew Person page with bio & filmography), local TV show (`Season 1 - 1.` heading, Season Play playback), local movie playback (`mp4 h264/aac` direct play + auto-landscape), and Live TV rolling HLS playback — **0 server 4xx/5xx errors** across 238 post-fix requests.
+  - **Real iPhone Air (iOS 26.2, Swiftfin):** verified server discovery, sign-in, Home/On Now/Media/Movies grid/Details, and raw `.mkv` direct play (`play original file — mkv h264/eac3`) with seeking and 5s progress reporting.
+- Not run locally on this commit:
+  - Automated household `verify:full` live CLI + physical Android TV ADB stress, real iPad Jellyfin session (covered by same iOS/iPadOS Jellyfin API & `WKWebView` codepath), macOS Safari/desktop Jellyfin, Windows `libmpv` runtime GPU decode (`hwdec-current`), and Windows ARM64.
+- Version contract: `package.json` 3.5.12; Android `versionName` 3.5.12 / `versionCode` 457; Windows client `package.json` / `package-lock.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` 3.5.12.
+
 2026-11-24, v3.5.11 — iPhone & iPad Safari/PWA polish, AirPlay & Safari HLS transcode fixes, Play on TV (Triboon Connect), and Android TV Next Episode chip fixes:
 - What changed:
   - **AirPlay & Safari HLS playback (`server/transcode.js`, `server/index.js`, `web/index.html`):**

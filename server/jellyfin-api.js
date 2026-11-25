@@ -1023,9 +1023,24 @@ function peopleOf(credits) {
 
 // List rows stay light. A details page has genres, a star rating, the US
 // rating, the studio, and the cast, which is what the Jellyfin page paints.
+const NAMED_GUID_MAP = new Map();
+const NAMED_GUID_CAP = 500;
+function rememberNamedGuid(guid, entry) {
+  if (NAMED_GUID_MAP.has(guid)) return;
+  if (NAMED_GUID_MAP.size >= NAMED_GUID_CAP) {
+    const first = NAMED_GUID_MAP.keys().next().value;
+    if (first) NAMED_GUID_MAP.delete(first);
+  }
+  NAMED_GUID_MAP.set(guid, entry);
+}
+
 function nameGuid(name) {
-  const hex = crypto.createHash('sha1').update(`triboon-name:${String(name)}`).digest('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  const raw = String(name);
+  const hex = crypto.createHash('sha1').update(`triboon-name:${raw}`).digest('hex');
+  const guid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  if (raw.startsWith('studio:')) rememberNamedGuid(guid, { type: 'Studio', name: raw.slice(7) });
+  else rememberNamedGuid(guid, { type: 'Genre', name: raw });
+  return guid;
 }
 
 function detailExtra(row, kind) {
@@ -1099,6 +1114,7 @@ const GENRE_BY_ID = {
   10764: 'Reality', 10765: 'Sci-Fi & Fantasy', 10766: 'Soap', 10767: 'Talk', 10768: 'War & Politics',
 };
 const GENRE_BY_NAME = new Map(Object.entries(GENRE_BY_ID).map(([id, name]) => [name.toLowerCase(), Number(id)]));
+const GENRE_BY_GUID = new Map(Object.entries(GENRE_BY_ID).map(([id, name]) => [nameGuid(name), Number(id)]));
 
 function listParam(q, names) {
   const raw = names.map((name) => q && q.get(name)).find((value) => value != null && value !== '');
@@ -1115,7 +1131,11 @@ function queryView(ctx) {
     asc: /asc/i.test(sortOrder),
     filters: listParam(q, ['Filters', 'filters']).map((part) => part.toLowerCase()),
     genres: listParam(q, ['Genres', 'genres']),
-    genreIds: listParam(q, ['GenreIds', 'genreIds']).map((part) => parseInt(part, 10)).filter((n) => n > 0),
+    genreIds: listParam(q, ['GenreIds', 'genreIds']).map((part) => {
+      const byGuid = GENRE_BY_GUID.get(part.toLowerCase());
+      if (byGuid) return byGuid;
+      return /^\d+$/.test(part) ? parseInt(part, 10) : 0;
+    }).filter((n) => n > 0),
     years: listParam(q, ['Years', 'years']).map((part) => parseInt(part, 10)).filter(Boolean),
     starts: String((q && (q.get('NameStartsWith') || q.get('nameStartsWith'))) || ''),
     before: String((q && (q.get('NameLessThan') || q.get('nameLessThan'))) || ''),
@@ -1917,6 +1937,19 @@ function libraryFolder(id) {
 }
 
 async function itemById(id, ctx) {
+  const rawLower = String(id || '').trim().toLowerCase();
+  const namedHit = NAMED_GUID_MAP.get(rawLower);
+  if (namedHit) {
+    return {
+      ServerId: doorServerId(),
+      Id: rawLower,
+      Name: namedHit.name,
+      Type: namedHit.type,
+      IsFolder: true,
+      ImageTags: {},
+      BackdropImageTags: [],
+    };
+  }
   id = internalItemId(id);
   const folder = libraryFolder(id);
   if (folder) return folder;
@@ -1953,6 +1986,24 @@ async function itemById(id, ctx) {
   if (parsed.type === 'episode') {
     const episodes = await episodesFor(parsed.tmdbId, parsed.season);
     return episodes.find((row) => internalItemId(row.Id) === `e${parsed.tmdbId}s${parsed.season}e${parsed.episode}`) || null;
+  }
+  if (parsed.type === 'person') {
+    const d = await tmdbGet(`/person/${parsed.tmdbId}`);
+    if (!d || !d.id) return null;
+    if (d.profile_path) rememberTmdbArt(`p${d.id}`, { poster: d.profile_path });
+    return baseItem({
+      id: `p${d.id}`,
+      name: d.name || '',
+      overview: d.biography || '',
+      type: 'Person',
+      poster: d.profile_path ? 'tmdb' : '',
+      premiere: d.birthday || null,
+      aspect: 0.6666667,
+      extra: {
+        ...(d.place_of_birth ? { ProductionLocations: [d.place_of_birth] } : {}),
+        ...(d.deathday ? { EndDate: d.deathday } : {}),
+      },
+    });
   }
   return null;
 }
@@ -2069,6 +2120,8 @@ function itemFromWatchRow(ctx, row) {
         ...extra,
         SeriesId: `t${ep[1]}`,
         SeriesName: showName || meta.title || '',
+        SeasonId: `n${ep[1]}s${Number(ep[2])}`,
+        SeasonName: `Season ${Number(ep[2])}`,
         ParentIndexNumber: Number(ep[2]),
         IndexNumber: Number(ep[3]),
       },
@@ -2148,6 +2201,7 @@ function localJellyItem(row, libId) {
         SeriesId: localId(libId, row.showIdx),
         SeriesName: showName || row.title || '',
         SeasonId: `${localId(libId, row.showIdx)}s${season}`,
+        SeasonName: `Season ${season}`,
         ParentIndexNumber: season,
         IndexNumber: episodeNumber,
         CommunityRating: Number(row.rating) > 0 ? Number(row.rating) : undefined,
@@ -2267,6 +2321,8 @@ async function nextUpItems(ctx) {
               MediaType: 'Video',
               SeriesId: `t${row.tmdbId}`,
               SeriesName: row.title || '',
+              SeasonId: `n${row.tmdbId}s${row.season}`,
+              SeasonName: `Season ${row.season}`,
               ParentIndexNumber: row.season,
               IndexNumber: row.episode,
             },
@@ -2277,10 +2333,12 @@ async function nextUpItems(ctx) {
   if (parentRaw === 'viewshows' || parentRaw === 'viewmovies') {
     return ranked.sort((a, b) => b.at - a.at).map((row) => row.item);
   }
-  for (const row of diskPlayNext(ctx)) {
-    if (parent && parent.type === 'locallib' && parent.libId !== row.libId) continue;
-    if (series && series.type === 'local' && (series.libId !== row.libId || series.idx !== row.showIdx)) continue;
-    ranked.push({ at: row.at, item: row.item });
+  if (!series || series.type === 'local') {
+    for (const row of diskPlayNext(ctx)) {
+      if (parent && parent.type === 'locallib' && parent.libId !== row.libId) continue;
+      if (series && series.type === 'local' && (series.libId !== row.libId || series.idx !== row.showIdx)) continue;
+      ranked.push({ at: row.at, item: row.item });
+    }
   }
   return ranked.sort((a, b) => b.at - a.at).map((row) => row.item);
 }
@@ -2336,6 +2394,27 @@ async function itemsFor(ctx, opts = {}) {
   const parent = internalItemId(String((q && (q.get('ParentId') || q.get('parentId'))) || ''));
   const types = String((q && (q.get('IncludeItemTypes') || q.get('includeItemTypes'))) || '').toLowerCase();
   const { start, limit } = windowOf(ctx);
+  const personIds = listParam(q, ['PersonIds', 'personIds']);
+  if (personIds.length) {
+    const parsedPerson = parseItemId(personIds[0]);
+    if (!parsedPerson || parsedPerson.type !== 'person') return { items: [], total: 0, paged: true };
+    const credits = await tmdbGet(`/person/${parsedPerson.tmdbId}/combined_credits`);
+    const raw = [...((credits && credits.cast) || []), ...((credits && credits.crew) || [])];
+    const wantTypes = types.split(',').map((s) => s.trim()).filter(Boolean);
+    const seen = new Set();
+    const out = [];
+    for (const row of raw.sort((a, b) => (Number(b && b.popularity) || 0) - (Number(a && a.popularity) || 0))) {
+      if (!row || !row.id) continue;
+      const mt = row.media_type === 'tv' ? 'series' : (row.media_type === 'movie' ? 'movie' : '');
+      if (!mt) continue;
+      if (wantTypes.length && !wantTypes.includes(mt)) continue;
+      const key = `${mt}:${row.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(mt === 'movie' ? movieItem(row) : seriesItem(row));
+    }
+    return { items: out.slice(start, start + limit), total: out.length, paged: true };
+  }
   const view = queryView(ctx);
   const localParent = parseItemId(parent);
   if (localParent && localParent.type === 'locallib' && typeof deps.localPage === 'function') {
@@ -2968,6 +3047,8 @@ async function handleKind(kind, ctx) {
               MediaType: 'Video',
               SeriesId: `t${row.tmdbId}`,
               SeriesName: row.title || '',
+              SeasonId: `n${row.tmdbId}s${row.season}`,
+              SeasonName: `Season ${row.season}`,
               ParentIndexNumber: row.season,
               IndexNumber: row.episode,
             },
@@ -3681,6 +3762,8 @@ async function handleKind(kind, ctx) {
       try { body = (await readJson(ctx.req)) || {}; } catch { body = {}; }
     }
     const q = ctx.url && ctx.url.searchParams;
+    const libSeriesId = String(queryField(ctx, body, 'LibrarySeriesId') || '').trim();
+    if (libSeriesId) return send(ctx.res, 200, emptyPage(), cors);
     const rawIds = body.ChannelIds || (q && (q.get('ChannelIds') || q.get('channelIds'))) || '';
     const wantIds = new Set(
       (Array.isArray(rawIds) ? rawIds : String(rawIds).split(','))

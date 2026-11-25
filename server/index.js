@@ -14781,7 +14781,9 @@ const server = http.createServer(async (req, res) => {
     // Jellyfin's page. Never hand it Triboon's page: Triboon's script name
     // looks like Jellyfin's, so the phone would stay on the wrong site.
     // The browser and the Triboon app keep Triboon's page.
-    const jellyfinShell = jellyfinEnabled(settings.peek()) && jellyfinClientShell(req);
+    const jfEnabled = jellyfinEnabled(settings.peek());
+    const jellyfinPath = p === '/web' || p === '/web/' || p.startsWith('/web/');
+    const jellyfinShell = jfEnabled && (jellyfinClientShell(req) || jellyfinPath);
     const jfDir = jellyfinShell ? jellyfinWebDir() : null;
     if (jellyfinShell && !jfDir && (p === '/' || p === '/web' || p.startsWith('/web/'))) {
       res.writeHead(503, {

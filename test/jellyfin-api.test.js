@@ -2058,3 +2058,132 @@ test('Safari HLS transcode, AirPlay availability across Live TV/VOD, and AirPlay
   assert.strictEqual(S.playing._textTrack.mode, 'hidden', 'exiting AirPlay returns to inline HTML captions');
   assert.strictEqual(rendered, 1, 'inline captions re-rendered on AirPlay exit');
 });
+
+test('jellyfin iOS/Swiftfin fixes: scoped NextUp, LibrarySeriesId LiveTv, local SeasonName, Person/Genre pages, and /web/ iOS shell', async () => {
+  // 1. Scoped NextUp, LibrarySeriesId LiveTV guard, Local SeasonName, Person & Genre details/filmography
+  let lastMovieGenreUrl = '';
+  const door = fakeDoor({
+    deps: {
+      jellyfinLiveTvEnabled: () => true,
+      jellyfinLiveChannels: async () => [{ id: 'ch1', name: 'News HD', number: '10', fav: true }],
+      jellyfinLivePrograms: (_ctx, chans) => new Map(chans.map((c) => [c.id, [
+        { title: 'Evening News', start: Date.now() - 600000, stop: Date.now() + 1800000 },
+      ]])),
+      jellyfinNextCatalog: async () => [],
+      localLibraries: () => [{ id: 'aabbccdd11', name: 'Disk TV', kind: 'tv' }],
+      localPage: (_ctx, libId, _offset, _limit, showIdx) => {
+        if (libId !== 'aabbccdd11') return { items: [], total: 0 };
+        if (showIdx === 5) {
+          return {
+            items: [
+              { idx: 6, showIdx: 5, kind: 'episode', title: 'Local Show', epTitle: 'Pilot', s: 1, e: 1, runtime: 45 },
+            ],
+            total: 1,
+          };
+        }
+        return { items: [{ idx: 5, kind: 'show', title: 'Local Show' }], total: 1 };
+      },
+      localOne: (_ctx, libId, idx) => {
+        if (libId === 'aabbccdd11' && idx === 6) {
+          return { idx: 6, showIdx: 5, kind: 'episode', title: 'Local Show', epTitle: 'Pilot', s: 1, e: 1, runtime: 45 };
+        }
+        if (libId === 'aabbccdd11' && idx === 5) return { idx: 5, kind: 'show', title: 'Local Show' };
+        return null;
+      },
+      jellyfinWatchRows: () => [
+        { key: 'local:aabbccdd11:6', position: 600, duration: 2700, watched: true, updatedAt: Date.now() },
+      ],
+      tmdb: {
+        get: async (p) => {
+          if (p.startsWith('/discover/movie')) {
+            lastMovieGenreUrl = p;
+            return { results: [{ id: 101, title: 'Genre Film', release_date: '2024-01-01' }], total_results: 1 };
+          }
+          if (p.startsWith('/movie/9001')) {
+            return {
+              id: 9001,
+              title: 'Cast Movie',
+              genres: [{ id: 18, name: 'Drama' }],
+              production_companies: [{ id: 7, name: 'Test Studio' }],
+              credits: { cast: [{ id: 64, name: 'Gary Oldman', character: 'Jackson Lamb', profile_path: '/gary.jpg' }], crew: [] },
+            };
+          }
+          if (p === '/person/64') {
+            return { id: 64, name: 'Gary Oldman', biography: 'Actor bio', birthday: '1958-03-21', place_of_birth: 'London', profile_path: '/gary.jpg' };
+          }
+          if (p === '/person/64/combined_credits') {
+            return {
+              cast: [
+                { id: 155, media_type: 'movie', title: 'The Dark Knight', popularity: 90, release_date: '2008-07-18' },
+                { id: 95480, media_type: 'tv', name: 'Slow Horses', popularity: 80, first_air_date: '2022-04-01' },
+                { id: 155, media_type: 'movie', title: 'The Dark Knight', popularity: 90, release_date: '2008-07-18' },
+              ],
+              crew: [],
+            };
+          }
+          return null;
+        },
+      },
+    },
+  });
+
+  // NextUp filtered by TMDB SeriesId must NOT leak unrelated local library NextUp
+  const nextTmdb = await door.call('nextup', 'GET', '/Shows/NextUp?SeriesId=04000174-f800-0000-0000-000000000000');
+  assert.strictEqual(nextTmdb.status, 200);
+  assert.strictEqual(nextTmdb.body.Items.length, 0, 'TMDB SeriesId NextUp must not leak local library episodes');
+
+  // LiveTv/Programs with LibrarySeriesId (TV show "Upcoming On TV") must return emptyPage
+  const upcomingOnTv = await door.call('liveTvPrograms', 'GET', '/LiveTv/Programs?LibrarySeriesId=04000174-f800-0000-0000-000000000000&Limit=50');
+  assert.strictEqual(upcomingOnTv.status, 200);
+  assert.strictEqual(upcomingOnTv.body.Items.length, 0, 'LibrarySeriesId must not return unrelated Live TV programs');
+  const normalLive = await door.call('liveTvPrograms', 'GET', '/LiveTv/Programs?Limit=50');
+  assert.strictEqual(normalLive.status, 200);
+  assert.strictEqual(normalLive.body.Items.length, 1, 'normal Live TV program guide still works');
+
+  // Local episode DTOs carry SeasonName so jellyfin-web does not render "undefined - 1."
+  const localEp = await door.call('item', 'GET', '/Items/laabbccdd11i6');
+  assert.strictEqual(localEp.status, 200);
+  assert.strictEqual(localEp.body.SeasonName, 'Season 1', 'local episode includes SeasonName');
+  assert.strictEqual(localEp.body.ParentIndexNumber, 1);
+
+  // Person item lookup and PersonIds combined credits filmography
+  const movieDet = await door.call('item', 'GET', '/Items/m9001');
+  assert.strictEqual(movieDet.status, 200);
+  const actorId = movieDet.body.People[0].Id;
+  const personRes = await door.call('item', 'GET', `/Items/${actorId}`);
+  assert.strictEqual(personRes.status, 200);
+  assert.strictEqual(personRes.body.Type, 'Person');
+  assert.strictEqual(personRes.body.Name, 'Gary Oldman');
+  assert.strictEqual(personRes.body.Overview, 'Actor bio');
+  assert.deepStrictEqual(personRes.body.ProductionLocations, ['London']);
+  const creditsRes = await door.call('shelf', 'GET', `/Items?PersonIds=${actorId}&Limit=20`);
+  assert.strictEqual(creditsRes.status, 200);
+  assert.strictEqual(creditsRes.body.Items.length, 2, 'PersonIds returns deduped movie + series credits');
+  const creditsMovies = await door.call('shelf', 'GET', `/Items?PersonIds=${actorId}&IncludeItemTypes=Movie&Limit=20`);
+  assert.strictEqual(creditsMovies.body.Items.length, 1);
+  assert.strictEqual(creditsMovies.body.Items[0].Name, 'The Dark Knight');
+
+  // Genre & Studio named-GUID item resolution and UUID GenreIds filtering
+  const dramaGuid = movieDet.body.GenreItems[0].Id;
+  const studioGuid = movieDet.body.Studios[0].Id;
+  const genreRes = await door.call('item', 'GET', `/Items/${dramaGuid}`);
+  assert.strictEqual(genreRes.status, 200);
+  assert.strictEqual(genreRes.body.Type, 'Genre');
+  assert.strictEqual(genreRes.body.Name, 'Drama');
+  const studioRes = await door.call('item', 'GET', `/Items/${studioGuid}`);
+  assert.strictEqual(studioRes.status, 200);
+  assert.strictEqual(studioRes.body.Type, 'Studio');
+  assert.strictEqual(studioRes.body.Name, 'Test Studio');
+  const byGenre = await door.call('shelf', 'GET', `/Items?ParentId=viewmovies&GenreIds=${dramaGuid}&Limit=10`);
+  assert.strictEqual(byGenre.status, 200);
+  assert.match(lastMovieGenreUrl, /with_genres=18/, 'UUID GenreIds maps to TMDB genre id 18 (Drama)');
+
+  // 2. iOS Jellyfin Mobile WebView redirect in web/index.html + /web/ serving on server/index.js
+  const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(html, /window\.NativeShell\s*&&\s*!window\.ReactNativeWebView/, 'web/index.html detects Jellyfin Mobile WKWebView safely');
+  assert.match(html, /location\.replace\('\/web\/'/, 'web/index.html redirects Jellyfin Mobile WKWebView to /web/');
+  assert.match(html, /window\.TriboonAndroid\s*\|\|\s*window\.__TAURI__/, 'redirect never triggers on Triboon Android or Windows shells');
+  const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(serverSrc, /jellyfinPath\s*=\s*p === '\/web' \|\| p === '\/web\/' \|\| p\.startsWith\('\/web\/'\)/,
+    'server serves /web/ as jellyfin-web for iOS WKWebView when jellyfinApps is enabled');
+});
