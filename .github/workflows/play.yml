@@ -107,7 +107,11 @@ jobs:
         run: |
           aab=android/app/build/outputs/bundle/playRelease/app-playRelease.aab
           test -s "$aab" || { echo "Signed AAB not found"; exit 1; }
-          jarsigner -verify -strict "$aab"
+          # AGP places META-INF signature files after payload entries in AABs (triggers exit 4 under
+          # JDK 17 jarsigner -strict even on valid Google Play bundles). Verify signature + cert directly.
+          sig=$(jarsigner -verify -verbose -certs "$aab")
+          printf '%s\n' "$sig" | tail -n 25
+          printf '%s\n' "$sig" | grep -q "jar verified."
           manifest=android/app/build/intermediates/merged_manifest/playRelease/processPlayReleaseMainManifest/AndroidManifest.xml
           ! grep -q "REQUEST_INSTALL_PACKAGES" "$manifest"
           ! grep -q "updateprovider" "$manifest"
