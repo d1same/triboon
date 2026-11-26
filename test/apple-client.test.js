@@ -62,6 +62,17 @@ test('Apple client: project.yml versions and Info.plist preservation stay aligne
   const iosPlist = read('clients/apple/Sources/iOS/Resources/Info.plist');
   assert.match(iosPlist, /<key>UILaunchScreen<\/key>/);
   assert.match(iosPlist, /<key>NSAllowsArbitraryLoads<\/key>/);
+  assert.match(iosPlist, /<key>ITSAppUsesNonExemptEncryption<\/key>\s*<false\/>/);
+  const tvPlist = read('clients/apple/Sources/tvOS/Resources/Info.plist');
+  assert.match(tvPlist, /<key>ITSAppUsesNonExemptEncryption<\/key>\s*<false\/>/);
+  assert.match(yml, /ASSETCATALOG_COMPILER_APPICON_NAME:\s*App Icon & Top Shelf Image/);
+  const iosIcon = fs.readFileSync(path.join(root, 'clients/apple/Sources/iOS/Resources/Assets.xcassets/AppIcon.appiconset/icon-1024.png'));
+  assert.strictEqual(iosIcon.readUInt32BE(16), 1024);
+  assert.strictEqual(iosIcon.readUInt32BE(20), 1024);
+  assert.strictEqual(iosIcon[25], 2, 'iOS 1024x1024 App Store icon must be opaque 24-bit RGB (no alpha channel)');
+  assert.ok(fs.existsSync(path.join(root, 'clients/apple/Sources/tvOS/Resources/Assets.xcassets/App Icon & Top Shelf Image.brandassets/Contents.json')));
+  assert.ok(fs.existsSync(path.join(root, 'clients/apple/TESTFLIGHT_SETUP.md')));
+  assert.match(read('.github/workflows/apple.yml'), /upload_testflight:/);
   assert.ok(fs.existsSync(path.join(root, 'clients/apple/Packages/TriboonCore/Package.swift')));
   assert.ok(fs.existsSync(path.join(root, 'clients/apple/Sources/iOS/TriboonIOSApp.swift')));
   assert.ok(fs.existsSync(path.join(root, 'clients/apple/Sources/tvOS/TriboonTVApp.swift')));
