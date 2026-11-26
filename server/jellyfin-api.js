@@ -54,8 +54,13 @@ function jellyfinEnabled(settings) {
   return !!(settings && settings.jellyfinApps === true);
 }
 
+function normalizeJellyfinPath(pathname) {
+  const lower = String(pathname || '').toLowerCase();
+  return lower.length > 1 ? lower.replace(/\/+$/, '') : lower;
+}
+
 function isJellyfinPath(pathname) {
-  const p = String(pathname || '').toLowerCase();
+  const p = normalizeJellyfinPath(pathname);
   return PREFIXES.some((pre) => p === pre || p.startsWith(pre + '/'));
 }
 
@@ -1825,7 +1830,7 @@ function isLiveProgramUuid(id) {
 }
 
 const recentLivePrograms = new Map();
-const LIVE_PROGRAM_CACHE_CAP = 500;
+const LIVE_PROGRAM_CACHE_CAP = 4000;
 function rememberLiveProgram(item) {
   if (!item || !item.Id) return item;
   const key = String(item.Id).toLowerCase();
@@ -1862,27 +1867,66 @@ function tvProgramItem(ch, prog) {
   const startMs = Number(prog && prog.start) || Date.now();
   const stopMs = Math.max(startMs + 60000, Number(prog && prog.stop) || (startMs + 3600000));
   const logoTag = liveLogoTag(ch);
+  const progId = liveProgramItemId(ch.id, startMs);
+  const genres = prog && prog.category ? [prog.category] : (ch.group ? [ch.group] : []);
   return rememberLiveProgram({
     Name: (prog && prog.title) || ch.name || 'Live',
     ServerId: doorServerId(),
-    Id: liveProgramItemId(ch.id, startMs),
+    Id: progId,
     ChannelId: chUuid,
     ChannelName: ch.name || '',
     ChannelNumber: String(ch.number || ''),
+    ChannelType: 'TV',
     ChannelPrimaryImageTag: logoTag || undefined,
     Type: 'Program',
     MediaType: 'Video',
+    LocationType: 'Virtual',
     Overview: (prog && prog.desc) || '',
     StartDate: new Date(startMs).toISOString(),
     EndDate: new Date(stopMs).toISOString(),
     RunTimeTicks: Math.round((stopMs - startMs) * 10000),
     IsLive: true,
     IsSeries: false,
+    IsMovie: false,
+    IsNews: false,
+    IsSports: false,
+    IsKids: false,
+    IsRepeat: false,
+    IsPremiere: false,
     IsFolder: false,
-    Genres: prog && prog.category ? [prog.category] : (ch.group ? [ch.group] : []),
+    CanDelete: false,
+    CanDownload: false,
+    Genres: genres,
+    GenreItems: genres.map((name) => ({ Name: name, Id: nameGuid(name) })),
+    People: [],
+    Studios: [],
+    Taglines: [],
     ImageTags: logoTag ? { Primary: logoTag } : {},
     BackdropImageTags: [],
     PrimaryImageAspectRatio: logoTag ? 1 : null,
+    MediaSources: [completeSource({
+      Id: chUuid,
+      Protocol: 'Http',
+      Container: /mpegurl/i.test(String(ch.nativeMime || '')) ? 'hls' : 'mpegts',
+      Name: ch.name || 'Channel',
+      IsInfiniteStream: true,
+      IsRemote: false,
+      SupportsDirectPlay: true,
+      SupportsDirectStream: true,
+      SupportsTranscoding: true,
+      RequiresOpening: false,
+      RequiresClosing: false,
+      MediaStreams: defaultLiveStreams(),
+    })],
+    MediaStreams: defaultLiveStreams(),
+    UserData: {
+      PlaybackPositionTicks: 0,
+      PlayCount: 0,
+      IsFavorite: !!ch.fav,
+      Played: false,
+      Key: String(ch.id || chUuid),
+      ItemId: progId,
+    },
   });
 }
 
@@ -1976,6 +2020,28 @@ async function findLiveChannel(ctx, itemId) {
   const target = String(itemId).toLowerCase();
   const chans = await deps.jellyfinLiveChannels(ctx);
   return (chans || []).find((ch) => liveChannelItemId(ch.id) === target) || null;
+}
+
+async function findLiveChannelForItem(ctx, itemId) {
+  if (isLiveChannelUuid(itemId)) return findLiveChannel(ctx, itemId);
+  if (!isLiveProgramUuid(itemId) || typeof deps.jellyfinLiveChannels !== 'function') return null;
+  const key = String(itemId).toLowerCase();
+  const cached = recentLivePrograms.get(key);
+  if (cached && cached.ChannelId) return findLiveChannel(ctx, cached.ChannelId);
+  if (typeof deps.jellyfinLivePrograms !== 'function') return null;
+  const chans = await deps.jellyfinLiveChannels(ctx);
+  const slice = (chans || []).slice(0, 200);
+  const now = Date.now();
+  const progMap = deps.jellyfinLivePrograms(ctx, slice, { from: now - 3600000, to: now + 6 * 3600000 });
+  for (const ch of slice) {
+    for (const p of (progMap && progMap.get(ch.id)) || []) {
+      if (liveProgramItemId(ch.id, p.start) === key) {
+        tvProgramItem(ch, p);
+        return ch;
+      }
+    }
+  }
+  return null;
 }
 
 function libraryFolder(id) {
@@ -3394,29 +3460,52 @@ async function handleKind(kind, ctx) {
   }
   if (kind === 'episodes') {
     const parsed = parseItemId(ctx.m[1]);
+    const q = ctx.url && ctx.url.searchParams;
+    const seasonId = q && (q.get('seasonId') || q.get('SeasonId'));
+    const startItemIdRaw = String((q && (q.get('startItemId') || q.get('StartItemId'))) || '').trim();
+    const adjacentToRaw = String((q && (q.get('adjacentTo') || q.get('AdjacentTo'))) || '').trim();
+    const sliceEpisodes = (list) => {
+      if (!Array.isArray(list) || !list.length) return [];
+      const matchIdx = (raw) => {
+        const want = internalItemId(raw).toLowerCase();
+        const wantPub = String(raw).toLowerCase();
+        return list.findIndex((it) => it && it.Id
+          && (internalItemId(it.Id).toLowerCase() === want || String(it.Id).toLowerCase() === wantPub));
+      };
+      if (adjacentToRaw) {
+        const idx = matchIdx(adjacentToRaw);
+        if (idx >= 0) return list.slice(Math.max(0, idx - 1), idx + 2);
+      }
+      if (startItemIdRaw) {
+        const idx = matchIdx(startItemIdRaw);
+        if (idx >= 0) return list.slice(idx);
+      }
+      return list;
+    };
     if (parsed && parsed.type === 'local') {
-      const q = ctx.url && ctx.url.searchParams;
-      const seasonId = q && (q.get('seasonId') || q.get('SeasonId'));
       const season = parseItemId(seasonId || '');
       let eps = localRows(ctx, parsed.libId, parsed.idx);
       if (season && season.type === 'localseason') {
         eps = eps.filter((row) => (Number(row.s || row.season) || 1) === season.season);
       }
+      const mapped = sliceEpisodes(eps.map((row) => localJellyItem(row, parsed.libId)).filter(Boolean));
       // Same as the usenet branch: apps ask without a Limit and expect every episode.
-      return send(ctx.res, 200, fullPageOf(eps.map((row) => localJellyItem(row, parsed.libId)).filter(Boolean), ctx), cors);
+      return send(ctx.res, 200, fullPageOf(mapped, ctx), cors);
     }
-    const q = ctx.url && ctx.url.searchParams;
-    const seasonId = q && (q.get('seasonId') || q.get('SeasonId'));
     const season = parseItemId(seasonId || '');
     const n = season && season.type === 'season' ? season.season : (parsed && parsed.season);
     if (!parsed || parsed.type !== 'series') return send(ctx.res, 404, { error: 'not found' }, cors);
     if (!n) {
       const show = await tmdbGet(`/tv/${parsed.tmdbId}`);
-      const nums = ((show && show.seasons) || []).map((row) => Number(row.season_number)).filter((row) => row > 0);
+      let nums = ((show && show.seasons) || []).map((row) => Number(row.season_number)).filter((row) => row > 0);
+      const startParsed = startItemIdRaw ? parseItemId(startItemIdRaw) : null;
+      if (startParsed && startParsed.type === 'episode' && startParsed.tmdbId === parsed.tmdbId && !adjacentToRaw) {
+        nums = nums.filter((s) => s >= startParsed.season);
+      }
       const groups = await mapLimit(nums, 6, (row) => episodesFor(parsed.tmdbId, row, show));
-      return send(ctx.res, 200, fullPageOf(groups.flat(), ctx), cors);
+      return send(ctx.res, 200, fullPageOf(sliceEpisodes(groups.flat()), ctx), cors);
     }
-    return send(ctx.res, 200, fullPageOf(await episodesFor(parsed.tmdbId, n), ctx), cors);
+    return send(ctx.res, 200, fullPageOf(sliceEpisodes(await episodesFor(parsed.tmdbId, n)), ctx), cors);
   }
   if (kind === 'similar') {
     if (ctx.m[2] && !owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
@@ -3581,8 +3670,8 @@ async function handleKind(kind, ctx) {
     }
     return sendPoster(ctx, cors, file, wide || imageKind === 'thumb');
   }
-  if (kind === 'video' && isLiveChannelUuid(ctx.m[1])) {
-    const ch = await findLiveChannel(ctx, ctx.m[1]);
+  if (kind === 'video' && (isLiveChannelUuid(ctx.m[1]) || isLiveProgramUuid(ctx.m[1]))) {
+    const ch = await findLiveChannelForItem(ctx, ctx.m[1]);
     if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
     const urls = typeof deps.jellyfinLivePlayUrls === 'function' ? deps.jellyfinLivePlayUrls(ctx, ch) : null;
     if (!urls) return send(ctx.res, 503, { error: 'live stream unavailable' }, cors);
@@ -3706,8 +3795,8 @@ async function handleKind(kind, ctx) {
     const parsed = parseItemId(ctx.m[1]);
     const sentId = String(queryField(ctx, body, 'MediaSourceId') || '');
     const playSessId = String(queryField(ctx, body, 'PlaySessionId') || '');
-    if (isLiveChannelUuid(ctx.m[1])) {
-      const ch = await findLiveChannel(ctx, ctx.m[1]);
+    if (isLiveChannelUuid(ctx.m[1]) || isLiveProgramUuid(ctx.m[1])) {
+      const ch = await findLiveChannelForItem(ctx, ctx.m[1]);
       if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
       const source = liveChannelMediaSource(ctx, ch, body);
       if (!source) return send(ctx.res, 503, { error: 'live stream unavailable' }, cors);
@@ -3948,7 +4037,10 @@ async function handleKind(kind, ctx) {
     const now = Date.now();
     const minEnd = Date.parse(String(queryField(ctx, body, 'MinEndDate') || '')) || (now - 30 * 60000);
     const maxStart = Date.parse(String(queryField(ctx, body, 'MaxStartDate') || '')) || (now + 6 * 3600000);
-    const isAiring = /^true$/i.test(String(queryField(ctx, body, 'IsAiring') || '')) || kind === 'liveTvRecommended';
+    const isAiringRaw = String(queryField(ctx, body, 'IsAiring') ?? '').trim();
+    const isAiring = isAiringRaw !== '' ? /^true$/i.test(isAiringRaw) : kind === 'liveTvRecommended';
+    const hasAiredRaw = String(queryField(ctx, body, 'HasAired') ?? '').trim();
+    const wantUpcomingOnly = hasAiredRaw !== '' && /^false$/i.test(hasAiredRaw) && !isAiring;
     const progMap = typeof deps.jellyfinLivePrograms === 'function'
       ? deps.jellyfinLivePrograms(ctx, targetChans, { from: minEnd, to: maxStart })
       : new Map();
@@ -3956,6 +4048,7 @@ async function handleKind(kind, ctx) {
     for (const ch of targetChans) {
       for (const p of (progMap && progMap.get(ch.id)) || []) {
         if (isAiring && !(p.start <= now && p.stop > now)) continue;
+        if (wantUpcomingOnly && p.start <= now) continue;
         if (p.stop <= minEnd || p.start >= maxStart) continue;
         rows.push(tvProgramItem(ch, p));
       }
@@ -3969,7 +4062,7 @@ async function handleKind(kind, ctx) {
     let body = {};
     try { body = (await readJson(ctx.req)) || {}; } catch { body = {}; }
     const itemId = String(queryField(ctx, body, 'ItemId') || queryField(ctx, body, 'OpenToken') || '');
-    const ch = await findLiveChannel(ctx, itemId);
+    const ch = await findLiveChannelForItem(ctx, itemId);
     if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
     const source = liveChannelMediaSource(ctx, ch, body);
     if (!source) return send(ctx.res, 503, { error: 'live stream unavailable' }, cors);
@@ -4025,8 +4118,8 @@ async function handleKind(kind, ctx) {
       if (kind === 'played') want.watched = true;
       if (kind === 'unplayed') want.watched = false;
     }
-    if (isLiveChannelUuid(itemId)) {
-      const ch = await findLiveChannel(ctx, itemId);
+    if (isLiveChannelUuid(itemId) || isLiveProgramUuid(itemId)) {
+      const ch = await findLiveChannelForItem(ctx, itemId);
       if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
       let fav = !!ch.fav;
       if (want.favorite !== undefined && typeof deps.jellyfinLiveFavorite === 'function') {
@@ -4335,6 +4428,7 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/branding\/css(?:\.css)?$/, auth: 'public', kind: 'brandingCss', h: serveJellyfin },
   { m: 'GET', re: /^\/quickconnect\/enabled$/, auth: 'public', kind: 'quickConnect', h: serveJellyfin },
   { m: 'POST', re: /^\/quickconnect\/initiate$/, auth: 'public', kind: 'qcInitiate', h: serveJellyfin },
+  { m: 'GET', re: /^\/quickconnect\/initiate$/, auth: 'public', kind: 'qcInitiate', h: serveJellyfin },
   { m: 'GET', re: /^\/quickconnect\/connect$/, auth: 'public', kind: 'qcConnect', h: serveJellyfin },
   { m: 'POST', re: /^\/quickconnect\/authorize$/, auth: 'user', kind: 'qcAuthorize', h: serveJellyfin },
   { m: 'GET', re: /^\/localization\/options$/, auth: 'public', kind: 'locale', h: serveJellyfin },
@@ -4361,7 +4455,7 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items$/, auth: 'user', kind: 'shelf', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/intros$/, auth: 'user', kind: 'intros', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'item', h: serveJellyfin },
-  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/views$/, auth: 'user', kind: 'views', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/views\/?$/, auth: 'user', kind: 'views', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})$/, auth: 'user', kind: 'userById', h: serveJellyfin },
   { m: 'GET', re: /^\/userviews$/, auth: 'user', kind: 'views', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/counts$/, auth: 'user', kind: 'counts', h: serveJellyfin },
@@ -4552,7 +4646,7 @@ function loadingHoldPlaylist(count) {
 }
 
 module.exports = {
-  JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
+  JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, normalizeJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
   setEmbyDoorCheck, setEmbySocketCheck,
   attachJellyfinSocket, closeJellyfinSockets,
   mediaStreamsFromProbe, streamsWithSubtitles, tmdbSort, genreIdsFromNames,

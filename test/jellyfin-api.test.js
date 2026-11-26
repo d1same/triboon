@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { httpJson, bootServer, setupAdmin } = require('./helpers');
-const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinCors, jellyfinToken, clientAddress, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor, traktResumeSeconds, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard } = require('../server/jellyfin-api');
+const { JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, normalizeJellyfinPath, jellyfinCors, jellyfinToken, clientAddress, mediaStreamsFromProbe, tmdbSort, genreIdsFromNames, resumeClockPlaylist, fullTimelinePlaylist, rememberResumeOrigin, progressSeconds, resumeFracFor, traktResumeSeconds, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard } = require('../server/jellyfin-api');
 const { LibraryDb } = require('../server/library-db');
 
 let srv, admin;
@@ -734,10 +734,20 @@ test('jellyfin sign-in returns an empty shelf and refuses a stranger', async () 
     ['episodes', episodes.json.Items], ['seasons', seasons.json.Items],
     ['next up', nextUp.json.Items], ['resume', homeNext.json.Items],
   ];
-  for (const latestPath of [`/Users/${me.json.Id}/Items/Latest`, '/Items/Latest']) {
+  for (const latestPath of [`/Users/${me.json.Id}/Items/Latest`, `/Users/${me.json.Id}/Items/Latest/`, '/Items/Latest']) {
     const latest = await httpSend(srv.port, 'GET', latestPath, { headers: { authorization: authz } });
+    assert.strictEqual(latest.status, 200, `${latestPath} must succeed (including Roku trailing slash)`);
     rokuReads.push([latestPath, Array.isArray(latest.json) ? latest.json : (latest.json && latest.json.Items) || []]);
   }
+  const rokuViews = await httpSend(srv.port, 'GET', `/Users/${me.json.Id}/Views/`, { headers: { authorization: authz } });
+  assert.strictEqual(rokuViews.status, 200, 'Roku GET /Users/:id/Views/ with trailing slash must return libraries');
+  assert.ok(Array.isArray(rokuViews.json && rokuViews.json.Items) && rokuViews.json.Items.length >= 2, 'Roku Views/ returns Movies & Shows folders');
+  const rokuQc = await httpSend(srv.port, 'GET', '/QuickConnect/Initiate', {
+    headers: { 'x-emby-authorization': 'MediaBrowser Client="Jellyfin Roku", Device="Roku 4", DeviceId="roku4", Version="2.2.5"' },
+  });
+  assert.strictEqual(rokuQc.status, 200, 'Roku GET /QuickConnect/Initiate must succeed');
+  assert.ok(rokuQc.json && rokuQc.json.Code && rokuQc.json.Secret, 'Roku Quick Connect returns Code and Secret');
+  assert.strictEqual(normalizeJellyfinPath('/Users/abc/Views///'), '/users/abc/views');
   for (const [where, rows] of rokuReads) {
     for (const row of rows) {
       const tag = `${where}: ${row.Name}`;
@@ -2241,4 +2251,77 @@ test('jellyfin performance optimizations: scoped NextUp, playSpec metadata reuse
   tmdbCalls.length = 0;
   await door.call('image', 'HEAD', '/Items/n8802s1/Images/Backdrop').catch(() => {});
   assert.ok(!tmdbCalls.some((p) => p.includes('/season/1')), 'season backdrop never fetches /tv/:id/season/:s');
+});
+
+test('jellyfin Android TV 0.20.0: Live TV Program DTOs carry UserData/MediaSources/playback and Episodes honor startItemId/adjacentTo', async () => {
+  const now = Date.now();
+  const door = fakeDoor({
+    deps: {
+      jellyfinLiveTvEnabled: () => true,
+      jellyfinLiveChannels: async () => [{ id: 'ch-office', name: 'News 24', number: '7', fav: true, nativeMime: 'video/mp2t' }],
+      jellyfinLivePrograms: (_ctx, chans) => new Map(chans.map((c) => [c.id, [
+        { title: 'Live Now', start: now - 600000, stop: now + 1800000 },
+        { title: 'Up Next Show', start: now + 1800000, stop: now + 5400000 },
+      ]])),
+      jellyfinLivePlayUrls: (_ctx, ch) => ({
+        nativeUrl: `/api/iptv/native/0?cid=${encodeURIComponent(ch.id)}`,
+        nativeMime: 'video/mp2t',
+        hlsUrl: '/api/iptv/hls/0/index.m3u8',
+        hasFfmpeg: true,
+      }),
+      tmdb: {
+        async get(p) {
+          if (p === '/tv/9910') {
+            return { id: 9910, name: 'Test Series', seasons: [{ season_number: 1, episode_count: 10 }] };
+          }
+          if (p === '/tv/9910/season/1') {
+            return {
+              season_number: 1,
+              episodes: Array.from({ length: 10 }, (_, i) => ({
+                episode_number: i + 1, name: `Ep ${i + 1}`, runtime: 45,
+              })),
+            };
+          }
+          return {};
+        },
+      },
+    },
+  });
+
+  // 1. Recommended On Now vs Upcoming (IsAiring=false&HasAired=false)
+  const onNow = await door.call('liveTvRecommended', 'GET', '/LiveTv/Programs/Recommended?IsAiring=true&Limit=20');
+  assert.strictEqual(onNow.status, 200);
+  assert.strictEqual(onNow.body.Items.length, 1);
+  const prog = onNow.body.Items[0];
+  assert.strictEqual(prog.Name, 'Live Now');
+  assert.ok(prog.UserData && typeof prog.UserData.PlaybackPositionTicks === 'number', 'Program DTO must carry non-null UserData for Android TV');
+  assert.ok(Array.isArray(prog.MediaSources) && prog.MediaSources.length === 1, 'Program DTO must carry MediaSources');
+  assert.ok(Array.isArray(prog.People) && Array.isArray(prog.Studios) && Array.isArray(prog.GenreItems), 'Program DTO must carry empty detail arrays');
+
+  const upcoming = await door.call('liveTvRecommended', 'GET', '/LiveTv/Programs/Recommended?IsAiring=false&HasAired=false&Limit=20');
+  assert.strictEqual(upcoming.status, 200);
+  assert.strictEqual(upcoming.body.Items.length, 1);
+  assert.strictEqual(upcoming.body.Items[0].Name, 'Up Next Show');
+
+  // 2. Program item detail + PlaybackInfo both resolve cleanly instead of crashing or 404ing
+  const progDet = await door.call('item', 'GET', `/Items/${prog.Id}`);
+  assert.strictEqual(progDet.status, 200);
+  assert.strictEqual(progDet.body.Type, 'Program', 'Program item detail returns Type=Program');
+  assert.ok(progDet.body.UserData && progDet.body.UserData.IsFavorite === true);
+  const progPlay = await door.call('playback', 'POST', `/Items/${prog.Id}/PlaybackInfo`, { body: {} });
+  assert.strictEqual(progPlay.status, 200);
+  assert.strictEqual(progPlay.body.MediaSources.length, 1);
+
+  // 3. GET /Shows/:id/Episodes honors startItemId and adjacentTo so Play on Ep 8 plays Ep 8 (not Ep 1)
+  const allEps = await door.call('episodes', 'GET', '/Shows/t9910/Episodes');
+  assert.strictEqual(allEps.body.Items.length, 10);
+  const ep8Id = allEps.body.Items[7].Id;
+  const fromEp8 = await door.call('episodes', 'GET', `/Shows/t9910/Episodes?startItemId=${ep8Id}&Limit=150`);
+  assert.strictEqual(fromEp8.status, 200);
+  assert.strictEqual(fromEp8.body.Items[0].IndexNumber, 8, 'startItemId starts the playback queue at Episode 8');
+  assert.strictEqual(fromEp8.body.Items.length, 3, 'startItemId returns Ep 8, 9, 10');
+
+  const adjEp8 = await door.call('episodes', 'GET', `/Shows/t9910/Episodes?adjacentTo=${ep8Id}`);
+  assert.strictEqual(adjEp8.status, 200);
+  assert.deepStrictEqual(adjEp8.body.Items.map((e) => e.IndexNumber), [7, 8, 9], 'adjacentTo returns [prev, current, next]');
 });

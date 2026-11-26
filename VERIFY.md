@@ -128,6 +128,25 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-11-26, v3.5.14 — Jellyfin Android TV 0.20.0 & Roku 2.2.5 compatibility fixes:
+- What changed:
+  - **Jellyfin Android TV 0.20.0 (`server/jellyfin-api.js`):**
+    - Completed Live TV `Program` DTOs (`tvProgramItem()`) with `UserData`, `MediaSources`, `MediaStreams`, and empty detail arrays (`People`, `Studios`, `GenreItems`, `Taglines`) so clicking a Live TV program never crashes Android TV 0.20.0.
+    - Added `findLiveChannelForItem()` so `PlaybackInfo`, `/Videos/:id/stream`, `/LiveTv/LiveStreams/Open`, and Favorites resolve `0d...` program UUIDs directly; raised `LIVE_PROGRAM_CACHE_CAP` to `4000`; honored `IsAiring=false&HasAired=false` ("Upcoming") in `/LiveTv/Programs/Recommended`.
+    - Honored `startItemId` / `StartItemId` and `adjacentTo` / `AdjacentTo` in `GET /Shows/:id/Episodes` (both TMDB and local shows) so pressing Play on Episode N starts at Episode N instead of S01E01.
+  - **Jellyfin Roku 2.2.5 (`server/jellyfin-api.js`, `server/index.js`):**
+    - Added `normalizeJellyfinPath()` to strip trailing slashes on all Jellyfin door routes (fixing `404` on Roku's `GET /Users/:id/Views/`, `/Users/:id/Items/Latest/`, `/Users/:id/Items/`, etc. that left the Roku home screen blank).
+    - Registered `GET /QuickConnect/Initiate` alongside `POST` with the same rate limiting so Quick Connect works on Roku 2.2.5.
+  - **Tests (`test/jellyfin-api.test.js`):**
+    - Added unit + live HTTP tests for Android TV Live TV Program DTOs/playback, Upcoming recommendations, `Episodes?startItemId=` / `adjacentTo=`, Roku `GET /Users/:id/Views/` & `/Items/Latest/` trailing slashes, and `GET /QuickConnect/Initiate`.
+- Automated verification:
+  - **Node test suites (`GITHUB_REF_NAME=v3.5.14`):** all 59/59 suites passing, 1431/1431 tests passing, 0 failures — including `test/jellyfin-api.test.js` + `test/security.test.js` (209/209), `test/apple-client.test.js` + `test/release-contract.test.js` (14/14), and `test/iptv-cache.test.js` + `test/library-persian.test.js` + `test/phase4.test.js` (296/296, run with real local `ffmpeg`/`ffprobe`).
+  - **Syntax & diff checks:** `node --check` clean on `server/jellyfin-api.js` and `server/index.js`; `git diff --check` clean.
+  - **Android / Windows / Apple:** version manifests bumped cleanly (`3.5.14` / `459`); CI builds & signs the universal APK, Docker image, and Windows installers on tag `v3.5.14`.
+- Not run locally on this commit:
+  - Physical Roku 4 / Android TV hardware playback smoke and Docker image build (owner verifying post-release on server + Roku + Android TV).
+- Version contract: `package.json` 3.5.14; Android `versionName` 3.5.14 / `versionCode` 459; Apple `project.yml` `MARKETING_VERSION` 3.5.14 / `CURRENT_PROJECT_VERSION` 459; Windows client `package.json` / `package-lock.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` 3.5.14.
+
 2026-11-25, v3.5.13 — Cross-platform UX & performance polish across Web/Mobile, Android, Windows, and Jellyfin:
 - What changed:
   - **Web / TV / Mobile (`web/index.html`):**

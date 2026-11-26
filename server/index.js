@@ -22,7 +22,7 @@ const { planMoves, applyLibraryMoves, parkVanished, restoreReturned, parkLibrary
 const { pickLibraryTmdbHit, libraryNfoPrefersLocal, libraryAutoTmdbMatch, libraryScanUsesLocalMetaOnly, libraryItemMatchesTmdb, unboundLibraryItem, findLibraryArt, libraryNameParts, libraryTmdbQueries, isLibrarySeasonDir, librarySeasonFromDir, libraryEpisodeNumber, solarToGregorian, foldPersian, cleanNfoTitle } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter, SIGN_IN_NAME_MAX } = require('./auth');
 const {
-  JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
+  JELLYFIN_ROUTES, JELLYFIN_MAX_RANK, bindJellyfin, jellyfinEnabled, isJellyfinPath, normalizeJellyfinPath, jellyfinToken, jellyfinCors, clientAddress,
   attachJellyfinSocket, closeJellyfinSockets,
   streamsWithSubtitles, resumeClockPlaylist, fullTimelinePlaylist, playlistClockShift, loadingCardPng, loadingHoldPlaylist, pictureAfterLoadingCard,
   directGrantUser,
@@ -14788,7 +14788,7 @@ const server = http.createServer(async (req, res) => {
       for (const [k, v] of Object.entries(cors)) { try { res.setHeader(k, v); } catch {} }
       if (req.method === 'OPTIONS') return send(res, 204, '', cors);
       const method = req.method === 'HEAD' ? 'GET' : req.method;
-      const pathLower = p.toLowerCase();
+      const pathLower = normalizeJellyfinPath(p);
       res._failScope = 'jellyfin';
       res._failWhat = `${method} ${p}${jellyfinQueryHint(url)} ${jellyfinClientLabel(req)}`;
       // With Debug logging on, every door call is written with its answer, so
