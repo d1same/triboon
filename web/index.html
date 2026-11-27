@@ -29761,9 +29761,16 @@ function isPlayStoreAndroidShell() {
     return ver.distribution === 'play';
   } catch { return false; }
 }
+function isMicrosoftStoreWindowsShell() {
+  try {
+    if (!isWindowsDesktopClient() || !(window.TriboonTV && typeof TriboonTV.appVersion === 'function')) return false;
+    const ver = JSON.parse(TriboonTV.appVersion() || '{}') || {};
+    return ver.distribution === 'msstore';
+  } catch { return false; }
+}
 function nativeAppUpdateKind() {
   if (isAndroidAppShell()) return isPlayStoreAndroidShell() ? '' : 'android';
-  if (isWindowsDesktopClient()) return 'windows';
+  if (isWindowsDesktopClient()) return isMicrosoftStoreWindowsShell() ? '' : 'windows';
   return '';
 }
 function isAppleAppShell() {
@@ -29773,11 +29780,12 @@ function isAppleAppShell() {
 function syncAppUpdateButtons() {
   const android = isAndroidAppShell();
   const playAndroid = isPlayStoreAndroidShell();
+  const msStoreWin = isMicrosoftStoreWindowsShell();
   const apple = isAppleAppShell();
   const windows = isWindowsHost();
   const admin = !!(S.user && S.user.role === 'admin');
-  const showApk = !apple && !playAndroid && (android || !windows);
-  const showWin = !apple && !playAndroid && windows && !android;
+  const showApk = !apple && !playAndroid && !msStoreWin && (android || !windows);
+  const showWin = !apple && !playAndroid && !msStoreWin && windows && !android;
   if ($('apkUpdate')) $('apkUpdate').style.display = showApk ? '' : 'none';
   if ($('winClientUpdate')) $('winClientUpdate').style.display = showWin ? '' : 'none';
   if ($('winServerUpdate')) $('winServerUpdate').style.display = (showWin && admin) ? '' : 'none';
@@ -29785,6 +29793,7 @@ function syncAppUpdateButtons() {
   if (copy) {
     if (apple) copy.textContent = 'Triboon for iPhone & iPad updates through TestFlight or the App Store.';
     else if (playAndroid) copy.textContent = 'Triboon updates automatically through Google Play.';
+    else if (msStoreWin) copy.textContent = 'Triboon updates automatically through the Microsoft Store.';
     else if (android) copy.textContent = 'Install the latest Triboon app — one build runs on both Android TV and phone.';
     else if (showWin) copy.textContent = 'Install the latest Windows app or server from the same GitHub release.';
     else copy.textContent = 'Download the latest Triboon Android app.';

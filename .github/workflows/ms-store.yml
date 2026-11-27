@@ -1,0 +1,77 @@
+name: microsoft store msix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'clients/windows-px8/**'
+      - '.github/workflows/ms-store.yml'
+      - 'test/ms-store.test.js'
+  pull_request:
+    paths:
+      - 'clients/windows-px8/**'
+      - '.github/workflows/ms-store.yml'
+      - 'test/ms-store.test.js'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ms-store-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-msix:
+    name: Build Microsoft Store MSIX (x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v4
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: clients/windows-px8/src-tauri -> target
+      - name: Verify MS Store and Windows client contracts
+        shell: pwsh
+        run: node --test test/ms-store.test.js test/windows-px8-player.test.js
+      - name: Build locked Windows client payload and pack MSIX
+        shell: pwsh
+        run: |
+          & clients/windows-px8/scripts/build-package.ps1 -CacheDirectory "$env:RUNNER_TEMP\triboon-libmpv-cache" -ArtifactDirectory "dist\windows-client"
+          & clients/windows-px8/scripts/build-msix.ps1 -OutputDirectory "dist\ms-store"
+      - name: Inspect MSIX contents and manifest identity
+        shell: pwsh
+        run: |
+          $ver = node -p "require('./package.json').version"
+          $msix = "dist/ms-store/Triboon-Windows-Store-v$ver.msix"
+          if (-not (Test-Path $msix)) { throw "Missing $msix" }
+          $listing = & 7z l $msix
+          if ($LASTEXITCODE -ne 0) { throw "7z list failed" }
+          foreach ($entry in @('AppxManifest.xml', 'triboon-px8.exe', 'libmpv-2.dll', 'LIBMPV-LICENSE.LGPL', 'Assets\StoreLogo.png')) {
+            if (-not ($listing -match [regex]::Escape($entry))) { throw "Missing $entry inside $msix" }
+          }
+          $xml = & 7z e -so $msix AppxManifest.xml
+          if ($xml -notmatch 'Name="Disame\.Triboon"') { throw "Unexpected Package Identity Name in AppxManifest.xml" }
+          if ($xml -notmatch 'Publisher="CN=CC350014-1964-4C3C-BCF7-6D4262F0EC93"') { throw "Unexpected Publisher in AppxManifest.xml" }
+          if ($xml -notmatch "Version=`"$ver\.0`"") { throw "Unexpected Version in AppxManifest.xml" }
+          Write-Host "Verified $msix successfully."
+      - name: Upload Microsoft Store MSIX artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        with:
+          name: Triboon-MS-Store-MSIX
+          path: |
+            dist/ms-store/Triboon-Windows-Store-*.msix
+            dist/ms-store/Triboon-Windows-Store-*.msix.sha256
+          retention-days: 30
+          if-no-files-found: error

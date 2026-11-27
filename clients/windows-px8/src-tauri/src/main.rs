@@ -389,18 +389,50 @@ fn windows_native_playback_caps(
     Ok(player::native_playback_caps())
 }
 
+#[cfg(target_os = "windows")]
+fn is_ms_store_package() -> bool {
+    extern "system" {
+        fn GetCurrentPackageFullName(
+            package_full_name_length: *mut u32,
+            package_full_name: *mut u16,
+        ) -> i32;
+    }
+    let mut len: u32 = 0;
+    let rc = unsafe { GetCurrentPackageFullName(&mut len, std::ptr::null_mut()) };
+    rc == 0 || rc == 122
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_ms_store_package() -> bool {
+    false
+}
+
+fn app_version_payload() -> serde_json::Value {
+    if is_ms_store_package() {
+        json!({
+            "versionName": env!("CARGO_PKG_VERSION"),
+            "versionCode": 0,
+            "tv": false,
+            "platform": "windows",
+            "distribution": "msstore",
+        })
+    } else {
+        json!({
+            "versionName": env!("CARGO_PKG_VERSION"),
+            "versionCode": 0,
+            "tv": false,
+            "platform": "windows",
+        })
+    }
+}
+
 #[tauri::command]
 fn windows_app_version(
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     require_player_or_catalog(&window, &state)?;
-    Ok(json!({
-        "versionName": env!("CARGO_PKG_VERSION"),
-        "versionCode": 0,
-        "tv": false,
-        "platform": "windows",
-    }))
+    Ok(app_version_payload())
 }
 
 #[tauri::command]
@@ -411,6 +443,15 @@ fn windows_install_app_update(
     url: String,
 ) -> Result<(), String> {
     require_catalog_origin(&window, &state)?;
+    if is_ms_store_package() {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("explorer.exe")
+                .arg("ms-windows-store://pdp/?ProductId=9N12LTV21B88")
+                .spawn();
+        }
+        return Ok(());
+    }
     let filename = update::allowed_windows_update_filename(&url)
         .ok_or_else(|| "update link was blocked".to_string())?;
     #[cfg(not(target_os = "windows"))]
@@ -428,12 +469,7 @@ fn bridge_script() -> &'static str {
         let bootstrap = json!({
             "chromeVersion": player::native_chrome_version(),
             "playbackCaps": player::native_playback_caps(),
-            "appVersion": {
-                "versionName": env!("CARGO_PKG_VERSION"),
-                "versionCode": 0,
-                "tv": false,
-                "platform": "windows",
-            }
+            "appVersion": app_version_payload(),
         });
         format!(
             "Object.defineProperty(window,'__TRIBOON_WINDOWS_BOOTSTRAP__',{{value:Object.freeze({bootstrap}),configurable:false,writable:false}});\n{}",
