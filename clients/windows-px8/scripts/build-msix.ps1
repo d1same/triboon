@@ -69,13 +69,13 @@ foreach ($name in @('libmpv-2.dll', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'LIBMPV
     Copy-Item -LiteralPath $src -Destination (Join-Path $stageRoot $name) -Force
 }
 
-# Stage Microsoft Store visual assets
+# Stage Microsoft Store visual assets (all tracked in clients/windows-px8/ms-store/)
 $assetMap = [ordered]@{
-    'StoreLogo.png'       = (Join-Path $iconsRoot 'StoreLogo.png')
-    'Square44x44Logo.png' = (Join-Path $iconsRoot 'Square44x44Logo.png')
-    'Square150x150Logo.png' = (Join-Path $iconsRoot 'Square150x150Logo.png')
-    'Square310x310Logo.png' = (Join-Path $iconsRoot 'Square310x310Logo.png')
-    'Wide310x150Logo.png' = (Join-Path $msStoreAssets 'Wide310x150Logo.png')
+    'StoreLogo.png'         = (Join-Path $msStoreAssets 'StoreLogo.png')
+    'Square44x44Logo.png'   = (Join-Path $msStoreAssets 'Square44x44Logo.png')
+    'Square150x150Logo.png' = (Join-Path $msStoreAssets 'Square150x150Logo.png')
+    'Square310x310Logo.png' = (Join-Path $msStoreAssets 'Square310x310Logo.png')
+    'Wide310x150Logo.png'   = (Join-Path $msStoreAssets 'Wide310x150Logo.png')
 }
 foreach ($destName in $assetMap.Keys) {
     $src = $assetMap[$destName]
