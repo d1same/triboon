@@ -53,7 +53,7 @@
             <Rectangle width="1920" height="96" color="0x111118FF" />
             <Label text="TRIBOON" translation="[64, 28]" font="font:MediumBoldSystemFont" color="0xE11D74FF" />
             <LabelList id="navTabs" translation="[280, 22]" itemSize="[190, 54]" numRows="1"
-                       horizFocusAnimationStyle="floatingFocus" color="0x9DA0AEFF" focusedColor="0xFFFFFFFF" />
+                       vertFocusAnimationStyle="floatingFocus" color="0x9DA0AEFF" focusedColor="0xFFFFFFFF" />
             <Label id="navHint" text="Press UP for tabs  •  OK to select  •  * for Search" translation="[64, 110]"
                    width="1792" font="font:SmallestSystemFont" color="0x7D8090FF" />
             <Label id="browseStatus" text="" translation="[64, 152]" width="1792"

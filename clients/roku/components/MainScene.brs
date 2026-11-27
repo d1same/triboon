@@ -519,39 +519,37 @@ sub addWatchRow(root as Object, rowTitle as String, watchRows as Dynamic)
     row.title = rowTitle
     added = 0
     for each w in watchRows
-        if w.watched = true then goto nextWatch
-        pos = 0.0
-        dur = 0.0
-        if w.position <> invalid then pos = w.position
-        if w.duration <> invalid then dur = w.duration
-        if pos < 15 then goto nextWatch
-        prog = 0.0
-        if dur > 1 then prog = pos / dur
-        if prog >= 0.94 then goto nextWatch
-
-        meta = w.meta
-        if meta = invalid then goto nextWatch
-        item = row.createChild("ContentNode")
-        titleStr = "Resume"
-        if meta.title <> invalid then titleStr = meta.title.ToStr()
-        if meta.season <> invalid and meta.episode <> invalid
-            titleStr = titleStr + " S" + meta.season.ToStr() + "E" + meta.episode.ToStr()
+        if w.watched <> true
+            playPos = 0.0
+            playDur = 0.0
+            if w.position <> invalid then playPos = w.position
+            if w.duration <> invalid then playDur = w.duration
+            prog = 0.0
+            if playDur > 1 then prog = playPos / playDur
+            meta = w.meta
+            if playPos >= 15 and prog < 0.94 and meta <> invalid
+                item = row.createChild("ContentNode")
+                titleStr = "Resume"
+                if meta.title <> invalid then titleStr = meta.title.ToStr()
+                if meta.season <> invalid and meta.episode <> invalid
+                    titleStr = titleStr + " S" + meta.season.ToStr() + "E" + meta.episode.ToStr()
+                end if
+                item.title = titleStr
+                if meta.poster <> invalid and meta.poster <> ""
+                    item.HDPosterUrl = TriboonResolveUrl(m.serverUrl, TriboonTmdbImage(meta.poster, "w342"))
+                end if
+                item.addFields({
+                    itemKind: "watch",
+                    watchKey: w.key,
+                    resumePos: Int(playPos),
+                    resumeDur: Int(playDur),
+                    progress: prog,
+                    metaJson: FormatJson(meta)
+                })
+                added = added + 1
+                if added >= 20 then exit for
+            end if
         end if
-        item.title = titleStr
-        if meta.poster <> invalid and meta.poster <> ""
-            item.HDPosterUrl = TriboonResolveUrl(m.serverUrl, TriboonTmdbImage(meta.poster, "w342"))
-        end if
-        item.addFields({
-            itemKind: "watch",
-            watchKey: w.key,
-            resumePos: Int(pos),
-            resumeDur: Int(dur),
-            progress: prog,
-            metaJson: FormatJson(meta)
-        })
-        added = added + 1
-        if added >= 20 then exit for
-        nextWatch:
     end for
     if added > 0 then root.appendChild(row)
 end sub
@@ -564,41 +562,41 @@ sub addTmdbRow(root as Object, rowTitle as String, pageObj as Dynamic, defaultTy
     for each it in pageObj.results
         mType = defaultType
         if it.media_type <> invalid then mType = it.media_type.ToStr()
-        if mType = "person" then goto nextTmdb
-        if mType = ""
-            if it.name <> invalid and it.title = invalid then mType = "tv" else mType = "movie"
+        if mType <> "person"
+            if mType = ""
+                if it.name <> invalid and it.title = invalid then mType = "tv" else mType = "movie"
+            end if
+
+            titleStr = "Untitled"
+            if it.title <> invalid and it.title <> ""
+                titleStr = it.title.ToStr()
+            else if it.name <> invalid and it.name <> ""
+                titleStr = it.name.ToStr()
+            end if
+
+            yearVal = 0
+            dateStr = ""
+            if it.release_date <> invalid then dateStr = it.release_date.ToStr()
+            if dateStr = "" and it.first_air_date <> invalid then dateStr = it.first_air_date.ToStr()
+            if Len(dateStr) >= 4 then yearVal = Val(Left(dateStr, 4))
+
+            item = row.createChild("ContentNode")
+            item.title = titleStr
+            item.HDPosterUrl = TriboonTmdbImage(it.poster_path, "w342")
+            item.addFields({
+                itemKind: "tmdb",
+                tmdbId: it.id,
+                mediaType: mType,
+                year: yearVal,
+                overview: it.overview,
+                backdropUrl: TriboonTmdbImage(it.backdrop_path, "w1280"),
+                posterPath: it.poster_path,
+                voteAverage: it.vote_average,
+                progress: 0.0
+            })
+            added = added + 1
+            if added >= 24 then exit for
         end if
-
-        titleStr = "Untitled"
-        if it.title <> invalid and it.title <> ""
-            titleStr = it.title.ToStr()
-        else if it.name <> invalid and it.name <> ""
-            titleStr = it.name.ToStr()
-        end if
-
-        yearVal = 0
-        dateStr = ""
-        if it.release_date <> invalid then dateStr = it.release_date.ToStr()
-        if dateStr = "" and it.first_air_date <> invalid then dateStr = it.first_air_date.ToStr()
-        if Len(dateStr) >= 4 then yearVal = Val(Left(dateStr, 4))
-
-        item = row.createChild("ContentNode")
-        item.title = titleStr
-        item.HDPosterUrl = TriboonTmdbImage(it.poster_path, "w342")
-        item.addFields({
-            itemKind: "tmdb",
-            tmdbId: it.id,
-            mediaType: mType,
-            year: yearVal,
-            overview: it.overview,
-            backdropUrl: TriboonTmdbImage(it.backdrop_path, "w1280"),
-            posterPath: it.poster_path,
-            voteAverage: it.vote_average,
-            progress: 0.0
-        })
-        added = added + 1
-        if added >= 24 then exit for
-        nextTmdb:
     end for
     if added > 0 then root.appendChild(row)
 end sub
@@ -957,12 +955,12 @@ sub onDetailButton()
         meta = { title: m.detailContext.title, type: "movie", libId: m.detailContext.libId, idx: m.detailContext.localIdx }
         startLocalPlayback(m.detailContext.libId, m.detailContext.localIdx, m.detailContext.title, key, 0, meta)
     else if m.detailContext.kind = "tmdb"
-        sVal = invalid
-        eVal = invalid
+        seasonNum = invalid
+        episodeNum = invalid
         key = "tmdb:" + m.detailContext.mediaType + ":" + m.detailContext.tmdbId.ToStr()
         if m.detailContext.mediaType = "tv"
-            sVal = 1
-            eVal = 1
+            seasonNum = 1
+            episodeNum = 1
             key = key + ":s1e1"
         end if
         meta = {
@@ -972,9 +970,9 @@ sub onDetailButton()
             year: m.detailContext.year,
             poster: m.detailContext.posterPath
         }
-        if sVal <> invalid then meta.season = sVal
-        if eVal <> invalid then meta.episode = eVal
-        startCatalogPlayback(m.detailContext.title, m.detailContext.mediaType, m.detailContext.year, m.detailContext.tmdbId, sVal, eVal, key, 0, meta)
+        if seasonNum <> invalid then meta.season = seasonNum
+        if episodeNum <> invalid then meta.episode = episodeNum
+        startCatalogPlayback(m.detailContext.title, m.detailContext.mediaType, m.detailContext.year, m.detailContext.tmdbId, seasonNum, episodeNum, key, 0, meta)
     end if
 end sub
 
@@ -1153,17 +1151,17 @@ end sub
 
 sub saveWatchProgress(finished as Boolean)
     if m.playContext = invalid or m.playContext.kind <> "vod" or m.playContext.watchKey = "" then return
-    pos = m.videoPlayer.position
-    dur = m.videoPlayer.duration
-    if pos < 5 and not finished then return
+    playPos = m.videoPlayer.position
+    playDur = m.videoPlayer.duration
+    if playPos < 5 and not finished then return
     isWatched = finished
-    if dur > 1 and (pos / dur) >= 0.94 then isWatched = true
+    if playDur > 1 and (playPos / playDur) >= 0.94 then isWatched = true
 
     payload = {
         key: m.playContext.watchKey,
         profile: m.profileId,
-        position: pos,
-        duration: dur,
+        position: playPos,
+        duration: playDur,
         watched: isWatched
     }
     if m.playContext.meta <> invalid then payload.meta = m.playContext.meta
@@ -1203,25 +1201,25 @@ sub onKeyboardDialogButton()
     dlg = m.top.dialog
     if dlg = invalid then return
     idx = dlg.buttonSelected
-    val = dlg.text.Trim()
+    inputVal = dlg.text.Trim()
     m.top.dialog = invalid
     if idx <> 0 then return
 
     if m.keyboardPurpose = "server_url"
-        verifyAndConnect(val)
+        verifyAndConnect(inputVal)
     else if m.keyboardPurpose = "login_user"
-        m.pendingLoginName = val
-        openKeyboardDialog("login_pass", "Password", "Enter password for " + val, "", true)
+        m.pendingLoginName = inputVal
+        openKeyboardDialog("login_pass", "Password", "Enter password for " + inputVal, "", true)
     else if m.keyboardPurpose = "login_pass"
         m.loginStatus.text = "Signing in..."
-        apiRequest("login", "POST", "/api/login", { name: m.pendingLoginName, password: val }, false, 12)
+        apiRequest("login", "POST", "/api/login", { name: m.pendingLoginName, password: inputVal }, false, 12)
     else if m.keyboardPurpose = "login_2fa"
         m.loginStatus.text = "Verifying 2FA code..."
-        apiRequest("login_2fa", "POST", "/api/login/2fa", { challenge: m.pending2faChallenge, code: val }, false, 12)
+        apiRequest("login_2fa", "POST", "/api/login/2fa", { challenge: m.pending2faChallenge, code: inputVal }, false, 12)
     else if m.keyboardPurpose = "search_query"
-        if val <> ""
-            m.browseStatus.text = "Searching for """ + val + """..."
-            apiRequest("search_multi", "GET", "/api/tmdb/search/multi?query=" + val.EncodeUriComponent(), invalid, true, 12)
+        if inputVal <> ""
+            m.browseStatus.text = "Searching for """ + inputVal + """..."
+            apiRequest("search_multi", "GET", "/api/tmdb/search/multi?query=" + inputVal.EncodeUriComponent(), invalid, true, 12)
         end if
     end if
 end sub

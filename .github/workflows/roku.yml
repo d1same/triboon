@@ -31,6 +31,8 @@ jobs:
           node-version: '24'
       - name: Run Roku contract & XML/manifest tests
         run: node --test test/roku-client.test.js
+      - name: Validate BrightScript syntax with BrighterScript compiler
+        run: npx --yes brighterscript@0.73.8 --rootDir clients/roku --files "manifest" "source/**/*" "components/**/*" --copyToStaging false --createPackage false --diagnosticLevel error
       - name: Package Roku channel zip
         run: |
           ver=$(node -p "require('./package.json').version")

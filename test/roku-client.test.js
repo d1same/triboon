@@ -81,9 +81,26 @@ test('Roku channel: store guide and pinned GitHub Actions packaging workflow exi
   assert.ok(fs.existsSync(path.join(root, 'clients/roku/ROKU_STORE_LISTING.md')));
   const wf = read('.github/workflows/roku.yml');
   assert.match(wf, /Triboon-Roku-v\$\{ver\}\.zip/);
+  assert.match(wf, /brighterscript/);
   const usesRefs = [...wf.matchAll(/^\s*-\s+uses:\s+([^\s#]+)/gm)].map((m) => m[1]);
   assert.ok(usesRefs.length > 0);
   for (const ref of usesRefs) {
     assert.ok(/@[0-9a-f]{40}$/.test(ref), `roku.yml action pinned by full SHA: ${ref}`);
+  }
+});
+
+test('Roku BrightScript: no reserved builtin identifiers (pos, eval, val, etc.) assigned as variables', () => {
+  const brsFiles = [
+    'clients/roku/source/main.brs',
+    'clients/roku/source/TriboonUtils.brs',
+    'clients/roku/components/MainScene.brs',
+    'clients/roku/components/PosterItem.brs',
+    'clients/roku/components/TriboonApiTask.brs',
+  ];
+  const reservedAssign = /^\s*(pos|eval|val|tab|rnd|stop|step|rem|dim|run)\s*=/im;
+  for (const rel of brsFiles) {
+    const src = read(rel);
+    const m = src.match(reservedAssign);
+    assert.strictEqual(m, null, `${rel} must not assign to reserved BrightScript keyword/builtin: ${m && m[0]}`);
   }
 });
