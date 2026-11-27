@@ -37,7 +37,7 @@ jobs:
         run: node --test test/webos-client.test.js
       - name: Install LG webOS CLI (@webosose/ares-cli) and package IPK
         run: |
-          npm install --no-save @webosose/ares-cli@3.1.2
+          npm install --no-save @webosose/ares-cli@2.4.0
           mkdir -p dist/webos stage/webos
           cp clients/webos/appinfo.json clients/webos/index.html clients/webos/server-url.js clients/webos/connect.js \
              clients/webos/icon-80.png clients/webos/icon-130.png clients/webos/splash-1920x1080.png stage/webos/
