@@ -3,11 +3,7 @@ name: roku channel package
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths:
-      - 'clients/roku/**'
-      - '.github/workflows/roku.yml'
-      - 'test/roku-client.test.js'
+    tags: ['v*']
   pull_request:
     paths:
       - 'clients/roku/**'
@@ -19,7 +15,7 @@ permissions:
 
 concurrency:
   group: roku-channel-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   build-roku-channel:

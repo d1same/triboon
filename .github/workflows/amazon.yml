@@ -8,11 +8,7 @@ on:
         type: boolean
         default: true
   push:
-    branches: [main]
-    paths:
-      - 'android/**'
-      - '.github/workflows/amazon.yml'
-      - 'test/amazon-firetv.test.js'
+    tags: ['v*']
   pull_request:
     paths:
       - 'android/**'
@@ -24,7 +20,7 @@ permissions:
 
 concurrency:
   group: amazon-apk-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   amazon-policy-check:
@@ -72,7 +68,7 @@ jobs:
   amazon-signed-apk:
     name: Build signed Amazon Appstore APK
     needs: [amazon-policy-check]
-    if: github.event_name == 'workflow_dispatch' && inputs.build_signed
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_signed)
     runs-on: ubuntu-24.04
     environment: release
     steps:

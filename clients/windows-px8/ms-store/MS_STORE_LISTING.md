@@ -32,3 +32,10 @@ Triboon Windows Client packages as a native x64 **MSIX** signed by Microsoft upo
    - **Screenshots**: Upload 1–4 clean 16:9 desktop screenshots (1920×1080) using open-source/personal media.
 6. **Submission options → Notes for certification**:
    - Provide a temporary read-only HTTPS demo Triboon server URL + test login with 2–3 open-source videos (*Big Buck Bunny*, *Sintel*) so Microsoft certification reviewers can verify sign-in and video playback.
+
+## Automatic Tag-Triggered CI Submissions
+Every `vX.Y.Z` release tag automatically builds and validates `Triboon-Windows-Store-vX.Y.Z.msix` in `.github/workflows/ms-store.yml`. To enable hands-free Partner Center submissions via `clients/windows-px8/scripts/upload-ms-store.js`:
+1. In **Partner Center → Account settings → Tenants → Developer**, click **Create Microsoft Entra ID** (or **Associate Microsoft Entra ID**).
+2. Register an Entra ID App Registration (copy **Directory (tenant) ID**, **Application (client) ID**, and a **Client secret**) and add that Entra app under **Partner Center → User management → Microsoft Entra ID applications** with **Manager** role.
+3. Add `MS_STORE_TENANT_ID`, `MS_STORE_CLIENT_ID`, and `MS_STORE_CLIENT_SECRET` (plus optional `MS_STORE_APP_ID=9N12LTV21B88`) to GitHub **Settings → Environments → `release` → Secrets**.
+4. If a prior submission is still in `PreProcessing` or `Certification`, the uploader logs a notice and exits cleanly rather than failing the tag build.

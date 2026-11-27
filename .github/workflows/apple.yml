@@ -2,10 +2,7 @@ name: apple client
 
 on:
   push:
-    branches: [main]
-    paths:
-      - 'clients/apple/**'
-      - '.github/workflows/apple.yml'
+    tags: ['v*']
   pull_request:
     paths:
       - 'clients/apple/**'
@@ -27,6 +24,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: apple-client-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   apple-build:
@@ -116,7 +117,7 @@ jobs:
   testflight-upload:
     name: Archive and upload to TestFlight
     needs: [apple-build]
-    if: github.event_name == 'workflow_dispatch' && inputs.upload_testflight
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.upload_testflight)
     runs-on: macos-15
     timeout-minutes: 30
     environment: release
@@ -126,28 +127,42 @@ jobs:
           persist-credentials: false
 
       - name: Validate Apple Developer & App Store Connect secrets
+        id: check_secrets
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_API_KEY_P8_B64: ${{ secrets.ASC_API_KEY_P8_B64 }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          missing=""
           for v in APPLE_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY_P8_B64; do
             if [ -z "${!v}" ]; then
-              echo "Missing required GitHub secret: $v (see clients/apple/TESTFLIGHT_SETUP.md)"
-              exit 1
+              missing="$missing $v"
             fi
           done
+          if [ -n "$missing" ]; then
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "Missing required GitHub secret(s):$missing (see clients/apple/TESTFLIGHT_SETUP.md)"
+              exit 1
+            fi
+            echo "::notice::Apple TestFlight secrets not configured ($missing); skipping automatic TestFlight upload on tag push."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           printf '%s' "$ASC_API_KEY_P8_B64" | tr -d '[:space:]' | base64 -d > "${RUNNER_TEMP}/AuthKey_${ASC_KEY_ID}.p8"
           test -s "${RUNNER_TEMP}/AuthKey_${ASC_KEY_ID}.p8" || { echo "Decoded .p8 key is empty"; exit 1; }
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Install XcodeGen and generate project
+        if: steps.check_secrets.outputs.ready == 'true'
         working-directory: clients/apple
         run: |
           brew install xcodegen
           xcodegen generate
 
       - name: Write App Store Connect ExportOptions.plist
+        if: steps.check_secrets.outputs.ready == 'true'
         working-directory: clients/apple
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -172,7 +187,7 @@ jobs:
           EOF
 
       - name: Archive and upload TriboonIOS (iPhone & iPad) to TestFlight
-        if: inputs.platform == 'both' || inputs.platform == 'ios'
+        if: steps.check_secrets.outputs.ready == 'true' && ((inputs.platform || 'both') == 'both' || inputs.platform == 'ios')
         working-directory: clients/apple
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -202,7 +217,7 @@ jobs:
             -authenticationKeyIssuerID "$ASC_ISSUER_ID"
 
       - name: Archive and upload TriboonTV (Apple TV) to TestFlight
-        if: inputs.platform == 'both' || inputs.platform == 'tvos'
+        if: steps.check_secrets.outputs.ready == 'true' && ((inputs.platform || 'both') == 'both' || inputs.platform == 'tvos')
         working-directory: clients/apple
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

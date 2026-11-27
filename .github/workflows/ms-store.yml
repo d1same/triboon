@@ -2,12 +2,13 @@ name: microsoft store msix
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_to_ms_store:
+        description: 'Auto-submit MSIX to Microsoft Partner Center (requires MS_STORE_* Entra secrets)'
+        type: boolean
+        default: true
   push:
-    branches: [main]
-    paths:
-      - 'clients/windows-px8/**'
-      - '.github/workflows/ms-store.yml'
-      - 'test/ms-store.test.js'
+    tags: ['v*']
   pull_request:
     paths:
       - 'clients/windows-px8/**'
@@ -19,7 +20,7 @@ permissions:
 
 concurrency:
   group: ms-store-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   build-msix:
@@ -75,3 +76,38 @@ jobs:
             dist/ms-store/Triboon-Windows-Store-*.msix.sha256
           retention-days: 30
           if-no-files-found: error
+
+  publish-ms-store:
+    name: Submit MSIX to Microsoft Partner Center
+    needs: [build-msix]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_to_ms_store)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Download built MSIX artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Triboon-MS-Store-MSIX
+          path: dist/ms-store
+      - name: Submit MSIX via Microsoft Store Submission API
+        env:
+          MS_STORE_TENANT_ID: ${{ secrets.MS_STORE_TENANT_ID }}
+          MS_STORE_CLIENT_ID: ${{ secrets.MS_STORE_CLIENT_ID }}
+          MS_STORE_CLIENT_SECRET: ${{ secrets.MS_STORE_CLIENT_SECRET }}
+          MS_STORE_APP_ID: ${{ secrets.MS_STORE_APP_ID || '9N12LTV21B88' }}
+        run: |
+          if [ -z "$MS_STORE_TENANT_ID" ] || [ -z "$MS_STORE_CLIENT_ID" ] || [ -z "$MS_STORE_CLIENT_SECRET" ]; then
+            echo "::notice::MS_STORE_TENANT_ID / MS_STORE_CLIENT_ID / MS_STORE_CLIENT_SECRET not configured; skipping automatic Partner Center upload. Download the Triboon-MS-Store-MSIX artifact or add Entra secrets to enable automatic submissions."
+            exit 0
+          fi
+          ver=$(node -p "require('./package.json').version")
+          node clients/windows-px8/scripts/upload-ms-store.js \
+            --app-id "$MS_STORE_APP_ID" \
+            --msix "dist/ms-store/Triboon-Windows-Store-v${ver}.msix"

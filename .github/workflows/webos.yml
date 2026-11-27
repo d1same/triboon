@@ -3,11 +3,7 @@ name: lg webos ipk
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths:
-      - 'clients/webos/**'
-      - '.github/workflows/webos.yml'
-      - 'test/webos-client.test.js'
+    tags: ['v*']
   pull_request:
     paths:
       - 'clients/webos/**'
@@ -19,7 +15,7 @@ permissions:
 
 concurrency:
   group: webos-ipk-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   build-webos-ipk:
