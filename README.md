@@ -73,9 +73,12 @@ photos come from TMDB.
 - Fast start. Opening a title can warm up its source, so Play reuses it instead
   of starting from zero. Playback tries direct play first, then remux, then
   transcode.
-- Health protection. Triboon checks a source quickly before it starts and keeps
-  checking in the background. A broken copy is swapped for the next healthy one
-  at the same timestamp.
+- Health protection & **TRaSH press-play scoring**. Triboon checks a source
+  quickly before it starts and keeps checking in the background. Built-in TRaSH
+  rules filter out CAM, 3D split-screen, hardcoded subs, and low-quality
+  re-encoders — all individually toggleable with 1-by-1 editable Trusted/Avoid
+  groups under **Settings → Catalog → Scoring**. A broken copy is swapped for
+  the next healthy one at the same timestamp.
 - Continue Watching and **Up next**. Progress follows the file on disk, so a
   renamed folder or a new episode does not move your progress onto another
   title. Up next works for shows in your own library too.
@@ -96,7 +99,8 @@ photos come from TMDB.
 **Live TV**
 
 - Bring your own M3U or Xtream playlists, each with its own guide.
-- A full TV guide, favourites, and Multiview.
+- A full TV guide, favourites, Multiview, and direct channel surfing
+  (`Ch-` / `Ch+`) across Web, Android TV, Fire TV, Windows, Apple TV, and Roku.
 - **Max connections** per playlist (Settings → House TV → edit the playlist).
   When a new stream would go over your provider's limit, Triboon stops the
   oldest stream on that playlist and tells that screen why, instead of the
@@ -121,10 +125,12 @@ photos come from TMDB.
 **Apps**
 
 - **Web** in any modern browser at `http://<server>:7777`.
-- **Android TV and Android phones**: one APK for both. TV playback uses the
-  native ExoPlayer for 4K and surround sound.
+- **Android TV, Fire TV, and Android phones**: one universal APK. TV playback
+  uses native Media3/ExoPlayer for 4K, HDR, surround sound, and Live TV surfing.
 - **Windows**: a native player app built on libmpv with hardware decoding, plus
   a separate one-click server installer.
+- **Apple iOS / tvOS, Roku, and LG webOS**: dedicated native/TV clients plus
+  optional Jellyfin app compatibility (Swiftfin, Infuse, Roku, Samsung, LG).
 
 ## Install
 
@@ -226,13 +232,14 @@ that need a remux or transcode.
 Do this right after the server starts, from a device on your home network:
 
 1. Open `http://<server>:7777` and create the owner (admin) account.
-2. Open **Settings → Catalog** and add a [TMDB](docs-setup.md) key (free).
-   Posters and rows appear on Home.
-3. Add a **usenet provider** and at least one **Newznab indexer** under
-   Settings → Providers. These are what Play streams from.
-4. Optional: add your own media under **Libraries**, Live TV playlists under
-   **House TV**, a Wyzie or OpenSubtitles key, Trakt, or Music.
-5. Invite your family under **Users**, then go to Home and press Play.
+2. Follow the built-in 3-step **Host Setup** wizard to add and live-test your
+   free [TMDB](docs-setup.md) v3 key, **usenet provider**, and **Newznab /
+   Prowlarr indexer** (or jump straight to local media folders). You can re-open
+   this checklist anytime from **Settings → Status**.
+3. Optional: add your own media under **Libraries**, Live TV playlists under
+   **House TV**, a Wyzie or OpenSubtitles key, Trakt, or Music, and customize
+   TRaSH scoring rules under **Settings → Catalog → Scoring**.
+4. Invite your family under **Users**, then go to Home and press Play.
 
 New to these services? The [Setup guide](docs-setup.md) explains each key step
 by step, with links and which ones are free.
