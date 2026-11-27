@@ -67,8 +67,14 @@ Triboon builds a **single universal Android App Bundle (`.aab`)** (`app.triboon.
 
 ## Building the Signed Play `.aab`
 
-### Via GitHub Actions (Recommended)
-Run **Actions → `Play Store AAB` → Run workflow** (uses the existing `release` environment signing secrets, verifies zero `REQUEST_INSTALL_PACKAGES` in the merged `.aab`, and uploads `triboon-play-vX.Y.Z.aab`).
+### Via GitHub Actions (Recommended — Automatic on Every `v*` Release Tag)
+Every `vX.Y.Z` tag push (or manual **Actions → `play store aab` → Run workflow**) builds `dist/triboon-play-vX.Y.Z.aab`, verifies zero `REQUEST_INSTALL_PACKAGES`, and — when `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` is configured in GitHub **Settings → Environments → `release` → Secrets** — uploads the signed `.aab` straight to Google Play Console (`internal` track by default) via `android/play-store/upload-play.js`.
+
+One-time setup for hands-free Google Play publishing:
+1. In **Google Cloud Console**, enable **Google Play Android Developer API** (`androidpublisher.googleapis.com`) and create a Service Account (e.g. `github-play-upload@<project>.iam.gserviceaccount.com`) with a JSON key.
+2. In **Google Play Console → Users and permissions → Invite new users**, invite that service account email and grant **App permissions → Triboon → Releases** (*View app information* + *Manage testing track releases*, plus *Manage production releases* if publishing to production).
+3. Add the downloaded JSON key as the GitHub `release` environment secret `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (never commit the key file).
+4. Note: While an app is still in **Draft** state on Play Console, the script automatically falls back to `status=draft`; once your first Closed Testing or Production release passes Google review, every future `v*` tag rolls out live (`status=completed`) to testers automatically.
 
 ### Locally
 ```powershell

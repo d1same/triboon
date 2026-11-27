@@ -7,12 +7,21 @@ on:
         description: 'Build signed Play Store AAB (requires release environment signing secrets)'
         type: boolean
         default: true
+      publish_to_play:
+        description: 'Auto-upload signed AAB to Google Play Console (requires GOOGLE_PLAY_SERVICE_ACCOUNT_JSON secret)'
+        type: boolean
+        default: true
+      track:
+        description: 'Google Play release track'
+        type: choice
+        default: internal
+        options:
+          - internal
+          - alpha
+          - beta
+          - production
   push:
-    branches: [main]
-    paths:
-      - 'android/**'
-      - '.github/workflows/play.yml'
-      - 'test/play-store.test.js'
+    tags: ['v*']
   pull_request:
     paths:
       - 'android/**'
@@ -24,7 +33,7 @@ permissions:
 
 concurrency:
   group: play-aab-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   play-policy-check:
@@ -68,15 +77,18 @@ jobs:
           echo "Play policy check passed for $aab"
 
   play-signed-aab:
-    name: Build signed Play Store AAB
+    name: Build & publish signed Play Store AAB
     needs: [play-policy-check]
-    if: github.event_name == 'workflow_dispatch' && inputs.build_signed
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_signed)
     runs-on: ubuntu-24.04
     environment: release
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v4
         with:
           distribution: temurin
@@ -129,3 +141,21 @@ jobs:
             dist/triboon-play-*.aab.sha256
           retention-days: 30
           if-no-files-found: error
+      - name: Publish signed AAB to Google Play Console
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_to_play)
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_TRACK: ${{ inputs.track || 'internal' }}
+        run: |
+          if [ -z "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::notice::GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is not set; skipping automatic Google Play upload. Download the Triboon-Play-AAB artifact or add the secret to enable automatic releases."
+            exit 0
+          fi
+          ver=$(node -p "require('./package.json').version")
+          code=$(grep -E 'versionCode\s*=' android/app/build.gradle | head -n1 | grep -oE '[0-9]+')
+          node android/play-store/upload-play.js \
+            --package app.triboon.tv \
+            --aab "dist/triboon-play-v${ver}.aab" \
+            --track "$PLAY_TRACK" \
+            --release-name "${ver} (${code})" \
+            --notes "Triboon v${ver}"

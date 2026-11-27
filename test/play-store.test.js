@@ -51,4 +51,64 @@ test('Google Play listing assets and privacy policy match Play Console dimension
   assert.ok(fs.existsSync(path.join(root, 'PRIVACY.md')), 'PRIVACY.md exists');
   assert.ok(fs.existsSync(path.join(root, 'android/play-store/PLAY_STORE_LISTING.md')), 'Play Console listing guide exists');
   assert.ok(fs.existsSync(path.join(root, '.github/workflows/play.yml')), 'Play Store AAB workflow exists');
+  assert.ok(fs.existsSync(path.join(root, 'android/play-store/upload-play.js')), 'Google Play auto-upload script exists');
+});
+
+test('Google Play CI auto-publish: play.yml runs signed AAB + Play upload on v* tags and workflow_dispatch', () => {
+  const wf = read('.github/workflows/play.yml');
+  assert.match(wf, /tags:\s*\['v\*'\]/);
+  assert.match(wf, /startsWith\(github\.ref,\s*'refs\/tags\/v'\)/);
+  assert.match(wf, /GOOGLE_PLAY_SERVICE_ACCOUNT_JSON/);
+  assert.match(wf, /node android\/play-store\/upload-play\.js/);
+});
+
+test('Google Play auto-upload helper: parses raw/base64 service account, signs RS256 JWT, and detects draft app fallback', () => {
+  const crypto = require('node:crypto');
+  const uploader = require('../android/play-store/upload-play.js');
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+  const sample = { client_email: 'ci@example.iam.gserviceaccount.com', private_key: privateKey };
+  const raw = JSON.stringify(sample);
+  const b64 = Buffer.from(raw, 'utf8').toString('base64');
+
+  assert.strictEqual(uploader.parseServiceAccountJson(raw).client_email, sample.client_email);
+  assert.strictEqual(uploader.parseServiceAccountJson(b64).client_email, sample.client_email);
+
+  const jwt = uploader.buildJwtAssertion(sample, 1700000000);
+  const parts = jwt.split('.');
+  assert.strictEqual(parts.length, 3);
+  const verifier = crypto.createVerify('RSA-SHA256');
+  verifier.update(`${parts[0]}.${parts[1]}`);
+  verifier.end();
+  const sigBuf = Buffer.from(parts[2].replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  assert.strictEqual(verifier.verify(publicKey, sigBuf), true, 'JWT RS256 signature must verify');
+
+  const payload = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+  assert.strictEqual(payload.iss, sample.client_email);
+  assert.strictEqual(payload.scope, 'https://www.googleapis.com/auth/androidpublisher');
+  assert.strictEqual(payload.iat, 1700000000);
+  assert.strictEqual(payload.exp, 1700003600);
+
+  assert.strictEqual(uploader.isDraftAppError(400, 'Only releases with status draft may be created on draft app.'), true);
+  assert.strictEqual(uploader.isDraftAppError(403, 'Version code 461 has already been used.'), false);
+
+  const body = uploader.buildTrackReleaseBody({
+    track: 'internal',
+    versionCode: 461,
+    status: 'completed',
+    releaseName: '3.6.1 (461)',
+    notes: 'Triboon v3.6.1',
+  });
+  assert.deepStrictEqual(body, {
+    track: 'internal',
+    releases: [{
+      name: '3.6.1 (461)',
+      versionCodes: ['461'],
+      status: 'completed',
+      releaseNotes: [{ language: 'en-US', text: 'Triboon v3.6.1' }],
+    }],
+  });
 });
