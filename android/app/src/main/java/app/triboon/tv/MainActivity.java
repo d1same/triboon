@@ -917,7 +917,29 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void openAmazonAppstoreListing() {
+        String pkg = getPackageName();
+        try {
+            Intent amzn = new Intent(Intent.ACTION_VIEW, Uri.parse("amzn://apps/android?p=" + pkg));
+            amzn.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(amzn);
+        } catch (Exception ignored) {
+            try {
+                Intent web = new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://www.amazon.com/gp/mas/dl/android?p=" + pkg));
+                web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(web);
+            } catch (Exception e) {
+                Toast.makeText(this, "Updates are delivered through the Amazon Appstore", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
     private void openExternalUrl(String rawUrl) {
+        if (BuildConfig.AMAZON_DISTRIBUTION) {
+            openAmazonAppstoreListing();
+            return;
+        }
         if (BuildConfig.PLAY_DISTRIBUTION) {
             openPlayStoreListing();
             return;
@@ -944,6 +966,10 @@ public class MainActivity extends Activity {
     // it straight to the system package installer — no browser/downloader detour. A failed
     // download or verification never reaches Package Installer.
     private void downloadAndInstallUpdate(String rawUrl) {
+        if (BuildConfig.AMAZON_DISTRIBUTION) {
+            openAmazonAppstoreListing();
+            return;
+        }
         if (BuildConfig.PLAY_DISTRIBUTION) {
             openPlayStoreListing();
             return;
@@ -1621,7 +1647,7 @@ public class MainActivity extends Activity {
                 return "{\"versionName\":\"" + jsonEscape(BuildConfig.VERSION_NAME)
                         + "\",\"versionCode\":" + BuildConfig.VERSION_CODE
                         + ",\"tv\":" + (isTvDevice() ? "true" : "false")
-                        + ",\"distribution\":\"" + (BuildConfig.PLAY_DISTRIBUTION ? "play" : "direct") + "\"}";
+                        + ",\"distribution\":\"" + (BuildConfig.AMAZON_DISTRIBUTION ? "amazon" : (BuildConfig.PLAY_DISTRIBUTION ? "play" : "direct")) + "\"}";
             }
 
             @android.webkit.JavascriptInterface
@@ -9650,6 +9676,7 @@ public class MainActivity extends Activity {
     // sideloaded boxes never crash — they simply never show a Cast button. All Cast SDK callbacks
     // (session/state/progress) fire on the main thread; we still wrap web pushes in runOnUiThread.
     private com.google.android.gms.cast.framework.CastContext castCtx() {
+        if (BuildConfig.AMAZON_DISTRIBUTION) { castUnavailable = true; return null; }
         if (castUnavailable) return null;
         if (castContext != null) return castContext;
         try {

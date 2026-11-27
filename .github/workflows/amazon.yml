@@ -1,0 +1,130 @@
+name: amazon fire tv apk
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_signed:
+        description: 'Build signed Amazon Appstore APK (requires release environment signing secrets)'
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/amazon.yml'
+      - 'test/amazon-firetv.test.js'
+  pull_request:
+    paths:
+      - 'android/**'
+      - '.github/workflows/amazon.yml'
+      - 'test/amazon-firetv.test.js'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amazon-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  amazon-policy-check:
+    name: Amazon Appstore compliance check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - name: Lint and build unsigned amazonRelease APK to verify manifest policy
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew lintAmazonRelease assembleAmazonRelease -PtriboonAllowUnsignedAmazonCheck=true --console=plain
+      - name: Verify merged Amazon manifest strips REQUEST_INSTALL_PACKAGES, FileProvider, and Google Cast metadata
+        run: |
+          manifest=android/app/build/intermediates/merged_manifest/amazonRelease/processAmazonReleaseMainManifest/AndroidManifest.xml
+          test -f "$manifest" || { echo "Merged amazonRelease manifest not found at $manifest"; exit 1; }
+          if grep -q "REQUEST_INSTALL_PACKAGES" "$manifest"; then
+            echo "FAIL: REQUEST_INSTALL_PACKAGES must not be present in Amazon Appstore builds"
+            exit 1
+          fi
+          if grep -q "updateprovider" "$manifest"; then
+            echo "FAIL: updateprovider FileProvider must not be present in Amazon Appstore builds"
+            exit 1
+          fi
+          if grep -q "OPTIONS_PROVIDER_CLASS_NAME" "$manifest"; then
+            echo "FAIL: Google Cast OPTIONS_PROVIDER_CLASS_NAME must not be present in Amazon Appstore builds"
+            exit 1
+          fi
+          grep -q 'android.software.leanback' "$manifest"
+          grep -q 'android.intent.category.LEANBACK_LAUNCHER' "$manifest"
+          grep -q 'android.intent.category.LAUNCHER' "$manifest"
+          apk=android/app/build/outputs/apk/amazonRelease/app-amazonRelease-unsigned.apk
+          test -s "$apk" || { echo "Expected unsigned Amazon APK at $apk"; exit 1; }
+          echo "Amazon Appstore policy check passed for $apk"
+
+  amazon-signed-apk:
+    name: Build signed Amazon Appstore APK
+    needs: [amazon-policy-check]
+    if: github.event_name == 'workflow_dispatch' && inputs.build_signed
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - name: Decode release keystore
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.TRIBOON_RELEASE_KEYSTORE_B64 }}
+        run: |
+          test -n "$RELEASE_KEYSTORE_B64" || { echo "Missing TRIBOON_RELEASE_KEYSTORE_B64 secret"; exit 1; }
+          printf '%s' "$RELEASE_KEYSTORE_B64" | tr -d '[:space:]' | base64 -d > "${{ runner.temp }}/triboon-release.jks"
+          test -s "${{ runner.temp }}/triboon-release.jks" || { echo "Keystore decode produced an empty file"; exit 1; }
+      - name: Build signed amazonRelease APK
+        env:
+          TRIBOON_RELEASE_STORE_FILE: ${{ runner.temp }}/triboon-release.jks
+          TRIBOON_RELEASE_STORE_PASSWORD: ${{ secrets.TRIBOON_RELEASE_STORE_PASSWORD }}
+          TRIBOON_RELEASE_KEY_ALIAS: ${{ secrets.TRIBOON_RELEASE_KEY_ALIAS }}
+          TRIBOON_RELEASE_KEY_PASSWORD: ${{ secrets.TRIBOON_RELEASE_KEY_PASSWORD }}
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleAmazonRelease --console=plain
+      - name: Verify signed Amazon APK integrity and policy compliance
+        run: |
+          apk=android/app/build/outputs/apk/amazonRelease/app-amazonRelease.apk
+          test -s "$apk" || { echo "Signed Amazon APK not found"; exit 1; }
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          test -x "$apksigner" || { echo "apksigner not found"; exit 1; }
+          "$apksigner" verify --verbose --print-certs "$apk"
+          manifest=android/app/build/intermediates/merged_manifest/amazonRelease/processAmazonReleaseMainManifest/AndroidManifest.xml
+          ! grep -q "REQUEST_INSTALL_PACKAGES" "$manifest"
+          ! grep -q "updateprovider" "$manifest"
+          ! grep -q "OPTIONS_PROVIDER_CLASS_NAME" "$manifest"
+          ver=$(node -p "require('./package.json').version")
+          mkdir -p dist
+          cp "$apk" "dist/triboon-amazon-v${ver}.apk"
+          sha256sum "dist/triboon-amazon-v${ver}.apk" > "dist/triboon-amazon-v${ver}.apk.sha256"
+          ls -lh dist/
+      - name: Upload signed Amazon Appstore APK artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        with:
+          name: Triboon-Amazon-FireTV-APK
+          path: |
+            dist/triboon-amazon-*.apk
+            dist/triboon-amazon-*.apk.sha256
+          retention-days: 30
+          if-no-files-found: error

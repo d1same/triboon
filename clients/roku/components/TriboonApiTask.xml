@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="TriboonApiTask" extends="Task">
+    <interface>
+        <field id="method" type="string" value="GET" />
+        <field id="url" type="string" value="" />
+        <field id="token" type="string" value="" />
+        <field id="bodyJson" type="string" value="" />
+        <field id="timeoutSec" type="integer" value="15" />
+        <field id="requestTag" type="string" value="" />
+        <field id="response" type="assocarray" />
+    </interface>
+    <script type="text/brightscript" uri="pkg:/components/TriboonApiTask.brs" />
+</component>

@@ -37,6 +37,7 @@ android {
         versionCode = 459
         versionName = "3.5.14"
         buildConfigField "boolean", "PLAY_DISTRIBUTION", "false"
+        buildConfigField "boolean", "AMAZON_DISTRIBUTION", "false"
     }
 
     signingConfigs {
@@ -78,6 +79,18 @@ android {
                 signingConfig = signingConfigs.playRelease
             }
         }
+        // Amazon Appstore distribution (Fire TV Stick, Fire TV Cube, Fire TV Edition, Fire Tablets).
+        // Inherits R8/shrinking from release, strips REQUEST_INSTALL_PACKAGES + FileProvider + Cast
+        // metadata via src/amazonRelease/AndroidManifest.xml, disables GMS Cast at runtime, and
+        // routes updates through Amazon Appstore.
+        amazonRelease {
+            initWith release
+            matchingFallbacks = ['release']
+            buildConfigField "boolean", "AMAZON_DISTRIBUTION", "true"
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.release
+            }
+        }
     }
 
     buildFeatures {
@@ -116,6 +129,20 @@ tasks.matching { it.name == 'assemblePlayRelease' || it.name == 'bundlePlayRelea
         }
         if (!file(playStoreFilePath).isFile()) {
             throw new GradleException("Play release keystore not found: ${playStoreFilePath}")
+        }
+    }
+}
+
+tasks.matching { it.name == 'assembleAmazonRelease' || it.name == 'bundleAmazonRelease' }.configureEach {
+    doFirst {
+        if (project.hasProperty('triboonAllowUnsignedAmazonCheck')) {
+            return
+        }
+        if (!hasReleaseSigning) {
+            throw new GradleException('Amazon release signing is required. Set TRIBOON_RELEASE_STORE_FILE, TRIBOON_RELEASE_STORE_PASSWORD, TRIBOON_RELEASE_KEY_ALIAS, and TRIBOON_RELEASE_KEY_PASSWORD outside git.')
+        }
+        if (!file(releaseStoreFilePath).isFile()) {
+            throw new GradleException("Release keystore not found: ${releaseStoreFilePath}")
         }
     }
 }

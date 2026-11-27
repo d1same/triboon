@@ -1,0 +1,14 @@
+title=Triboon
+major_version=3
+minor_version=5
+build_version=14
+mm_icon_focus_hd=pkg:/images/icon-focus-hd.png
+mm_icon_focus_sd=pkg:/images/icon-focus-sd.png
+splash_screen_fhd=pkg:/images/splash-fhd.png
+splash_screen_hd=pkg:/images/splash-hd.png
+splash_screen_sd=pkg:/images/splash-sd.png
+splash_color=#0b0b0f
+splash_min_time=0
+ui_resolutions=fhd
+supports_input_launch=1
+bs_const=debug=false

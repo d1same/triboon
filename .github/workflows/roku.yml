@@ -1,0 +1,58 @@
+name: roku channel package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'clients/roku/**'
+      - '.github/workflows/roku.yml'
+      - 'test/roku-client.test.js'
+  pull_request:
+    paths:
+      - 'clients/roku/**'
+      - '.github/workflows/roku.yml'
+      - 'test/roku-client.test.js'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roku-channel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-roku-channel:
+    name: Validate and package Roku channel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v4
+        with:
+          node-version: '24'
+      - name: Run Roku contract & XML/manifest tests
+        run: node --test test/roku-client.test.js
+      - name: Package Roku channel zip
+        run: |
+          ver=$(node -p "require('./package.json').version")
+          mkdir -p dist/roku
+          (cd clients/roku && zip -r "../../dist/roku/Triboon-Roku-v${ver}.zip" manifest source components images -x "images/icon-store-540x405.png")
+          zip_path="dist/roku/Triboon-Roku-v${ver}.zip"
+          test -s "$zip_path" || { echo "Expected Roku channel zip at $zip_path"; exit 1; }
+          unzip -l "$zip_path" | grep -q "manifest"
+          unzip -l "$zip_path" | grep -q "source/main.brs"
+          unzip -l "$zip_path" | grep -q "components/MainScene.xml"
+          sha256sum "$zip_path" > "${zip_path}.sha256"
+          ls -lh dist/roku/
+      - name: Upload Roku channel zip artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        with:
+          name: Triboon-Roku-Channel
+          path: |
+            dist/roku/Triboon-Roku-*.zip
+            dist/roku/Triboon-Roku-*.zip.sha256
+          retention-days: 30
+          if-no-files-found: error

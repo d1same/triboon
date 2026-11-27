@@ -1,0 +1,21 @@
+{
+  "id": "app.triboon.webos",
+  "version": "3.5.14",
+  "vendor": "Disame",
+  "type": "web",
+  "main": "index.html",
+  "title": "Triboon",
+  "icon": "icon-80.png",
+  "largeIcon": "icon-130.png",
+  "bgColor": "#0b0b0f",
+  "iconColor": "#e11d74",
+  "bgImage": "splash-1920x1080.png",
+  "splashBackground": "splash-1920x1080.png",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true,
+  "handlesRelaunch": true,
+  "requiredPermissions": [
+    "time.query",
+    "application.operation"
+  ]
+}

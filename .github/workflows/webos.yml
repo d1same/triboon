@@ -1,0 +1,73 @@
+name: lg webos ipk
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'clients/webos/**'
+      - '.github/workflows/webos.yml'
+      - 'test/webos-client.test.js'
+  pull_request:
+    paths:
+      - 'clients/webos/**'
+      - '.github/workflows/webos.yml'
+      - 'test/webos-client.test.js'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webos-ipk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-webos-ipk:
+    name: Build LG webOS IPK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v4
+        with:
+          node-version: '24'
+      - name: Run LG webOS contract tests
+        run: node --test test/webos-client.test.js
+      - name: Install LG webOS CLI (@webosose/ares-cli) and package IPK
+        run: |
+          npm install --no-save @webosose/ares-cli@3.1.2
+          mkdir -p dist/webos stage/webos
+          cp clients/webos/appinfo.json clients/webos/index.html clients/webos/server-url.js clients/webos/connect.js \
+             clients/webos/icon-80.png clients/webos/icon-130.png clients/webos/splash-1920x1080.png stage/webos/
+          npx --no-install ares-package stage/webos -o dist/webos
+          ver=$(node -p "require('./package.json').version")
+          ipk="dist/webos/app.triboon.webos_${ver}_all.ipk"
+          test -s "$ipk" || { echo "Expected packaged IPK at $ipk"; ls -la dist/webos; exit 1; }
+          sha256sum "$ipk" > "${ipk}.sha256"
+          hash=$(cut -d' ' -f1 "${ipk}.sha256")
+          cat > dist/webos/triboon-webos-manifest.json <<EOF
+          {
+            "id": "app.triboon.webos",
+            "version": "${ver}",
+            "type": "web",
+            "title": "Triboon",
+            "appDescription": "Self-hosted Triboon media server client for LG webOS Smart TVs.",
+            "iconUri": "https://raw.githubusercontent.com/d1same/triboon/main/clients/webos/icon-130.png",
+            "sourceUrl": "https://github.com/d1same/triboon",
+            "ipkUrl": "app.triboon.webos_${ver}_all.ipk",
+            "ipkHash": { "sha256": "${hash}" }
+          }
+          EOF
+          ls -lh dist/webos/
+      - name: Upload LG webOS IPK artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        with:
+          name: Triboon-LG-webOS-IPK
+          path: |
+            dist/webos/*.ipk
+            dist/webos/*.ipk.sha256
+            dist/webos/triboon-webos-manifest.json
+          retention-days: 30
+          if-no-files-found: error
