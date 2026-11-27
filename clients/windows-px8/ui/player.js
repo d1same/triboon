@@ -144,12 +144,43 @@
     return `${(bps / 1000000).toFixed(1)} Mbps`;
   }
 
+  let lastToastText = '';
+  let lastToastAt = 0;
+  function cleanToastMessage(raw) {
+    let s = text(raw, 220).replace(/\s+/g, ' ').trim();
+    if (!s) return '';
+    if (/^(AbortError\b|The (user )?(aborted|operation was aborted)|cancel+ed\b)/i.test(s)) return '';
+    s = s.replace(/https?:\/\/\S+/gi, '').replace(/[?&](?:t|token)=[^&\s]+/gi, '').replace(/\s+/g, ' ').trim();
+    if (/(?:failed to fetch|networkerror|econnrefused|enotfound|etimedout)/i.test(s)) {
+      return 'Could not reach the server. Check your connection.';
+    }
+    if (/(?:mpv\s+error|native playback failed|live playback failed)/i.test(s)) {
+      return 'Playback could not start — try another source.';
+    }
+    return s.length > 140 ? `${s.slice(0, 137).trimEnd()}…` : s;
+  }
+
+  function classifyToastTone(msg) {
+    const s = String(msg || '').toLowerCase();
+    if (/\b(failed|error|could not|couldn['’]t|blocked|lost|expired)\b/.test(s)) return 'err';
+    if (/\b(unavailable|no |turn subtitles|missing|limit)\b/.test(s)) return 'warn';
+    if (/[✓★]|\b(saved|added|connected|synced|copied|enabled)\b/.test(s)) return 'ok';
+    return 'info';
+  }
+
   function showToast(message) {
+    const clean = cleanToastMessage(message);
+    if (!clean) return;
+    const now = Date.now();
+    if (clean === lastToastText && now - lastToastAt < 2500) return;
+    lastToastText = clean;
+    lastToastAt = now;
     const toast = $('toast');
-    toast.textContent = text(message, 180);
+    toast.dataset.tone = classifyToastTone(clean);
+    toast.textContent = clean;
     toast.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toast.classList.remove('show'), 2300);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), toast.dataset.tone === 'err' ? 3600 : 2400);
   }
 
   function announce(message) {

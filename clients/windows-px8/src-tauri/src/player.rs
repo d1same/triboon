@@ -2466,7 +2466,8 @@ fn actor_loop(
                 flush_progress(&app, session.as_mut());
                 let mut next = NativeSession::from_vod(request);
                 if let Err(error) = load_session(&mpv, &mut next) {
-                    notify_error(&app, &mut next, &format!("native playback failed: {error}"));
+                    mpv_log_line(&format!("[play] native playback failed: {error}"));
+                    notify_error(&app, &mut next, "Playback could not start — try another source.");
                 }
                 publish_ui(&app, &shared, next.ui.clone());
                 session = Some(next);
@@ -2477,7 +2478,8 @@ fn actor_loop(
                 let mut next = NativeSession::from_live(request);
                 if let Err(error) = load_session(&mpv, &mut next) {
                     if !try_live_fallback(&mpv, &mut next) {
-                        notify_error(&app, &mut next, &format!("live playback failed: {error}"));
+                        mpv_log_line(&format!("[live] live playback failed: {error}"));
+                        notify_error(&app, &mut next, "Live TV stream is unavailable.");
                     }
                 }
                 publish_ui(&app, &shared, next.ui.clone());
@@ -2806,15 +2808,15 @@ fn load_session(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> Result<(), S
     Ok(())
 }
 
-#[cfg(all(feature = "player", target_os = "windows"))]
+#[cfg_attr(not(all(feature = "player", target_os = "windows")), allow(dead_code))]
 fn subtitle_scale(size: &str) -> f64 {
     match size.trim().to_ascii_uppercase().as_str() {
         "XXS" => 0.62,
-        "XS" => 0.76,
-        "S" => 0.9,
-        "L" => 1.18,
-        "XL" => 1.34,
-        "XXL" => 1.52,
+        "XS" => 0.70,
+        "S" => 0.78,
+        "L" => 1.28,
+        "XL" => 1.42,
+        "XXL" => 1.56,
         _ => 1.0,
     }
 }

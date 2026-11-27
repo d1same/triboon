@@ -3361,7 +3361,7 @@ public class MainActivity extends Activity {
         nativePlayerView.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
         if (nativePlayerView.getSubtitleView() != null) {
             nativePlayerView.getSubtitleView().setApplyEmbeddedStyles(false);
-            nativePlayerView.getSubtitleView().setBottomPaddingFraction(0.08f);
+            nativePlayerView.getSubtitleView().setBottomPaddingFraction(isTvDevice() ? 0.08f : 0.05f);
             nativePlayerView.getSubtitleView().setStyle(new CaptionStyleCompat(
                     Color.WHITE, Color.TRANSPARENT, Color.TRANSPARENT,
                     CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW, Color.BLACK, Typeface.DEFAULT_BOLD));
@@ -3390,12 +3390,13 @@ public class MainActivity extends Activity {
         nativeSubtitleOverlay.setIncludeFontPadding(false);
         nativeSubtitleOverlay.setTypeface(Typeface.DEFAULT_BOLD);
         nativeSubtitleOverlay.setShadowLayer(dp(2), 0, dp(1), Color.BLACK);
-        nativeSubtitleOverlay.setPadding(dp(24), dp(8), dp(24), dp(8));
+        boolean tvSub = isTvDevice();
+        nativeSubtitleOverlay.setPadding(dp(tvSub ? 24 : 12), dp(8), dp(tvSub ? 24 : 12), dp(8));
         nativeSubtitleOverlay.setVisibility(View.GONE);
         FrameLayout.LayoutParams subLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL);
-        subLp.setMargins(dp(64), 0, dp(64), dp(82));
+        subLp.setMargins(dp(tvSub ? 64 : 18), 0, dp(tvSub ? 64 : 18), dp(tvSub ? 82 : 30));
         nativePlayerLayer.addView(nativeSubtitleOverlay, subLp);
         applyNativeSubtitleSize();
 
@@ -5990,30 +5991,65 @@ public class MainActivity extends Activity {
         updateNativeChrome();
     }
 
+    private String lastNativeToastText = "";
+    private long lastNativeToastAtMs = 0L;
+
+    private String cleanNativeToastText(String raw) {
+        if (raw == null) return "";
+        String s = raw.replaceAll("\\s+", " ").trim();
+        if (s.isEmpty()) return "";
+        if (s.matches("(?i)^(AbortError\\b|The (user )?(aborted|operation was aborted)|cancel+ed\\b).*")) return "";
+        s = s.replaceAll("(?i)https?://\\S+", "").replaceAll("\\s+", " ").trim();
+        s = s.replaceAll("(?i)^(?:java\\.lang\\.|androidx\\.media3\\.|com\\.google\\.android\\.exoplayer2\\.)\\S+:\\s*", "").trim();
+        if (s.matches("(?i).*(?:failed to fetch|econnrefused|enotfound|etimedout|unknownhostexception|sockettimeoutexception).*")) {
+            return "Could not reach the server. Check your connection.";
+        }
+        if (s.matches("(?i).*(?:exoplaybackexception|mediacodec|error_code_).*")) {
+            return "Playback could not start — try another source.";
+        }
+        if (s.length() > 140) s = s.substring(0, 137).trim() + "…";
+        return s;
+    }
+
     private void showNativePlayerToast(String message) {
-        if (nativePlayerLayer == null || message == null || message.isEmpty()) return;
+        if (nativePlayerLayer == null) return;
+        String clean = cleanNativeToastText(message);
+        if (clean.isEmpty()) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (clean.equals(lastNativeToastText) && (now - lastNativeToastAtMs) < 2500L) return;
+        lastNativeToastText = clean;
+        lastNativeToastAtMs = now;
         if (nativeToastView == null) {
             nativeToastView = new TextView(this);
             nativeToastView.setTextColor(0xFFF3EFF7);
             nativeToastView.setTextSize(14);
-            nativeToastView.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
-            nativeToastView.setPadding(dp(18), dp(10), dp(18), dp(10));
+            nativeToastView.setTypeface(Typeface.SANS_SERIF, Typeface.NORMAL);
+            nativeToastView.setMaxLines(2);
+            nativeToastView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            nativeToastView.setMaxWidth(dp(480));
+            nativeToastView.setPadding(dp(18), dp(11), dp(18), dp(11));
             android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-            bg.setColor(0xE014161A);
+            bg.setColor(0xEB14161B);
             bg.setCornerRadius(dp(8));
-            bg.setStroke(dp(1), 0x33FFFFFF);
+            bg.setStroke(dp(1), 0x26FFFFFF);
             nativeToastView.setBackground(bg);
             FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                    android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL);
-            lp.topMargin = dp(28);
+                    android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL);
+            lp.bottomMargin = dp(40);
             nativePlayerLayer.addView(nativeToastView, lp);
         }
-        nativeToastView.setText(message);
+        boolean isErr = clean.toLowerCase(java.util.Locale.US).matches(".*\\b(failed|error|could not|couldn't|blocked|lost|expired)\\b.*");
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(0xEB14161B);
+        bg.setCornerRadius(dp(8));
+        bg.setStroke(dp(1), isErr ? 0x55E86B74 : 0x26FFFFFF);
+        nativeToastView.setBackground(bg);
+        nativeToastView.setText(clean);
         nativeToastView.setVisibility(View.VISIBLE);
         nativeToastView.bringToFront();
         nativeProgress.removeCallbacks(nativeHideToast);
-        nativeProgress.postDelayed(nativeHideToast, 1800L);
+        nativeProgress.postDelayed(nativeHideToast, isErr ? 3600L : 2400L);
     }
 
     private void zapNativeLiveChannel(int dir) {
@@ -7313,7 +7349,7 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
             if (!sameTrack) clearNativeSubtitleOverlay();
-            if (!silent) Toast.makeText(this, "Subtitles could not load", Toast.LENGTH_SHORT).show();
+            if (!silent) showNativePlayerToast("Subtitles could not load");
             return;
         }
         loadNativeSubtitleOverlayAttempt(subtitleUrl, cleanUrl, token, silent, 0);
@@ -7603,7 +7639,7 @@ public class MainActivity extends Activity {
     }
 
     private void applyNativeSubtitleSize() {
-        float sizeSp = SubtitleText.sizeSp(nativeSubtitleSize);
+        float sizeSp = SubtitleText.sizeSp(nativeSubtitleSize, isTvDevice());
         if (nativeSubtitleOverlay != null) {
             nativeSubtitleOverlay.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp);
         }
@@ -7679,7 +7715,7 @@ public class MainActivity extends Activity {
 
     private void shiftNativeSubtitles(float delta) {
         if (nativePlayer == null || !nativeHasWyzieSubtitle || nativeSubtitleUrl.isEmpty()) {
-            Toast.makeText(this, "Turn subtitles on first", Toast.LENGTH_SHORT).show();
+            showNativePlayerToast("Turn subtitles on first");
             return;
         }
         nativeSubtitleShift = Math.round((nativeSubtitleShift + delta) * 10f) / 10f;
@@ -7831,7 +7867,7 @@ public class MainActivity extends Activity {
             }
         } catch (Exception e) {
             nativeOpenSubtitleMenuAfterRefresh = false;
-            Toast.makeText(this, "Could not load subtitle versions", Toast.LENGTH_SHORT).show();
+            showNativePlayerToast("Could not load subtitle versions");
         }
     }
 
@@ -8396,11 +8432,11 @@ public class MainActivity extends Activity {
         // open the menu when the list arrives.
         if (trackType == C.TRACK_TYPE_TEXT && !nativeSubtitleHasOptions()) {
             nativeOpenSubtitleMenuAfterRefresh = true;
-            Toast.makeText(this, "Finding subtitles...", Toast.LENGTH_SHORT).show();
+            showNativePlayerToast("Finding subtitles…");
             return;
         }
         if (trackType == C.TRACK_TYPE_AUDIO && !nativeAudioHasOptions()) {
-            Toast.makeText(this, "This file has one audio track", Toast.LENGTH_SHORT).show();
+            showNativePlayerToast("Only one audio track available");
             return;
         }
         showNativeChrome(false);
@@ -8470,11 +8506,9 @@ public class MainActivity extends Activity {
         }
 
         if (choices.size() == (trackType == C.TRACK_TYPE_TEXT ? 1 : 0)) {
-            Toast.makeText(this,
-                    trackType == C.TRACK_TYPE_TEXT
-                            ? "No online subtitle choices are available"
-                            : "No alternate audio tracks are available",
-                    Toast.LENGTH_SHORT).show();
+            showNativePlayerToast(trackType == C.TRACK_TYPE_TEXT
+                    ? "No subtitles available"
+                    : "No other audio tracks available");
             return;
         }
 
@@ -8560,8 +8594,8 @@ public class MainActivity extends Activity {
             return;
         }
         if (trackType == C.TRACK_TYPE_TEXT && "missing".equals(choice.subtitleAction)) {
-            Toast.makeText(this, choice.label == null || choice.label.isEmpty()
-                    ? "No subtitles found for this title" : choice.label, Toast.LENGTH_SHORT).show();
+            showNativePlayerToast(choice.label == null || choice.label.isEmpty()
+                    ? "No subtitles found for this title" : choice.label);
             showNativeChrome(false);
             return;
         }
@@ -8613,7 +8647,7 @@ public class MainActivity extends Activity {
                 nativeSubtitleUrl = "";
                 nativeSubtitleHostHeader = "";
                 nativeHasWyzieSubtitle = false;
-                Toast.makeText(this, "Subtitle URL was blocked", Toast.LENGTH_SHORT).show();
+                showNativePlayerToast("Subtitle URL was blocked");
                 showNativeChrome(false);
                 return;
             }
@@ -8795,7 +8829,6 @@ public class MainActivity extends Activity {
     private void requestNativeSubtitleVersions(String lang) {
         if (web == null) return;
         nativeOpenSubtitleMenuAfterRefresh = true;
-        Toast.makeText(this, "Loading subtitle versions...", Toast.LENGTH_SHORT).show();
         web.evaluateJavascript("window.__tvNativeSubtitleVersions && window.__tvNativeSubtitleVersions("
                 + org.json.JSONObject.quote(lang == null || lang.isEmpty() ? "en" : lang)
                 + "," + nativePosSecondsPrecise() + "," + nativeDurSeconds()
@@ -8805,7 +8838,6 @@ public class MainActivity extends Activity {
     private void requestNativeSubtitleShowAll() {
         if (web == null) return;
         nativeOpenSubtitleMenuAfterRefresh = true;
-        Toast.makeText(this, "Showing all subtitle languages", Toast.LENGTH_SHORT).show();
         web.evaluateJavascript("window.__tvNativeSubtitleShowAll && window.__tvNativeSubtitleShowAll("
                 + nativePosSecondsPrecise() + "," + nativeDurSeconds()
                 + "," + nativePlaybackToken + ")", null);

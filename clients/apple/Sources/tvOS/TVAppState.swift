@@ -6,13 +6,22 @@ final class TVAppState: ObservableObject {
     private static let serverKey = "triboon.tv.serverOrigin"
     private static let tokenKey = "triboon.tv.token"
     private static let profileKey = "triboon.tv.profileId"
+    private static let skipPickerKey = "triboon.tv.skipProfilePicker"
+    private static let coverSizeKey = "triboon.tv.coverSize"
+    private static let textSizeKey = "triboon.tv.textSize"
 
     @Published var serverOrigin: String?
     @Published var token: String?
     @Published var user: TriboonUser?
     @Published var activeProfileId: String = "default"
+    @Published var skipProfilePicker: Bool = false
+    @Published var coverSize: String = "M"
+    @Published var textSize: String = "M"
+    @Published var needsProfilePick: Bool = false
     @Published var isLoadingHome = false
     @Published var errorBanner: String?
+
+    private var pickedThisSession = false
 
     @Published var continueWatching: [WatchRow] = []
     @Published var trendingMovies: [TMDBTitle] = []
@@ -40,6 +49,11 @@ final class TVAppState: ObservableObject {
         }
         self.token = UserDefaults.standard.string(forKey: Self.tokenKey)
         self.activeProfileId = UserDefaults.standard.string(forKey: Self.profileKey) ?? "default"
+        self.skipProfilePicker = UserDefaults.standard.bool(forKey: Self.skipPickerKey)
+        let savedCover = UserDefaults.standard.string(forKey: Self.coverSizeKey) ?? "M"
+        self.coverSize = ["S", "M", "L"].contains(savedCover) ? savedCover : "M"
+        let savedText = UserDefaults.standard.string(forKey: Self.textSizeKey) ?? "M"
+        self.textSize = ["S", "M", "L"].contains(savedText) ? savedText : "M"
         wirePlaybackCallbacks()
         if serverOrigin != nil && token != nil {
             Task { await restoreSession() }
@@ -58,10 +72,11 @@ final class TVAppState: ObservableObject {
     func completeSignIn(token: String, user: TriboonUser?) async {
         UserDefaults.standard.set(token, forKey: Self.tokenKey)
         self.token = token
+        pickedThisSession = false
         if let user {
             self.user = user
-            if let first = user.profiles?.first?.id {
-                selectProfile(first)
+            if let profiles = user.profiles, profiles.count == 1, let only = profiles.first?.id {
+                selectProfile(only)
             }
         }
         await restoreSession()
@@ -69,8 +84,43 @@ final class TVAppState: ObservableObject {
 
     func selectProfile(_ id: String) {
         activeProfileId = id
+        pickedThisSession = true
+        needsProfilePick = false
         UserDefaults.standard.set(id, forKey: Self.profileKey)
         Task { await refreshHome() }
+    }
+
+    func setSkipProfilePicker(_ skip: Bool) {
+        skipProfilePicker = skip
+        UserDefaults.standard.set(skip, forKey: Self.skipPickerKey)
+    }
+
+    var posterWidth: CGFloat {
+        switch coverSize {
+        case "S": return 200
+        case "L": return 290
+        default: return 240
+        }
+    }
+
+    var dynamicTypeSize: DynamicTypeSize {
+        switch textSize {
+        case "S": return .medium
+        case "L": return .xLarge
+        default: return .large
+        }
+    }
+
+    func setCoverSize(_ size: String) {
+        let v = ["S", "M", "L"].contains(size) ? size : "M"
+        coverSize = v
+        UserDefaults.standard.set(v, forKey: Self.coverSizeKey)
+    }
+
+    func setTextSize(_ size: String) {
+        let v = ["S", "M", "L"].contains(size) ? size : "M"
+        textSize = v
+        UserDefaults.standard.set(v, forKey: Self.textSizeKey)
     }
 
     func signOut() {
@@ -78,6 +128,8 @@ final class TVAppState: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.tokenKey)
         token = nil
         user = nil
+        pickedThisSession = false
+        needsProfilePick = false
         continueWatching = []
         libraries = []
         iptvChannels = []
@@ -94,16 +146,22 @@ final class TVAppState: ObservableObject {
         do {
             let me = try await api.fetchMe()
             self.user = me
-            if let profiles = me.profiles, !profiles.isEmpty,
-               !profiles.contains(where: { $0.id == activeProfileId }) {
-                activeProfileId = profiles[0].id
-                UserDefaults.standard.set(activeProfileId, forKey: Self.profileKey)
+            if let profiles = me.profiles, !profiles.isEmpty {
+                if !profiles.contains(where: { $0.id == activeProfileId }) {
+                    activeProfileId = profiles[0].id
+                    UserDefaults.standard.set(activeProfileId, forKey: Self.profileKey)
+                }
+                if profiles.count > 1 && !pickedThisSession && !skipProfilePicker {
+                    needsProfilePick = true
+                    return
+                }
             }
+            needsProfilePick = false
             await refreshHome()
         } catch TriboonAPIError.unauthorized {
             signOut()
         } catch {
-            errorBanner = error.localizedDescription
+            showError(for: error)
         }
     }
 
@@ -147,7 +205,7 @@ final class TVAppState: ObservableObject {
                 profileId: activeProfileId
             )
             guard let url = resp.preferredAppleURL(baseOrigin: origin, startSeconds: resumeAt) else {
-                errorBanner = "No playable Apple stream URL returned."
+                showError("This title isn't playable right now.")
                 return
             }
             let isHLS = url.absoluteString.lowercased().contains(".m3u8")
@@ -173,7 +231,7 @@ final class TVAppState: ObservableObject {
             activePlayback = req
             playback.load(req)
         } catch {
-            errorBanner = error.localizedDescription
+            showError(for: error)
         }
     }
 
@@ -193,7 +251,7 @@ final class TVAppState: ObservableObject {
                 profileId: activeProfileId
             )
             guard let url = resp.preferredAppleURL(baseOrigin: origin, startSeconds: resumeAt) else {
-                errorBanner = "No playable Apple stream URL returned."
+                showError("This title isn't playable right now.")
                 return
             }
             let isHLS = url.absoluteString.lowercased().contains(".m3u8")
@@ -222,7 +280,7 @@ final class TVAppState: ObservableObject {
             activePlayback = req
             playback.load(req)
         } catch {
-            errorBanner = error.localizedDescription
+            showError(for: error)
         }
     }
 
@@ -234,7 +292,7 @@ final class TVAppState: ObservableObject {
         do {
             let resp = try await api.playLocal(libId: libId, idx: item.idx, profileId: activeProfileId)
             guard let url = resp.preferredAppleURL(baseOrigin: origin, startSeconds: resumeAt) else {
-                errorBanner = "No playable local stream URL returned."
+                showError("This library file isn't playable right now.")
                 return
             }
             let isHLS = url.absoluteString.lowercased().contains(".m3u8")
@@ -263,13 +321,43 @@ final class TVAppState: ObservableObject {
             activePlayback = req
             playback.load(req)
         } catch {
-            errorBanner = error.localizedDescription
+            showError(for: error)
         }
     }
 
     @Published var activeLiveChannelIdx: Int?
     @Published var liveZapToast: String?
     private var liveZapToastTask: Task<Void, Never>?
+    private var errorBannerTask: Task<Void, Never>?
+
+    func dismissErrorBanner() {
+        errorBannerTask?.cancel()
+        errorBannerTask = nil
+        errorBanner = nil
+    }
+
+    func showError(_ message: String) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        errorBanner = trimmed.count > 140 ? String(trimmed.prefix(137)) + "…" : trimmed
+        errorBannerTask?.cancel()
+        errorBannerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.errorBanner = nil
+        }
+    }
+
+    func showError(for error: Error) {
+        if error is CancellationError { return }
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
+        if ns.domain == NSURLErrorDomain {
+            showError("Could not reach the server. Check your connection.")
+            return
+        }
+        showError(error.localizedDescription)
+    }
 
     func playIPTVChannel(_ channel: IPTVChannel) async {
         guard let api, let origin = serverOrigin else { return }
@@ -293,7 +381,7 @@ final class TVAppState: ObservableObject {
             activePlayback = req
             playback.load(req)
         } catch {
-            errorBanner = error.localizedDescription
+            showError(for: error)
         }
     }
 
@@ -344,7 +432,7 @@ final class TVAppState: ObservableObject {
         }
         playback.onError = { [weak self] msg, _, _, _ in
             guard let self else { return }
-            self.errorBanner = msg
+            self.showError(msg.isEmpty ? "Playback could not start — try another source." : msg)
             self.activePlayback = nil
             self.playback.stop(notify: false)
         }

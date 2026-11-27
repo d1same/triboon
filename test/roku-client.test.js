@@ -68,6 +68,8 @@ test('Roku channel: native SceneGraph components, background Task networking, an
   assert.match(sceneBrs, /function onKeyEvent\(/);
   assert.match(sceneBrs, /sub stepLiveChannel\(/);
   assert.match(sceneBrs, /channelup/);
+  assert.match(sceneBrs, /skipProfilePicker/);
+  assert.match(sceneBrs, /toggle_skip_picker/);
 
   const posterXml = read('clients/roku/components/PosterItem.xml');
   const posterBrs = read('clients/roku/components/PosterItem.brs');

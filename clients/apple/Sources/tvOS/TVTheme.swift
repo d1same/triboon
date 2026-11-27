@@ -28,13 +28,16 @@ struct TVPosterCard: View {
     let subtitle: String?
     let imageURL: URL?
     let progress: Double?
+    var posterWidth: CGFloat = 240
+
+    private var posterHeight: CGFloat { posterWidth * 1.5 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ZStack(alignment: .bottomLeading) {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(TVTheme.raise)
-                    .frame(width: 240, height: 360)
+                    .frame(width: posterWidth, height: posterHeight)
 
                 if let imageURL {
                     AsyncImage(url: imageURL) { phase in
@@ -45,7 +48,7 @@ struct TVPosterCard: View {
                             Color.clear
                         }
                     }
-                    .frame(width: 240, height: 360)
+                    .frame(width: posterWidth, height: posterHeight)
                     .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 16))
                 } else {
@@ -59,7 +62,7 @@ struct TVPosterCard: View {
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 12)
                     }
-                    .frame(width: 240, height: 360)
+                    .frame(width: posterWidth, height: posterHeight)
                 }
 
                 if let progress, progress > 0.01 {
@@ -76,20 +79,20 @@ struct TVPosterCard: View {
                     .padding(10)
                 }
             }
-            .frame(width: 240, height: 360)
+            .frame(width: posterWidth, height: posterHeight)
 
             Text(title)
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
-                .frame(width: 240, alignment: .leading)
+                .frame(width: posterWidth, alignment: .leading)
 
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.65))
                     .lineLimit(1)
-                    .frame(width: 240, alignment: .leading)
+                    .frame(width: posterWidth, alignment: .leading)
             }
         }
     }

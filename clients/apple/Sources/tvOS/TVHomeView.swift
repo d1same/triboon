@@ -77,7 +77,8 @@ private struct TVHomeShelfTab: View {
                                             title: row.meta?.title ?? row.key,
                                             subtitle: rowSubtitle(row),
                                             imageURL: rowPosterURL(row),
-                                            progress: row.progress
+                                            progress: row.progress,
+                                            posterWidth: appState.posterWidth
                                         )
                                     }
                                     .buttonStyle(.card)
@@ -114,7 +115,8 @@ private struct TVHomeShelfTab: View {
                                 title: item.displayTitle,
                                 subtitle: item.year.map(String.init),
                                 imageURL: item.posterURL(),
-                                progress: nil
+                                progress: nil,
+                                posterWidth: appState.posterWidth
                             )
                         }
                         .buttonStyle(.card)
@@ -194,7 +196,9 @@ private struct TVCatalogGridTab: View {
     let title: String
     let items: [TMDBTitle]
 
-    private let columns = [GridItem(.adaptive(minimum: 250, maximum: 280), spacing: 38)]
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: appState.posterWidth + 10, maximum: appState.posterWidth + 40), spacing: 38)]
+    }
 
     var body: some View {
         let deduped = uniqueTitles(items)
@@ -212,7 +216,8 @@ private struct TVCatalogGridTab: View {
                                 title: item.displayTitle,
                                 subtitle: item.year.map(String.init),
                                 imageURL: item.posterURL(),
-                                progress: nil
+                                progress: nil,
+                                posterWidth: appState.posterWidth
                             )
                         }
                         .buttonStyle(.card)
@@ -247,20 +252,20 @@ private struct TVLibrariesTab: View {
 
             if let lib = selectedLib ?? appState.libraries.first {
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 250, maximum: 280), spacing: 38)], spacing: 44) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: appState.posterWidth + 10, maximum: appState.posterWidth + 40), spacing: 38)], spacing: 44) {
                         ForEach(items) { item in
                             if item.isShow {
                                 NavigationLink {
                                     TVLocalShowView(appState: appState, libId: lib.id, show: item)
                                 } label: {
-                                    TVPosterCard(title: item.title, subtitle: item.year.map(String.init), imageURL: localArtURL(item), progress: nil)
+                                    TVPosterCard(title: item.title, subtitle: item.year.map(String.init), imageURL: localArtURL(item), progress: nil, posterWidth: appState.posterWidth)
                                 }
                                 .buttonStyle(.card)
                             } else {
                                 Button {
                                     Task { await appState.playLocalItem(libId: lib.id, item: item) }
                                 } label: {
-                                    TVPosterCard(title: item.title, subtitle: item.year.map(String.init), imageURL: localArtURL(item), progress: nil)
+                                    TVPosterCard(title: item.title, subtitle: item.year.map(String.init), imageURL: localArtURL(item), progress: nil, posterWidth: appState.posterWidth)
                                 }
                                 .buttonStyle(.card)
                             }
@@ -394,7 +399,7 @@ private struct TVSearchTab: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 250, maximum: 280), spacing: 38)], spacing: 44) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: appState.posterWidth + 10, maximum: appState.posterWidth + 40), spacing: 38)], spacing: 44) {
                 ForEach(results.filter { $0.mediaType == "movie" || $0.mediaType == "tv" }) { item in
                     NavigationLink {
                         TVDetailView(appState: appState, item: item)
@@ -457,6 +462,43 @@ private struct TVSettingsTab: View {
                             Button(profile.id == appState.activeProfileId ? "✓ \(profile.name)" : profile.name) {
                                 appState.selectProfile(profile.id)
                             }
+                        }
+                    }
+                    Toggle(
+                        "Skip \"Who's watching?\" on this Apple TV",
+                        isOn: Binding(
+                            get: { appState.skipProfilePicker },
+                            set: { appState.setSkipProfilePicker($0) }
+                        )
+                    )
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: 640)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Display")
+                    .font(.title3.bold())
+                    .foregroundStyle(.white)
+                HStack(spacing: 18) {
+                    Text("Cover size")
+                        .font(.callout)
+                        .foregroundStyle(.white.opacity(0.75))
+                        .frame(width: 150, alignment: .leading)
+                    ForEach([("S", "Small"), ("M", "Medium"), ("L", "Large")], id: \.0) { code, label in
+                        Button(appState.coverSize == code ? "✓ \(label)" : label) {
+                            appState.setCoverSize(code)
+                        }
+                    }
+                }
+                HStack(spacing: 18) {
+                    Text("Text size")
+                        .font(.callout)
+                        .foregroundStyle(.white.opacity(0.75))
+                        .frame(width: 150, alignment: .leading)
+                    ForEach([("S", "Compact"), ("M", "Standard"), ("L", "Larger")], id: \.0) { code, label in
+                        Button(appState.textSize == code ? "✓ \(label)" : label) {
+                            appState.setTextSize(code)
                         }
                     }
                 }

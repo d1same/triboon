@@ -794,6 +794,28 @@ function videoMimeFor(url, json, picked) {
   if (/webm/i.test(blob)) return 'video/webm';
   return 'video/mp4';
 }
+function isDirectMuxedTrailerFormat(f) {
+  if (!f || !f.url) return false;
+  if (!f.vcodec || f.vcodec === 'none' || !f.acodec || f.acodec === 'none') return false;
+  const proto = String(f.protocol || '').toLowerCase();
+  if (proto.includes('m3u8') || proto.includes('dash') || /\.m3u8(\?|$)/i.test(String(f.url))) return false;
+  return true;
+}
+function pickBestMuxedTrailerFormat(json) {
+  const list = Array.isArray(json && json.formats) ? json.formats.filter(isDirectMuxedTrailerFormat) : [];
+  if (!list.length) return (json && json.requested_downloads && json.requested_downloads[0]) || null;
+  // Prefer direct progressive muxed MP4/H.264 up to 1080p so trailers play in crisp HD
+  // instead of settling for 360p itag 18 whenever a 720p/1080p muxed stream is available.
+  const score = (f) => {
+    const h = Math.min(1080, num(f.height) || 0);
+    const mp4 = String(f.ext || '').toLowerCase() === 'mp4' ? 1 : 0;
+    const h264 = /^(?:avc1|h264)/i.test(String(f.vcodec || '')) ? 1 : 0;
+    const tbr = Math.min(8000, num(f.tbr) || 0);
+    return h * 100000 + mp4 * 20000 + h264 * 10000 + tbr;
+  };
+  list.sort((a, b) => score(b) - score(a));
+  return list[0];
+}
 async function resolveVideoStream(id, { cookiesPath, force = false, site } = {}) {
   const spec = trailerWatch(id, site);
   const cookieFile = spec.site === 'vimeo' ? null : cookiesPath;
@@ -815,18 +837,18 @@ async function resolveVideoStream(id, { cookiesPath, force = false, site } = {})
     let j = await load(cookieFile);
     if ((!j || typeof j !== 'object') && cookieFile) j = await load(null);
     if (!j || typeof j !== 'object') throw new Error('yt-dlp returned no trailer data');
-    const picked = (j.requested_downloads && j.requested_downloads[0])
-      || (Array.isArray(j.formats) && [...j.formats].reverse().find((f) => (
-        f && f.url && f.vcodec && f.vcodec !== 'none' && f.acodec && f.acodec !== 'none'
-      )))
+    const picked = pickBestMuxedTrailerFormat(j)
+      || (j.requested_downloads && j.requested_downloads[0])
       || null;
-    const url = j.url || (picked && picked.url);
+    const url = (picked && picked.url) || j.url;
     if (!url) throw new Error('no trailer stream found');
     const headers = { ...(j.http_headers || {}), ...((picked && picked.http_headers) || {}) };
     const rec = {
       url, at: Date.now(), expiresAt: Date.now() + STREAM_TTL_MS,
       headers,
       mime: videoMimeFor(url, j, picked),
+      width: num((picked && picked.width) || j.width),
+      height: num((picked && picked.height) || j.height),
       title: cleanTitle(j.title) || j.title || 'Trailer',
       duration: num(j.duration),
     };
@@ -958,4 +980,5 @@ module.exports = {
   _parsePlaylistTracks: parsePlaylistTracks,
   _normalizeYtMusicApiTrack: normalizeYtMusicApiTrack,
   _normalizeYtMusicApiPlaylist: normalizeYtMusicApiPlaylist,
+  _pickBestMuxedTrailerFormat: pickBestMuxedTrailerFormat,
 };

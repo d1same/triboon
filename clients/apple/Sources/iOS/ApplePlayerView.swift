@@ -48,15 +48,22 @@ struct ApplePlayerView: View {
             }
 
             if let toast = session.playerToastText {
-                Text(toast)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 9)
-                    .background(Color.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.18), lineWidth: 1))
-                    .padding(.top, 60)
-                    .transition(.opacity)
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.white.opacity(0.85))
+                        .frame(width: 7, height: 7)
+                    Text(toast)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color(red: 20 / 255, green: 22 / 255, blue: 27 / 255).opacity(0.94), in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.12), lineWidth: 1))
+                .padding(.top, 56)
+                .padding(.horizontal, 20)
+                .transition(.opacity)
             }
         }
         .statusBarHidden(true)

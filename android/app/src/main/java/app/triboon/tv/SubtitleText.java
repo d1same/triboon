@@ -51,4 +51,10 @@ final class SubtitleText {
         return "S".equalsIgnoreCase(preference) ? 20f
                 : ("L".equalsIgnoreCase(preference) ? 32f : 25f);
     }
+
+    static float sizeSp(String preference, boolean isTv) {
+        if (isTv) return sizeSp(preference);
+        return "S".equalsIgnoreCase(preference) ? 15f
+                : ("L".equalsIgnoreCase(preference) ? 23f : 18.5f);
+    }
 }

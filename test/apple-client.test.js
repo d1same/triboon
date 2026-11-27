@@ -76,6 +76,10 @@ test('Apple client: project.yml versions and Info.plist preservation stay aligne
   assert.ok(fs.existsSync(path.join(root, 'clients/apple/Packages/TriboonCore/Package.swift')));
   assert.ok(fs.existsSync(path.join(root, 'clients/apple/Sources/iOS/TriboonIOSApp.swift')));
   assert.ok(fs.existsSync(path.join(root, 'clients/apple/Sources/tvOS/TriboonTVApp.swift')));
+  assert.ok(fs.existsSync(path.join(root, 'clients/apple/Sources/tvOS/TVProfilePickerView.swift')));
+  assert.match(read('clients/apple/Sources/tvOS/TVAppState.swift'), /needsProfilePick/);
+  assert.match(read('clients/apple/Sources/tvOS/TVAppState.swift'), /skipProfilePicker/);
+  assert.match(read('clients/apple/Sources/tvOS/TVHomeView.swift'), /setSkipProfilePicker/);
 });
 
 test('Apple client: bridge.js enforces same-origin VOD URLs, sanitizes Live TV, and routes native events', () => {
@@ -144,4 +148,19 @@ test('Apple client: web/index.html wires AVPlayer HLS handoff, hides APK/EXE dow
   assert.match(html, /function isAppleAppShell\(\)/);
   assert.match(html, /updates through TestFlight or the App Store/);
   assert.match(html, /body:not\(\.tv\) #browse \.filterBar\{display:flex;flex-wrap:nowrap/);
+
+  // Apple tvOS native Display settings (Cover size S/M/L + Text size DynamicTypeSize)
+  const tvState = read('clients/apple/Sources/tvOS/TVAppState.swift');
+  const tvHome = read('clients/apple/Sources/tvOS/TVHomeView.swift');
+  const tvTheme = read('clients/apple/Sources/tvOS/TVTheme.swift');
+  const tvApp = read('clients/apple/Sources/tvOS/TriboonTVApp.swift');
+  assert.match(tvState, /var posterWidth: CGFloat/);
+  assert.match(tvState, /var dynamicTypeSize: DynamicTypeSize/);
+  assert.match(tvState, /func setCoverSize\(_ size: String\)/);
+  assert.match(tvState, /func setTextSize\(_ size: String\)/);
+  assert.match(tvHome, /Text\("Display"\)/);
+  assert.match(tvHome, /appState\.setCoverSize\(code\)/);
+  assert.match(tvHome, /appState\.setTextSize\(code\)/);
+  assert.match(tvTheme, /var posterWidth: CGFloat = 240/);
+  assert.match(tvApp, /\.dynamicTypeSize\(appState\.dynamicTypeSize\)/);
 });

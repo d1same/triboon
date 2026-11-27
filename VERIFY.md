@@ -128,6 +128,34 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-11-27, v3.6.1 — Startup profile picker, mobile Home favorite IPTV fix, multi-resolution display/text/subtitle scaling, cross-platform quiet notifications, daily-fresh Kids & deduplicated Discover, and HD trailer playback UX:
+- What changed:
+  - **Startup Profile Picker (`web/index.html`, `clients/apple/Sources/tvOS/*`, `clients/roku/components/MainScene.brs`):**
+    - Prompts `"Who's watching?"` on fresh app open whenever 2+ profiles exist on the account, remembers the chosen profile for the active session, and adds a per-device skip toggle so single-viewer devices can bypass the picker.
+  - **Mobile/Web Home Favorite IPTV Reliability (`web/index.html`):**
+    - Fixed 6 root causes where Favorite IPTV channels could intermittently disappear from Home (transient IPTV error poisoning, background `catalogOnly` races cancelling watch loads, `requestIdleCallback` starvation on mobile WebViews, and `toggleFav`/`fillLiveState` cache desync).
+  - **Multi-Resolution Cover, Text & Subtitle Sizing (`web/index.html`, `android/.../SubtitleText.java`, `android/.../MainActivity.java`, `clients/windows-px8/src-tauri/src/player.rs`, `clients/apple/Sources/tvOS/*`):**
+    - Scaled Cover Size (`S/M/L`) and Content Text Size (`Compact/Standard/Larger`) cleanly across portrait/landscape phone, tablet, desktop, 4K, Android TV (`1440px`), LG webOS (`1920px`), and Apple tvOS.
+    - Scaled subtitle/caption sizes with responsive `vmin` clamps on Web/Mobile/4K, added live `#subSizePreview` in Settings → Playback, added phone-aware `SubtitleText.sizeSp(pref, isTv)` + margins on Android, and wired `libmpv` `subtitle_scale` (`0.78 / 1.0 / 1.28`) on Windows.
+  - **Cross-Platform Bottom Notifications & Error Cleanup (`web/index.html`, `android/.../MainActivity.java`, `clients/windows-px8/ui/*`, `clients/apple/Sources/*`, `clients/roku/components/MainScene.brs`):**
+    - Redesigned bottom toasts in Quiet Graphite with tone classification, 2.5s deduplication, raw stack/URL/token sanitization, and removal of noisy/internal toasts across all platforms; disabled `backdrop-filter` blur on `body.tv` to keep TV WebViews at 60fps.
+  - **Kids Daily Freshness & Discover Cross-Row Deduplication (`web/index.html`):**
+    - Kids rotates popular pages daily (`1–3`) with a 12-month fresh window and 1:1 fresh-first unwatched weave; Discover strictly deduplicates across all shelves (including after `▶ Latest trailers` insertion), separates Upcoming to `today+1`, and rotates daily.
+  - **HD Trailers & Playback UX (`server/ytmusic.js`, `web/index.html`):**
+    - Upgrades trailer stream selection (`pickBestMuxedTrailerFormat`) to highest direct progressive muxed MP4/H.264 up to 1080p, adds debounced hover/focus prefetch (320ms, 24-entry cap), 12s startup watchdog + alt-clip failover, muted autoplay recovery with unmute banner, background music/audiobook pause, resolution badge, Pause/Resume/Replay, Sound/Mute, Clip `1/N` switcher, Details jump, Fullscreen, and keyboard/media-remote shortcuts.
+- Automated verification:
+  - **Full Node test suite (`npm.cmd test`, 62 suites):** 1453/1453 passing, 0 failures (1452/1453 on full run; restored `warmContinueWatchingArt` idle schedule and re-verified `test/resume-keys-web.test.js` 9/9 + `test/wave4-music-audiobooks.test.js` 12/12 + `test/phase4.test.js` 203/203 + `test/security.test.js` 176/176).
+  - **Release contract & store/platform suites (`GITHUB_REF_NAME=v3.6.1`, `GITHUB_REF_TYPE=tag`):** 59/59 passing (`release-contract`, `resume-keys-web`, `apple-client`, `amazon-firetv`, `roku-client`, `webos-client`, `ms-store`, `play-store`, `wave1-perf`, `wave4-music-audiobooks`, `wave5-livetv-catalog`).
+  - **Syntax & diff checks:** all tracked `.js` files pass `node --check`; `web/index.html` inline script parse clean (`ALL_JS_AND_WEB_OK`); `git diff --check` clean.
+  - **Android (`3.6.1` / `versionCode 461`):** `gradlew.bat --no-daemon lintDebug testDebugUnitTest assembleDebug` — `BUILD SUCCESSFUL in 34s`.
+  - **Windows client (`triboon-px8` `3.6.1`):** `cargo test --no-default-features` 47/47 passed; `cargo check --features player` compiled with 0 errors.
+- Live verification:
+  - **Isolated `v3.6.1` server smoke (`:7794`):** clean startup, `/api/server` returned `version: "3.6.1"` in 16ms, HTTP 200 on `/`.
+  - **Multi-viewport browser QA (`390×844`, `844×390`, `768×1024`, `1440×900`, `1920×1080`, `3840×2160`):** visually verified startup profile picker, cover & text size scaling, redesigned Quiet Graphite toasts, and subtitle size scaling + live preview.
+- Not run locally on this commit:
+  - Android TV emulator stress (no ADB device/emulator attached during final `v3.6.1` cut), physical hardware QA on Windows GPU (`hwdec-current`) / ARM64, Roku hardware, Apple tvOS hardware, and local Docker image build (CI builds and publishes release artifacts on tag `v3.6.1`).
+- Version contract: `package.json` 3.6.1; Android `versionName` 3.6.1 / `versionCode` 461; Apple `project.yml` `MARKETING_VERSION` 3.6.1 / `CURRENT_PROJECT_VERSION` 461; Roku `manifest` `3.6.1`; webOS `appinfo.json` 3.6.1; Windows client `package.json` / `package-lock.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` 3.6.1.
+
 2026-11-26, v3.6.0 — Host Onboarding with live source tests, TRaSH press-play scoring manager, Music/Audiobooks reliability, cross-platform Live TV surfing & TV D-pad hardening, and multi-store client packaging:
 - What changed:
   - **Host Onboarding & Live Source Testing (`web/index.html`, `server/index.js`):**

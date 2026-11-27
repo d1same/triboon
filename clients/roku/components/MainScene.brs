@@ -3,6 +3,8 @@ sub init()
     m.authToken = TriboonRegRead("authToken")
     m.profileId = TriboonRegRead("profileId")
     if m.profileId = "" then m.profileId = "default"
+    m.skipProfilePicker = (TriboonRegRead("skipProfilePicker") = "1")
+    m.pickedProfileThisSession = false
     m.currentUser = invalid
     m.activeView = "connect"
     m.activeTab = "home"
@@ -357,7 +359,7 @@ sub afterUserLoaded()
                 exit for
             end if
         end for
-        if not foundSaved
+        if (not foundSaved) or (not m.pickedProfileThisSession and not m.skipProfilePicker)
             openProfilePicker(profiles)
             return
         end if
@@ -374,11 +376,15 @@ end sub
 sub openProfilePicker(profiles as Object)
     m.profilesListData = profiles
     root = CreateObject("roSGNode", "ContentNode")
-    for each p in profiles
+    savedIdx = 0
+    for i = 0 to profiles.Count() - 1
+        p = profiles[i]
         n = root.createChild("ContentNode")
         n.title = p.name
+        if p.id <> invalid and p.id.ToStr() = m.profileId then savedIdx = i
     end for
     m.profileList.content = root
+    m.profileList.jumpToItem = savedIdx
     showView("profiles")
 end sub
 
@@ -391,6 +397,7 @@ sub onProfileSelected()
             TriboonRegWrite("profileId", m.profileId)
         end if
     end if
+    m.pickedProfileThisSession = true
     showView("browse")
     loadTab("home")
 end sub
@@ -446,8 +453,11 @@ sub renderAccountTab()
     root = CreateObject("roSGNode", "ContentNode")
     row = root.createChild("ContentNode")
     row.title = "Account & Server"
+    skipLbl = "Skip Startup Picker: Off"
+    if m.skipProfilePicker then skipLbl = "Skip Startup Picker: On"
     actions = [
         { title: "Switch Profile", action: "switch_profile" },
+        { title: skipLbl, action: "toggle_skip_picker" },
         { title: "Change Server", action: "change_server" },
         { title: "Sign Out", action: "sign_out" }
     ]
@@ -737,6 +747,14 @@ sub onBrowseItemSelected()
             if m.currentUser <> invalid and m.currentUser.profiles <> invalid
                 openProfilePicker(m.currentUser.profiles)
             end if
+        else if item.actionId = "toggle_skip_picker"
+            m.skipProfilePicker = not m.skipProfilePicker
+            if m.skipProfilePicker
+                TriboonRegWrite("skipProfilePicker", "1")
+            else
+                TriboonRegWrite("skipProfilePicker", "0")
+            end if
+            renderAccountTab()
         else if item.actionId = "change_server"
             showView("connect")
         else if item.actionId = "sign_out"
@@ -1010,16 +1028,34 @@ sub startLocalPlayback(libId as String, localIdx as Integer, title as String, wa
     apiRequest("play_vod", "POST", "/api/local/" + libId + "/" + localIdx.ToStr() + "/play", body, true, 30)
 end sub
 
+function friendlyRokuError(raw as Dynamic, fallback as String) as String
+    if raw = invalid then return fallback
+    s = raw.ToStr().Trim()
+    if s = "" then return fallback
+    lower = LCase(s)
+    if Instr(1, lower, "timed out") > 0 or Instr(1, lower, "timeout") > 0 or Instr(1, lower, "could not connect") > 0 or Instr(1, lower, "network") > 0
+        return "Could not reach the server. Check your connection."
+    end if
+    if Instr(1, lower, "http 502") > 0 or Instr(1, lower, "http 503") > 0 or Instr(1, lower, "http 504") > 0
+        return "Server is temporarily unavailable. Try again."
+    end if
+    if Instr(1, lower, "http 401") > 0 or Instr(1, lower, "unauthorized") > 0
+        return "Session expired. Please sign in again."
+    end if
+    if Len(s) > 120 then s = Left(s, 117) + "..."
+    return s
+end function
+
 sub handlePlayVodResponse(res as Object)
     if not res.ok or res.data = invalid
-        m.detailStatus.text = res.error
+        m.detailStatus.text = friendlyRokuError(res.error, "Playback could not start.")
         return
     end if
     startSec = 0
     if m.playContext <> invalid then startSec = m.playContext.startSec
     stream = TriboonPreferredVodStream(m.serverUrl, res.data, startSec)
     if stream.url = ""
-        m.detailStatus.text = "No playable stream URL returned."
+        m.detailStatus.text = "This title isn't playable right now."
         return
     end if
     m.detailStatus.text = ""
@@ -1028,13 +1064,13 @@ end sub
 
 sub handleIptvPlay(res as Object)
     if not res.ok or res.data = invalid
-        m.browseStatus.text = res.error
+        m.browseStatus.text = friendlyRokuError(res.error, "Live TV channel is unavailable.")
         return
     end if
     m.liveCandidates = TriboonOrderedLiveStreams(m.serverUrl, res.data)
     m.liveCandidateIdx = 0
     if m.liveCandidates.Count() = 0
-        m.browseStatus.text = "No playable Live TV stream returned."
+        m.browseStatus.text = "Live TV channel is unavailable right now."
         return
     end if
     m.browseStatus.text = ""
@@ -1101,12 +1137,12 @@ sub onVideoStateChanged()
             m.liveCandidateIdx = m.liveCandidateIdx + 1
             if m.liveCandidateIdx < m.liveCandidates.Count()
                 cand = m.liveCandidates[m.liveCandidateIdx]
-                m.playerStatus.text = "Switching Live TV fallback..."
+                m.playerStatus.text = "Reconnecting channel..."
                 startNativeVideo(cand.url, cand.streamFormat, m.playContext.title, true, 0)
                 return
             end if
         end if
-        m.playerStatus.text = "Playback error (" + m.videoPlayer.errorMsg + "). Press Back to return."
+        m.playerStatus.text = "Playback could not continue. Press Back to return."
         m.playerOverlay.visible = true
     end if
 end sub
