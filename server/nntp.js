@@ -270,8 +270,14 @@ class NntpConnection {
   connect() {
     return new Promise((resolve, reject) => {
       const { host, port } = this.opts;
+      if (/[\r\n\0]/.test(String(host || '')) || /[\r\n\0]/.test(String(this.opts.user || '')) || /[\r\n\0]/.test(String(this.opts.pass || ''))) {
+        return reject(new Error('NNTP configuration contains invalid control characters'));
+      }
       const onConn = () => {};
-      const tlsOpts = { host, port, rejectUnauthorized: false };
+      const verifyCert = this.opts.allowInsecureTls === true || process.env.TRIBOON_NNTP_INSECURE_TLS === '1'
+        ? false : !net.isIP(String(host || ''));
+      const tlsOpts = { host, port, rejectUnauthorized: verifyCert };
+      if (!net.isIP(String(host || ''))) tlsOpts.servername = host;
       if (this.opts.tls && Buffer.isBuffer(this.opts.tlsSession)) tlsOpts.session = this.opts.tlsSession;
       this.sock = this.opts.tls
         ? tls.connect(tlsOpts, onConn)
@@ -581,7 +587,9 @@ class NntpConnection {
   }
 
   async stat(msgId, opts = {}) {
-    const r = await this._cmd(`STAT <${msgId.replace(/[<>]/g, '')}>`, false, opts);
+    const cleanId = String(msgId || '').replace(/[<>\r\n\0\s]/g, '');
+    if (!cleanId) throw new Error('STAT: empty message-id');
+    const r = await this._cmd(`STAT <${cleanId}>`, false, opts);
     if (isAuthLostStatus(r.status)) throw this._authLost('STAT', r.status);
     this.served = true; // a real answer means this login worked; a 480 before this is the account
     if (r.status.startsWith('223')) {
@@ -589,7 +597,7 @@ class NntpConnection {
       // out of step with its queue, and its present/missing answers belong to other articles.
       // Drop the line; the pool asks again on a fresh one. No id named = trusted as before.
       const named = /<([^<>\s]+)>/.exec(r.status);
-      const want = String(msgId).replace(/[<>]/g, '');
+      const want = cleanId;
       if (named && named[1] !== want) throw this._desync('STAT', want, named[1]);
       return true;
     }
@@ -600,18 +608,20 @@ class NntpConnection {
     // pool asks again on a fresh line.
     if (/^2\d\d/.test(r.status)) {
       const named = /<([^<>\s]+)>/.exec(r.status);
-      throw this._desync('STAT', String(msgId).replace(/[<>]/g, ''), named ? named[1] : r.status.slice(0, 3));
+      throw this._desync('STAT', cleanId, named ? named[1] : r.status.slice(0, 3));
     }
     // Only "no such article" is a real "missing". Any other reply (500 command unknown, 503
     // fault, 400 shutting down) is the SERVER'S problem and must not be cached as a dead source.
     if (r.status.startsWith('430') || r.status.startsWith('423')) return false;
-    const err = new Error(`STAT ${msgId}: ${r.status}`);
+    const err = new Error(`STAT ${cleanId}: ${r.status}`);
     err.code = r.status.slice(0, 3);
     throw err;
   }
 
   async body(msgId, opts = {}) {
-    const r = await this._cmd(`BODY <${msgId.replace(/[<>]/g, '')}>`, true, opts);
+    const cleanId = String(msgId || '').replace(/[<>\r\n\0\s]/g, '');
+    if (!cleanId) throw new Error('BODY: empty message-id');
+    const r = await this._cmd(`BODY <${cleanId}>`, true, opts);
     if (!r.status.startsWith('222')) {
       if (isAuthLostStatus(r.status)) throw this._authLost('BODY', r.status);
       this.served = true;
@@ -619,9 +629,9 @@ class NntpConnection {
       // the wrong waiter: the line is out of step. Drop it so the pool retries on a fresh line.
       if (/^2\d\d/.test(r.status)) {
         const named = /<([^<>\s]+)>/.exec(r.status);
-        throw this._desync('BODY', String(msgId).replace(/[<>]/g, ''), named ? named[1] : r.status.slice(0, 3));
+        throw this._desync('BODY', cleanId, named ? named[1] : r.status.slice(0, 3));
       }
-      const err = new Error(`BODY ${msgId}: ${r.status}`);
+      const err = new Error(`BODY ${cleanId}: ${r.status}`);
       err.code = r.status.slice(0, 3);
       throw err;
     }
@@ -1559,7 +1569,8 @@ class ProviderPool {
     if (this.queue && this.queue.length) {
       const pending = this.queue.splice(0, this.queue.length);
       for (const t of pending) {
-        if (t && t.signal && t.onAbort) { try { t.signal.removeEventListener('abort', t.onAbort); } catch {} }
+        if (t && typeof t.cleanupAbort === 'function') { try { t.cleanupAbort(); } catch {} }
+        else if (t && t.signal && t.onAbort) { try { t.signal.removeEventListener('abort', t.onAbort); } catch {} }
         if (t && typeof t.reject === 'function') {
           try { t.reject(new Error('NNTP pool closed')); } catch {}
         }

@@ -215,7 +215,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['GET', '/api/watch-stats'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['POST', '/api/presence'], ['GET', '/api/remote/targets'], ['POST', '/api/remote/send'], ['GET', '/api/remote/poll?deviceId=d1'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'], ['POST', '/api/settings/side-copy/dismiss'],
     ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
-    ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
+    ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/test/tmdb'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/libraries/search?q=x'], ['GET', '/api/libraries/local-lookup?key=tmdb:movie:1'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'], ['GET', '/api/filesub/abc/0?fs=abcdef'],
     ['GET', '/api/transcode/abc'], ['GET', '/api/hls/abc'], ['GET', '/api/hls/abc/seg00001.m4s'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
@@ -245,7 +245,7 @@ test('security: role separation — user tokens cannot reach admin routes', asyn
 
   for (const [m, p] of [['GET', '/api/settings'], ['POST', '/api/settings'], ['POST', '/api/settings/side-copy/dismiss'], ['POST', '/api/invites'],
     ['GET', '/api/invites'], ['GET', '/api/users'], ['POST', '/api/mount'],
-    ['POST', '/api/libraries'], ['DELETE', '/api/libraries/abc'], ['POST', '/api/streaming/recommend'],
+    ['POST', '/api/libraries'], ['DELETE', '/api/libraries/abc'], ['POST', '/api/streaming/recommend'], ['POST', '/api/test/tmdb'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'],
     ['POST', '/api/me/totp/setup'], ['POST', '/api/me/totp/enable'], ['POST', '/api/me/totp/disable'], ['POST', '/api/me/totp/recovery']]) {
     assert.strictEqual((await httpJson(srv.port, m, p, {}, user)).status, 403, `user → ${m} ${p}`);
@@ -3254,7 +3254,24 @@ test('settings: custom scoring — trusted-group override flips the auto-pick vi
   }, admin);
   const back = (await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Sc Test 2024'), null, admin)).json;
   assert.ok(back.candidates[0].name.endsWith('-FLUX'), 'reset returns to the recommended defaults');
-  await httpJson(srv.port, 'POST', '/api/settings', { indexers: prevIx }, admin);
+
+  // Removing ONE default group or emptying one list (with scoringCustom: true) persists without resurrecting defaults.
+  const baseStg = (await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json;
+  assert.ok(Array.isArray(baseStg.scoringBuiltinRules) && baseStg.scoringBuiltinRules.length >= 8, 'exposes TRaSH built-in rules to UI');
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    scoringCustom: true,
+    scoringGroupsTrusted: baseStg.scoringGroupsTrusted.filter((g) => g !== 'FLUX'),
+    scoringGroupsAvoid: [],
+    scoringKeywords: baseStg.scoringKeywords,
+    scoringDisabledRules: ['3d', 'hevc-at-hd'],
+  }, admin);
+  const removedStg = (await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json;
+  assert.strictEqual(removedStg.scoringCustom, true);
+  assert.ok(!removedStg.scoringGroupsTrusted.includes('FLUX'), 'removing one default trusted group persists');
+  assert.deepStrictEqual(removedStg.scoringGroupsAvoid, [], 'clearing avoid groups stays empty instead of resurrecting defaults');
+  assert.deepStrictEqual(removedStg.scoringDisabledRules.sort(), ['3d', 'hevc-at-hd'], 'disabled TRaSH rules persist');
+
+  await httpJson(srv.port, 'POST', '/api/settings', { scoringReset: true, indexers: prevIx }, admin);
   ix.close();
 });
 
@@ -5950,6 +5967,52 @@ test('security: a Jellyfin grant ends with the session, cannot start a play, and
   assert.match(src, /\(ctx\.user\.sessionEpoch \|\| 0\) !== grant\.epoch\) return reject\(401/, 'a password change ends the grant');
   assert.match(jf, /if \(!rel\) \{\s+if \(ctx\.directGrant\) return send\(ctx\.res, 401/, 'a grant can only reuse a mount');
   assert.doesNotMatch(jf, /g\.until = Date\.now\(\) \+ DIRECT_GRANT_MS/, 'use does not extend it');
+});
+
+test('onboarding/admin pre-save source test endpoints validate TMDB, unsaved provider, and unsaved indexer', async () => {
+  const prevTmdbBase = process.env.TMDB_BASE;
+  process.env.TMDB_BASE = `http://127.0.0.1:${tmdbMock.address().port}/3`;
+  try {
+    const emptyTmdb = await httpJson(srv.port, 'POST', '/api/test/tmdb', { tmdbKey: '' }, admin);
+    assert.strictEqual(emptyTmdb.status, 200);
+    assert.strictEqual(emptyTmdb.json.ok, false);
+    assert.match(emptyTmdb.json.error, /v3 API key/i);
+
+    const v4Tmdb = await httpJson(srv.port, 'POST', '/api/test/tmdb', {
+      tmdbKey: 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMiJ9.signaturepart',
+    }, admin);
+    assert.strictEqual(v4Tmdb.status, 200);
+    assert.strictEqual(v4Tmdb.json.ok, false);
+    assert.match(v4Tmdb.json.error, /v4 Read Access Token/i);
+
+    const badTmdb = await httpJson(srv.port, 'POST', '/api/test/tmdb', { tmdbKey: 'bad-tmdb-key' }, admin);
+    assert.strictEqual(badTmdb.status, 200);
+    assert.strictEqual(badTmdb.json.ok, false);
+    assert.strictEqual(badTmdb.json.status, 401);
+
+    const goodTmdb = await httpJson(srv.port, 'POST', '/api/test/tmdb', { tmdbKey: 'mock-key' }, admin);
+    assert.strictEqual(goodTmdb.status, 200);
+    assert.strictEqual(goodTmdb.json.ok, true);
+    assert.ok(Number.isFinite(goodTmdb.json.ms));
+
+    const badProv = await httpJson(srv.port, 'POST', '/api/test/provider', { provider: { host: '', port: 563 } }, admin);
+    assert.strictEqual(badProv.status, 200);
+    assert.strictEqual(badProv.json.ok, false);
+    assert.match(badProv.json.error, /host/i);
+
+    const badIx = await httpJson(srv.port, 'POST', '/api/test/indexer', { indexer: { url: 'ftp://bad.example', apikey: 'k' } }, admin);
+    assert.strictEqual(badIx.status, 200);
+    assert.strictEqual(badIx.json.ok, false);
+    assert.match(badIx.json.error, /http/i);
+
+    const noKeyIx = await httpJson(srv.port, 'POST', '/api/test/indexer', { indexer: { url: 'https://api.example.com', apikey: '' } }, admin);
+    assert.strictEqual(noKeyIx.status, 200);
+    assert.strictEqual(noKeyIx.json.ok, false);
+    assert.match(noKeyIx.json.error, /API key/i);
+  } finally {
+    if (prevTmdbBase === undefined) delete process.env.TMDB_BASE;
+    else process.env.TMDB_BASE = prevTmdbBase;
+  }
 });
 
 test('teardown', async () => {

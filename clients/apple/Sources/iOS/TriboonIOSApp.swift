@@ -27,6 +27,10 @@ final class IOSSessionController: ObservableObject {
     @Published var activePlayback: TriboonPlaybackRequest?
     @Published var webLoadError: String?
     @Published var reloadToken = UUID()
+    @Published var playerToastText: String?
+    @Published var liveFavorite: Bool = false
+
+    private var toastTask: Task<Void, Never>?
 
     let playback = TriboonPlaybackCoordinator()
     var evaluateJS: ((String) -> Void)?
@@ -195,6 +199,28 @@ final class IOSSessionController: ObservableObject {
             self.activePlayback = nil
             self.playback.stop(notify: false)
         }
+    }
+
+    func showPlayerToast(_ message: String) {
+        let clean = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        playerToastText = clean
+        toastTask?.cancel()
+        toastTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            guard !Task.isCancelled else { return }
+            self?.playerToastText = nil
+        }
+    }
+
+    func zapLive(_ direction: Int) {
+        emitPlayerEvent(["type": "live_zap", "direction": direction >= 0 ? 1 : -1])
+    }
+
+    func toggleLiveFavorite() {
+        let next = !liveFavorite
+        liveFavorite = next
+        emitPlayerEvent(["type": "live_fav", "on": next])
     }
 
     func emitPlayerEvent(_ event: [String: Any]) {

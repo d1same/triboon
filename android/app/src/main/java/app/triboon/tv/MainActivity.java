@@ -225,8 +225,14 @@ public class MainActivity extends Activity {
     private HorizontalScrollView nativeEpisodeStrip;
     private LinearLayout nativeEpisodeList;
     private ImageButton nativePlayBtn;
+    private ImageButton nativeChPrevBtn;
+    private ImageButton nativeChNextBtn;
     private ImageButton nativeRewBtn;
     private ImageButton nativeFwdBtn;
+    private TextView nativeToastView;
+    private final Runnable nativeHideToast = () -> {
+        if (nativeToastView != null) nativeToastView.setVisibility(View.GONE);
+    };
     private ImageButton nativeGuideBtn;
     private ImageButton nativeAboutBtn;
     private ImageButton nativeCcBtn;
@@ -507,7 +513,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         active = this; // MusicService forwards lock-screen transport back to this Activity
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // Keep TV screens awake globally; on phones/tablets only keep screen awake while video plays.
+        if (isTvDevice()) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         if (audioManager != null) audioManager.registerAudioDeviceCallback(nativeAudioOutputCallback, new Handler(Looper.getMainLooper()));
 
@@ -1620,6 +1627,14 @@ public class MainActivity extends Activity {
             public void setLiveFav(boolean on) {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> { nativeLiveFav = on; applyNativeFavIcon(); });
+            }
+
+            @android.webkit.JavascriptInterface
+            public void playerToast(String message) {
+                if (!trustedBridgeOrigin()) return;
+                String clean = message == null ? "" : message.trim();
+                if (clean.isEmpty()) return;
+                runOnUiThread(() -> showNativePlayerToast(clean));
             }
 
             @android.webkit.JavascriptInterface
@@ -3342,6 +3357,7 @@ public class MainActivity extends Activity {
         nativePlayerView.setBackgroundColor(Color.BLACK);
         nativePlayerView.setShutterBackgroundColor(Color.TRANSPARENT);
         nativePlayerView.setKeepContentOnPlayerReset(true);
+        nativePlayerView.setKeepScreenOn(true);
         nativePlayerView.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
         if (nativePlayerView.getSubtitleView() != null) {
             nativePlayerView.getSubtitleView().setApplyEmbeddedStyles(false);
@@ -3637,6 +3653,11 @@ public class MainActivity extends Activity {
         nativeRewBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(-10000); }); // 3.5.1: the button says 10 s and matches web/Windows (it jumped back 30 s)
         centerControls.addView(nativeRewBtn);
 
+        nativeChPrevBtn = nativeButton(R.drawable.ic_player_ch_prev, "Previous channel", false);
+        nativeChPrevBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) zapNativeLiveChannel(-1); });
+        nativeChPrevBtn.setVisibility(View.GONE);
+        centerControls.addView(nativeChPrevBtn);
+
         nativePlayBtn = nativeButton(R.drawable.ic_player_pause, "Pause", true);
         nativePlayBtn.setOnClickListener(v -> {
             if (!consumeNativeControlClick(v)) return;
@@ -3673,6 +3694,11 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(36));
         liveLp.setMargins(dp(10), 0, dp(10), 0);
         centerControls.addView(nativeLiveBtn, liveLp);
+
+        nativeChNextBtn = nativeButton(R.drawable.ic_player_ch_next, "Next channel", false);
+        nativeChNextBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) zapNativeLiveChannel(1); });
+        nativeChNextBtn.setVisibility(View.GONE);
+        centerControls.addView(nativeChNextBtn);
 
         nativeFwdBtn = nativeButton(R.drawable.ic_player_forward, "Forward 30 seconds", false);
         nativeFwdBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(30000); });
@@ -4721,6 +4747,8 @@ public class MainActivity extends Activity {
     private void startNativePlayback(String json, String mode) {
         nativePlaybackStartSeq++; // disarms the Up Next stuck-loader net (UpNextHandoff)
         nativeNextHandoffStartSeq = -1; // a new start ends any silenced Next handoff
+        nativeEpgData = null; // never flash previous channel's EPG across zaps
+        renderNativeEpgStrip();
         String title = "video".equals(mode) ? "Triboon" : "Live TV";
         String backdropUrl = "";
         String loadingKind = "direct";
@@ -5378,7 +5406,9 @@ public class MainActivity extends Activity {
     }
 
     private void toggleNativeChromeByTouch() {
-        if (!nativePlayerOpen() || nativeGuideMode) return;
+        if (!nativePlayerOpen()) return;
+        // Tapping the PiP video while browsing the Live TV guide returns to fullscreen.
+        if (nativeGuideMode) { closeNativeGuideMode(); return; }
         // A tap on the picture puts the info, subtitles, and episode sheets away.
         if (nativeSheetOpen()) { hideNativeSheet(); return; }
         if (nativeAboutOpen) { hideNativeTitleInfo(); return; }
@@ -5960,6 +5990,32 @@ public class MainActivity extends Activity {
         updateNativeChrome();
     }
 
+    private void showNativePlayerToast(String message) {
+        if (nativePlayerLayer == null || message == null || message.isEmpty()) return;
+        if (nativeToastView == null) {
+            nativeToastView = new TextView(this);
+            nativeToastView.setTextColor(0xFFF3EFF7);
+            nativeToastView.setTextSize(14);
+            nativeToastView.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+            nativeToastView.setPadding(dp(18), dp(10), dp(18), dp(10));
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setColor(0xE014161A);
+            bg.setCornerRadius(dp(8));
+            bg.setStroke(dp(1), 0x33FFFFFF);
+            nativeToastView.setBackground(bg);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL);
+            lp.topMargin = dp(28);
+            nativePlayerLayer.addView(nativeToastView, lp);
+        }
+        nativeToastView.setText(message);
+        nativeToastView.setVisibility(View.VISIBLE);
+        nativeToastView.bringToFront();
+        nativeProgress.removeCallbacks(nativeHideToast);
+        nativeProgress.postDelayed(nativeHideToast, 1800L);
+    }
+
     private void zapNativeLiveChannel(int dir) {
         if (!"live".equals(nativeMode) || nativeGuideMode || nativeSheetOpen() || web == null) return;
         showNativeChrome(false);
@@ -6211,6 +6267,12 @@ public class MainActivity extends Activity {
     }
 
     private View[] nativeControlButtons() {
+        if ("live".equals(nativeMode)) {
+            return new View[]{
+                    nativeGuideBtn, nativeChPrevBtn, nativePlayBtn, nativeLiveBtn, nativeChNextBtn,
+                    nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeCastBtn, nativeQualityBtn, nativeStatsBtn
+            };
+        }
         return new View[]{
                 nativeGuideBtn, nativeAboutBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,
                 nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeCastBtn, nativeQualityBtn, nativeStatsBtn
@@ -6379,6 +6441,20 @@ public class MainActivity extends Activity {
             if (e.getAction() == KeyEvent.ACTION_UP) {
                 zapNativeLiveChannel(code == KeyEvent.KEYCODE_DPAD_UP ? 1 : -1);
             }
+            return true;
+        }
+        if ("live".equals(nativeMode) && (code == KeyEvent.KEYCODE_CHANNEL_UP || code == KeyEvent.KEYCODE_CHANNEL_DOWN
+                || code == KeyEvent.KEYCODE_PAGE_UP || code == KeyEvent.KEYCODE_PAGE_DOWN
+                || code == KeyEvent.KEYCODE_MEDIA_NEXT || code == KeyEvent.KEYCODE_MEDIA_PREVIOUS)) {
+            if (e.getAction() == KeyEvent.ACTION_UP) {
+                boolean next = code == KeyEvent.KEYCODE_CHANNEL_UP
+                        || code == KeyEvent.KEYCODE_PAGE_UP || code == KeyEvent.KEYCODE_MEDIA_NEXT;
+                zapNativeLiveChannel(next ? 1 : -1);
+            }
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_GUIDE || code == KeyEvent.KEYCODE_TV) {
+            if (e.getAction() == KeyEvent.ACTION_UP) openNativeLiveGuide();
             return true;
         }
         if (nativeChrome != null && nativeChrome.getVisibility() == View.VISIBLE) {
@@ -6570,6 +6646,8 @@ public class MainActivity extends Activity {
         if (nativeAboutBtn != null) nativeAboutBtn.setVisibility(isLive || !nativeAboutAvailable ? View.GONE : View.VISIBLE);
         if (nativeRewBtn != null) nativeRewBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         if (nativeFwdBtn != null) nativeFwdBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        if (nativeChPrevBtn != null) nativeChPrevBtn.setVisibility(isLive ? View.VISIBLE : View.GONE);
+        if (nativeChNextBtn != null) nativeChNextBtn.setVisibility(isLive ? View.VISIBLE : View.GONE);
         // Live IPTV has no CC/audio/quality/next-episode choices — hide them entirely (the owner's
         // "no need to show sound/HD on the IPTV player"); CC/audio/quality return for
         // movies/episodes, but Next Episode exists only for EPISODES (hasNext is type-based from
@@ -9761,6 +9839,12 @@ public class MainActivity extends Activity {
             androidx.media3.common.MediaItem mi = nativePlayer.getCurrentMediaItem();
             if (mi != null && mi.localConfiguration != null && mi.localConfiguration.uri != null) url = mi.localConfiguration.uri.toString();
         } catch (Throwable ignored) {}
+        // Chromecast Default Media Receiver cannot play raw MKV/HEVC/DTS/TrueHD from /api/stream/.
+        // Prefer the fMP4 remux/transcode fallback URL when available for direct-play streams.
+        if (url.contains("/api/stream/") && nativeFallbackUrl != null
+                && (nativeFallbackUrl.contains("/api/remux/") || nativeFallbackUrl.contains("/api/transcode/") || nativeFallbackUrl.contains("/api/hls/"))) {
+            url = nativeFallbackUrl;
+        }
         if (url.isEmpty()) { pushCastError("No stream to cast"); return; }
         String title = (nativePlaybackTitle != null && !nativePlaybackTitle.trim().isEmpty()) ? nativePlaybackTitle : "Triboon";
         // Server-seek remux/transcode URLs already carry &start=<offset> in the URL itself; send the
@@ -9809,9 +9893,6 @@ public class MainActivity extends Activity {
             posMs = Math.max(0L, (long) (j.optDouble("position", 0) * 1000));
         } catch (Throwable t) { pushCastError("Bad cast request"); return; }
         if (url.isEmpty()) { pushCastError("No stream URL to cast"); return; }
-        // Stop local ExoPlayer so we never double-play; false = do NOT tell the web playback ended
-        // (the web keeps its player open to render the cast OSD state).
-        closeNativePlayback(false);
         com.google.android.gms.cast.MediaMetadata md =
                 new com.google.android.gms.cast.MediaMetadata(com.google.android.gms.cast.MediaMetadata.MEDIA_TYPE_MOVIE);
         md.putString(com.google.android.gms.cast.MediaMetadata.KEY_TITLE, title);
@@ -9826,6 +9907,8 @@ public class MainActivity extends Activity {
                         .setMediaInfo(info).setAutoplay(true).setCurrentTime(posMs).build();
         attachCastMediaListeners(rmc);
         try { rmc.load(req); } catch (Throwable t) { pushCastError("Cast could not load this title"); return; }
+        // Stop local ExoPlayer only after rmc.load(req) succeeded so Cast failures don't kill playback.
+        closeNativePlayback(false);
         pushCast("connected", session);
     }
     private void attachCastMediaListeners(com.google.android.gms.cast.framework.media.RemoteMediaClient rmc) {
@@ -10680,7 +10763,7 @@ public class MainActivity extends Activity {
 
     private boolean enterNativePictureInPictureIfUseful() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || isTvDevice()) return false;
-        if (!nativePlayerOpen() || nativePlayer == null || nativeGuideMode) return false;
+        if (!nativePlayerOpen() || nativePlayer == null || nativeGuideMode || !nativePlayer.isPlaying()) return false;
         try {
             PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder()
                     .setAspectRatio(new Rational(16, 9));

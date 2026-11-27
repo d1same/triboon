@@ -10,7 +10,10 @@
 // So the browser plays /api/music/stream/<id>?t=… and we Range-proxy the bytes.
 
 const { spawn, spawnSync } = require('child_process');
+const fs = require('fs');
 const https = require('https');
+const os = require('os');
+const path = require('path');
 const YTDLP_CONCURRENCY = Math.max(1, Math.min(4, parseInt(process.env.TRIBOON_YTDLP_CONCURRENCY || '2', 10) || 2));
 const YTMUSICAPI_CONCURRENCY = Math.max(1, Math.min(3, parseInt(process.env.TRIBOON_YTMUSICAPI_CONCURRENCY || '2', 10) || 2));
 const PLAYLIST_LIST_LIMIT = Math.max(12, Math.min(60, parseInt(process.env.TRIBOON_MUSIC_PLAYLIST_LIST_LIMIT || '36', 10) || 36));
@@ -115,12 +118,41 @@ function _setYtMusicApiRunnerForTest(fn) {
   _ytmApi = _ytmApiRunnerForTest ? { cmd: ['test-python'], version: 'test' } : undefined;
 }
 
+function ytdlpSupportsJsRuntimes(version) {
+  const m = String(version || '').match(/^(\d{4})\.(\d{2})\.(\d{2})/);
+  if (!m) return false;
+  const stamp = Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]);
+  return stamp >= 20251112;
+}
+function ytCacheDir() {
+  const candidates = [];
+  if (process.env.TRIBOON_DATA) candidates.push(path.join(process.env.TRIBOON_DATA, 'yt-dlp-cache'));
+  candidates.push(path.join(os.tmpdir(), 'triboon-yt-dlp-cache'));
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.accessSync(dir, fs.constants.W_OK);
+      return dir;
+    } catch {}
+  }
+  return '';
+}
+
 // Cookies (a Netscape cookies.txt the admin exports from their browser) unlock the user's
 // OWN library/playlists. Optional — public search + play needs none. The caller passes a
 // path; we just append --cookies when present.
 function ytArgs(extra, cookiesPath, { noPlaylist = true } = {}) {
-  const { cmd } = detectYtdlp() || { cmd: ['yt-dlp'] };
-  const base = ['--no-warnings', '--no-progress'];
+  const yt = detectYtdlp() || { cmd: ['yt-dlp'], version: '' };
+  const cmd = yt.cmd || ['yt-dlp'];
+  const base = ['--no-warnings', '--no-progress', '--force-ipv4'];
+  const cacheDir = ytCacheDir();
+  if (cacheDir) base.push('--cache-dir', cacheDir);
+  else base.push('--no-cache-dir');
+  // yt-dlp 2025.11+ disables Node by default (only Deno is auto-enabled) and needs EJS challenge
+  // solving for YouTube audio extraction; pass --js-runtimes node when running modern yt-dlp.
+  if (ytdlpSupportsJsRuntimes(yt.version)) {
+    base.push('--js-runtimes', 'node', '--remote-components', 'ejs:github');
+  }
   if (noPlaylist) base.push('--no-playlist');
   if (cookiesPath) base.push('--cookies', cookiesPath);
   return { bin: cmd[0], argv: [...cmd.slice(1), ...base, ...extra] };
@@ -647,10 +679,29 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
     if (pending) return pending;
   }
   const work = (async () => {
+  const AUDIO_FORMAT = 'bestaudio[ext=m4a][protocol^=http][protocol!*=m3u8]/bestaudio[protocol^=http][protocol!*=m3u8]/best[ext=mp4][acodec!=none][protocol^=http][protocol!*=m3u8]/bestaudio[ext=m4a]/bestaudio/best';
+  const pickFromJson = (j) => {
+    if (!j || typeof j !== 'object') return null;
+    const reqDl = j.requested_downloads && j.requested_downloads[0];
+    if (reqDl && reqDl.url) return { url: reqDl.url, src: reqDl };
+    if (j.url) return { url: j.url, src: j };
+    const formats = Array.isArray(j.formats) ? j.formats : [];
+    const directAudio = [...formats].reverse().find((f) => f && f.url && f.acodec && f.acodec !== 'none'
+      && /^https?$/i.test(String(f.protocol || '')) && !/\.m3u8(?:$|\?)/i.test(String(f.url)));
+    const anyAudio = directAudio
+      || [...formats].reverse().find((f) => f && f.url && f.acodec && f.acodec !== 'none');
+    return anyAudio ? { url: anyAudio.url, src: anyAudio } : null;
+  };
+  const isHlsChoice = (choice, j) => {
+    if (!choice || !choice.url) return true;
+    return /\.m3u8(?:$|\?)/i.test(choice.url) || String((choice.src && choice.src.protocol) || (j && j.protocol) || '').includes('m3u8');
+  };
   // -J gives the picked format URL + metadata in one shot (title/artist/duration for the bar).
-  const load = async (cookieFile) => {
-    const out = await runJson(['-f', 'bestaudio[ext=m4a]/bestaudio/best', '-J', `https://music.youtube.com/watch?v=${id}`],
-      { cookiesPath: cookieFile, timeoutMs: 30000, priority: 10 });
+  const load = async (cookieFile, extractorArgs = null) => {
+    const args = ['-f', AUDIO_FORMAT];
+    if (extractorArgs) args.push('--extractor-args', extractorArgs);
+    args.push('-J', `https://music.youtube.com/watch?v=${id}`);
+    const out = await runJson(args, { cookiesPath: cookieFile, timeoutMs: 30000, priority: 10 });
     try { return JSON.parse(out); } catch { throw new Error('yt-dlp returned no JSON'); }
   };
   let j = null;
@@ -666,18 +717,27 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
     }
   }
   if ((!j || typeof j !== 'object') && cookiesPath) j = await load(null);
+  let choice = pickFromJson(j);
+  // If default extraction fell back to HLS (.m3u8) or returned no progressive audio, retry once with
+  // mobile/VR YouTube clients that expose direct HTTPS m4a/mp4 streams without SABR HLS-only gating.
+  if (!choice || isHlsChoice(choice, j)) {
+    try {
+      const alt = await load(null, 'youtube:player_client=android_vr,ios,web');
+      const altChoice = pickFromJson(alt);
+      if (altChoice && !isHlsChoice(altChoice, alt)) { j = alt; choice = altChoice; }
+      else if (!choice && altChoice) { j = alt; choice = altChoice; }
+    } catch {}
+  }
   if (!j || typeof j !== 'object') throw new Error('yt-dlp returned no track data');
-  const picked = (j.requested_downloads && j.requested_downloads[0])
-    || (Array.isArray(j.formats) && [...j.formats].reverse().find((f) => f.acodec && f.acodec !== 'none' && f.url))
-    || null;
-  const url = j.url || (picked && picked.url);
+  const url = choice && choice.url;
   if (!url) throw new Error('no audio stream found');
-  const headers = { ...(j.http_headers || {}), ...((picked && picked.http_headers) || {}) };
-  const ext = String((picked && picked.ext) || j.ext || '').toLowerCase();
-  const isHls = /\.m3u8(?:$|\?)/i.test(url) || String((picked && picked.protocol) || j.protocol || '').includes('m3u8');
+  const picked = choice.src || j;
+  const headers = { ...(j.http_headers || {}), ...(picked.http_headers || {}) };
+  const ext = String(picked.ext || j.ext || '').toLowerCase();
+  const isHls = isHlsChoice(choice, j);
   const mime = isHls
     ? 'application/vnd.apple.mpegurl'
-    : (/mime=audio%2Fmp4|\.m4a|ext=m4a/i.test(url) || ext === 'm4a'
+    : (/mime=audio%2Fmp4|\.m4a|ext=m4a/i.test(url) || ext === 'm4a' || ext === 'mp4'
       ? 'audio/mp4'
       : (ext === 'webm' || ext === 'opus' ? 'audio/webm' : 'audio/mp4'));
   const rec = {

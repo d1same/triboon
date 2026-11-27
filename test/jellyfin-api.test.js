@@ -2325,3 +2325,30 @@ test('jellyfin Android TV 0.20.0: Live TV Program DTOs carry UserData/MediaSourc
   assert.strictEqual(adjEp8.status, 200);
   assert.deepStrictEqual(adjEp8.body.Items.map((e) => e.IndexNumber), [7, 8, 9], 'adjacentTo returns [prev, current, next]');
 });
+
+test('jellyfin 10.9+ audit: GET UserData, ThemeSongs/Videos, Ancestors, GroupingOptions, and Roku TvChannel arrays', async () => {
+  const door = fakeDoor({
+    deps: {
+      jellyfinLiveTvEnabled: () => true,
+      jellyfinLiveChannels: async () => [{ id: 'ch-roku', name: 'Roku News', number: '4', fav: false, group: 'News', nativeMime: 'video/mp2t' }],
+      jellyfinLivePrograms: () => new Map(),
+      jellyfinWatchGet: () => ({ position: 120, duration: 3600, favorite: true, watched: false }),
+    },
+  });
+  const ud = await door.call('getUserData', 'GET', '/UserItems/m550/UserData');
+  assert.strictEqual(ud.status, 200);
+  assert.strictEqual(ud.body.IsFavorite, true);
+  assert.strictEqual(ud.body.PlaybackPositionTicks, 120 * 10000000);
+  const ts = await door.call('emptyItemPage', 'GET', '/Items/m550/ThemeSongs');
+  assert.strictEqual(ts.status, 200);
+  assert.deepStrictEqual(ts.body.Items, []);
+  const anc = await door.call('emptyList', 'GET', '/Items/m550/Ancestors');
+  assert.strictEqual(anc.status, 200);
+  assert.deepStrictEqual(anc.body, []);
+  const grp = await door.call('emptyList', 'GET', '/UserViews/GroupingOptions');
+  assert.strictEqual(grp.status, 200);
+  assert.deepStrictEqual(grp.body, []);
+  const chans = await door.call('liveTvChannels', 'GET', '/LiveTv/Channels');
+  assert.strictEqual(chans.status, 200);
+  assert.ok(Array.isArray(chans.body.Items[0].People) && Array.isArray(chans.body.Items[0].Studios) && Array.isArray(chans.body.Items[0].MediaStreams));
+});

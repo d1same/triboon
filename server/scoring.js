@@ -79,27 +79,67 @@ const FEATURE = [
   // bonus here used to promote French/German scene packs over untagged English WEB-DLs.
 ];
 
-// Release-group tiers (small representative list; admin-extensible in Phase 4 settings).
+// Release-group tiers (TRaSH-Guides-aligned press-play defaults; admin-extensible & individually
+// removable in Settings → Catalog → Scoring).
 // Group bonuses are a TIEBREAKER, deliberately capped BELOW a resolution step (70) and even a
 // same-res source step — a trusted group refines the pick among comparable releases but must never
 // let a 1080p-from-a-good-group outrank a 2160p (the bug this trim fixes). Admins extend/override via
 // customScoring; the re-encoder avoid-list stays strong (those genuinely signal low bitrate).
 const GROUP_TIER = [
-  { score: 25, groups: ['FLUX', 'NTb', 'TEPES', 'CtrlHD', 'EbP', 'FraMeSToR', 'HiDt', 'SMURF', 'D-Z0N3'] },
+  { score: 25, groups: [
+    'FLUX', 'NTb', 'TEPES', 'CtrlHD', 'EbP', 'FraMeSToR', 'HiDt', 'SMURF', 'D-Z0N3',
+    'CMRG', 'KiNGS', 'DEFLATE', 'MZABI', 'BYNDR', 'SiC', 'playWEB', 'DON', 'TayTO', 'SbR',
+  ] },
   { score: 12, groups: ['RARBG', 'FGT', 'LEGION', 'LEGi0N', 'SPARKS', 'AMIABLE', 'GECKOS'] },
-  { score: -50, groups: ['YTS', 'YIFY', 'GALAXYRG', 'RMTEAM', 'MEGUSTA', 'TGX', 'AOC', 'PSA'] }, // re-encoders
+  { score: -50, groups: [
+    'YTS', 'YIFY', 'GALAXYRG', 'RMTEAM', 'MEGUSTA', 'TGX', 'AOC', 'PSA',
+    'BONE', 'd3g', 'iVy', 'Lama', 'Pahe', 'VXT', 'x0r', 'WORLDMKV',
+  ] }, // low-bitrate re-encoders (TRaSH LQ)
 ];
+const GROUP_TIER_MAP = new Map();
+for (const tier of GROUP_TIER) {
+  const cls = tier.score > 0 ? 'trusted' : 'low-quality';
+  for (const g of tier.groups) GROUP_TIER_MAP.set(g.toLowerCase(), { score: tier.score, groupClass: cls });
+}
 const DEFAULT_TRUSTED_GROUPS = GROUP_TIER[0].groups.slice();
 const DEFAULT_AVOID_GROUPS = GROUP_TIER[2].groups.slice();
+const DEFAULT_TRUSTED_SET = new Set(DEFAULT_TRUSTED_GROUPS.map((g) => g.toLowerCase()));
+const DEFAULT_AVOID_SET = new Set(DEFAULT_AVOID_GROUPS.map((g) => g.toLowerCase()));
 // Shown in Settings → Scoring so the owner can delete CAM (or add more). Factory scoring
 // still uses the SOURCE table; this line is the on/off switch for that built-in penalty.
 const DEFAULT_SCORING_KEYWORDS = [{ term: 'CAM', score: -8000 }];
 const CAM_KEYWORD_RE = /^(cam|hdcam|hdts|telesync|telecine|ts|hc\.?v\d+)$/i;
+// 3D split-screen formats (TRaSH penalizes 3D heavily so normal TVs never auto-play Half-SBS/Half-OU).
+const THREE_D_RE = /\b(?:3d[ ._-]?(?:sbs|hsbs|ou|hou|blu-?ray|bdremux|remux|1080p|2160p)|(?:1080p|2160p|blu-?ray|bdremux|remux)[ ._-]?3d|h?sbs|half[ ._-]?sbs|half[ ._-]?ou|side[ ._-]?by[ ._-]?side)\b/i;
+// Built-in TRaSH press-play rules surfaced in Settings → Catalog → Scoring so the owner can
+// inspect and toggle each rule individually without editing raw regexes.
+const BUILTIN_SCORING_RULES = [
+  { id: 'cam', label: 'Block theater CAM & Telesync', desc: 'Hides CAM, HDCAM, TS, Telesync, and HC.V2 rips from auto-play and Sources.', score: -8000 },
+  { id: '3d', label: 'Block 3D split-screen (SBS / OU)', desc: 'Prevents Half-SBS / Half-OU 3D releases from auto-playing on 2D TVs.', score: -8000 },
+  { id: 'hardcoded-subs', label: 'Penalize hardcoded subtitles', desc: 'Demotes KORSUB, HARDSUB, and HC.HDRip burned-in subtitle releases.', score: -200 },
+  { id: 'upscaled', label: 'Penalize upscaled / fake 4K', desc: 'Demotes AI-upscaled or fake 4K encodes.', score: -150 },
+  { id: 'hevc-at-hd', label: 'Prefer H.264 over 1080p x265', desc: 'TRaSH rule: avoids starved 1080p HEVC micro-encodes when H.264 WEB-DL/BluRay exists.', score: -35 },
+  { id: 'audio-description', label: 'Demote Audio Description (AD)', desc: 'Avoids narrated descriptive-audio releases unless no normal copy exists.', score: -600 },
+  { id: 'stream-first-remux', label: 'Fast-start: WEB-DL before unverified Remux', desc: 'Starts faster by ranking lean WEB-DLs ahead of huge unverified BluRay Remuxes.', score: -50 },
+  { id: 'low-quality-xvid', label: 'Penalize legacy XviD / DivX', desc: 'Demotes old low-efficiency AVI/XviD encodes.', score: -20 },
+];
+const VALID_BUILTIN_RULE_IDS = new Set(BUILTIN_SCORING_RULES.map((r) => r.id));
 function isCamKeywordTerm(term) {
   return CAM_KEYWORD_RE.test(String(term || '').trim());
 }
+function disabledRulesSetOf(customScoring) {
+  if (!customScoring) return null;
+  if (customScoring._disabledSet) return customScoring._disabledSet;
+  if (!Array.isArray(customScoring.disabledRules) || !customScoring.disabledRules.length) return null;
+  return new Set(customScoring.disabledRules.map((id) => String(id).trim().toLowerCase()));
+}
+function ruleDisabled(customScoring, ruleId) {
+  const set = disabledRulesSetOf(customScoring);
+  return !!(set && set.has(ruleId));
+}
 function camScoringEnabled(customScoring) {
   if (!customScoring) return true;
+  if (ruleDisabled(customScoring, 'cam')) return false;
   const kw = customScoring.keywords;
   if (!Array.isArray(kw)) return true;
   return kw.some((k) => isCamKeywordTerm(k && k.term));
@@ -175,11 +215,8 @@ function parseRelease(name) {
   const group = groupOf(name);
   let groupScore = 0, groupClass = 'unknown';
   if (group) {
-    for (const tier of GROUP_TIER) {
-      if (tier.groups.some((g) => g.toLowerCase() === group.toLowerCase())) {
-        groupScore = tier.score; groupClass = tier.score > 0 ? 'trusted' : 'low-quality'; break;
-      }
-    }
+    const hit = GROUP_TIER_MAP.get(group.toLowerCase());
+    if (hit) { groupScore = hit.score; groupClass = hit.groupClass; }
   }
   return {
     resolution: res ? res.key : 'unknown', resolutionRank: res ? res.rank : 2,
@@ -391,15 +428,20 @@ function scoreRelease(candidate, policy = {}) {
   // compressed). Prefer a same-res WEB-DL until health/store is proven. A verified store remux
   // keeps the raw remux bonus so remux fans still get the file they asked for.
   if (src && src.key === 'remux'
+      && !ruleDisabled(policy.customScoring, 'stream-first-remux')
       && candidate.health !== 'verified'
       && candidate.streamClass !== 'store'
       && candidate.streamClass !== 'flat') {
     add('stream-first-remux', -50);
   }
-  const cod = matchOne(candidate.name, CODEC); if (cod) add(`codec ${cod.key}`, cod.score);
+  const cod = matchOne(candidate.name, CODEC);
+  if (cod && !(cod.key === 'xvid' && ruleDisabled(policy.customScoring, 'low-quality-xvid'))) {
+    add(`codec ${cod.key}`, cod.score);
+  }
   // TRaSH rejects 1080p x265 (-10000). We only soft-demote: 1080p HEVC stays a fallback when
   // no H.264 exists (FROM MeGusta), but a same-res WEB-DL H.264 must win when both are listed.
-  if (a.codec === 'hevc' && a.resolutionRank <= 3 && a.resolution !== 'unknown') {
+  if (a.codec === 'hevc' && a.resolutionRank <= 3 && a.resolution !== 'unknown'
+      && !ruleDisabled(policy.customScoring, 'hevc-at-hd')) {
     add('hevc-at-hd', -35);
   }
   // atmos/truehd/dts-hd are scored by the device-aware passthrough block below (a +passthrough OR a
@@ -421,12 +463,20 @@ function scoreRelease(candidate, policy = {}) {
     }
     if (f.re.test(candidate.name)) add(f.key, f.score);
   }
-  for (const b of BAD_FLAGS) if (b.re.test(candidate.name)) add(b.key, b.score);
+  for (const b of BAD_FLAGS) {
+    if ((b.key === 'hardcoded-subs' || b.key === 'upscaled') && ruleDisabled(policy.customScoring, b.key)) continue;
+    if (b.re.test(candidate.name)) add(b.key, b.score);
+  }
+  if (!ruleDisabled(policy.customScoring, '3d') && THREE_D_RE.test(candidate.name)) {
+    add('3d-format', -8000);
+  }
   // More than any same-quality difference and the preferred-4K bonus (+400), so every healthy normal
   // release wins, even a lower resolution. Less than the −800 class (a copy that failed in playback, a
   // probe timeout, a foreign dub): a healthy AD copy plays before a copy known to be bad, and an
   // English narration track is still English, unlike a French dub. Far above the −5000 line.
-  if (isAudioDescriptionRelease(candidate.name)) add('audio-description', -600);
+  if (!ruleDisabled(policy.customScoring, 'audio-description') && isAudioDescriptionRelease(candidate.name)) {
+    add('audio-description', -600);
+  }
   const hasTrueHd = a.features.includes('truehd');
   const hasDtsHd = a.features.includes('dts-hd');
   const hasAtmos = a.features.includes('atmos');
@@ -521,26 +571,32 @@ function scoreRelease(candidate, policy = {}) {
     if (preferredAudio === 'en') add('no-preferred-audio-hint', -40);
   }
 
-  // Admin scoring tweaks (TRaSH-style "custom formats" lite). The built-in weights are the
-  // recommended default; admin entries EXTEND them — and for group tiers, OVERRIDE them.
+  // Admin scoring tweaks (TRaSH-style custom formats). Built-in weights are the recommended default;
+  // when custom lists are active (replaceDefaultGroups), removing a default group actually removes
+  // its bonus/penalty, and adding custom groups boosts/avoids them cleanly.
   const cs = policy.customScoring || {};
   let gScore = a.groupScore, gClass = a.groupClass;
   if (a.group) {
     const g = a.group.toLowerCase();
-    if ((cs.groupsTrusted || []).some((x) => String(x).toLowerCase() === g)) { gScore = 50; gClass = 'trusted·admin'; }
-    else if ((cs.groupsAvoid || []).some((x) => String(x).toLowerCase() === g)) { gScore = -50; gClass = 'avoid·admin'; }
+    const trustedSet = cs._trustedSet || (Array.isArray(cs.groupsTrusted) && cs.groupsTrusted.length
+      ? new Set(cs.groupsTrusted.map((x) => String(x).trim().toLowerCase())) : null);
+    const avoidSet = cs._avoidSet || (Array.isArray(cs.groupsAvoid) && cs.groupsAvoid.length
+      ? new Set(cs.groupsAvoid.map((x) => String(x).trim().toLowerCase())) : null);
+    if (trustedSet && trustedSet.has(g)) {
+      gScore = cs.replaceDefaultGroups && DEFAULT_TRUSTED_SET.has(g) ? 25 : 50;
+      gClass = cs.replaceDefaultGroups && DEFAULT_TRUSTED_SET.has(g) ? 'trusted' : 'trusted·admin';
+    } else if (avoidSet && avoidSet.has(g)) {
+      gScore = -50;
+      gClass = 'avoid·admin';
+    } else if (cs.replaceDefaultGroups && (DEFAULT_TRUSTED_SET.has(g) || DEFAULT_AVOID_SET.has(g))) {
+      gScore = 0;
+      gClass = 'unknown';
+    }
   }
   if (gScore) add(`group ${a.group} (${gClass})`, gScore);
-  for (const k of cs.keywords || []) {
-    if (!k || !k.term || !Number.isFinite(+k.score)) continue;
-    if (isCamKeywordTerm(k.term)) continue; // CAM on/off is the SOURCE cam rule, not a second penalty
-    // Word-boundary match; spaces in the term match any scene separator (dot/dash/underscore).
-    const safe = String(k.term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '[ ._-]');
-    try {
-      if (new RegExp(`\\b${safe}\\b`, 'i').test(candidate.name)) {
-        add(`custom:${k.term}`, Math.max(-5000, Math.min(5000, Math.round(+k.score))));
-      }
-    } catch { /* a malformed term never breaks ranking */ }
+  const compiledKw = cs._compiledKeywords || compileCustomKeywords(cs.keywords);
+  for (const k of compiledKw) {
+    if (k.re.test(candidate.name)) add(`custom:${k.term}`, k.score);
   }
 
   // A TMDB episode that is a two-part hour-long in release numbering (brief 127: The Office
@@ -632,10 +688,47 @@ function scoreRelease(candidate, policy = {}) {
   return { score: Math.round(score), attributes: a, reasons };
 }
 
+function compileCustomKeywords(keywords) {
+  if (!Array.isArray(keywords) || !keywords.length) return [];
+  const out = [];
+  for (const k of keywords) {
+    if (!k || !k.term || !Number.isFinite(+k.score)) continue;
+    if (isCamKeywordTerm(k.term)) continue; // CAM on/off is the SOURCE cam rule, not a second penalty
+    const safe = String(k.term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '[ ._-]');
+    try {
+      out.push({
+        term: k.term,
+        score: Math.max(-5000, Math.min(5000, Math.round(+k.score))),
+        re: new RegExp(`\\b${safe}\\b`, 'i'),
+      });
+    } catch { /* a malformed term never breaks ranking */ }
+  }
+  return out;
+}
+
+// Precompile policy Sets & RegExps once per rankReleases() pass so 200+ candidate searches avoid
+// repeated Set/RegExp allocations inside scoreRelease().
+function compileScoringPolicy(policy) {
+  if (!policy || typeof policy !== 'object') return policy || {};
+  const cs = policy.customScoring;
+  if (!cs || typeof cs !== 'object') return policy;
+  const compiledCs = {
+    ...cs,
+    _trustedSet: new Set((cs.groupsTrusted || []).map((x) => String(x).trim().toLowerCase()).filter(Boolean)),
+    _avoidSet: new Set((cs.groupsAvoid || []).map((x) => String(x).trim().toLowerCase()).filter(Boolean)),
+    _disabledSet: Array.isArray(cs.disabledRules) && cs.disabledRules.length
+      ? new Set(cs.disabledRules.map((id) => String(id).trim().toLowerCase()).filter(Boolean))
+      : null,
+    _compiledKeywords: compileCustomKeywords(cs.keywords),
+  };
+  return { ...policy, customScoring: compiledCs };
+}
+
 // Rank a list of candidates (highest score first), attaching scoring detail. Stable for ties.
 function rankReleases(candidates, policy = {}) {
+  const compiled = compileScoringPolicy(policy);
   return candidates
-    .map((c, i) => ({ ...c, ...scoreRelease(c, policy), _i: i }))
+    .map((c, i) => ({ ...c, ...scoreRelease(c, compiled), _i: i }))
     .sort((x, y) => (y.score - x.score) || (x._i - y._i))
     .map(({ _i, ...c }) => c);
 }
@@ -761,8 +854,8 @@ function sourceDrawerCandidates(candidates, { hideCam = true } = {}) {
 }
 
 module.exports = { releaseAudioFacts,
-  parseRelease, scoreRelease, rankReleases, isCamCandidate, isCamKeywordTerm, camScoringEnabled, sourceDrawerCandidates,
-  DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
+  parseRelease, scoreRelease, rankReleases, compileScoringPolicy, isCamCandidate, isCamKeywordTerm, camScoringEnabled, sourceDrawerCandidates,
+  DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS, BUILTIN_SCORING_RULES, VALID_BUILTIN_RULE_IDS,
   notTheMovie, unstreamableContainer, isAudioDescriptionRelease, normalizeLanguageCode, releaseLanguageTag, releaseLanguageTags, RES, SOURCE,
   parseAudiobook, scoreAudiobook, rankAudiobooks, audiobookLanguage,
 };

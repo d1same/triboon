@@ -87,12 +87,16 @@
         if (!value) return '';
         const hadScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
         if (hadScheme && !/^https?:\/\//i.test(value)) return '';
-        if (!hadScheme) value = 'http://' + value;
+        if (!hadScheme) {
+          const bareHost = value.split(':')[0].toLowerCase();
+          const isLocalOrIp = bareHost === 'localhost' || !bareHost.includes('.') || /^[\d.]+$/.test(bareHost) || bareHost.startsWith('[');
+          value = (isLocalOrIp ? 'http://' : 'https://') + value;
+        }
         let url;
         try { url = new URL(value); } catch { return ''; }
         if (!/^https?:$/.test(url.protocol) || url.username || url.password) return '';
         if ((url.pathname && url.pathname !== '/') || url.search || url.hash) return '';
-        if (!hadScheme && !url.port) url.port = '7777';
+        if (!hadScheme && !url.port && url.protocol === 'http:') url.port = '7777';
         return url.origin;
       }
 
@@ -130,8 +134,9 @@
             if (!response.ok) throw new Error('unreachable');
             setStatus('Server is reachable. Open this page in the Triboon Windows app to connect.', 'success');
           }
-        } catch {
-          setStatus('Could not open that server. Check the address, port, and that Triboon is running.', 'error');
+        } catch (err) {
+          const detail = String((err && (err.message || err)) || '').replace(/https?:\/\/\S+/gi, '').trim().slice(0, 140);
+          setStatus(detail || 'Could not open that server. Check the address, port, and that Triboon is running.', 'error');
           button.disabled = false;
           input.focus();
         }

@@ -13,6 +13,8 @@ sub init()
     m.playContext = invalid
     m.liveCandidates = []
     m.liveCandidateIdx = 0
+    m.liveChannels = []
+    m.liveChannelPos = -1
     m.pendingTasks = {}
     m.homeRowsCache = {}
 
@@ -653,6 +655,7 @@ sub handleIptvChannels(res as Object)
         m.browseStatus.text = "No Live TV channels available."
         return
     end if
+    m.liveChannels = res.data.channels
 
     groups = {}
     groupOrder = []
@@ -746,10 +749,15 @@ sub onBrowseItemSelected()
     end if
 
     if kind = "livetv"
-        m.browseStatus.text = "Tuning " + item.title + "..."
-        m.playContext = { kind: "livetv", title: item.title, watchKey: "", startSec: 0 }
-        cid = item.channelId.EncodeUriComponent()
-        apiRequest("iptv_play", "GET", "/api/iptv/play/" + item.channelIdx.ToStr() + "?cid=" + cid, invalid, true, 15)
+        m.liveChannelPos = -1
+        for i = 0 to m.liveChannels.Count() - 1
+            ch = m.liveChannels[i]
+            if ch <> invalid and ((ch.id <> invalid and ch.id.ToStr() = item.channelId) or ch.idx = item.channelIdx)
+                m.liveChannelPos = i
+                exit for
+            end if
+        end for
+        tuneLiveChannel(item.channelIdx, item.channelId, item.title)
         return
     end if
 
@@ -1034,6 +1042,30 @@ sub handleIptvPlay(res as Object)
     startNativeVideo(cand.url, cand.streamFormat, m.playContext.title, true, 0)
 end sub
 
+sub tuneLiveChannel(channelIdx as Integer, channelId as String, title as String)
+    m.browseStatus.text = "Tuning " + title + "..."
+    m.playerTitle.text = title
+    m.playerStatus.text = "Tuning " + title + "..."
+    if m.activeView = "player" then m.playerOverlay.visible = true
+    m.playContext = { kind: "livetv", title: title, watchKey: "", startSec: 0 }
+    cid = channelId.EncodeUriComponent()
+    apiRequest("iptv_play", "GET", "/api/iptv/play/" + channelIdx.ToStr() + "?cid=" + cid, invalid, true, 15)
+end sub
+
+sub stepLiveChannel(delta as Integer)
+    if m.liveChannels = invalid or m.liveChannels.Count() < 2 then return
+    n = m.liveChannels.Count()
+    if m.liveChannelPos < 0 then m.liveChannelPos = 0
+    m.liveChannelPos = (m.liveChannelPos + delta + n) mod n
+    ch = m.liveChannels[m.liveChannelPos]
+    if ch = invalid then return
+    cid = ""
+    if ch.id <> invalid then cid = ch.id.ToStr()
+    chName = "Channel"
+    if ch.name <> invalid and ch.name.ToStr() <> "" then chName = ch.name.ToStr()
+    tuneLiveChannel(ch.idx, cid, chName)
+end sub
+
 sub startNativeVideo(url as String, streamFormat as String, title as String, isLive as Boolean, startSec as Integer)
     content = CreateObject("roSGNode", "ContentNode")
     content.url = url
@@ -1180,6 +1212,14 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             return true
         else if key = "up" and m.episodeRows.hasFocus()
             m.detailButtons.setFocus(true)
+            return true
+        end if
+    else if m.activeView = "player" and m.playContext <> invalid and m.playContext.kind = "livetv"
+        if key = "up" or key = "channelup"
+            stepLiveChannel(-1)
+            return true
+        else if key = "down" or key = "channeldown"
+            stepLiveChannel(1)
             return true
         end if
     end if

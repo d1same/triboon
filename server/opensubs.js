@@ -89,7 +89,11 @@ function request(method, url, { key, bearer, body, timeoutMs = 10000, deadlineMs
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume(); clearTimeout(deadline);
-        const next = new URL(res.headers.location, url);
+        let next;
+        try {
+          next = new URL(res.headers.location, url);
+          if (next.protocol !== 'http:' && next.protocol !== 'https:') throw new Error('bad redirect protocol');
+        } catch (e) { return reject(new Error(`invalid subtitle redirect: ${e.message}`)); }
         const sameOrigin = next.origin === new URL(url).origin;
         const redirectKey = key && subtitleDownloadNeedsAuth(next.href, url) ? key : undefined;
         const redirectBearer = bearer && (sameOrigin || subtitleDownloadNeedsAuth(next.href, url)) ? bearer : undefined;

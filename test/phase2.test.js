@@ -8484,3 +8484,50 @@ test('a failed track probe waits a minute before the next one, so seeks do not r
   // The shared menu probe: a failure is remembered the same way, and a recent one answers at once.
   assert.match(src, /function probeMountTracks\(vf, uid\) \{[\s\S]{0,400}if \(probeFailedRecently\(vf\)\) return Promise\.reject\(new Error\('track probe failed a moment ago'\)\);[\s\S]{0,900}\}\)\.catch\(\(e\) => \{ vf\._probeFailedAt = Date\.now\(\); throw e; \}\)\.finally\(\(\) => \{ vf\._tracksProbe = null; \}\);/);
 });
+
+test('scoring TRaSH defaults: 3D split-screen blocked, individual default groups removable, and built-in rules toggleable', () => {
+  const { BUILTIN_SCORING_RULES, DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS } = require('../server/scoring');
+  assert.ok(BUILTIN_SCORING_RULES.length >= 8, 'exposes built-in TRaSH press-play rules');
+  assert.ok(DEFAULT_TRUSTED_GROUPS.includes('FLUX') && DEFAULT_TRUSTED_GROUPS.includes('CMRG'), 'TRaSH trusted groups included');
+  assert.ok(DEFAULT_AVOID_GROUPS.includes('YTS') && DEFAULT_AVOID_GROUPS.includes('PSA'), 'TRaSH avoid groups included');
+
+  // 3D Half-SBS / Half-OU blocked by default, without false-matching plain 2D releases of a "3D" title.
+  const sbs = scoreRelease({ name: 'Avatar.2009.1080p.BluRay.3D.HSBS.x264-GRP', sizeBytes: 8e9 }, {});
+  assert.ok(sbs.score < -5000, '3D HSBS release is blocked from auto-play by default');
+  assert.ok(sbs.reasons.some((r) => r.includes('3d-format')), 'names 3d-format reason');
+  const title3d = scoreRelease({ name: 'Step.Up.3D.2010.1080p.WEB-DL.H.264-NTb', sizeBytes: 6e9 }, {});
+  assert.ok(title3d.score > 0 && !title3d.reasons.some((r) => r.includes('3d-format')),
+    'plain 2D rip of a movie with "3D" in the title is NOT blocked');
+  const sbsAllowed = scoreRelease({ name: 'Avatar.2009.1080p.BluRay.3D.HSBS.x264-GRP', sizeBytes: 8e9 },
+    { customScoring: { disabledRules: ['3d'] } });
+  assert.ok(sbsAllowed.score > 0, 'disabling 3d rule removes the -8000 penalty');
+
+  // Removing a default Trusted or Avoid group with replaceDefaultGroups truly zeros its built-in score.
+  const ytsDefault = scoreRelease({ name: 'Movie.2024.1080p.WEB-DL.H.264-YTS', sizeBytes: 6e9 }, {});
+  assert.ok(ytsDefault.reasons.some((r) => r.includes('group YTS') && r.includes('-50')), 'YTS penalized by default');
+  const ytsRemoved = scoreRelease({ name: 'Movie.2024.1080p.WEB-DL.H.264-YTS', sizeBytes: 6e9 }, {
+    customScoring: {
+      replaceDefaultGroups: true,
+      groupsTrusted: DEFAULT_TRUSTED_GROUPS,
+      groupsAvoid: DEFAULT_AVOID_GROUPS.filter((g) => g !== 'YTS'),
+    },
+  });
+  assert.ok(!ytsRemoved.reasons.some((r) => r.includes('group YTS')), 'removing YTS from avoid removes its -50 penalty');
+
+  const fluxRemoved = scoreRelease({ name: 'Movie.2024.1080p.WEB-DL.H.264-FLUX', sizeBytes: 6e9 }, {
+    customScoring: {
+      replaceDefaultGroups: true,
+      groupsTrusted: DEFAULT_TRUSTED_GROUPS.filter((g) => g !== 'FLUX'),
+      groupsAvoid: DEFAULT_AVOID_GROUPS,
+    },
+  });
+  assert.ok(!fluxRemoved.reasons.some((r) => r.includes('group FLUX')), 'removing FLUX from trusted removes its +25 bonus');
+
+  // Built-in TRaSH rules can be toggled off individually (e.g. 1080p HEVC, stream-first-remux, hardcoded-subs).
+  const hevcOff = scoreRelease({ name: 'Movie.2024.1080p.WEB-DL.HEVC.x265-GRP', sizeBytes: 4e9 },
+    { customScoring: { disabledRules: ['hevc-at-hd'] } });
+  assert.ok(!hevcOff.reasons.some((r) => r.includes('hevc-at-hd')), 'hevc-at-hd can be toggled off');
+  const remuxOff = scoreRelease({ name: 'Movie.2024.2160p.UHD.BluRay.REMUX.HEVC-GRP', sizeBytes: 18e9 },
+    { customScoring: { disabledRules: ['stream-first-remux'] } });
+  assert.ok(!remuxOff.reasons.some((r) => r.includes('stream-first-remux')), 'stream-first-remux can be toggled off');
+});

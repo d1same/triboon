@@ -248,10 +248,9 @@ class Trakt {
         this._saveToken(uid, tok);
         return tok.access;
       }
-      // A definitive 4xx (invalid_grant — revoked app / rotated refresh token) can never succeed
-      // on retry: stamp the token broken so status()/the UI say "re-link" instead of silently
-      // no-oping sync forever while Settings claims linked. Network errors / 5xx stay unstamped.
-      if (r.status >= 400 && r.status < 500) {
+      // Only definitive auth-rejection statuses (400 invalid_grant / 401 unauthorized) mark the
+      // token broken. Transient 429 rate-limits, 408 timeouts, Cloudflare 403s, and 5xx stay unstamped.
+      if (r.status === 400 || r.status === 401) {
         this._saveToken(uid, { ...latest, broken: Date.now(), brokenWhy: `token refresh rejected (HTTP ${r.status})` });
       }
       return null;

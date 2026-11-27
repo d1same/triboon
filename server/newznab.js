@@ -116,9 +116,14 @@ function fetchUrl(url, opts = {}) {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         settled = true;
         res.resume(); cleanup();
-        const next = new URL(res.headers.location, url).href;
-        return fetchUrl(next, {
-          timeoutMs, deadlineMs, headers, maxBytes, signal,
+        let nextUrl;
+        try {
+          nextUrl = new URL(res.headers.location, url);
+          if (nextUrl.protocol !== 'http:' && nextUrl.protocol !== 'https:') throw new Error('bad redirect protocol');
+        } catch (e) { return reject(new Error(`invalid redirect: ${e.message}`)); }
+        const sameOrigin = nextUrl.origin === new URL(url).origin;
+        return fetchUrl(nextUrl.href, {
+          timeoutMs, deadlineMs, headers: sameOrigin ? headers : {}, maxBytes, signal,
           validateUrl: opts.validateUrl, _deadlineAt: deadlineAt, _hops: hops + 1,
         }).then(resolve, reject);
       }

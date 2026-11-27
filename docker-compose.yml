@@ -36,6 +36,15 @@ services:
       #
       # Extra [debug] Play / prepare / sweep lines. Same as Settings → Engine → Debug logging.
       # TRIBOON_DEBUG: "1"
+      #
+      # Trust X-Forwarded-For behind Traefik / Nginx / Caddy / Cloudflare Tunnel / ElfHosted:
+      # TRIBOON_TRUST_PROXY: "1"
+      #
+      # Optional first-run setup token for public/cloud deploys (required on first admin creation):
+      # TRIBOON_SETUP_TOKEN: "change-me"
+    # Optional GPU hardware transcoding (Intel Quick Sync / AMD VA-API on Linux):
+    # devices:
+    #   - /dev/dri:/dev/dri
 
 volumes:
   triboon-data:

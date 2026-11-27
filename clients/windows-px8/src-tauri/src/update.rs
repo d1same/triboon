@@ -141,6 +141,18 @@ fn download_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
     let status = hidden_command("curl.exe")
         .args([
             "-fL",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--connect-timeout",
+            "15",
+            "--speed-limit",
+            "10240",
+            "--speed-time",
+            "30",
+            "--max-time",
+            "600",
             "--max-filesize",
             &MAX_UPDATE_BYTES.to_string(),
             "-o",

@@ -96,11 +96,15 @@ button,.focusable,.railBtn,.mChip,.musicRow,.mbBtn,.musicAction,.iconBtn,.cbtn,
   -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
 }
 /* Native selects look foreign (white OS chrome) — restyle them to match the design system. */
-select{appearance:none;-webkit-appearance:none;
-  background:var(--field) url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8"><path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="%239B8FAD" stroke-width="2" stroke-linecap="round"/></svg>') no-repeat right 13px center;
+select{appearance:none;-webkit-appearance:none;-moz-appearance:none;
+  background-color:var(--field);
+  background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8"><path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="%239B8FAD" stroke-width="2" stroke-linecap="round"/></svg>');
+  background-repeat:no-repeat;background-position:right 12px center;
   border:1px solid var(--line);border-radius:12px;color:var(--text);
   padding:11px 36px 11px 13px;font:500 13.5px "Albert Sans",system-ui,sans-serif;outline:none;cursor:pointer;
   transition:border-color .15s}
+select::-ms-expand{display:none}
+select::picker-icon{display:none!important;content:none!important}
 select:hover{border-color:rgba(var(--fg),.2)}
 select:focus{border-color:var(--magenta)}
 select option,select optgroup{background:var(--surface);color:var(--text)}
@@ -1650,6 +1654,8 @@ body.tv #settings>.setGrid,body.tv #prefs>.setGrid{
 @media (max-width:860px){.jfCovers{grid-template-columns:repeat(3,minmax(0,1fr))}}
 .kv{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .kv span:last-child{font-family:"JetBrains Mono";color:rgba(var(--fg),.76);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#npList .kv,#ixList .kv{flex-wrap:wrap;gap:6px 12px;align-items:center}
+#npList .kv>span:last-child,#ixList .kv>span:last-child{max-width:none;overflow:visible;white-space:normal;display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
 .hint{font:500 11px "JetBrains Mono";color:rgba(var(--fg),.76);margin-top:10px;word-break:break-all}
 .syncGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:2px 0 14px}
 .syncCard{min-height:70px;border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--field)}
@@ -2398,7 +2404,7 @@ body.mobileShell #dTitle,body.mobileShell #dOverview,body.mobileShell #dCrew,bod
 body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;align-items:center;gap:10px;overflow-x:auto;box-sizing:border-box;width:calc(100% + 48px);max-width:calc(100% + 48px);padding:4px 0 6px;margin-left:-48px}
 body.mobileShell #dBtns::-webkit-scrollbar{display:none}
 @media (orientation:landscape){
-  body.mobileShell #dBtns{overflow:visible}
+  body.mobileShell #dBtns{flex-wrap:wrap;overflow-x:visible}
 }
 body.mobileShell #dBtns .btn{min-width:0;white-space:nowrap;justify-content:center;padding:14px 22px;font-size:14px;min-height:52px}
 body.mobileShell #dBtns .btn.primary{padding:14px 28px}
@@ -2412,7 +2418,7 @@ body.mobileShell #person .personHead .pPhoto{flex:0 0 auto;width:min(42vw,150px)
 body.mobileShell #person .personHead .pInfo{width:100%;text-align:center}
 body.mobileShell #person .personHead h1{font-size:clamp(24px,7.8vw,34px);margin-bottom:8px}
 body.mobileShell #person .personHead #pBio{max-width:100%;font-size:14px;line-height:1.5;-webkit-line-clamp:5}
-body.mobileShell #osd{padding:14px 12px calc(14px + env(safe-area-inset-bottom));gap:10px}
+body.mobileShell #osd{padding:14px max(12px,var(--safeR)) calc(14px + env(safe-area-inset-bottom)) max(12px,var(--safeL));gap:10px}
 body.mobileShell #osd .top{gap:10px}
 body.mobileShell #osd .topLeft{gap:8px;max-width:100%;min-width:0}
 body.mobileShell .playerBackBtn{width:40px;height:40px;flex:0 0 40px}
@@ -2872,8 +2878,9 @@ body.tv .ctWells{display:none}
 .avatarOpt:hover,.avatarOpt.focus,.avatarOpt:focus-visible{border-color:var(--focus);transform:scale(1.08)}
 .avatarOpt.sel{border-color:var(--focus);box-shadow:0 0 0 2px var(--focusSoft)}
 .avatarCustomRow{display:flex;gap:8px;align-items:center;width:100%;margin-top:2px}
-.pinForm input,.pinForm select{flex:1;min-width:130px;background:var(--field);border:1px solid var(--line);border-radius:10px;
+.pinForm input,.pinForm select{flex:1;min-width:130px;background-color:var(--field);border:1px solid var(--line);border-radius:10px;
   padding:10px 12px;color:var(--text);font:650 12.5px "JetBrains Mono";outline:none}
+.pinForm select{padding-right:34px}
 .pinForm input:focus,.pinForm select:focus{border-color:var(--focus)}
 .pinForm .profileAction{min-height:40px}
 .addProfileForm{align-items:center;padding:12px;border:1px dashed var(--line);border-radius:14px;background:var(--field)}
@@ -3282,7 +3289,11 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 #pgInfo .t{font:800 clamp(24px,3.2vw,44px)/1.05 "Sora";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #pgInfo .m{font:700 13px "Albert Sans";color:var(--muted);margin-top:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #pgInfo .n{font:600 12px "Albert Sans";color:var(--amber);margin-top:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#pGuide .pgHead{font:800 clamp(18px,2vw,26px) "Sora";padding:0 0 8px;display:flex;align-items:center;justify-content:space-between;gap:18px;flex:none;background:none}
+#pGuide .pgHead{font:800 clamp(18px,2vw,26px) "Sora";padding:0 0 8px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;background:none;flex-wrap:wrap}
+#pGuide .pgSearch{flex:0 1 220px;min-width:120px;height:36px;padding:0 12px;border-radius:6px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:var(--text);font:500 13px "Albert Sans",sans-serif;outline:none}
+#pGuide .pgSearch:focus{border-color:rgba(237,239,243,.55);background:rgba(255,255,255,.1)}
+body.tv #pGuide .pgSearch{display:none}
+#pGuide .pgVideoSlot{cursor:pointer}
 #pGuide .pgHint{font:700 10px "JetBrains Mono";letter-spacing:.08em;color:var(--muted);text-transform:uppercase;white-space:nowrap}
 #pgList{flex:1;overflow-y:auto;padding:0 0 52px;scroll-padding:42px 0 68px;overscroll-behavior:contain;
   background:transparent;border-radius:0;overflow-x:hidden}
@@ -3480,8 +3491,8 @@ body.tv:not(.abMiniOpen) #audiobooks{padding-bottom:var(--tvCoverBot)!important}
 #settings .setGrid,#prefs .setGrid{grid-template-columns:minmax(0,920px);gap:0 56px;max-width:980px;
   border-left:1px solid rgba(255,255,255,.10);padding-left:34px}
 #settings .field select,#prefs .field select,#settings select,#prefs select{
-  background:var(--field);border:1px solid var(--line);border-radius:12px;
-  padding:12px 13px;color:var(--text);font:700 13px "Albert Sans";outline:none}
+  background-color:var(--field);border:1px solid var(--line);border-radius:12px;
+  padding:10px 36px 10px 13px;color:var(--text);font:700 13px "Albert Sans";outline:none}
 #settings .setGrid :is(.btn,.ghostMini,.profileAction,.profileAddBtn,.testBtn,.rm,.menuRow button):focus,
 #prefs .setGrid :is(.btn,.ghostMini,.profileAction,.profileAddBtn,.testBtn,.rm,.menuRow button):focus,
 #settings .setGrid :is(a,input,textarea,select):focus,#prefs .setGrid :is(a,input,textarea,select):focus,
@@ -4296,6 +4307,109 @@ body.tv #bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
   body.mobileShell:not(.tv) #prefs #playbackStory{max-height:52vh}
 }
 
+/* ===== Host Onboarding & TRaSH Scoring Manager (theme-agnostic base) ===== */
+#gateOnboard{place-items:center;padding:16px;background:rgba(10,11,15,.92)}
+#gateOnboard .gateCard{margin:0 auto;width:min(620px,100%);max-height:92vh;overflow-y:auto;overflow-x:hidden;text-align:left;padding:24px 26px 22px;border-radius:14px}
+#gateOnboard .gateCard label{display:block;font:600 12px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em;text-transform:none;color:var(--muted);margin:8px 0 5px}
+#gateOnboard .gateCard input{width:100%;min-height:40px;height:40px;padding:8px 12px;font:500 14px "Albert Sans",system-ui,sans-serif;border-radius:8px;box-shadow:inset 0 0 0 1px var(--line)}
+#gateOnboard .gateCard .btn{min-height:40px;height:40px;margin-top:0;font-size:13.5px;padding:0 16px;border-radius:8px;box-shadow:none}
+#gateOnboard .gateCard select{appearance:none!important;-webkit-appearance:none!important;-moz-appearance:none!important;min-width:136px;max-width:190px;width:auto;height:36px;padding:4px 32px 4px 10px;font:500 12.5px/1.2 "Albert Sans",system-ui,sans-serif;border-radius:8px}
+#gateOnboard .obBrand{display:inline-flex;align-items:center;gap:8px;font:700 12px "Sora",system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+#gateOnboard .obBrandDot{width:8px;height:8px;border-radius:2px;background:#C13BD6}
+#gateOnboard .obStepper{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:12px 0 14px}
+#gateOnboard .obStepBtn{display:flex;align-items:center;gap:8px;width:100%;height:auto;min-height:40px;padding:9px 12px;border-radius:8px;background:rgba(var(--fg),.04);border:1px solid var(--line);color:var(--muted);font:600 13px "Albert Sans",system-ui,sans-serif;text-align:left;justify-content:flex-start}
+#gateOnboard .obStepBtn.on{background:rgba(193,59,214,.14);border-color:rgba(193,59,214,.45);color:var(--text)}
+#gateOnboard .obStepBtn.done{border-color:rgba(46,204,113,.35);color:#7be3a4}
+#gateOnboard .obStepBtn.focus,#gateOnboard .obStepBtn:focus-visible{background:var(--btnHover);color:var(--btnFocusText);border-color:var(--focus)}
+#gateOnboard .obStepNum{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:4px;font:700 11px "JetBrains Mono",monospace;background:rgba(var(--fg),.08);color:inherit;flex:0 0 auto}
+#gateOnboard .obStepBtn.on .obStepNum{background:#C13BD6;color:#fff}
+#gateOnboard .obStepBtn.done .obStepNum{background:rgba(46,204,113,.22);color:#7be3a4}
+#gateOnboard .obSection{background:rgba(var(--fg),.03);border:1px solid var(--line);border-radius:10px;padding:14px 14px 12px;margin-bottom:12px}
+#gateOnboard .obSecHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+#gateOnboard .obSecTitle{font:600 13.5px "Sora",system-ui,sans-serif;color:var(--text)}
+#gateOnboard .obAddedList{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+#gateOnboard .obAddedChip{display:inline-flex;align-items:center;gap:6px;padding:4px 6px 4px 10px;border-radius:6px;font:600 12px "Albert Sans",system-ui,sans-serif;background:rgba(46,204,113,.12);border:1px solid rgba(46,204,113,.28);color:#8be7b0;max-width:100%}
+#gateOnboard .obAddedChip.bad{background:rgba(235,87,87,.12);border-color:rgba(235,87,87,.32);color:#ff9b9b}
+#gateOnboard .obChipLbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px}
+#gateOnboard .obChipMeta{font:600 11px "JetBrains Mono",monospace;opacity:.85}
+#gateOnboard .obChipAct{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 6px;border-radius:4px;font:600 11px "Albert Sans",system-ui,sans-serif;background:rgba(var(--fg),.1);color:var(--text);cursor:pointer}
+#gateOnboard .obChipAct:hover,#gateOnboard .obChipAct.focus,#gateOnboard .obChipAct:focus-visible{background:var(--btnHover);color:var(--btnFocusText)}
+#gateOnboard .obGrid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#gateOnboard .obRow{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+#gateOnboard .obRowEnd{display:flex;align-items:flex-end;gap:10px;margin-top:8px;flex-wrap:wrap}
+#gateOnboard .obBtnGroup{display:inline-flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
+#gateOnboard .obCheck{display:inline-flex;align-items:center;gap:8px;margin:0;cursor:pointer;white-space:nowrap;font-size:13px;color:var(--text)}
+#gateOnboard .obCheck input[type="checkbox"]{width:18px;height:18px;min-height:0;height:18px;padding:0;margin:0;border:0;box-shadow:none;flex:0 0 auto;accent-color:#C13BD6}
+#gateOnboard .obConnWrap{display:inline-flex;align-items:center;gap:8px;margin:0;white-space:nowrap;font-size:12.5px}
+#gateOnboard .obConnWrap input{width:72px;margin:0;padding:6px 10px;height:38px;min-height:38px}
+#gateOnboard .obAddBtn,#gateOnboard .obTestBtn{width:auto;flex:0 0 auto;white-space:nowrap;padding:0 15px;height:40px;min-height:40px}
+#gateOnboard .obTestBtn{background:rgba(var(--fg),.06);border:1px solid var(--line);color:var(--text)}
+#gateOnboard .obTestStatus{font:500 12.5px/1.4 "Albert Sans",system-ui,sans-serif;margin-top:8px;color:var(--muted)}
+#gateOnboard .obTestStatus:empty{display:none}
+#gateOnboard .obTestStatus.ok{color:#7be3a4}
+#gateOnboard .obTestStatus.bad{color:#ff9b9b}
+#gateOnboard .obExtra{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;width:100%;height:auto;min-height:0;padding:12px 14px;text-align:left;background:rgba(var(--fg),.04);border:1px solid var(--line)}
+#gateOnboard .obExtra strong{font:600 14px "Sora",system-ui,sans-serif;color:inherit}
+#gateOnboard .obExtra small{font:400 12px/1.35 "Albert Sans",system-ui,sans-serif;color:var(--muted)}
+#gateOnboard .obExtra:hover small,#gateOnboard .obExtra.focus small{color:inherit;opacity:.78}
+#gateOnboard .obActions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center}
+#gateOnboard .obActions .btn{width:auto;flex:0 1 auto}
+#gateOnboard #obStepPill{white-space:nowrap;flex-shrink:0}
+.scToolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.scToolbar input{flex:1 1 220px;min-width:0;height:40px;padding:8px 12px;border-radius:8px}
+.scFilterMeta{font:500 12px "JetBrains Mono",monospace;color:var(--muted);white-space:nowrap}
+.scBlock{background:rgba(var(--fg),.025);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+.scBlockHead{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.scBlockHead h3{font:600 14px "Sora",system-ui,sans-serif;color:var(--text);margin:0}
+.scBlockHead small{font:500 12px "Albert Sans",system-ui,sans-serif;color:var(--muted)}
+.scRuleList{display:grid;gap:6px}
+.scRuleRow{display:flex;align-items:center;gap:12px;padding:9px 10px;border-radius:8px;background:rgba(var(--fg),.03);border:1px solid rgba(var(--fg),.06);cursor:pointer}
+.scRuleRow:has(:focus){box-shadow:0 0 0 2px var(--focus);background:rgba(var(--fg),.1)}
+.scRuleRow.off{opacity:.58}
+.scRuleRow input[type="checkbox"]{width:18px;height:18px;flex:0 0 auto;accent-color:#C13BD6;margin:0}
+.scRuleBody{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px}
+.scRuleBody strong{font:600 13.5px "Albert Sans",system-ui,sans-serif;color:var(--text)}
+.scRuleBody small{font:400 12px/1.35 "Albert Sans",system-ui,sans-serif;color:var(--muted)}
+.scScorePill{flex:0 0 auto;padding:3px 8px;border-radius:6px;font:600 11.5px "JetBrains Mono",monospace;background:rgba(var(--fg),.07);color:var(--text)}
+.scScorePill.pos{background:rgba(46,204,113,.15);color:#7be3a4}
+.scScorePill.neg{background:rgba(235,87,87,.15);color:#ff9b9b}
+.scChips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px;min-height:28px}
+.scChip{display:inline-flex;align-items:center;gap:6px;padding:5px 8px 5px 10px;border-radius:6px;font:600 12.5px "JetBrains Mono",monospace;background:rgba(var(--fg),.06);border:1px solid var(--line);color:var(--text)}
+.scChip.avoid{background:rgba(235,87,87,.11);border-color:rgba(235,87,87,.26);color:#ffc2c2}
+.scChip.trusted{background:rgba(46,204,113,.11);border-color:rgba(46,204,113,.26);color:#c3f5d6}
+body[data-light="1"] .scChip.avoid{color:#9d2424}
+body[data-light="1"] .scChip.trusted{color:#15693a}
+body[data-light="1"] .scScorePill.pos{color:#15693a}
+body[data-light="1"] .scScorePill.neg{color:#9d2424}
+body[data-light="1"] #gateOnboard .obTestStatus.ok,body[data-light="1"] #gateOnboard .obAddedChip{color:#15693a}
+body[data-light="1"] #gateOnboard .obTestStatus.bad,body[data-light="1"] #gateOnboard .obAddedChip.bad{color:#9d2424}
+.scChipX{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:4px;font:700 13px/1 system-ui,sans-serif;color:var(--muted);background:rgba(var(--fg),.08)}
+.scChipX:hover,.scChipX.focus,.scChipX:focus-visible{background:var(--btnHover);color:var(--btnFocusText)}
+.scAddRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.scAddRow input{flex:1 1 180px;min-width:0;height:40px;padding:8px 11px;border-radius:8px}
+.scAddRow input.scScoreIn{flex:0 0 110px;max-width:110px}
+.scAddRow .btn{height:40px;padding:0 16px;min-height:0}
+.scKwList{display:grid;gap:6px;margin-bottom:10px}
+.scKwRow{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;background:rgba(var(--fg),.035);border:1px solid var(--line)}
+.scKwTerm{flex:1 1 auto;min-width:0;font:600 13px "JetBrains Mono",monospace;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scEmpty{font:500 12.5px "Albert Sans",system-ui,sans-serif;color:var(--muted);padding:4px 0}
+.scRawFold{margin:10px 0 14px;border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:rgba(var(--fg),.02)}
+.scRawFold summary{cursor:pointer;font:600 13px "Sora",system-ui,sans-serif;color:var(--muted)}
+.scRawFold summary:focus{outline:none;box-shadow:0 0 0 2px var(--focus);border-radius:6px;padding:2px 6px}
+.scRawFold[open] summary{margin-bottom:10px;color:var(--text)}
+.scDirty{font:600 12.5px "Albert Sans",system-ui,sans-serif;color:#ffd082;margin-left:auto}
+.srcTestOut{font:500 12.5px "Albert Sans",system-ui,sans-serif;color:var(--muted);margin-left:4px}
+.srcTestOut.ok{color:#7be3a4}
+.srcTestOut.bad{color:#ff9b9b}
+@media (max-width:560px){
+  #gateOnboard .gateCard{padding:18px 16px 16px!important}
+  #gateOnboard .obStepper{grid-template-columns:1fr}
+  #gateOnboard .obGrid2{grid-template-columns:1fr}
+  #gateOnboard .obBtnGroup{width:100%;margin-left:0}
+  #gateOnboard .obBtnGroup .btn{flex:1 1 0}
+  #gateOnboard .obActions .btn{width:100%;margin-left:0!important}
+}
+
 /* ===== Quiet Graphite (3.5.0, owner pick 2026-11-17) =====
    Look only: no layout, order or remote behaviour changes. Scoped to the Graphite theme so the
    other themes look exactly as before. Flat: no glows, no blurred shadows, no zoom on focus. */
@@ -4508,9 +4622,12 @@ body[data-theme="graphite"] .guideTimeline :is(.gRow.focus,.pgRow.focus,.pgRow:f
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn,#pgMultiBtn){min-height:46px;height:auto;padding:0 22px;gap:10px;
   font:600 15px "Sora",system-ui,sans-serif;letter-spacing:0;text-transform:none;box-shadow:none;border:0;border-radius:6px;
   background:rgba(237,239,243,.08);color:var(--text)}
-body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn,#pgMultiBtn) svg{width:19px;height:19px}
+body[data-theme="graphite"] #pgCloseBtn{min-height:46px;height:auto;padding:0 18px;gap:8px;
+  font:600 14px "Sora",system-ui,sans-serif;letter-spacing:0;text-transform:none;box-shadow:none;border:0;border-radius:6px;
+  background:rgba(237,239,243,.08);color:var(--text)}
+body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn,#pgMultiBtn,#pgCloseBtn) svg{width:19px;height:19px}
 body[data-theme="graphite"] #chGuideBtn.on{background:rgba(237,239,243,.16)}
-body[data-theme="graphite"] #pgMultiBtn:is(.focus,:focus,:hover){background:#EDEFF3!important;color:#14161A!important;box-shadow:none!important}
+body[data-theme="graphite"] :is(#pgMultiBtn,#pgCloseBtn):is(.focus,:focus,:hover){background:#EDEFF3!important;color:#14161A!important;box-shadow:none!important}
 body[data-theme="graphite"] #chSearch{min-height:46px;border-radius:6px}
 body[data-theme="graphite"] :is(#chGuideBtn,#chMultiBtn):is(.focus,:focus,:hover){background:var(--btnHover)!important;color:var(--btnFocusText)!important;box-shadow:none!important}
 /* "Categories" label: quiet Sora like the other labels, not mono capitals. */
@@ -4700,6 +4817,14 @@ body[data-theme="graphite"] .avatarOpt.sel{box-shadow:0 0 0 3px rgba(237,239,243
    quiet level text instead of mono-capital chips, and no poster strip behind it. */
 body[data-theme="graphite"] #gateProfiles{place-items:center}
 body[data-theme="graphite"]:has(#gateProfiles.open) :is(#gatePosterStrip,#gateArtCaption){display:none}
+body[data-theme="graphite"]:has(#gateOnboard.open) :is(#gatePosterStrip,#gateArtCaption){display:none}
+body[data-theme="graphite"] #gateOnboard{background:rgba(10,11,15,.94)}
+body[data-theme="graphite"] #gateOnboard .gateCard{background:#14161b;border:1px solid rgba(255,255,255,.09);border-radius:8px;box-shadow:none;backdrop-filter:none}
+body[data-theme="graphite"] #gateOnboard .gateCard::before{display:none}
+body[data-theme="graphite"] #gateOnboard :is(.obSection,.obStepBtn,.obExtra,.obAddedChip,.gateCard input,.gateCard select,.gateCard .btn){border-radius:6px}
+body[data-theme="graphite"] #gateOnboard .obStepBtn.on{color:#fff}
+body[data-theme="graphite"] .scBlock,body[data-theme="graphite"] .scRuleRow,body[data-theme="graphite"] .scKwRow,body[data-theme="graphite"] .scRawFold,body[data-theme="graphite"] .scToolbar input,body[data-theme="graphite"] .scAddRow input{border-radius:6px}
+body[data-theme="graphite"] #pinPad button:is(.focus,:focus-visible){background:var(--btnHover)!important;color:var(--btnFocusText)!important;box-shadow:none!important}
 body[data-theme="graphite"] #gateProfiles .profileGatePanel{background:none;border:0;box-shadow:none;backdrop-filter:none;padding:0;width:min(1500px,94vw)!important}
 body[data-theme="graphite"] #gateProfiles h1{font:700 48px "Sora",system-ui,sans-serif!important;letter-spacing:-.01em;margin-bottom:56px!important}
 body[data-theme="graphite"] #gateProfiles .sub{display:none}
@@ -4774,13 +4899,137 @@ body[data-theme="graphite"].mobileShell:not(.tv) #prefs .hint{font:400 13px/1.45
 
 <!-- ============ auth gates ============ -->
 <div class="gate" id="gateSetup">
-  <div class="gateCard">
+  <form class="gateCard" id="gateSetupForm" autocomplete="on">
     <div class="logoRow"><img src="triboon.png" alt="Triboon"></div>
-    <div class="sub">Create the server owner account. You'll configure usenet &amp; indexers next.</div>
-    <label>Name</label><input id="suName" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <label>Password</label><input id="suPass" type="password" autocomplete="new-password" inputmode="text" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <button class="btn primary" id="suGo">Create owner account</button>
+    <div class="sub">Create the server owner account. We'll walk you through TMDB and your media sources next.</div>
+    <label for="suName">Owner name</label><input id="suName" name="username" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+    <label for="suPass">Password</label><input id="suPass" name="password" type="password" autocomplete="new-password" inputmode="text" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false" minlength="4" required>
+    <label for="suPass2">Confirm password</label><input id="suPass2" type="password" autocomplete="new-password" inputmode="text" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false" minlength="4" required>
+    <div id="suTokenRow" hidden>
+      <label for="suToken">Setup token</label><input id="suToken" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="TRIBOON_SETUP_TOKEN">
+    </div>
+    <button class="btn primary" id="suGo" type="submit">Create owner account</button>
     <div class="err" id="suErr"></div>
+  </form>
+</div>
+
+<div class="gate" id="gateOnboard" aria-label="Server setup checklist">
+  <div class="gateCard">
+    <div class="obBrand"><span class="obBrandDot" aria-hidden="true"></span><span>Triboon Host Setup</span></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px">
+      <div style="font:700 22px 'Sora',system-ui,sans-serif;letter-spacing:-.01em">Set up your server</div>
+      <span id="obStepPill" style="font:600 12px 'JetBrains Mono',monospace;color:var(--muted)">Step 1 of 3</span>
+    </div>
+    <div id="obSub" class="sub" style="margin:0 0 12px;text-align:left">Three quick steps to get posters and streaming ready. Everything is encrypted at rest and editable anytime in Settings.</div>
+    <div class="obStepper" role="tablist" aria-label="Setup steps">
+      <button type="button" class="obStepBtn focusable" data-ob-jump="1"><span class="obStepNum">1</span><span>Metadata</span></button>
+      <button type="button" class="obStepBtn focusable" data-ob-jump="2"><span class="obStepNum">2</span><span>Sources</span></button>
+      <button type="button" class="obStepBtn focusable" data-ob-jump="3"><span class="obStepNum">3</span><span>Ready</span></button>
+    </div>
+    <div id="obChecklist" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px"></div>
+
+    <div id="obStep1">
+      <div class="obSection">
+        <div class="obSecHead"><span class="obSecTitle">1. Connect TMDB metadata</span></div>
+        <p style="font-size:13px;color:var(--muted);line-height:1.5;margin:0 0 10px">TMDB powers posters, synopses, cast, and Discover rows. Create a free <b>v3 API Key</b> (32 characters, not the long Read Access Token) at <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" style="color:var(--text);text-decoration:underline">themoviedb.org → Settings → API</a>.</p>
+        <label for="obTmdbKey">TMDB API Key (v3)</label>
+        <input id="obTmdbKey" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste your 32-character TMDB v3 key">
+        <div class="obTestStatus" id="obTmdbStatus" role="status" aria-live="polite"></div>
+      </div>
+      <div class="err" id="obErr1"></div>
+      <div class="obActions">
+        <button type="button" class="btn primary focusable" id="obSaveTmdb">Verify &amp; continue</button>
+        <button type="button" class="btn focusable obTestBtn" id="obTestTmdb">Test key</button>
+        <button type="button" class="btn focusable" id="obSkip1" style="margin-left:auto">Skip for now</button>
+      </div>
+    </div>
+
+    <div id="obStep2" hidden>
+      <p style="font-size:13px;color:var(--muted);line-height:1.5;margin:0 0 12px">Add a Usenet provider + Newznab/Prowlarr indexer for instant press-play streaming, or jump straight to local media folders. Test each source before or after saving.</p>
+      <div id="obAddedList" class="obAddedList" hidden></div>
+      <div class="obSection">
+        <div class="obSecHead">
+          <span class="obSecTitle">Usenet provider</span>
+          <select id="obProvPreset" aria-label="Usenet provider preset">
+            <option value="">Preset</option>
+            <option value="news.newshosting.com|563">Newshosting</option>
+            <option value="news.eweka.nl|563">Eweka</option>
+            <option value="news.easynews.com|563">Easynews</option>
+            <option value="news.usenetserver.com|563">UsenetServer</option>
+            <option value="news.newsdemon.com|563">NewsDemon</option>
+            <option value="eunews.frugalusenet.com|563">Frugal Usenet</option>
+            <option value="news.usenetexpress.com|563">UsenetExpress</option>
+          </select>
+        </div>
+        <div class="obGrid2">
+          <div><label for="obProvHost">Host</label><input id="obProvHost" placeholder="news.example.com" autocapitalize="off" spellcheck="false"></div>
+          <div><label for="obProvPort">Port</label><input id="obProvPort" type="number" value="563"></div>
+          <div><label for="obProvUser">Username</label><input id="obProvUser" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+          <div><label for="obProvPass">Password</label><input id="obProvPass" type="password" autocomplete="off"></div>
+        </div>
+        <div class="obRow">
+          <label class="obCheck"><input id="obProvTls" type="checkbox" checked> SSL/TLS</label>
+          <label class="obConnWrap">Connections <input id="obProvConn" type="number" value="20" min="1" max="150"></label>
+          <div class="obBtnGroup">
+            <button type="button" class="btn focusable obTestBtn" id="obTestProv">Test</button>
+            <button type="button" class="btn focusable obAddBtn" id="obAddProv">Add provider</button>
+          </div>
+        </div>
+        <div class="obTestStatus" id="obProvStatus" role="status" aria-live="polite"></div>
+      </div>
+
+      <div class="obSection">
+        <div class="obSecHead">
+          <span class="obSecTitle">Newznab / Prowlarr indexer</span>
+          <select id="obIxPreset" aria-label="Indexer preset">
+            <option value="">Preset</option>
+            <option value="NZBgeek|https://api.nzbgeek.info">NZBgeek</option>
+            <option value="NZBFinder|https://nzbfinder.ws">NZBFinder</option>
+            <option value="DrunkenSlug|https://api.drunkenslug.com">DrunkenSlug</option>
+            <option value="NZBPlanet|https://api.nzbplanet.net">NZBPlanet</option>
+            <option value="NinjaCentral|https://ninjacentral.co.za">NinjaCentral</option>
+            <option value="Prowlarr|http://localhost:9696/1/api">Prowlarr (local)</option>
+            <option value="NZBHydra|http://localhost:5076/api">NZBHydra2 (local)</option>
+          </select>
+        </div>
+        <div class="obGrid2">
+          <div><label for="obIxName">Name</label><input id="obIxName" placeholder="NZBgeek / Prowlarr" autocapitalize="off" spellcheck="false"></div>
+          <div><label for="obIxUrl">URL</label><input id="obIxUrl" placeholder="https://api.example.com" autocapitalize="off" spellcheck="false"></div>
+        </div>
+        <div class="obRowEnd">
+          <div style="flex:1 1 180px;min-width:0"><label for="obIxKey">API key</label><input id="obIxKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste API key"></div>
+          <div class="obBtnGroup">
+            <button type="button" class="btn focusable obTestBtn" id="obTestIx">Test</button>
+            <button type="button" class="btn focusable obAddBtn" id="obAddIx">Add indexer</button>
+          </div>
+        </div>
+        <div class="obTestStatus" id="obIxStatus" role="status" aria-live="polite"></div>
+      </div>
+
+      <div class="err" id="obErr2"></div>
+      <div class="obActions">
+        <button type="button" class="btn primary focusable" id="obNext2">Continue</button>
+        <button type="button" class="btn focusable" id="obLocalJump">Use local folders instead</button>
+        <button type="button" class="btn focusable" id="obBack2" style="margin-left:auto">Back</button>
+      </div>
+    </div>
+
+    <div id="obStep3" hidden>
+      <p style="font-size:13px;color:var(--muted);line-height:1.5;margin:0 0 14px">Your server is live with TRaSH press-play scoring defaults already enabled. Configure any optional extras now or start watching.</p>
+      <div class="obGrid2" style="margin-bottom:16px">
+        <button type="button" class="btn focusable obExtra" data-ob-tab="catalog"><strong>Subtitles &amp; TRaSH Scoring</strong><small>Wyzie, OpenSubtitles, trusted/avoid groups &amp; rules</small></button>
+        <button type="button" class="btn focusable obExtra" data-ob-tab="sources"><strong>Providers &amp; Indexers</strong><small>Connection tests, failover &amp; backup block accounts</small></button>
+        <button type="button" class="btn focusable obExtra" data-ob-tab="rules"><strong>Local Libraries</strong><small>Auto-scan local folders &amp; Audiobooks access</small></button>
+        <button type="button" class="btn focusable obExtra" data-ob-tab="livetv"><strong>House Live TV</strong><small>M3U / Xtream playlists, EPG sync &amp; channel groups</small></button>
+        <button type="button" class="btn focusable obExtra" data-ob-tab="apps"><strong>Jellyfin &amp; Trakt Apps</strong><small>Connect Apple TV, Roku, Swiftfin &amp; Trakt sync</small></button>
+        <button type="button" class="btn focusable obExtra" data-ob-tab="users"><strong>Invite Users</strong><small>Family accounts, quality caps &amp; profile PINs</small></button>
+      </div>
+      <div class="obActions">
+        <button type="button" class="btn primary focusable" id="obFinish">Start watching →</button>
+        <button type="button" class="btn focusable" data-ob-tab="performance">Streaming performance</button>
+        <button type="button" class="btn focusable" id="obBack3" style="margin-left:auto">Back</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -4848,20 +5097,34 @@ body[data-theme="graphite"].mobileShell:not(.tv) #prefs .hint{font:400 13px/1.45
     <h1 id="pinTitle">Enter PIN</h1>
     <div class="sub">This profile is locked.</div>
     <div id="pinDots"><span></span><span></span><span></span><span></span></div>
+    <div class="pinPad" id="pinPad" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;max-width:240px;margin:16px auto 12px">
+      <button type="button" class="btn focusable" data-pin="1" style="justify-content:center;padding:12px 0;font-size:17px">1</button>
+      <button type="button" class="btn focusable" data-pin="2" style="justify-content:center;padding:12px 0;font-size:17px">2</button>
+      <button type="button" class="btn focusable" data-pin="3" style="justify-content:center;padding:12px 0;font-size:17px">3</button>
+      <button type="button" class="btn focusable" data-pin="4" style="justify-content:center;padding:12px 0;font-size:17px">4</button>
+      <button type="button" class="btn focusable" data-pin="5" style="justify-content:center;padding:12px 0;font-size:17px">5</button>
+      <button type="button" class="btn focusable" data-pin="6" style="justify-content:center;padding:12px 0;font-size:17px">6</button>
+      <button type="button" class="btn focusable" data-pin="7" style="justify-content:center;padding:12px 0;font-size:17px">7</button>
+      <button type="button" class="btn focusable" data-pin="8" style="justify-content:center;padding:12px 0;font-size:17px">8</button>
+      <button type="button" class="btn focusable" data-pin="9" style="justify-content:center;padding:12px 0;font-size:17px">9</button>
+      <button type="button" class="btn focusable" data-pin="clear" style="justify-content:center;padding:12px 0;font-size:13px">Clear</button>
+      <button type="button" class="btn focusable" data-pin="0" style="justify-content:center;padding:12px 0;font-size:17px">0</button>
+      <button type="button" class="btn focusable" data-pin="back" aria-label="Backspace" style="justify-content:center;padding:12px 0;font-size:16px">⌫</button>
+    </div>
     <div class="err" id="pinErr"></div>
-    <div class="alt"><button id="pinBack">Back</button></div>
+    <div class="alt"><button class="focusable" id="pinBack">Back</button></div>
   </div>
 </div>
 
 <div class="gate" id="gateInvite">
-  <div class="gateCard">
+  <form class="gateCard" id="gateInviteForm" autocomplete="on">
     <div class="logoRow"><img src="triboon.png" alt="Triboon"></div>
     <div class="sub">Create your account on this Triboon server.</div>
-    <label>Name</label><input id="ivName" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <label>Password</label><input id="ivPass" type="password" autocomplete="new-password" inputmode="text" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <button class="btn primary" id="ivGo">Join server</button>
+    <label for="ivName">Name</label><input id="ivName" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+    <label for="ivPass">Password</label><input id="ivPass" type="password" autocomplete="new-password" inputmode="text" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false" minlength="4" required>
+    <button class="btn primary" id="ivGo" type="submit">Join server</button>
     <div class="err" id="ivErr"></div>
-  </div>
+  </form>
 </div>
 
 <!-- ============ app shell ============ -->
@@ -5741,6 +6004,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
   <div class="setGrid" data-stab="server">
   <div class="panel"><h2>Engine</h2><p>Live status from the Triboon server. The play-by-play is on Logs.</p><div id="engineStatus"><div class="kv"><span>Engine</span><span>Checking...</span></div></div>
+    <div class="settingsActions" style="margin-top:14px"><button class="btn ghost focusable" id="openOnboardBtn" type="button">Setup checklist</button></div>
   </div>
   </div>
 
@@ -5748,7 +6012,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <div class="panel"><h2>Logs</h2>
     <p>The last few plays on this account. Each block is one movie or episode: play, skip, buffer, subtitles, and remount. Passwords are not included. This clears when the server restarts.</p>
     <h3 style="font:800 15px 'Sora';margin:8px 0 2px;color:var(--text)">Debug logging</h3>
-    <p>Off by default. When on, the Unraid log also gets extra Play, prepare, and sweep lines. Tokens and passwords are never written.</p>
+    <p>Off by default. When on, the server log also gets extra Play, prepare, and sweep lines. Tokens and passwords are never written.</p>
     <div class="field">
       <select id="debugLoggingMode" style="max-width:320px">
         <option value="off">Off - quiet server log</option>
@@ -5934,8 +6198,8 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <p>Add one or more NNTP providers (encrypted on the server). Missing pieces fail over automatically; mark block plans <b>Backup only</b>.</p>
     <div id="npList" style="margin-bottom:14px"></div>
     <div class="field">
-      <select id="npPreset" style="max-width:170px">
-        <option value="">Provider…</option>
+      <select id="npPreset" style="flex:0 0 auto;min-width:136px;max-width:170px">
+        <option value="">Provider</option>
         <option value="news.newshosting.com|563">Newshosting</option>
         <option value="news.eweka.nl|563">Eweka</option>
         <option value="news.easynews.com|563">Easynews</option>
@@ -5945,24 +6209,24 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <option value="news.usenet.farm|563">Usenet.Farm</option>
         <option value="custom">Custom…</option>
       </select>
-      <input id="npHost" placeholder="news.example.com" style="flex:2">
-      <input id="npPort" placeholder="563" style="max-width:80px">
+      <input id="npHost" placeholder="news.example.com" style="flex:2 1 180px">
+      <input id="npPort" placeholder="563" style="flex:0 0 80px;max-width:84px">
     </div>
     <div class="field">
-      <input id="npUser" placeholder="username" style="flex:1">
-      <input id="npPass" placeholder="password" type="password" style="flex:1">
-      <input id="npConn" placeholder="connections (16, max 150)" title="max connections for this provider" style="max-width:190px">
+      <input id="npUser" placeholder="username" style="flex:1 1 140px">
+      <input id="npPass" placeholder="password" type="password" style="flex:1 1 140px">
+      <input id="npConn" placeholder="Connections (16)" title="max connections for this provider (max 150)" style="flex:1 1 150px;max-width:190px">
     </div>
     <label class="catRow" style="margin-bottom:10px" title="A backup account is only dialed when every primary account is down, refuses logins, or has no clean copy of a piece. Use it for a block account or a plan that answers 480 when it is over its limit."><input type="checkbox" id="npBackup"><span class="cgN">Backup only — use this account only when the others fail</span></label>
-    <div class="settingsActions"><button class="btn primary" id="npSave">Add provider</button></div>
+    <div class="settingsActions"><button class="btn primary" id="npSave">Add provider</button><button type="button" class="btn ghost focusable" id="npTestNew">Test connection</button><span class="srcTestOut" id="npNewTestOut" role="status" aria-live="polite"></span></div>
   </div>
 
   <div class="panel"><h2>Indexers</h2>
     <p>Newznab-compatible indexers — searches fan out to all of them in parallel and results are merged.</p>
     <div id="ixList" style="margin-bottom:14px"></div>
     <div class="field">
-      <select id="ixPreset" style="max-width:170px">
-        <option value="">Indexer…</option>
+      <select id="ixPreset" style="flex:0 0 auto;min-width:136px;max-width:170px">
+        <option value="">Indexer</option>
         <option value="NZBgeek|https://api.nzbgeek.info">NZBgeek</option>
         <option value="NZBFinder|https://nzbfinder.ws">NZBFinder</option>
         <option value="DrunkenSlug|https://api.drunkenslug.com">DrunkenSlug</option>
@@ -5974,15 +6238,15 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <option value="NZBHydra|http://localhost:5076/api">NZBHydra2 (local)</option>
         <option value="custom">Custom…</option>
       </select>
-      <input id="ixName" placeholder="name" style="max-width:130px">
-      <input id="ixUrl" placeholder="https://api.example.com" style="flex:2">
-      <input id="ixKey" placeholder="API key" style="flex:1">
+      <input id="ixName" placeholder="Name" style="flex:1 1 120px;max-width:160px">
+      <input id="ixUrl" placeholder="https://api.example.com" style="flex:2 1 200px">
+      <input id="ixKey" placeholder="API key" style="flex:1 1 160px">
     </div>
     <div class="field">
-      <input id="ixApiLim" placeholder="API hits/day (optional)" title="your indexer tier's daily API limit" style="max-width:185px">
-      <input id="ixGrabLim" placeholder="NZB grabs/day (optional)" title="your indexer tier's daily download limit" style="max-width:185px">
+      <input id="ixApiLim" placeholder="API hits/day" title="your indexer tier's daily API limit (optional)" style="flex:1 1 150px;max-width:200px">
+      <input id="ixGrabLim" placeholder="NZB grabs/day" title="your indexer tier's daily download limit (optional)" style="flex:1 1 150px;max-width:200px">
     </div>
-    <div class="settingsActions"><button class="btn primary" id="ixSave">Add indexer</button></div>
+    <div class="settingsActions"><button class="btn primary" id="ixSave">Add indexer</button><button type="button" class="btn ghost focusable" id="ixTestNew">Test indexer</button><span class="srcTestOut" id="ixNewTestOut" role="status" aria-live="polite"></span></div>
   </div>
   </div>
 
@@ -6076,16 +6340,72 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   </div>
 
   <div class="panel"><h2>Scoring</h2>
-    <p>Controls how Usenet releases are ranked for fast playback. Delete the <b>CAM</b> line if you want theater rips in Sources.</p>
+    <p>TRaSH-Guides-aligned press-play ranking for Usenet releases. Toggle built-in filters, remove or add release groups one by one, or add custom keyword scores. Delete the <b>CAM</b> line if you want theater rips in Sources.</p>
     <details class="advFold" id="scoringAdvFold">
-      <summary class="advFoldHead focusable"><span>Edit ranking rules</span><small>Trusted groups, avoid list, keyword weights</small></summary>
+      <summary class="advFoldHead focusable"><span>Edit ranking rules</span><small id="scFoldSummary">TRaSH press-play defaults · trusted &amp; avoid groups · filters · keyword weights</small></summary>
       <div class="advFoldBody">
-        <div class="field"><input id="scTrusted" placeholder="Trusted groups"></div>
-        <div class="field"><input id="scAvoid" placeholder="Avoid groups"></div>
-        <div class="field"><textarea id="scKeywords" rows="6" placeholder="keyword = score (one per line)"></textarea></div>
-        <div class="settingsActions">
-          <button class="btn primary" id="scSave">Save scoring</button>
-          <button class="btn ghost" id="scReset">Reset to defaults</button>
+        <div class="scToolbar">
+          <input id="scFilter" type="search" autocomplete="off" spellcheck="false" placeholder="Filter rules, release groups, or keywords…">
+          <button type="button" class="btn ghost focusable" id="scFilterClear" hidden style="height:40px;min-height:0;padding:0 12px">Clear</button>
+          <span class="scFilterMeta" id="scFilterMeta"></span>
+        </div>
+
+        <div class="scBlock">
+          <div class="scBlockHead">
+            <h3>Built-in TRaSH press-play filters</h3>
+            <small>Toggle any built-in rule on or off</small>
+          </div>
+          <div class="scRuleList" id="scBuiltinRules"></div>
+        </div>
+
+        <div class="scBlock">
+          <div class="scBlockHead">
+            <h3>Trusted release groups</h3>
+            <small id="scTrustedMeta">+25 built-in / +50 custom tiebreaker · click × to remove any group</small>
+          </div>
+          <div class="scChips" id="scTrustedChips"></div>
+          <div class="scAddRow">
+            <input id="scAddTrustedIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Add trusted group(s), e.g. DON, TayTO">
+            <button type="button" class="btn focusable" id="scAddTrustedBtn">Add</button>
+          </div>
+        </div>
+
+        <div class="scBlock">
+          <div class="scBlockHead">
+            <h3>Avoid release groups</h3>
+            <small id="scAvoidMeta">-50 penalty (low-bitrate re-encoders) · click × to remove any group</small>
+          </div>
+          <div class="scChips" id="scAvoidChips"></div>
+          <div class="scAddRow">
+            <input id="scAddAvoidIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Add group(s) to avoid, e.g. YTS, PSA">
+            <button type="button" class="btn focusable" id="scAddAvoidBtn">Add</button>
+          </div>
+        </div>
+
+        <div class="scBlock">
+          <div class="scBlockHead">
+            <h3>Keyword score rules</h3>
+            <small id="scKwMeta">Word-boundary match (-5000 to +5000) · click × to remove</small>
+          </div>
+          <div class="scKwList" id="scKwRows"></div>
+          <div class="scAddRow">
+            <input id="scAddKwTerm" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Keyword, e.g. IMAX, REPACK, DDP5 1">
+            <input id="scAddKwScore" class="scScoreIn" type="number" min="-8000" max="5000" step="10" placeholder="Score (+50)">
+            <button type="button" class="btn focusable" id="scAddKwBtn">Add rule</button>
+          </div>
+        </div>
+
+        <details class="scRawFold" id="scRawFold">
+          <summary class="focusable">Bulk / raw text editor</summary>
+          <div class="field"><input id="scTrusted" placeholder="Trusted groups"></div>
+          <div class="field"><input id="scAvoid" placeholder="Avoid groups"></div>
+          <div class="field"><textarea id="scKeywords" rows="6" placeholder="keyword = score (one per line)"></textarea></div>
+        </details>
+
+        <div class="settingsActions" style="align-items:center">
+          <button class="btn primary focusable" id="scSave">Save scoring</button>
+          <button class="btn ghost focusable" id="scReset">Reset to defaults</button>
+          <span class="scDirty" id="scDirtyNote" hidden>Unsaved changes</span>
         </div>
       </div>
     </details>
@@ -6336,8 +6656,8 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     </div>
   </div>
   <div id="pGuide">
-    <div id="pgTop"><div class="pgVideoSlot"></div><div id="pgInfo"></div></div>
-    <div class="pgHead"><span>Live TV guide</span><span class="pgHint">Up / Down · OK tunes · Back closes</span><button id="pgMultiBtn" class="mvIconBtn focusable" type="button" title="Open multiview" aria-label="Open multiview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.8"/><rect x="13" y="4" width="8" height="7" rx="1.8"/><rect x="3" y="13" width="8" height="7" rx="1.8"/><rect x="13" y="13" width="8" height="7" rx="1.8"/></svg><span>Multiview</span></button></div>
+    <div id="pgTop"><div class="pgVideoSlot" id="pgVideoSlot" title="Return to fullscreen"></div><div id="pgInfo"></div></div>
+    <div class="pgHead"><span>Live TV guide</span><span class="pgHint">Up / Down · OK tunes · Back closes</span><input id="pgSearch" class="pgSearch" type="search" placeholder="Filter channels…" autocomplete="off" spellcheck="false" aria-label="Filter guide channels"><button id="pgMultiBtn" class="mvIconBtn focusable" type="button" title="Open multiview" aria-label="Open multiview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.8"/><rect x="13" y="4" width="8" height="7" rx="1.8"/><rect x="3" y="13" width="8" height="7" rx="1.8"/><rect x="13" y="13" width="8" height="7" rx="1.8"/></svg><span>Multiview</span></button><button id="pgCloseBtn" class="mvIconBtn focusable" type="button" title="Back to fullscreen" aria-label="Close guide">✕ <span>Close</span></button></div>
     <div id="pgList"></div>
   </div>
   <div id="vlcPanel"><div class="gateCard">
@@ -7108,7 +7428,12 @@ function showGate(which) {
   if (which === 'login') setTimeout(() => { if ($('gateLogin').classList.contains('open')) startLoginQr(); }, 0); else stopLoginQr();
   document.body.classList.toggle('authOpen', !!which);
   if (which) ensureGateArt(); else stopGateArtCycle();
-  for (const g of ['gateSetup', 'gateLogin', 'gateQc', 'gateInvite', 'gateProfiles', 'gatePin']) $(g).classList.remove('open');
+  if (which === 'setup' && $('suTokenRow')) {
+    $('suTokenRow').hidden = !(S.serverInfo && S.serverInfo.setupTokenRequired);
+  }
+  for (const g of ['gateSetup', 'gateOnboard', 'gateLogin', 'gateQc', 'gateInvite', 'gateProfiles', 'gatePin']) {
+    if ($(g)) $(g).classList.remove('open');
+  }
   ['rail', 'home'].forEach((id) => $(id).classList.remove('show'));
   $('searchBar').classList.remove('show'); $('settings').classList.remove('open');
   if (which) {
@@ -7255,6 +7580,18 @@ function promptPin(title, onDone) {
   $('pinErr').textContent = '';
   renderPinDots();
   showGate('pin');
+  const firstKey = $('pinPad') && $('pinPad').querySelector('button[data-pin="1"]');
+  if (firstKey) setTimeout(() => { try { firstKey.focus(); } catch {} }, 40);
+}
+if ($('pinPad')) {
+  $('pinPad').addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest('button[data-pin]');
+    if (!btn) return;
+    const v = btn.dataset.pin;
+    if (v === 'back') { pinState.buf = pinState.buf.slice(0, -1); $('pinErr').textContent = ''; renderPinDots(); }
+    else if (v === 'clear') { pinState.buf = ''; $('pinErr').textContent = ''; renderPinDots(); }
+    else if (/^[0-9]$/.test(v)) pinDigit(v);
+  });
 }
 function renderPinDots() {
   [...$('pinDots').children].forEach((d, i) => d.classList.toggle('on', i < pinState.buf.length));
@@ -7362,20 +7699,359 @@ function setLogin2faMode(challenge) {
   $('liErr').textContent = '';
   if (on) setTimeout(() => $('liCode').focus(), 30);
 }
-$('suGo').addEventListener('click', async () => {
+let _setupBusy = false;
+async function submitOwnerSetup(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  if (_setupBusy) return;
+  const name = $('suName').value.trim();
+  const password = $('suPass').value;
+  const confirmEl = $('suPass2');
+  const confirmVal = confirmEl ? confirmEl.value : password;
+  if (!name) { $('suErr').textContent = 'Enter an owner name.'; return; }
+  if (!password || password.length < 4) { $('suErr').textContent = 'Password must be at least 4 characters.'; return; }
+  if (confirmEl && confirmVal && password !== confirmVal) { $('suErr').textContent = 'Passwords do not match.'; return; }
+  _setupBusy = true;
+  $('suGo').disabled = true;
+  $('suErr').textContent = '';
   try {
-    const r = await api('/api/setup', { method: 'POST', body: { name: $('suName').value.trim(), password: $('suPass').value } });
+    const setupToken = ($('suToken') && $('suToken').value.trim()) || '';
+    const r = await api('/api/setup', { method: 'POST', body: { name, password, ...(setupToken ? { setupToken } : {}) } });
     tokenStore.set(r.token); S.user = r.user;
-    toast('Server claimed — set up your provider & indexer in Settings');
-    await enterApp(); openServerSettings();
-  } catch (e) { $('suErr').textContent = e.message; }
+    S._justClaimedServer = true;
+    await enterApp();
+    openHostOnboarding();
+  } catch (err) { $('suErr').textContent = (err && err.message) || 'Setup failed'; }
+  finally { _setupBusy = false; $('suGo').disabled = false; }
+}
+if ($('gateSetupForm')) $('gateSetupForm').addEventListener('submit', submitOwnerSetup);
+else $('suGo').addEventListener('click', submitOwnerSetup);
+
+const OB = { step: 1, tmdb: false, providers: 0, indexers: 0, providerNames: [], indexerNames: [], provTest: {}, ixTest: {} };
+function setObStatus(id, kind, text) {
+  const el = $(id);
+  if (!el) return;
+  el.className = 'obTestStatus' + (kind ? ' ' + kind : '');
+  el.textContent = text || '';
+}
+function renderHostOnboarding() {
+  const pill = $('obStepPill');
+  if (pill) pill.textContent = `Step ${OB.step} of 3`;
+  if ($('obStep1')) $('obStep1').hidden = OB.step !== 1;
+  if ($('obStep2')) $('obStep2').hidden = OB.step !== 2;
+  if ($('obStep3')) $('obStep3').hidden = OB.step !== 3;
+  document.querySelectorAll('#gateOnboard [data-ob-jump]').forEach((btn) => {
+    const n = Number(btn.dataset.obJump);
+    const done = (n === 1 && OB.tmdb) || (n === 2 && OB.providers > 0 && OB.indexers > 0);
+    btn.classList.toggle('on', OB.step === n);
+    btn.classList.toggle('done', done && OB.step !== n);
+    btn.setAttribute('aria-selected', OB.step === n ? 'true' : 'false');
+  });
+  const list = $('obChecklist');
+  if (list) {
+    const badge = (ok, label) => `<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;font:600 12px 'Albert Sans',sans-serif;background:${ok ? 'rgba(46,204,113,.14)' : 'rgba(var(--fg),.06)'};color:${ok ? '#7be3a4' : 'var(--muted)'};border:1px solid ${ok ? 'rgba(46,204,113,.3)' : 'var(--line)'}">${ok ? '✓' : '○'} ${label}</span>`;
+    list.innerHTML = badge(OB.tmdb, 'TMDB') + badge(OB.providers > 0, `Usenet (${OB.providers})`) + badge(OB.indexers > 0, `Indexers (${OB.indexers})`);
+  }
+  const added = $('obAddedList');
+  if (added) {
+    const chips = [
+      ...OB.providerNames.map((n, i) => {
+        const st = OB.provTest[i];
+        const cls = st && st.ok === false ? 'obAddedChip bad' : 'obAddedChip';
+        const meta = st ? (st.ok ? `<span class="obChipMeta">${st.ms}ms</span>` : `<span class="obChipMeta" title="${esc(st.error || 'Failed')}">✗</span>`) : '';
+        return `<span class="${cls}"><span class="obChipLbl">${st && st.ok === false ? '✗' : '✓'} Usenet · ${esc(n)}</span>${meta}<button type="button" class="obChipAct focusable" data-ob-test-prov="${i}" title="Test provider">Test</button><button type="button" class="obChipAct focusable" data-ob-rm-prov="${i}" aria-label="Remove ${esc(n)}">×</button></span>`;
+      }),
+      ...OB.indexerNames.map((n, i) => {
+        const st = OB.ixTest[i];
+        const cls = st && st.ok === false ? 'obAddedChip bad' : 'obAddedChip';
+        const meta = st ? (st.ok ? `<span class="obChipMeta">${st.ms}ms</span>` : `<span class="obChipMeta" title="${esc(st.error || 'Failed')}">✗</span>`) : '';
+        return `<span class="${cls}"><span class="obChipLbl">${st && st.ok === false ? '✗' : '✓'} Indexer · ${esc(n)}</span>${meta}<button type="button" class="obChipAct focusable" data-ob-test-ix="${i}" title="Test indexer">Test</button><button type="button" class="obChipAct focusable" data-ob-rm-ix="${i}" aria-label="Remove ${esc(n)}">×</button></span>`;
+      }),
+    ];
+    added.hidden = !chips.length;
+    added.innerHTML = chips.join('');
+    added.querySelectorAll('[data-ob-test-prov]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const idx = Number(btn.dataset.obTestProv);
+        btn.disabled = true; btn.textContent = '…';
+        try {
+          const r = await api('/api/test/provider', { method: 'POST', body: { index: idx } });
+          OB.provTest[idx] = r;
+          setObStatus('obProvStatus', r.ok ? 'ok' : 'bad', r.ok ? `✓ ${r.host} connected (${r.tls ? 'TLS · ' : ''}${r.ms}ms)` : `✗ ${r.host}: ${r.error || 'Connection failed'}`);
+        } catch (e) {
+          OB.provTest[idx] = { ok: false, error: (e && e.message) || 'Test failed' };
+          setObStatus('obProvStatus', 'bad', `✗ ${(e && e.message) || 'Test failed'}`);
+        }
+        renderHostOnboarding();
+      });
+    });
+    added.querySelectorAll('[data-ob-test-ix]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const idx = Number(btn.dataset.obTestIx);
+        btn.disabled = true; btn.textContent = '…';
+        try {
+          const r = await api('/api/test/indexer', { method: 'POST', body: { index: idx } });
+          OB.ixTest[idx] = r;
+          setObStatus('obIxStatus', r.ok ? 'ok' : 'bad', r.ok ? `✓ ${r.name} reachable (${r.items} results · ${r.ms}ms)` : `✗ ${r.name}: ${r.error || 'Test failed'}`);
+        } catch (e) {
+          OB.ixTest[idx] = { ok: false, error: (e && e.message) || 'Test failed' };
+          setObStatus('obIxStatus', 'bad', `✗ ${(e && e.message) || 'Test failed'}`);
+        }
+        renderHostOnboarding();
+      });
+    });
+    added.querySelectorAll('[data-ob-rm-prov]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const idx = Number(btn.dataset.obRmProv);
+        try {
+          await api('/api/settings', { method: 'POST', body: { removeProvider: idx } });
+          OB.providerNames.splice(idx, 1);
+          OB.providers = OB.providerNames.length;
+          OB.provTest = {};
+          renderHostOnboarding();
+          toast('Provider removed');
+        } catch (e) { $('obErr2').textContent = (e && e.message) || 'Could not remove provider'; }
+      });
+    });
+    added.querySelectorAll('[data-ob-rm-ix]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const idx = Number(btn.dataset.obRmIx);
+        try {
+          await api('/api/settings', { method: 'POST', body: { removeIndexer: idx } });
+          OB.indexerNames.splice(idx, 1);
+          OB.indexers = OB.indexerNames.length;
+          OB.ixTest = {};
+          renderHostOnboarding();
+          toast('Indexer removed');
+        } catch (e) { $('obErr2').textContent = (e && e.message) || 'Could not remove indexer'; }
+      });
+    });
+  }
+}
+function focusHostOnboardingStep() {
+  const stepEl = $('obStep' + OB.step);
+  if (!stepEl) return;
+  const first = stepEl.querySelector('input:not([hidden]):not([disabled]), select:not([hidden]):not([disabled]), button:not([hidden]):not([disabled])');
+  if (first) setTimeout(() => { try { first.focus(); } catch {} }, 30);
+}
+async function openHostOnboarding() {
+  if (!(S.user && S.user.role === 'admin')) return;
+  OB.provTest = {}; OB.ixTest = {};
+  try {
+    const cfg = await api('/api/settings');
+    OB.tmdb = !!cfg.tmdbKey;
+    const provs = Array.isArray(cfg.providers) ? cfg.providers : [];
+    const ixs = Array.isArray(cfg.indexers) ? cfg.indexers : [];
+    OB.providers = provs.length;
+    OB.indexers = ixs.length;
+    OB.providerNames = provs.map((p) => p && p.host).filter(Boolean);
+    OB.indexerNames = ixs.map((ix) => (ix && (ix.name || ix.url)) || '').filter(Boolean);
+  } catch {}
+  OB.step = !OB.tmdb ? 1 : ((OB.providers === 0 || OB.indexers === 0) ? 2 : 3);
+  if ($('obErr1')) $('obErr1').textContent = '';
+  if ($('obErr2')) $('obErr2').textContent = '';
+  setObStatus('obTmdbStatus', '', '');
+  setObStatus('obProvStatus', '', '');
+  setObStatus('obIxStatus', '', '');
+  renderHostOnboarding();
+  showGate('onboard');
+  focusHostOnboardingStep();
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !$('gateOnboard') || !$('gateOnboard').classList.contains('open')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (OB.step > 1) {
+    OB.step -= 1;
+    renderHostOnboarding();
+    focusHostOnboardingStep();
+  } else {
+    closeHostOnboarding(null);
+  }
+});
+async function closeHostOnboarding(targetSettingsTab = null) {
+  showGate(null);
+  if ($('rail')) $('rail').classList.add('show');
+  try { S.serverInfo = await api('/api/server'); } catch {}
+  if (targetSettingsTab) {
+    openServerSettingsTab(targetSettingsTab);
+    return;
+  }
+  if ($('home')) $('home').classList.add('show');
+  switchView('home');
+  try { await loadHome(); } catch {}
+}
+document.querySelectorAll('#gateOnboard [data-ob-jump]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const n = Number(btn.dataset.obJump);
+    if (n >= 1 && n <= 3) { OB.step = n; renderHostOnboarding(); focusHostOnboardingStep(); }
+  });
+});
+if ($('obProvPreset')) {
+  $('obProvPreset').addEventListener('change', () => {
+    const v = $('obProvPreset').value;
+    if (!v) return;
+    const [host, port] = v.split('|');
+    if (host && $('obProvHost')) $('obProvHost').value = host;
+    if (port && $('obProvPort')) $('obProvPort').value = port;
+    if ($('obProvTls')) $('obProvTls').checked = true;
+    $('obProvPreset').value = '';
+    setObStatus('obProvStatus', '', '');
+    if ($('obProvUser')) $('obProvUser').focus();
+  });
+}
+if ($('obIxPreset')) {
+  $('obIxPreset').addEventListener('change', () => {
+    const v = $('obIxPreset').value;
+    if (!v) return;
+    const [name, url] = v.split('|');
+    if (name && $('obIxName')) $('obIxName').value = name;
+    if (url && $('obIxUrl')) $('obIxUrl').value = url;
+    $('obIxPreset').value = '';
+    setObStatus('obIxStatus', '', '');
+    if ($('obIxKey')) $('obIxKey').focus();
+  });
+}
+if ($('obTestTmdb')) {
+  $('obTestTmdb').addEventListener('click', async () => {
+    const key = ($('obTmdbKey').value || '').trim();
+    if (!key && !OB.tmdb) { setObStatus('obTmdbStatus', 'bad', 'Paste your TMDB v3 API key first.'); return; }
+    $('obErr1').textContent = '';
+    setObStatus('obTmdbStatus', '', 'Testing TMDB key…');
+    $('obTestTmdb').disabled = true;
+    try {
+      const r = await api('/api/test/tmdb', { method: 'POST', body: key ? { tmdbKey: key } : {} });
+      setObStatus('obTmdbStatus', r.ok ? 'ok' : 'bad', r.ok ? `✓ TMDB v3 key valid · ${r.ms}ms` : `✗ ${r.error || 'TMDB test failed'}`);
+    } catch (e) { setObStatus('obTmdbStatus', 'bad', `✗ ${(e && e.message) || 'Could not test TMDB key'}`); }
+    finally { $('obTestTmdb').disabled = false; }
+  });
+}
+if ($('obSaveTmdb')) {
+  $('obSaveTmdb').addEventListener('click', async () => {
+    const key = ($('obTmdbKey').value || '').trim();
+    if (!key) { $('obErr1').textContent = 'Paste your TMDB v3 API key, or click Skip for now.'; return; }
+    if (key.length > 64 && key.includes('.')) {
+      $('obErr1').textContent = 'That looks like a v4 Read Access Token. Paste the shorter 32-character API Key (v3 auth) instead.';
+      return;
+    }
+    $('obErr1').textContent = '';
+    setObStatus('obTmdbStatus', '', 'Verifying & saving…');
+    $('obSaveTmdb').disabled = true;
+    try {
+      await api('/api/settings', { method: 'POST', body: { tmdbKey: key } });
+      let verified = true;
+      try { await api('/api/tmdb/configuration'); }
+      catch (ve) {
+        if (ve && (ve.status === 401 || ve.status === 403)) verified = false;
+      }
+      if (!verified) {
+        setObStatus('obTmdbStatus', 'bad', '✗ TMDB rejected that key (401).');
+        $('obErr1').textContent = 'TMDB rejected that key (401). Double-check your 32-character v3 API key.';
+        return;
+      }
+      OB.tmdb = true;
+      OB.step = 2;
+      renderHostOnboarding();
+      focusHostOnboardingStep();
+      toast('TMDB verified ✓');
+    } catch (e) {
+      setObStatus('obTmdbStatus', 'bad', '');
+      $('obErr1').textContent = (e && e.message) || 'Could not save TMDB key';
+    } finally { $('obSaveTmdb').disabled = false; }
+  });
+}
+if ($('obSkip1')) $('obSkip1').addEventListener('click', () => { OB.step = 2; renderHostOnboarding(); focusHostOnboardingStep(); });
+if ($('obTestProv')) {
+  $('obTestProv').addEventListener('click', async () => {
+    const host = ($('obProvHost').value || '').trim();
+    const port = parseInt($('obProvPort').value || '563', 10) || 563;
+    const user = ($('obProvUser').value || '').trim();
+    const pass = $('obProvPass').value || '';
+    const tls = !!($('obProvTls') && $('obProvTls').checked);
+    if (!host) { setObStatus('obProvStatus', 'bad', 'Enter a Usenet host first.'); return; }
+    $('obErr2').textContent = '';
+    setObStatus('obProvStatus', '', `Testing ${host}:${port}…`);
+    $('obTestProv').disabled = true;
+    try {
+      const r = await api('/api/test/provider', { method: 'POST', body: { provider: { host, port, user, pass, tls } } });
+      setObStatus('obProvStatus', r.ok ? 'ok' : 'bad', r.ok ? `✓ Connected via ${r.tls ? 'TLS' : 'TCP'} · ${r.ms}ms` : `✗ ${r.error || 'Connection failed'}`);
+    } catch (e) { setObStatus('obProvStatus', 'bad', `✗ ${(e && e.message) || 'Connection test failed'}`); }
+    finally { $('obTestProv').disabled = false; }
+  });
+}
+if ($('obAddProv')) {
+  $('obAddProv').addEventListener('click', async () => {
+    const host = ($('obProvHost').value || '').trim();
+    const port = parseInt($('obProvPort').value || '563', 10) || 563;
+    const user = ($('obProvUser').value || '').trim();
+    const pass = $('obProvPass').value || '';
+    const tls = !!($('obProvTls') && $('obProvTls').checked);
+    const connections = Math.max(1, Math.min(150, parseInt($('obProvConn').value || '20', 10) || 20));
+    if (!host) { $('obErr2').textContent = 'Enter a Usenet host first.'; return; }
+    $('obErr2').textContent = '';
+    $('obAddProv').disabled = true;
+    try {
+      await api('/api/settings', { method: 'POST', body: { addProvider: { host, port, user, pass, tls, connections } } });
+      OB.providers += 1;
+      OB.providerNames.push(host);
+      $('obProvHost').value = ''; $('obProvUser').value = ''; $('obProvPass').value = '';
+      setObStatus('obProvStatus', 'ok', `✓ ${host} added — click Test on its chip above anytime.`);
+      renderHostOnboarding();
+      toast('Usenet provider saved');
+    } catch (e) { $('obErr2').textContent = (e && e.message) || 'Could not save provider'; }
+    finally { $('obAddProv').disabled = false; }
+  });
+}
+if ($('obTestIx')) {
+  $('obTestIx').addEventListener('click', async () => {
+    const name = ($('obIxName').value || '').trim() || 'Indexer';
+    const url = ($('obIxUrl').value || '').trim();
+    const apikey = ($('obIxKey').value || '').trim();
+    if (!url || !apikey) { setObStatus('obIxStatus', 'bad', 'Enter both Indexer URL and API key first.'); return; }
+    $('obErr2').textContent = '';
+    setObStatus('obIxStatus', '', `Testing ${name}…`);
+    $('obTestIx').disabled = true;
+    try {
+      const r = await api('/api/test/indexer', { method: 'POST', body: { indexer: { name, url, apikey } } });
+      setObStatus('obIxStatus', r.ok ? 'ok' : 'bad', r.ok ? `✓ Reachable · ${r.items} results · ${r.ms}ms` : `✗ ${r.error || 'Indexer test failed'}`);
+    } catch (e) { setObStatus('obIxStatus', 'bad', `✗ ${(e && e.message) || 'Indexer test failed'}`); }
+    finally { $('obTestIx').disabled = false; }
+  });
+}
+if ($('obAddIx')) {
+  $('obAddIx').addEventListener('click', async () => {
+    const name = ($('obIxName').value || '').trim() || 'Indexer';
+    const url = ($('obIxUrl').value || '').trim();
+    const apikey = ($('obIxKey').value || '').trim();
+    if (!url || !apikey) { $('obErr2').textContent = 'Enter both Indexer URL and API key.'; return; }
+    $('obErr2').textContent = '';
+    $('obAddIx').disabled = true;
+    try {
+      await api('/api/settings', { method: 'POST', body: { addIndexer: { name, url, apikey } } });
+      OB.indexers += 1;
+      OB.indexerNames.push(name);
+      $('obIxName').value = ''; $('obIxUrl').value = ''; $('obIxKey').value = '';
+      setObStatus('obIxStatus', 'ok', `✓ ${name} added — click Test on its chip above anytime.`);
+      renderHostOnboarding();
+      toast('Indexer saved');
+    } catch (e) { $('obErr2').textContent = (e && e.message) || 'Could not save indexer'; }
+    finally { $('obAddIx').disabled = false; }
+  });
+}
+if ($('obNext2')) $('obNext2').addEventListener('click', () => { OB.step = 3; renderHostOnboarding(); focusHostOnboardingStep(); });
+if ($('obBack2')) $('obBack2').addEventListener('click', () => { OB.step = 1; renderHostOnboarding(); focusHostOnboardingStep(); });
+if ($('obBack3')) $('obBack3').addEventListener('click', () => { OB.step = 2; renderHostOnboarding(); focusHostOnboardingStep(); });
+if ($('obLocalJump')) $('obLocalJump').addEventListener('click', () => closeHostOnboarding('rules'));
+if ($('obFinish')) $('obFinish').addEventListener('click', () => closeHostOnboarding(null));
+if ($('openOnboardBtn')) $('openOnboardBtn').addEventListener('click', () => openHostOnboarding());
+document.querySelectorAll('#obStep3 [data-ob-tab]').forEach((btn) => {
+  btn.addEventListener('click', () => closeHostOnboarding(btn.dataset.obTab));
 });
 $('gateLoginForm').addEventListener('submit', (e) => { e.preventDefault(); doLogin(); });
 // iPhone: type=password + current-password opens AutoFill and hides the QWERTY keys.
 // Name still types. Password shows Done/Paste and no keyboard. iOS-only — desktop/TV keep keychain fill.
 function armIosPasswordKeyboard() {
   if (!iosWebkitVideo()) return;
-  for (const id of ['liPass', 'suPass', 'ivPass']) {
+  for (const id of ['liPass', 'suPass', 'suPass2', 'ivPass']) {
     const el = $(id);
     if (!el || el.dataset.iosPwArmed) continue;
     el.dataset.iosPwArmed = '1';
@@ -7407,7 +8083,7 @@ async function doLogin() {
     const fd = new FormData($('gateLoginForm'));
     const name = String($('liName').value || fd.get('username') || '').trim();
     const password = String($('liPass').value || fd.get('password') || '').trim();
-    if (!name || !password) {
+    if (!name || !password.length) {
       $('liErr').textContent = 'Type the name and the password, then press Sign in';
       return;
     }
@@ -7426,19 +8102,36 @@ async function doLogin() {
     else $('liErr').textContent = (e && e.message) || 'Sign-in failed';
   } finally { _loginBusy = false; }
 }
-$('ivGo').addEventListener('click', async () => {
+let _inviteBusy = false;
+async function submitInviteAccept(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  if (_inviteBusy) return;
   const inviteToken = new URLSearchParams(location.search).get('invite');
+  _inviteBusy = true;
+  $('ivGo').disabled = true;
+  $('ivErr').textContent = '';
   try {
     const r = await api('/api/invite/accept', { method: 'POST', body: { token: inviteToken, name: $('ivName').value.trim(), password: $('ivPass').value } });
     tokenStore.set(r.token); S.user = r.user;
     history.replaceState(null, '', '/');
     await enterApp();
-  } catch (e) { $('ivErr').textContent = e.message; }
-});
+  } catch (err) { $('ivErr').textContent = (err && err.message) || 'Could not accept invite'; }
+  finally { _inviteBusy = false; $('ivGo').disabled = false; }
+}
+if ($('gateInviteForm')) $('gateInviteForm').addEventListener('submit', submitInviteAccept);
+else $('ivGo').addEventListener('click', submitInviteAccept);
 $('qcStart').addEventListener('click', async () => {
   if (S.qcTimer) { clearInterval(S.qcTimer); S.qcTimer = null; }
   showGate('qc');
-  const r = await api('/api/quickconnect', { method: 'POST', body: { deviceName: 'TV' } });
+  $('qcCode').textContent = '······';
+  $('qcState').textContent = 'requesting code…';
+  let r;
+  try {
+    r = await api('/api/quickconnect', { method: 'POST', body: { deviceName: 'TV' } });
+  } catch (e) {
+    $('qcState').textContent = (e && e.message) || 'Could not start Quick Connect — try again';
+    return;
+  }
   $('qcCode').textContent = r.code;
   $('qcState').textContent = 'waiting for approval…';
   const until = Date.now() + Math.max(5000, Number(r.ttlMs) || 60000);
@@ -13763,6 +14456,7 @@ function liveItemPayload(it = {}) {
     _personal: !!(it._personal || it.personal),
     _sourceName: it._sourceName || it.sourceName || '',
     _streamUrl: it._streamUrl || it.streamUrl || '',
+    _hlsUrl: it._hlsUrl || it.hlsUrl || '',
     _nativeUrl: it._nativeUrl || it.nativeUrl || '',
     _nativeMime: it._nativeMime || it.nativeMime || '',
     _nativeFallbackUrl: it._nativeFallbackUrl || it.nativeFallbackUrl || '',
@@ -14587,8 +15281,9 @@ function renderMultiViewPicker() {
     } else {
       // Logo + name only. The group ("United States") is implied by the category — repeating it on
       // every row was noise; a channel logo reads far more professionally.
-      const logo = ch.logo
-        ? `<img class="mvChLogo" src="${esc(ch.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.classList.add('mvChLogoOff')">`
+      const logoUrl = ch._logo || ch.logo;
+      const logo = logoUrl
+        ? `<img class="mvChLogo" src="${esc(logoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.classList.add('mvChLogoOff')">`
         : '<span class="mvChLogo mvChLogoOff"></span>';
       const np = liveNameParts(ch.title || ch.name || 'Live TV'); // 3.5.1 guide C: short name + tags
       btn.innerHTML = `${logo}<span class="mvChName">${esc(np.name)}</span>${liveTagsHtml(np.tags)}`;
@@ -20429,6 +21124,7 @@ let _liveEpgIdx = null, _liveEpgProgs = null;
 async function renderLiveEpgStrip(idx) {
   const strip = $('liveEpgStrip'); if (!strip) return;
   _liveEpgIdx = idx; _liveEpgProgs = null; strip.innerHTML = '';
+  pushLiveEpgToNative(); // clear previous channel's EPG immediately across zaps
   if (!S.liveEpg) return;
   const ch = liveChannelByIdx(idx); if (!ch) return;
   try {
@@ -22658,6 +23354,27 @@ function handleLiveSplitPick(e) {
 $('liveSplitPickBtn').addEventListener('pointerdown', handleLiveSplitPick);
 $('liveSplitPickBtn').addEventListener('click', handleLiveSplitPick);
 $('pgMultiBtn').addEventListener('click', () => openMultiViewFromGuide());
+if ($('pgCloseBtn')) $('pgCloseBtn').addEventListener('click', () => closePlayerGuide());
+if ($('pgVideoSlot')) $('pgVideoSlot').addEventListener('click', () => { if ($('pGuide') && $('pGuide').classList.contains('open')) closePlayerGuide(); });
+if ($('pgSearch')) {
+  let _pgSearchT = null;
+  $('pgSearch').addEventListener('input', () => {
+    clearTimeout(_pgSearchT);
+    _pgSearchT = setTimeout(() => {
+      if ($('pGuide') && $('pGuide').classList.contains('open')) renderPlayerGuideTimeline($('pGuide'), S.liveList || []);
+    }, 120);
+  });
+  $('pgSearch').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      const firstRow = document.querySelector('.pgGuideMain .pgRow[data-pg]');
+      if (firstRow) { e.preventDefault(); $('pgSearch').blur(); firstRow.focus(); }
+    } else if (e.key === 'Escape' && $('pgSearch').value) {
+      e.preventDefault(); e.stopPropagation();
+      $('pgSearch').value = '';
+      renderPlayerGuideTimeline($('pGuide'), S.liveList || []);
+    }
+  });
+}
 $('mvClose').addEventListener('click', closeMultiView);
 $('multiView').addEventListener('pointerdown', () => { if (S.multiView && S.multiView.open) bumpMultiViewChrome(); }); // tap wakes the chrome on phone/mouse
 $('mvPickerClose').addEventListener('click', () => { closeMultiViewPicker(); setMultiViewActiveSlot(multiViewActiveSlot()); });
@@ -26723,7 +27440,7 @@ function fitLiveGuide(wrap = $('guide')) {
 function liveTvCard(ch) {
   const i = S.gridItems.length;
   const it = { key: ch.key || ('live:' + ch.idx), title: ch.name, _channel: ch.idx, _logo: ch.logo, genre: ch.group || 'Other',
-    _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
+    _streamUrl: ch.streamUrl, _hlsUrl: ch.hlsUrl || '', _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
     _nativeFallbackUrl: ch.nativeFallbackUrl, _nativeFallbackMime: ch.nativeFallbackMime || '', _chid: ch.id,
     _personal: isPersonalChannel(ch), _sourceName: ch.sourceName || '',
     backdrop: procBackdrop(200 + (i % 8) * 14, 320, (Math.abs(ch.idx) % 12) + 9), poster: null };
@@ -27153,13 +27870,14 @@ function prefetchAdjacentChannelUrls(cur, list) {
   } catch { /* prefetch is best-effort */ }
 }
 async function hydrateLivePlaybackUrls(it) {
-  if (!it || it._personal || (it._streamUrl && it._nativeUrl)) return it;
+  if (!it || it._personal || (it._streamUrl && it._nativeUrl && it._hlsUrl)) return it;
   const idx = it._channel;
   if (idx === undefined || idx === null) return it;
   const q = new URLSearchParams();
   if (it._chid) q.set('cid', it._chid);
   const r = await api(`/api/iptv/play/${idx}${q.toString() ? '?' + q.toString() : ''}`);
   it._streamUrl = r.streamUrl || it._streamUrl || '';
+  it._hlsUrl = r.hlsUrl || it._hlsUrl || '';
   it._nativeUrl = r.nativeUrl || it._nativeUrl || '';
   it._nativeMime = r.nativeMime || it._nativeMime || '';
   it._nativeFallbackUrl = r.nativeFallbackUrl || it._nativeFallbackUrl || '';
@@ -27167,6 +27885,7 @@ async function hydrateLivePlaybackUrls(it) {
   const full = liveChannelByIdx(idx);
   if (full) {
     full.streamUrl = it._streamUrl;
+    full.hlsUrl = it._hlsUrl;
     full.nativeUrl = it._nativeUrl;
     full.nativeMime = it._nativeMime;
     full.nativeFallbackUrl = it._nativeFallbackUrl;
@@ -27394,6 +28113,7 @@ function closePlayerGuide(opts = {}) {
   S._pgExtend = null;
   S.pgCatDpadMode = false;
   S.liveSplitPickPane = null;
+  if ($('pgSearch')) $('pgSearch').value = '';
   setPlayerGuideLiveTuningPending(null);
   $('pGuide').classList.remove('ready', 'open');
   $('pgList').innerHTML = '';
@@ -27415,6 +28135,7 @@ function liveItemForPlayerGuide(ch) {
     _channel: ch.idx,
     _logo: ch.logo || '',
     _streamUrl: ch.streamUrl,
+    _hlsUrl: ch.hlsUrl || '',
     _nativeUrl: ch.nativeUrl,
     _nativeMime: ch.nativeMime || '',
     _nativeFallbackUrl: ch.nativeFallbackUrl,
@@ -27558,7 +28279,11 @@ async function renderPlayerGuideTimeline(pg, list) {
   S.pgCatNavIdx = S.pgCatDpadMode && Number.isFinite(S.pgCatNavIdx)
     ? Math.max(0, Math.min(catNames.length - 1, S.pgCatNavIdx))
     : selectedCatIdx;
-  const selectedList = S.pgLiveCat === favName ? favs : (groups.get(S.pgLiveCat) || []);
+  const pgQuery = ($('pgSearch') ? $('pgSearch').value : '').trim().toLowerCase();
+  const baseList = S.pgLiveCat === favName ? favs : (groups.get(S.pgLiveCat) || []);
+  const selectedList = pgQuery
+    ? allChannels.filter((c) => `${c.title || ''} ${c.genre || ''} ${c._sourceName || ''}`.toLowerCase().includes(pgQuery))
+    : baseList;
   const playingTitle = (S.playing && S.playing.item && S.playing.item.title) || $('pTitle').textContent || 'Now playing';
   const sourceText = $('pSrc').textContent || (currentCh && currentCh.genre) || '';
   // 3.5.1 (owner): the header uses the same short channel name and tags as the rows ("BBC 1  UK HD",
@@ -28220,12 +28945,17 @@ function playMusic(queue, idx, opts = {}) {
   const t = queue[idx]; if (!t) return;
   S.musicCur = t;
   S.musicLoadFailed = false;
+  S._musicPlayedAny = false;
+  S._musicAutoplayWanted = opts.autoplay !== false;
+  if (!S._musicSkipNext) S.musicFailStreak = 0;
+  S._musicSkipNext = false;
   S._musicPlayTicket = (S._musicPlayTicket || 0) + 1;
   S._musicSwapAt = Date.now();
   if (!t.streamUrl) {
     toast('Track is missing a stream');
     return;
   }
+  mAudio.preload = opts.autoplay === false ? 'none' : 'auto';
   mAudio.src = t.streamUrl;
   updateMusicMediaSession();
   if (opts.autoplay !== false) safeMusicPlay({ notify: opts.notify !== false });
@@ -28235,7 +28965,7 @@ function playMusic(queue, idx, opts = {}) {
   markMusicCur();
   if (opts.notify !== false || ($('musicNow') && $('musicNow').classList.contains('open'))) openMusicNow();
   else updateMusicNow();
-  prefetchNextMusicStream();
+  if (opts.autoplay !== false) prefetchNextMusicStream();
 }
 // Warm the NEXT track's googlevideo URL server-side (a tiny Range hit triggers yt-dlp resolve +
 // cache) so advancing feels instant instead of paying the 1-3s resolve at track change. When Shuffle
@@ -28301,17 +29031,21 @@ function musicTransport(action = 'toggle') {
   else if (action === 'fast_forward') {
     const d = mAudio.duration || (S.musicCur && S.musicCur.duration) || 0;
     mAudio.currentTime = d ? Math.min(d, (mAudio.currentTime || 0) + 10) : (mAudio.currentTime || 0) + 10;
-    if (typeof nativeMusicSession === 'function') nativeMusicSession();
+    if (typeof nativeMusicSession === 'function') nativeMusicSession(!mAudio.paused);
   } else if (action === 'rewind') {
     mAudio.currentTime = Math.max(0, (mAudio.currentTime || 0) - 10);
-    if (typeof nativeMusicSession === 'function') nativeMusicSession();
+    if (typeof nativeMusicSession === 'function') nativeMusicSession(!mAudio.paused);
   }
   else musicToggle();
   return true;
 }
 function musicNext(auto) {
+  const isError = !!S._musicErrorSkip;
+  S._musicErrorSkip = false;
   const q = S.musicQueue; if (!q || !q.length) return;
-  if (auto && S.musicRepeat === 'one') { mAudio.currentTime = 0; safeMusicPlay({ notify: false }); return; }
+  if (!isError) {
+    if (auto && S.musicRepeat === 'one') { mAudio.currentTime = 0; safeMusicPlay({ notify: false }); return; }
+  }
   let next;
   if (S.musicShuffle && q.length > 1) {
     if (S.musicNextShuffleIdx != null && S.musicNextShuffleIdx !== S.musicIdx && S.musicNextShuffleIdx < q.length) {
@@ -28326,6 +29060,7 @@ function musicNext(auto) {
     else if (musicQueueCanExtend(q)) { extendMusicQueueThenNext(auto); return; }
     else return; // end of queue, no repeat
   }
+  S._musicSkipNext = !!isError;
   playMusic(q, next, { notify: !auto });
 }
 // The playing queue is the current playlist's live tracks array and the playlist has more pages:
@@ -28395,37 +29130,72 @@ mAudio.addEventListener('timeupdate', () => {
 });
 mAudio.addEventListener('ended', () => {
   // Changing src aborts the previous track and some WebViews fire `ended` for that abort.
-  // Advancing on that fake end skips the song we just started.
+  // A 0-byte / empty upstream response can also fire `ended` with 0s played — treat that as a
+  // bounded failure, never an infinite auto-skip loop.
   if (Date.now() - (S._musicSwapAt || 0) < 400) return;
+  if (!S._musicPlayedAny && (mAudio.currentTime || 0) < 0.5) {
+    handleMusicTrackFailure();
+    return;
+  }
   musicNext(true);
 });
 mAudio.addEventListener('play', () => { document.body.classList.remove('musicPaused'); setPlayIcon(true); nativeMusicSession(true); });
-// The fail-streak must reset on 'playing' (media actually rendering), NOT 'play' — 'play' fires on
-// every play() CALL including doomed ones, which zeroed the streak each attempt and defeated the
-// one-full-lap bound: a wholly-unplayable queue (expired tokens overnight) looped forever, spawning
-// yt-dlp every ~350ms.
+// The fail-streak must reset on 'playing' (media actually rendering), NOT 'play'.
 mAudio.addEventListener('playing', () => { S.musicFailStreak = 0; });
+mAudio.addEventListener('timeupdate', () => {
+  if (mAudio.currentTime > 0.2) { S._musicPlayedAny = true; if (S.musicCur) S.musicCur._tokenRetried = false; }
+});
 mAudio.addEventListener('pause', () => { document.body.classList.add('musicPaused'); setPlayIcon(false); nativeMusicSession(false); });
 mAudio.addEventListener('error', () => {
   if (!S.musicCur || S.musicLoadFailed) return;
-  // MEDIA_ERR_ABORTED (code 1) fires when we change src to the next track. Treating that as a
-  // failure used to skip the new song, then the next, then the next.
+  // MEDIA_ERR_ABORTED (code 1) fires when we change src to the next track.
   if (mAudio.error && mAudio.error.code === 1) return;
   if (!mAudio.getAttribute('src')) return;
+  handleMusicTrackFailure();
+});
+function handleMusicTrackFailure() {
+  if (!S.musicCur || S.musicLoadFailed) return;
+  const t = S.musicCur;
+  const ticket = S._musicPlayTicket;
+  // Refresh an expired 6h stream token once before treating the track as unavailable.
+  if (t.id && !t._tokenRetried) {
+    t._tokenRetried = true;
+    api('/api/music/token/' + encodeURIComponent(t.id)).then((r) => {
+      if (S._musicPlayTicket !== ticket || S.musicCur !== t || !r || !r.streamUrl) return;
+      t.streamUrl = r.streamUrl;
+      S.musicLoadFailed = false;
+      mAudio.src = t.streamUrl;
+      if (S._musicAutoplayWanted !== false) safeMusicPlay({ notify: false });
+    }).catch(() => {
+      if (S._musicPlayTicket === ticket && S.musicCur === t) finalizeMusicTrackFailure();
+    });
+    return;
+  }
+  finalizeMusicTrackFailure();
+}
+function finalizeMusicTrackFailure() {
+  if (!S.musicCur || S.musicLoadFailed) return;
   S.musicLoadFailed = true;
   try { mAudio.pause(); } catch {}
-  // Bound the auto-skip: with shuffle/repeat-all on, musicNext never reports "end of queue", so a
-  // wholly-unplayable queue (all expired/region-blocked/rate-limited) would loop forever, spawning
-  // yt-dlp every ~350ms. Stop after one full lap of consecutive failures; reset on any real play.
-  S.musicFailStreak = (S.musicFailStreak || 0) + 1;
-  const exhausted = S.musicFailStreak >= (S.musicQueue || []).length;
-  const canSkip = !exhausted && (S.musicQueue || []).length > 1
-    && (S.musicIdx < S.musicQueue.length - 1 || S.musicRepeat === 'all' || S.musicShuffle);
-  toast(exhausted ? "Couldn't play this queue." : (canSkip ? 'Track unavailable. Skipping...' : 'Could not play that track.'));
   document.body.classList.add('musicPaused');
   setPlayIcon(false);
-  if (canSkip) setTimeout(() => { if (S.musicLoadFailed) musicNext(true); }, 350);
-});
+  if (S._musicAutoplayWanted === false) {
+    toast('Could not load that track.');
+    return;
+  }
+  // Bound the auto-skip: with shuffle/repeat-all on, musicNext never reports "end of queue", so a
+  // wholly-unplayable queue would loop forever. Stop after one full lap of consecutive failures.
+  S.musicFailStreak = (S.musicFailStreak || 0) + 1;
+  const qLen = (S.musicQueue || []).length;
+  const exhausted = S.musicFailStreak >= qLen;
+  const canSkip = !exhausted && qLen > 1
+    && (S.musicIdx < qLen - 1 || S.musicRepeat === 'all' || S.musicShuffle);
+  toast(exhausted ? "Couldn't play this queue." : (canSkip ? 'Track unavailable. Skipping...' : 'Could not play that track.'));
+  if (canSkip) {
+    S._musicErrorSkip = true;
+    setTimeout(() => { if (S.musicLoadFailed) musicNext(true); }, 500);
+  }
+}
 function setPlayIcon(playing) {
   const ic = playing ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
   $('mnPlayIco').innerHTML = ic;
@@ -28477,6 +29247,12 @@ function updateMusicMediaSession() {
         { src: t.thumb, sizes: '512x512', type: 'image/jpeg' },
       ] : [],
     });
+    navigator.mediaSession.setActionHandler('play', () => musicTransport('play'));
+    navigator.mediaSession.setActionHandler('pause', () => musicTransport('pause'));
+    navigator.mediaSession.setActionHandler('nexttrack', () => musicTransport('next'));
+    navigator.mediaSession.setActionHandler('previoustrack', () => musicTransport('prev'));
+    navigator.mediaSession.setActionHandler('seekbackward', () => musicTransport('rewind'));
+    navigator.mediaSession.setActionHandler('seekforward', () => musicTransport('fast_forward'));
   } catch {}
   nativeMusicSession(!mAudio.paused); // refresh the shell's now-playing/keep-alive state on track change
 }
@@ -29105,7 +29881,7 @@ function mnSeekToPointer(e) {
   const x = Number.isFinite(e.clientX) ? e.clientX : NaN;
   if (!d || !r.width || !Number.isFinite(x)) return;
   mAudio.currentTime = Math.max(0, Math.min(1, (x - r.left) / r.width)) * d;
-  if (typeof nativeMusicSession === 'function') nativeMusicSession();
+  if (typeof nativeMusicSession === 'function') nativeMusicSession(!mAudio.paused);
 }
 $('mnSeek').addEventListener('pointerdown', (e) => {
   _mnSeekDrag = true;
@@ -30562,8 +31338,12 @@ document.querySelectorAll('#userPeekRange button').forEach((b) => b.addEventList
 // Admin jumps here from setup / Trakt link — open the account page on the first Server-settings tab.
 function openServerSettings() {
   switchView('prefs');
-  const fromHash = accountTabButton(routeParts()[1]);
-  const first = fromHash || document.querySelector('#prefTabs .srvTab');
+  const first = accountTabButton(routeParts()[1]) || document.querySelector('#prefTabs .srvTab');
+  requestAnimationFrame(() => { if (first) activateAccountTab(first); });
+}
+function openServerSettingsTab(tabKey) {
+  switchView('prefs');
+  const first = (tabKey && accountTabButton(tabKey)) || document.querySelector('#prefTabs .srvTab');
   requestAnimationFrame(() => { if (first) activateAccountTab(first); });
 }
 // Profile PIN management — account password required so kids can't lift the lock.
@@ -32976,12 +33756,7 @@ async function refreshSettings(opts = {}) {
     $('libScanStatus').textContent = +lsm
       ? `saved ✓ — checking library folders every ${+lsm >= 60 ? (+lsm / 60) + 'h' : lsm + ' min'} for new files`
       : 'saved ✓ — auto-scan off; use the scan buttons in each library edit panel';
-    $('scTrusted').value = (s.scoringGroupsTrusted || []).join(', ');
-    $('scAvoid').value = (s.scoringGroupsAvoid || []).join(', ');
-    $('scKeywords').value = (s.scoringKeywords || []).map((k) => `${k.term} = ${k.score}`).join('\n');
-    $('scStatus').textContent = s.scoringCustom
-      ? 'using your custom scoring — Reset restores Triboon defaults'
-      : 'using the built-in defaults (recommended)';
+    loadScoringUiFromSettings(s);
     $('tmdbStatus').textContent = s.tmdbKey ? 'key saved ✓ — encrypted at rest' : 'no key yet';
     $('tmdbKey').placeholder = s.tmdbKey ? 'key saved ✓ — paste a new one to replace' : 'TMDB API key (v3)';
     $('osKey').placeholder = s.openSubsKey ? 'key saved ✓ — paste a new one to replace' : 'Wyzie Subs API key';
@@ -33224,8 +33999,31 @@ $('npSave').addEventListener('click', async () => {
   $('npUser').placeholder = 'username';
   ['npHost', 'npPort', 'npUser', 'npPass', 'npConn'].forEach((id) => { $(id).value = ''; }); $('npPreset').value = '';
   if ($('npBackup')) $('npBackup').checked = false;
+  if ($('npNewTestOut')) { $('npNewTestOut').className = 'srcTestOut'; $('npNewTestOut').textContent = ''; }
   toast(editing ? 'Provider updated' : 'Provider added (encrypted)'); refreshSettings({ force: true });
 });
+if ($('npTestNew')) {
+  $('npTestNew').addEventListener('click', async () => {
+    const host = ($('npHost').value || '').trim();
+    const port = parseInt($('npPort').value || '563', 10) || 563;
+    const out = $('npNewTestOut');
+    if (!host) { if (out) { out.className = 'srcTestOut bad'; out.textContent = 'Enter a provider host first.'; } return; }
+    if (out) { out.className = 'srcTestOut'; out.textContent = `Testing ${host}:${port}…`; }
+    $('npTestNew').disabled = true;
+    try {
+      const r = await api('/api/test/provider', {
+        method: 'POST',
+        body: { provider: { host, port, tls: port !== 119, user: $('npUser').value.trim(), pass: $('npPass').value } },
+      });
+      if (out) {
+        out.className = 'srcTestOut ' + (r.ok ? 'ok' : 'bad');
+        out.textContent = r.ok ? `✓ Connected (${r.tls ? 'TLS · ' : ''}${r.ms}ms)` : `✗ ${r.error || 'Connection failed'}`;
+      }
+    } catch (e) {
+      if (out) { out.className = 'srcTestOut bad'; out.textContent = `✗ ${(e && e.message) || 'Test failed'}`; }
+    } finally { $('npTestNew').disabled = false; }
+  });
+}
 $('ixPreset').addEventListener('change', () => {
   const v = $('ixPreset').value;
   if (!v || v === 'custom') { if (v === 'custom') $('ixName').focus(); return; }
@@ -33243,8 +34041,29 @@ $('ixSave').addEventListener('click', async () => {
     ? { editIndexer: { index: S.editingIndexer, ...fields } } : { addIndexer: fields } });
   S.editingIndexer = null; $('ixSave').textContent = 'Add indexer'; $('ixKey').placeholder = 'API key';
   ['ixName', 'ixUrl', 'ixKey', 'ixApiLim', 'ixGrabLim'].forEach((id) => { $(id).value = ''; }); $('ixPreset').value = '';
+  if ($('ixNewTestOut')) { $('ixNewTestOut').className = 'srcTestOut'; $('ixNewTestOut').textContent = ''; }
   toast(editing ? 'Indexer updated' : 'Indexer added'); refreshSettings({ force: true });
 });
+if ($('ixTestNew')) {
+  $('ixTestNew').addEventListener('click', async () => {
+    const name = ($('ixName').value || '').trim() || 'Indexer';
+    const url = ($('ixUrl').value || '').trim();
+    const apikey = ($('ixKey').value || '').trim();
+    const out = $('ixNewTestOut');
+    if (!url || !apikey) { if (out) { out.className = 'srcTestOut bad'; out.textContent = 'Enter both URL and API key first.'; } return; }
+    if (out) { out.className = 'srcTestOut'; out.textContent = `Testing ${name}…`; }
+    $('ixTestNew').disabled = true;
+    try {
+      const r = await api('/api/test/indexer', { method: 'POST', body: { indexer: { name, url, apikey } } });
+      if (out) {
+        out.className = 'srcTestOut ' + (r.ok ? 'ok' : 'bad');
+        out.textContent = r.ok ? `✓ Reachable · ${r.items} results · ${r.ms}ms` : `✗ ${r.error || 'Test failed'}`;
+      }
+    } catch (e) {
+      if (out) { out.className = 'srcTestOut bad'; out.textContent = `✗ ${(e && e.message) || 'Test failed'}`; }
+    } finally { $('ixTestNew').disabled = false; }
+  });
+}
 $('szMode').addEventListener('change', () => {
   $('szManual').style.display = $('szMode').value === 'manual' ? '' : 'none';
 });
@@ -33263,24 +34082,292 @@ $('szSave').addEventListener('click', async () => {
   await api('/api/settings', { method: 'POST', body });
   toast('Size limit saved'); refreshSettings({ force: true });
 });
-const parseGroupList = (v) => v.split(',').map((g) => g.trim()).filter(Boolean);
+const parseGroupList = (v) => {
+  const seen = new Set();
+  const out = [];
+  for (const raw of String(v || '').split(',')) {
+    const g = raw.trim().slice(0, 30);
+    const k = g.toLowerCase();
+    if (!g || seen.has(k)) continue;
+    seen.add(k);
+    out.push(g);
+  }
+  return out;
+};
+const SC_CAM_RE = /^(cam|hdcam|hdts|telesync|telecine|ts|hc\.?v\d+)$/i;
+const SC = {
+  trusted: [],
+  avoid: [],
+  keywords: [],
+  disabledRules: [],
+  builtinRules: [],
+  custom: false,
+  dirty: false,
+  filter: '',
+};
+function syncScoringRawFields() {
+  if ($('scTrusted')) $('scTrusted').value = SC.trusted.join(', ');
+  if ($('scAvoid')) $('scAvoid').value = SC.avoid.join(', ');
+  if ($('scKeywords')) $('scKeywords').value = SC.keywords.map((k) => `${k.term} = ${k.score}`).join('\n');
+}
+function markScoringDirty(on) {
+  SC.dirty = !!on;
+  if ($('scDirtyNote')) $('scDirtyNote').hidden = !SC.dirty;
+}
+function renderScoringManager(restoreFocus = null) {
+  const q = SC.filter.trim().toLowerCase();
+  if ($('scFilterClear')) $('scFilterClear').hidden = !q;
+  const rulesWrap = $('scBuiltinRules');
+  let shownCount = 0;
+  let totalCount = 0;
+  if (rulesWrap) {
+    const disabledSet = new Set(SC.disabledRules);
+    const rules = SC.builtinRules || [];
+    totalCount += rules.length;
+    const visRules = q
+      ? rules.filter((r) => `${r.id} ${r.label} ${r.desc} ${r.score}`.toLowerCase().includes(q))
+      : rules;
+    shownCount += visRules.length;
+    rulesWrap.innerHTML = visRules.length
+      ? visRules.map((r) => {
+        const enabled = !disabledSet.has(r.id);
+        const cls = r.score < 0 ? 'neg' : 'pos';
+        const scoreTxt = r.score > 0 ? `+${r.score}` : String(r.score);
+        return `<label class="scRuleRow${enabled ? '' : ' off'}">
+          <input type="checkbox" class="focusable" data-sc-rule="${esc(r.id)}"${enabled ? ' checked' : ''}>
+          <span class="scRuleBody"><strong>${esc(r.label)}</strong><small>${esc(r.desc)}</small></span>
+          <span class="scScorePill ${cls}">${esc(scoreTxt)}</span>
+        </label>`;
+      }).join('')
+      : '<div class="scEmpty">No built-in filters match that search.</div>';
+    rulesWrap.querySelectorAll('[data-sc-rule]').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        const id = cb.dataset.scRule;
+        const set = new Set(SC.disabledRules);
+        if (cb.checked) set.delete(id);
+        else set.add(id);
+        SC.disabledRules = [...set];
+        if (id === 'cam') {
+          if (cb.checked) {
+            if (!SC.keywords.some((k) => SC_CAM_RE.test(String(k.term || '').trim()))) {
+              SC.keywords = [{ term: 'CAM', score: -8000 }, ...SC.keywords];
+            }
+          } else {
+            SC.keywords = SC.keywords.filter((k) => !SC_CAM_RE.test(String(k.term || '').trim()));
+          }
+        }
+        syncScoringRawFields();
+        markScoringDirty(true);
+        renderScoringManager({ type: 'rule', id });
+      });
+    });
+  }
+  const renderChips = (elId, arr, kind, metaId, baseDesc) => {
+    const wrap = $(elId);
+    if (!wrap) return;
+    totalCount += arr.length;
+    const vis = q ? arr.filter((g) => g.toLowerCase().includes(q)) : arr;
+    shownCount += vis.length;
+    if ($(metaId)) $(metaId).textContent = `${arr.length} group${arr.length === 1 ? '' : 's'} · ${baseDesc}`;
+    wrap.innerHTML = vis.length
+      ? vis.map((g) => `<span class="scChip ${kind}"><span>${esc(g)}</span><button type="button" class="scChipX focusable" data-sc-del="${kind}" data-sc-val="${esc(g)}" aria-label="Remove ${esc(g)}" title="Remove ${esc(g)}">×</button></span>`).join('')
+      : `<div class="scEmpty">${q ? 'No groups match that filter.' : 'None — add any group below or Reset to restore defaults.'}</div>`;
+    wrap.querySelectorAll('[data-sc-del]').forEach((btn, idx) => {
+      btn.addEventListener('click', () => {
+        const target = (btn.dataset.scVal || '').toLowerCase();
+        if (kind === 'trusted') SC.trusted = SC.trusted.filter((g) => g.toLowerCase() !== target);
+        else SC.avoid = SC.avoid.filter((g) => g.toLowerCase() !== target);
+        syncScoringRawFields();
+        markScoringDirty(true);
+        renderScoringManager({ type: 'chip', kind, idx });
+      });
+    });
+  };
+  renderChips('scTrustedChips', SC.trusted, 'trusted', 'scTrustedMeta', '+25 built-in / +50 custom · click × to remove');
+  renderChips('scAvoidChips', SC.avoid, 'avoid', 'scAvoidMeta', '-50 re-encoder penalty · click × to remove');
+  const kwWrap = $('scKwRows');
+  if (kwWrap) {
+    totalCount += SC.keywords.length;
+    const visKw = q
+      ? SC.keywords.filter((k) => `${k.term} ${k.score}`.toLowerCase().includes(q))
+      : SC.keywords;
+    shownCount += visKw.length;
+    if ($('scKwMeta')) $('scKwMeta').textContent = `${SC.keywords.length} keyword rule${SC.keywords.length === 1 ? '' : 's'} · click × to remove`;
+    kwWrap.innerHTML = visKw.length
+      ? visKw.map((k) => {
+        const cls = Number(k.score) < 0 ? 'neg' : 'pos';
+        const scoreTxt = Number(k.score) > 0 ? `+${k.score}` : String(k.score);
+        return `<div class="scKwRow">
+          <span class="scKwTerm">${esc(k.term)}</span>
+          <span class="scScorePill ${cls}">${esc(scoreTxt)}</span>
+          <button type="button" class="scChipX focusable" data-sc-kw-del="${esc(k.term)}" aria-label="Remove ${esc(k.term)}" title="Remove ${esc(k.term)}">×</button>
+        </div>`;
+      }).join('')
+      : `<div class="scEmpty">${q ? 'No keyword rules match that filter.' : 'No keyword rules active.'}</div>`;
+    kwWrap.querySelectorAll('[data-sc-kw-del]').forEach((btn, idx) => {
+      btn.addEventListener('click', () => {
+        const term = (btn.dataset.scKwDel || '').toLowerCase();
+        SC.keywords = SC.keywords.filter((k) => String(k.term || '').toLowerCase() !== term);
+        if (SC_CAM_RE.test(term) && !SC.keywords.some((k) => SC_CAM_RE.test(String(k.term || '').trim()))) {
+          if (!SC.disabledRules.includes('cam')) SC.disabledRules = [...SC.disabledRules, 'cam'];
+        }
+        syncScoringRawFields();
+        markScoringDirty(true);
+        renderScoringManager({ type: 'kw', idx });
+      });
+    });
+  }
+  if ($('scFilterMeta')) {
+    $('scFilterMeta').textContent = q ? `${shownCount} of ${totalCount} matching` : `${totalCount} active items`;
+  }
+  if ($('scFoldSummary')) {
+    const enabledFilters = Math.max(0, (SC.builtinRules || []).length - SC.disabledRules.length);
+    const label = SC.custom ? 'Custom rules active' : 'TRaSH press-play defaults';
+    $('scFoldSummary').textContent = `${label} · ${SC.trusted.length} trusted · ${SC.avoid.length} avoid · ${enabledFilters}/${(SC.builtinRules || []).length} filters`;
+  }
+  // Keep TV D-pad focus anchored when a checkbox or × chip button rebuilds the list.
+  if (restoreFocus) {
+    let targetEl = null;
+    if (restoreFocus.type === 'rule') {
+      targetEl = document.querySelector(`#scBuiltinRules [data-sc-rule="${restoreFocus.id}"]`);
+    } else if (restoreFocus.type === 'chip') {
+      const wrap = $(restoreFocus.kind === 'trusted' ? 'scTrustedChips' : 'scAvoidChips');
+      const btns = wrap ? [...wrap.querySelectorAll('[data-sc-del]')] : [];
+      targetEl = btns[Math.min(restoreFocus.idx, btns.length - 1)]
+        || $(restoreFocus.kind === 'trusted' ? 'scAddTrustedIn' : 'scAddAvoidIn');
+    } else if (restoreFocus.type === 'kw') {
+      const btns = kwWrap ? [...kwWrap.querySelectorAll('[data-sc-kw-del]')] : [];
+      targetEl = btns[Math.min(restoreFocus.idx, btns.length - 1)] || $('scAddKwTerm');
+    }
+    if (targetEl) {
+      try {
+        if (typeof focusSectionControl === 'function') focusSectionControl(targetEl);
+        else targetEl.focus();
+      } catch {}
+    }
+  }
+}
+function loadScoringUiFromSettings(s) {
+  SC.trusted = Array.isArray(s.scoringGroupsTrusted) ? s.scoringGroupsTrusted.slice() : [];
+  SC.avoid = Array.isArray(s.scoringGroupsAvoid) ? s.scoringGroupsAvoid.slice() : [];
+  SC.keywords = Array.isArray(s.scoringKeywords) ? s.scoringKeywords.map((k) => ({ term: String(k.term || ''), score: Number(k.score) || 0 })) : [];
+  SC.disabledRules = Array.isArray(s.scoringDisabledRules) ? s.scoringDisabledRules.slice() : [];
+  SC.builtinRules = Array.isArray(s.scoringBuiltinRules) ? s.scoringBuiltinRules.slice() : SC.builtinRules;
+  SC.custom = s.scoringCustom === true;
+  syncScoringRawFields();
+  markScoringDirty(false);
+  renderScoringManager();
+  $('scStatus').textContent = s.scoringCustom
+    ? 'using your custom scoring — Reset restores TRaSH press-play defaults'
+    : 'using TRaSH press-play defaults (recommended)';
+}
+function addScoringGroups(kind, rawValue) {
+  const incoming = parseGroupList(rawValue);
+  if (!incoming.length) return;
+  const target = kind === 'trusted' ? SC.trusted : SC.avoid;
+  const other = kind === 'trusted' ? SC.avoid : SC.trusted;
+  const targetLower = new Set(target.map((g) => g.toLowerCase()));
+  const incomingLower = new Set(incoming.map((g) => g.toLowerCase()));
+  for (const g of incoming) {
+    if (!targetLower.has(g.toLowerCase())) {
+      target.push(g);
+      targetLower.add(g.toLowerCase());
+    }
+  }
+  // Moving a group into Trusted removes it from Avoid (and vice versa) so rules never conflict.
+  if (kind === 'trusted') SC.avoid = other.filter((g) => !incomingLower.has(g.toLowerCase()));
+  else SC.trusted = other.filter((g) => !incomingLower.has(g.toLowerCase()));
+  syncScoringRawFields();
+  markScoringDirty(true);
+  renderScoringManager();
+}
+function addScoringKeyword(termRaw, scoreRaw) {
+  const term = String(termRaw || '').trim().slice(0, 40);
+  const score = Math.round(Number(scoreRaw));
+  if (!term) return toast('Enter a keyword first');
+  if (!Number.isFinite(score) || score === 0) return toast('Enter a non-zero score (e.g. +100 or -500)');
+  const cap = SC_CAM_RE.test(term) ? 8000 : 5000;
+  const clamped = Math.max(-cap, Math.min(cap, score));
+  const idx = SC.keywords.findIndex((k) => String(k.term || '').toLowerCase() === term.toLowerCase());
+  if (idx >= 0) SC.keywords[idx] = { term, score: clamped };
+  else SC.keywords.push({ term, score: clamped });
+  if (SC_CAM_RE.test(term)) SC.disabledRules = SC.disabledRules.filter((id) => id !== 'cam');
+  syncScoringRawFields();
+  markScoringDirty(true);
+  renderScoringManager();
+}
+if ($('scFilter')) {
+  $('scFilter').addEventListener('input', () => {
+    SC.filter = $('scFilter').value || '';
+    renderScoringManager();
+  });
+}
+if ($('scFilterClear')) {
+  $('scFilterClear').addEventListener('click', () => {
+    SC.filter = '';
+    if ($('scFilter')) { $('scFilter').value = ''; $('scFilter').focus(); }
+    renderScoringManager();
+  });
+}
+if ($('scAddTrustedBtn')) {
+  const commit = () => { addScoringGroups('trusted', $('scAddTrustedIn').value); $('scAddTrustedIn').value = ''; };
+  $('scAddTrustedBtn').addEventListener('click', commit);
+  if ($('scAddTrustedIn')) $('scAddTrustedIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+}
+if ($('scAddAvoidBtn')) {
+  const commit = () => { addScoringGroups('avoid', $('scAddAvoidIn').value); $('scAddAvoidIn').value = ''; };
+  $('scAddAvoidBtn').addEventListener('click', commit);
+  if ($('scAddAvoidIn')) $('scAddAvoidIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+}
+if ($('scAddKwBtn')) {
+  const commit = () => {
+    addScoringKeyword($('scAddKwTerm').value, $('scAddKwScore').value);
+    if ($('scAddKwTerm').value.trim() && Number($('scAddKwScore').value)) {
+      $('scAddKwTerm').value = ''; $('scAddKwScore').value = '';
+    }
+  };
+  $('scAddKwBtn').addEventListener('click', commit);
+  for (const id of ['scAddKwTerm', 'scAddKwScore']) {
+    if ($(id)) $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+  }
+}
+for (const [id, fn] of [
+  ['scTrusted', () => { SC.trusted = parseGroupList($('scTrusted').value); markScoringDirty(true); renderScoringManager(); }],
+  ['scAvoid', () => { SC.avoid = parseGroupList($('scAvoid').value); markScoringDirty(true); renderScoringManager(); }],
+  ['scKeywords', () => {
+    SC.keywords = $('scKeywords').value.split('\n').map((line) => {
+      const m = /^(.+?)\s*=\s*(-?\d+(?:\.\d+)?)\s*$/.exec(line.trim());
+      return m ? { term: m[1].trim(), score: Math.round(+m[2]) } : null;
+    }).filter(Boolean);
+    const hasCam = SC.keywords.some((k) => SC_CAM_RE.test(String(k.term || '').trim()));
+    if (!hasCam && !SC.disabledRules.includes('cam')) SC.disabledRules = [...SC.disabledRules, 'cam'];
+    if (hasCam && SC.disabledRules.includes('cam')) SC.disabledRules = SC.disabledRules.filter((x) => x !== 'cam');
+    markScoringDirty(true);
+    renderScoringManager();
+  }],
+]) {
+  if ($(id)) $(id).addEventListener('change', fn);
+}
 $('scSave').addEventListener('click', async () => {
-  const keywords = $('scKeywords').value.split('\n').map((line) => {
-    const m = /^(.+?)\s*=\s*(-?\d+(?:\.\d+)?)\s*$/.exec(line.trim());
+  const rawLines = $('scKeywords').value.split('\n').map((l) => l.trim()).filter(Boolean);
+  const keywords = rawLines.map((line) => {
+    const m = /^(.+?)\s*=\s*(-?\d+(?:\.\d+)?)\s*$/.exec(line);
     return m ? { term: m[1].trim(), score: Math.round(+m[2]) } : null;
   }).filter(Boolean);
-  const badLines = $('scKeywords').value.split('\n').map((l) => l.trim()).filter(Boolean).length - keywords.length;
+  const badLines = rawLines.length - keywords.length;
   await api('/api/settings', { method: 'POST', body: {
+    scoringCustom: true,
     scoringGroupsTrusted: parseGroupList($('scTrusted').value),
     scoringGroupsAvoid: parseGroupList($('scAvoid').value),
     scoringKeywords: keywords,
+    scoringDisabledRules: SC.disabledRules,
   } });
   toast(badLines ? `Scoring saved — ${badLines} line(s) skipped (use "keyword = score")` : 'Scoring saved');
   refreshSettings({ force: true });
 });
 $('scReset').addEventListener('click', async () => {
   await api('/api/settings', { method: 'POST', body: { scoringReset: true } });
-  toast('Scoring reset to the built-in defaults');
+  toast('Scoring reset to TRaSH press-play defaults');
   refreshSettings({ force: true });
 });
 $('tmdbSave').addEventListener('click', async () => {
@@ -35184,8 +36271,12 @@ function focusDrawer(i) {
   applyFocus(rows[S.drawerIdx]);
 }
 function ctlButtons() {
+  if (S.playing && S.playing.live) {
+    return ['chGuide', 'chPrevBtn', 'playPause', 'liveBtn', 'chNextBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'castBtn', 'airplayBtn', 'muteBtn', 'fsBtn', 'statsBtn']
+      .map((id) => $(id)).filter((b) => b && !b.hidden && !b.disabled && !b.classList.contains('disabled') && b.style.display !== 'none' && b.offsetParent !== null);
+  }
   return ['chGuide', 'aboutBtn', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'castBtn', 'airplayBtn', 'muteBtn', 'fsBtn', 'statsBtn']
-    .map((id) => $(id)).filter((b) => b && !b.disabled && !b.classList.contains('disabled') && b.style.display !== 'none' && b.offsetParent !== null);
+    .map((id) => $(id)).filter((b) => b && !b.hidden && !b.disabled && !b.classList.contains('disabled') && b.style.display !== 'none' && b.offsetParent !== null);
 }
 function focusSeek() {
   S.zone = 'seek';
@@ -35456,6 +36547,35 @@ function dpadSectionForm(k) {
   }
   return false;
 }
+function dpadPinGate(openGate, k) {
+  const keys = [...$('pinPad').querySelectorAll('button[data-pin]')];
+  const backBtn = $('pinBack');
+  const cur = document.activeElement;
+  if (k === 'Enter') {
+    if (cur && openGate.contains(cur) && cur.click) cur.click();
+    else if (keys[0]) keys[0].focus();
+    return;
+  }
+  const idx = keys.indexOf(cur);
+  if (cur === backBtn) {
+    if (k === 'ArrowUp' && keys.length) keys[Math.min(10, keys.length - 1)].focus();
+    return;
+  }
+  if (idx < 0) {
+    if (keys[0]) keys[0].focus();
+    return;
+  }
+  let next = idx;
+  if (k === 'ArrowRight') next = Math.min(keys.length - 1, idx + 1);
+  else if (k === 'ArrowLeft') next = Math.max(0, idx - 1);
+  else if (k === 'ArrowDown') {
+    if (idx + 3 < keys.length) next = idx + 3;
+    else if (backBtn) { backBtn.focus(); return; }
+  } else if (k === 'ArrowUp') {
+    next = Math.max(0, idx - 3);
+  }
+  if (keys[next]) keys[next].focus();
+}
 document.addEventListener('keydown', (e) => {
   const k = e.key;
   // FREEZE-FLOOD GUARD: when a heavy render blocks the main thread, the D-pad presses made
@@ -35482,6 +36602,7 @@ document.addEventListener('keydown', (e) => {
   const openGate = [...document.querySelectorAll('.gate')].find((g) => g.classList.contains('open'));
   if (openGate && openGate !== $('gateProfiles') && isTvGateDpadKey(k)) {
     e.preventDefault();
+    if (openGate === $('gatePin') && $('pinPad')) return dpadPinGate(openGate, k);
     dpadCycle(openGate, k);
     return;
   }
@@ -37159,7 +38280,9 @@ async function restoreSavedSession() {
       }
       $('appLoader').classList.add('hide');
       document.body.classList.remove('authOpen');
-      for (const g of ['gateSetup', 'gateLogin', 'gateQc', 'gateInvite', 'gateProfiles', 'gatePin']) $(g).classList.remove('open');
+      for (const g of ['gateSetup', 'gateOnboard', 'gateLogin', 'gateQc', 'gateInvite', 'gateProfiles', 'gatePin']) {
+        if ($(g)) $(g).classList.remove('open');
+      }
       toast('Home had trouble opening after the update. Refresh and try again.');
     }
   }
@@ -37251,7 +38374,23 @@ function startServerVersionWatch(loadedVersion) {
   requestAnimationFrame(() => requestAnimationFrame(startBootLogo)); // the code has loaded: build the logo now
   const invite = new URLSearchParams(location.search).get('invite');
   let info;
-  try { info = await api('/api/server'); } catch { document.body.innerHTML = '<p style="padding:40px">Triboon server unreachable.</p>'; return; }
+  try { info = await api('/api/server'); } catch {
+    const canSwitch = !!(window.TriboonTV && typeof window.TriboonTV.changeServer === 'function');
+    document.body.innerHTML = `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#0a0a0d;color:#edeff3;font-family:'Albert Sans',system-ui,sans-serif">
+      <div style="max-width:420px;width:100%;background:#121216;border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:28px;text-align:center">
+        <h1 style="font:700 22px 'Sora',system-ui,sans-serif;margin:0 0 8px">Server unreachable</h1>
+        <p style="color:#9ba1ad;font-size:14px;line-height:1.5;margin:0 0 20px">Could not connect to your Triboon server. Check that it is running and reachable on this network.</p>
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+          <button id="bootRetry" style="background:#edeff3;color:#111215;border:0;border-radius:6px;padding:11px 22px;font:600 14px 'Sora',sans-serif;cursor:pointer">Try again</button>
+          ${canSwitch ? '<button id="bootChangeSrv" style="background:rgba(237,239,243,.1);color:#edeff3;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:11px 18px;font:600 14px \'Sora\',sans-serif;cursor:pointer">Change server</button>' : ''}
+        </div>
+      </div></div>`;
+    const rb = document.getElementById('bootRetry');
+    if (rb) { rb.addEventListener('click', () => location.reload()); try { rb.focus(); } catch {} }
+    const cs = document.getElementById('bootChangeSrv');
+    if (cs) cs.addEventListener('click', () => { try { window.TriboonTV.changeServer(); } catch {} });
+    return;
+  }
   splashStage(40); // server answered — the session decision is next
   S.serverInfo = info;
   startServerVersionWatch(info.version); // reload once the server reports another version (an update)
@@ -37465,7 +38604,7 @@ async function renderAbContinue() {
     // Show any in-progress book. Multi-file stores overall progress on a 0..1000 scale (a few % is
     // real progress); single-file stores seconds (30s = a real start), so threshold per type.
     .filter((w) => String(w.key || '').startsWith('audiobook:') && !w.watched
-      && ((w.meta && w.meta.abTracks) ? w.position > 3 : w.position > 30))
+      && ((w.meta && w.meta.abTracks) ? (w.position > 0 || Number(w.meta.abOffset || 0) > 15 || Number(w.meta.abTrack || 0) > 0) : w.position > 30))
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   if (!books.length) return;
   AB.contMeta = {};
@@ -37603,16 +38742,23 @@ async function openAbDetail(asin, fallback) {
     && String(AB.asin) === String(asin) && $('abDetail').classList.contains('open');
   updateAbMini(); // mini "now playing" bar rides along on the detail page too
   $('abDwrap').innerHTML = '<div style="grid-column:1/-1;color:#8a8f98">Loading…</div>';
-  // Fetch book details + chapters IN PARALLEL — these were two SERIAL Audnexus round-trips (8s each)
-  // behind the "Loading…" blank, the main cause of the detail page's "few seconds delay".
-  const [bookRes, chapRes] = await Promise.all([
-    api('/api/audible/book/' + asin).catch(() => null),
-    api('/api/audible/chapters/' + asin).catch(() => null),
-  ]);
-  if (!current()) return;
-  const book = bookRes || fallback || {};
+  let book = fallback || {};
+  let chapters = [];
+  if (!String(asin || '').startsWith('pub:')) {
+    // Fetch book details + chapters IN PARALLEL (cuts detail-open latency in half).
+    const [bookRes, chapRes] = await Promise.all([
+      api('/api/audible/book/' + asin).catch(() => null),
+      api('/api/audible/chapters/' + asin).catch(() => null),
+    ]);
+    if (!current()) return;
+    book = bookRes || fallback || {};
+    chapters = (chapRes && chapRes.chapters) || [];
+  }
   AB.book = book;
-  const chapters = (chapRes && chapRes.chapters) || [];
+  const activeMulti = !!(AB.now && String(AB.now.asin) === String(asin) && AB.now.multi && Array.isArray(AB.now.tracks) && AB.now.tracks.length);
+  if (!chapters.length && activeMulti) {
+    chapters = AB.now.tracks.map((tr, ti) => ({ title: tr.name || ('Part ' + (ti + 1)), startMs: 0, trackIdx: ti }));
+  }
   AB.chapters = chapters;
   const cover = `style="background-image:${artBackgroundHtml(book.cover, fallback && fallback.cover, artFallback('audiobook:' + asin, 63))}"`;
   const meta = [];
@@ -37649,7 +38795,13 @@ async function openAbDetail(asin, fallback) {
       ${book.description ? `<div class="abDdesc">${abEsc(book.description)}</div>` : ''}
     </div>
     ${chapHtml}${bmHtml}`;
-  $('abPlayBtn').addEventListener('click', () => abStartPlay(book, fallback));
+  $('abPlayBtn').addEventListener('click', () => {
+    if (isPubAsin) {
+      const target = abContinueTarget(asin, { title: book.title || (fallback && fallback.title), cover: book.cover || (fallback && fallback.cover), author: ((book.authors || (fallback && fallback.authors) || [])[0]) || '' });
+      if (target.kind === 'pub') { abPlayPubaudio(target); return; }
+    }
+    abStartPlay(book, fallback);
+  });
   const chapTog = $('abChapsToggle');
   if (chapTog) chapTog.addEventListener('click', () => {
     const list = $('abChapListEl'); if (!list) return;
@@ -37659,18 +38811,37 @@ async function openAbDetail(asin, fallback) {
   });
   $('abDwrap').querySelectorAll('.abChap:not(.abBm)').forEach((el) =>
     el.addEventListener('click', () => {
-      const sec = chapters[+el.dataset.ci].startMs / 1000;
-      if (AB.now && String(AB.now.asin) === String(asin) && !AB.now.multi) {
+      const ci = +el.dataset.ci;
+      const chap = chapters[ci] || {};
+      const sec = (chap.startMs || 0) / 1000;
+      if (AB.now && String(AB.now.asin) === String(asin)) {
         $('abDetail').classList.remove('open');
         openAbPlayer();
+        if (AB.now.multi) {
+          const targetTrack = chap.trackIdx != null ? chap.trackIdx : Math.min(ci, Math.max(0, (AB.now.tracks || []).length - 1));
+          abLoadTrack(targetTrack, 0);
+          return;
+        }
         const a = $('abAudio');
         try { a.currentTime = sec; if (a.paused) a.play().catch(() => {}); } catch {}
         return;
+      }
+      if (isPubAsin) {
+        const target = abContinueTarget(asin, { title: book.title || (fallback && fallback.title), cover: book.cover || (fallback && fallback.cover), author: ((book.authors || (fallback && fallback.authors) || [])[0]) || '' });
+        if (target.kind === 'pub') { abPlayPubaudio(target); return; }
       }
       abStartPlay(book, fallback, sec);
     }));
   $('abDwrap').querySelectorAll('.abBm').forEach((el) => el.addEventListener('click', () => {
     const b = bms[+el.dataset.bi]; if (!b) return;
+    if (AB.now && String(AB.now.asin) === String(asin)) {
+      $('abDetail').classList.remove('open');
+      openAbPlayer();
+      if (AB.now.multi && b.track != null) { abLoadTrack(b.track, b.pos || 0); return; }
+      const a = $('abAudio');
+      try { a.currentTime = b.pos || 0; if (a.paused) a.play().catch(() => {}); } catch {}
+      return;
+    }
     abStartPlay(book, fallback, b.track != null ? { track: b.track, offset: b.pos } : b.pos);
   }));
   $('abDwrap').querySelectorAll('.abBmDel').forEach((el) => el.addEventListener('click', (e) => {
@@ -37817,11 +38988,19 @@ async function abStartPlay(book, fallback, seekTo) {
 function abLoadTrack(idx, seekSec) {
   const n = AB.now; if (!n || !n.multi) return;
   const audio = $('abAudio');
+  const loadTicket = (AB._trackTicket = (AB._trackTicket || 0) + 1);
   n.trackIdx = Math.max(0, Math.min(n.tracks.length - 1, idx));
   audio.src = n.tracks[n.trackIdx].url;
-  audio.playbackRate = AB.speed;
   $('abPchap').textContent = abTrackLabel(n.trackIdx);
-  audio.play().then(() => { if (seekSec > 1) audio.currentTime = seekSec; }).catch(() => {});
+  const applyMeta = () => {
+    if (AB._trackTicket !== loadTicket) return;
+    try { audio.playbackRate = AB.speed; } catch {}
+    if (seekSec > 1 && Math.abs((audio.currentTime || 0) - seekSec) > 2) {
+      try { audio.currentTime = seekSec; } catch {}
+    }
+  };
+  audio.addEventListener('loadedmetadata', applyMeta, { once: true });
+  audio.play().then(applyMeta).catch(() => {});
   updateAbMini();
 }
 // A clean chapter label for a multi-file track — Audnexus title if the counts line up, else the
@@ -37928,6 +39107,8 @@ function abSaveWatch() {
   const base = { title: b.title, type: 'audiobook', cover: b.cover, author: n.author, asin: n.asin };
   let body, overall;
   if (n.multi) {
+    // Guard against overwriting saved resume with 0 before the track metadata has loaded.
+    if (audio.readyState < 1 || !audio.duration) return;
     const td = audio.duration || 0;
     const frac = td ? (audio.currentTime / td) : 0;
     overall = (n.trackIdx + Math.min(1, frac)) / n.tracks.length; // 0..1 across the whole book
@@ -37955,7 +39136,8 @@ function abStartSaveLoop() { clearInterval(AB.saveTimer); AB.saveTimer = setInte
   const setPlayIcon = (playing) => { $('abPlayPause').innerHTML = playing
     ? '<svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'
     : '<svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'; };
-  audio.addEventListener('play', () => { setPlayIcon(true); if (AB.now) AB.now.active = true; abNativeSession(true); updateAbMini(); });
+  audio.addEventListener('loadedmetadata', () => { try { audio.playbackRate = AB.speed; } catch {} });
+  audio.addEventListener('play', () => { try { audio.playbackRate = AB.speed; } catch {} setPlayIcon(true); if (AB.now) AB.now.active = true; abNativeSession(true); updateAbMini(); });
   audio.addEventListener('pause', () => { setPlayIcon(false); abSaveWatch(); abNativeSession(false); updateAbMini(); });
   let abLastSessionPush = 0;
   audio.addEventListener('timeupdate', () => {
@@ -37997,8 +39179,16 @@ function abStartSaveLoop() { clearInterval(AB.saveTimer); AB.saveTimer = setInte
   // single-file usenet mounts — multi-file playlists (usenet tracks or public-domain URLs) don't
   // remount a whole session on one track hiccup.
   audio.addEventListener('error', async () => {
+    if (!AB.now) return;
+    // MEDIA_ERR_ABORTED (code 1) fires when changing src to a new book or track.
+    if (audio.error && audio.error.code === 1) return;
+    if (!audio.getAttribute('src')) return;
     const sid = AB.sessionId;
-    if (!sid || !AB.now || AB.now.multi) return;
+    if (!sid || AB.now.multi) {
+      setPlayIcon(false);
+      toast('Couldn’t load this chapter.');
+      return;
+    }
     const playReq = AB.playReq;
     const at = audio.currentTime || 0;
     try {
@@ -38016,7 +39206,16 @@ function abStartSaveLoop() { clearInterval(AB.saveTimer); AB.saveTimer = setInte
   $('abPrevChap').addEventListener('click', () => abJumpChapter(-1));
   $('abNextChap').addEventListener('click', () => abJumpChapter(1));
   const seekTo = (clientX) => { const r = $('abBar').getBoundingClientRect(); const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width)); if (audio.duration) audio.currentTime = f * audio.duration; };
-  $('abBar').addEventListener('click', (e) => seekTo(e.clientX));
+  let _abSeekDrag = false;
+  $('abBar').addEventListener('pointerdown', (e) => {
+    _abSeekDrag = true;
+    try { $('abBar').setPointerCapture(e.pointerId); } catch {}
+    seekTo(e.clientX);
+    e.preventDefault();
+  });
+  $('abBar').addEventListener('pointermove', (e) => { if (_abSeekDrag) seekTo(e.clientX); });
+  $('abBar').addEventListener('pointerup', () => { _abSeekDrag = false; });
+  $('abBar').addEventListener('pointercancel', () => { _abSeekDrag = false; });
   $('abBar').addEventListener('keydown', (e) => {
     if (e.key === 'ArrowRight') { audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 10); e.preventDefault(); e.stopPropagation(); }
     else if (e.key === 'ArrowLeft') { audio.currentTime = Math.max(0, audio.currentTime - 10); e.preventDefault(); e.stopPropagation(); }

@@ -19,10 +19,12 @@ if [ "$(id -u)" = "0" ]; then
     adduser -D -H -G "$(getent group "$PGID" | cut -d: -f1)" -u "$PUID" -s /bin/sh triboon
   fi
 
-  mkdir -p "${TRIBOON_DATA:-/data}"
-  # /data holds small JSON state + cached thumbnails — a recursive chown stays cheap and
-  # guarantees the appdata share ends up PUID:PGID-owned regardless of how it was created.
-  chown -R "$PUID:$PGID" "${TRIBOON_DATA:-/data}"
+  DATA_DIR="${TRIBOON_DATA:-/data}"
+  mkdir -p "$DATA_DIR"
+  # Only recursively chown when top-level ownership mismatches so large segment caches don't stall boot.
+  if [ "$(stat -c '%u:%g' "$DATA_DIR" 2>/dev/null || echo '')" != "$PUID:$PGID" ]; then
+    chown -R "$PUID:$PGID" "$DATA_DIR" || true
+  fi
 
   exec su-exec "$PUID:$PGID" "$@"
 fi

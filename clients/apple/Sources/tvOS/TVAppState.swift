@@ -267,10 +267,15 @@ final class TVAppState: ObservableObject {
         }
     }
 
+    @Published var activeLiveChannelIdx: Int?
+    @Published var liveZapToast: String?
+    private var liveZapToastTask: Task<Void, Never>?
+
     func playIPTVChannel(_ channel: IPTVChannel) async {
         guard let api, let origin = serverOrigin else { return }
         isStartingPlayback = true
         errorBanner = nil
+        activeLiveChannelIdx = channel.idx
         defer { isStartingPlayback = false }
         do {
             let resp = try await api.playIPTV(idx: channel.idx, cid: channel.id)
@@ -290,6 +295,24 @@ final class TVAppState: ObservableObject {
         } catch {
             errorBanner = error.localizedDescription
         }
+    }
+
+    func zapIPTV(direction: Int) {
+        let list = iptvChannels
+        guard list.count >= 2 else { return }
+        let curIndex = list.firstIndex(where: { $0.idx == activeLiveChannelIdx }) ?? 0
+        let step = direction >= 0 ? 1 : -1
+        let nextIndex = (curIndex + step + list.count) % list.count
+        let target = list[nextIndex]
+        activeLiveChannelIdx = target.idx
+        liveZapToast = "\(nextIndex + 1)/\(list.count) · \(target.name)"
+        liveZapToastTask?.cancel()
+        liveZapToastTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            guard !Task.isCancelled else { return }
+            self?.liveZapToast = nil
+        }
+        Task { await playIPTVChannel(target) }
     }
 
     func stopPlayback() {

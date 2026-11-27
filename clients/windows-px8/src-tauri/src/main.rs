@@ -723,6 +723,7 @@ mod tests {
         assert!(normalize_server("http://127.0.0.1:7777/#/home").is_err());
     }
 
+    #[test]
     fn internal_urls_are_narrow() {
         assert!(is_internal_app_url("http://tauri.localhost/connect.html"));
         assert!(is_internal_app_url("tauri://localhost/player.html"));

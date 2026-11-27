@@ -214,7 +214,7 @@
     const position = Math.max(0, timelinePreview == null ? state.position : timelinePreview);
     const ratio = duration > 0 ? Math.min(1, position / duration) : 0;
     const buffered = duration > 0
-      ? Math.min(1, state.buffered > 1 ? state.buffered / duration : state.buffered)
+      ? Math.min(1, Math.max(0, state.buffered / duration))
       : 0;
     $('timeline').value = Math.round(ratio * 1000);
     $('timeline').style.setProperty('--seek', `${ratio * 100}%`);
@@ -1056,10 +1056,10 @@
     else if (key === 'a' && state.mode !== 'live' && titleInfoHasPeople(state.titleInfo)) { event.preventDefault(); openAbout(); }
     else if (key === 'n' && state.hasNext) { event.preventDefault(); send('next'); }
     else if (key === 'g') { event.preventDefault(); $('guide').click(); }
-    else if (state.mode === 'live' && (event.key === 'PageUp' || event.key === '[' || key === 'mediaprevioustrack')) {
+    else if (state.mode === 'live' && (event.key === 'PageDown' || event.key === '[' || key === 'mediaprevioustrack')) {
       event.preventDefault(); send('live_zap', { direction: -1 });
     }
-    else if (state.mode === 'live' && (event.key === 'PageDown' || event.key === ']' || key === 'medianexttrack')) {
+    else if (state.mode === 'live' && (event.key === 'PageUp' || event.key === ']' || key === 'medianexttrack')) {
       event.preventDefault(); send('live_zap', { direction: 1 });
     }
   }
@@ -1072,7 +1072,8 @@
       seekbackward: (details) => seekRelative(-(details.seekOffset || 10)),
       seekforward: (details) => seekRelative(details.seekOffset || 30),
       seekto: (details) => send('seek_absolute', { seconds: Math.max(0, finite(details.seekTime)) }),
-      nexttrack: () => { if (state.hasNext) send('next'); },
+      previoustrack: () => { if (state.mode === 'live') send('live_zap', { direction: -1 }); },
+      nexttrack: () => { if (state.mode === 'live') send('live_zap', { direction: 1 }); else if (state.hasNext) send('next'); },
       stop: requestClose,
     };
     Object.entries(handlers).forEach(([name, handler]) => {

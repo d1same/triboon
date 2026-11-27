@@ -182,7 +182,9 @@
     togglePlay() { return control('toggle'); },
     seekTo(seconds) { return control('seek_absolute', { seconds: Math.max(0, Number(seconds) || 0) }); },
     seekBy(seconds) { return control('seek_relative', { seconds: Number(seconds) || 0 }); },
-    playerToast() { return true; },
+    playerToast(message) {
+      try { return postNative('player_toast', { message: String(message || '').slice(0, 140) }); } catch { return false; }
+    },
     updateSubtitleChoices() { return true; },
     updateOtherVersions() { return true; },
     updateActiveSubtitle() { return true; },
@@ -193,7 +195,9 @@
     hideTitleInfo() { return true; },
     upNext() { return true; },
     upNextHide() { return true; },
-    setLiveFav() { return true; },
+    setLiveFav(on) {
+      try { return postNative('live_fav', { on: !!on }); } catch { return false; }
+    },
     setLiveEpg() { return true; },
   };
 
@@ -227,6 +231,8 @@
         case 'live_ready': callPage('__tvNativeLiveReady', []); break;
         case 'live_closed': callPage('__tvNativeLiveClosed', []); break;
         case 'live_error': callPage('__tvNativeLiveError', [playerErrorText(event)]); break;
+        case 'live_zap': callPage('__tvNativeLiveZap', [Number(event.direction) >= 0 ? 1 : -1]); break;
+        case 'live_fav': callPage('__tvNativeLiveFav', [!!event.on]); break;
         default: break;
       }
     },

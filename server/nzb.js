@@ -58,7 +58,7 @@ function parseNzb(xml) {
       if (num < prevNum) inOrder = false;
       prevNum = num;
       const seg = {
-        msgId: decodeEntities(sm[2]).trim(),
+        msgId: decodeEntities(sm[2]).replace(/[<>\r\n\0\s]/g, '').trim(),
         bytes: bytesM ? parseInt(bytesM[1], 10) : 0,
         number: num,
       };

@@ -1945,8 +1945,13 @@ function tvChannelItem(ch, curProg) {
     IsLive: true,
     IsFolder: false,
     Genres: ch.group ? [ch.group] : [],
+    GenreItems: ch.group ? [{ Name: ch.group, Id: nameGuid(ch.group) }] : [],
+    People: [],
+    Studios: [],
+    Taglines: [],
     ImageTags: logoTag ? { Primary: logoTag } : {},
     BackdropImageTags: [],
+    MediaStreams: defaultLiveStreams(),
     MediaSources: [completeSource({
       Id: uuid,
       Protocol: 'Http',
@@ -2773,6 +2778,11 @@ function rememberMount(uid, itemId, mountId, quality = '') {
   const key = lastMountKey(uid, itemId, quality);
   lastMount.delete(key);
   lastMount.set(key, String(mountId));
+  if (quality) {
+    const latestKey = lastMountKey(uid, itemId, 'latest');
+    lastMount.delete(latestKey);
+    lastMount.set(latestKey, String(mountId));
+  }
   while (lastMount.size > LAST_MOUNT_CAP) lastMount.delete(lastMount.keys().next().value);
 }
 
@@ -2786,12 +2796,17 @@ function reusableMount(uid, itemId, sentId) {
   const direct = liveStream(sentId, uid);
   if (direct) return { id: sentId, stream: direct };
   const baseSent = stripVersionSuffix(sentId);
-  if (!sentId || internalItemId(baseSent).toLowerCase() !== internalItemId(itemId).toLowerCase()) return null;
-  const key = lastMountKey(uid, itemId, requestedVersionQuality(sentId) || requestedVersionQuality(itemId));
-  const remembered = lastMount.get(key);
-  const stream = liveStream(remembered, uid);
-  if (stream) return { id: remembered, stream };
-  if (remembered) lastMount.delete(key);
+  if (sentId && itemId && internalItemId(baseSent).toLowerCase() !== internalItemId(itemId).toLowerCase()) return null;
+  const targetId = itemId || baseSent;
+  if (!targetId) return null;
+  const q = requestedVersionQuality(sentId) || requestedVersionQuality(itemId);
+  const candidates = q ? [lastMountKey(uid, targetId, q)] : [lastMountKey(uid, targetId, 'default'), lastMountKey(uid, targetId, 'latest')];
+  for (const key of candidates) {
+    const remembered = lastMount.get(key);
+    const stream = liveStream(remembered, uid);
+    if (stream) return { id: remembered, stream };
+    if (remembered) lastMount.delete(key);
+  }
   return null;
 }
 
@@ -3309,14 +3324,19 @@ async function handleKind(kind, ctx) {
     }
     if (kind === 'stopped') {
       clearResumeOrigin(uid, itemId);
-      if (typeof deps.jellyfinStopPlayback === 'function') deps.jellyfinStopPlayback(ctx, mediaSourceId);
+      const resolved = reusableMount(uid, itemId, mediaSourceId);
+      const stopId = (resolved && resolved.id) || mediaSourceId;
+      if (stopId && typeof deps.jellyfinStopPlayback === 'function') deps.jellyfinStopPlayback(ctx, stopId);
     }
     ctx.res.writeHead(204, { ...cors, 'x-content-type-options': 'nosniff' });
     return ctx.res.end();
   }
   if (kind === 'stopEncodings') {
+    const uid = ctx.user && ctx.user.id;
     const mediaSourceId = String(queryField(ctx, null, 'MediaSourceId') || '');
-    if (typeof deps.jellyfinStopPlayback === 'function') deps.jellyfinStopPlayback(ctx, mediaSourceId);
+    const resolved = mediaSourceId ? reusableMount(uid, mediaSourceId, mediaSourceId) : null;
+    const stopId = (resolved && resolved.id) || mediaSourceId;
+    if (typeof deps.jellyfinStopPlayback === 'function') deps.jellyfinStopPlayback(ctx, stopId);
     ctx.res.writeHead(204, { ...cors, 'x-content-type-options': 'nosniff' });
     return ctx.res.end();
   }
@@ -3718,9 +3738,10 @@ async function handleKind(kind, ctx) {
   }
   if (kind === 'video') {
     const q = ctx.url && ctx.url.searchParams;
+    const uid = ctx.user && ctx.user.id;
     const mountId = q && (q.get('mediaSourceId') || q.get('MediaSourceId'));
-    const found = mountId && typeof deps.jellyfinStream === 'function'
-      ? deps.jellyfinStream(mountId, ctx.user && ctx.user.id) : null;
+    const reused = reusableMount(uid, ctx.m[1], mountId || ctx.m[1]);
+    const found = reused && reused.stream;
     let rel = found && (found.hlsUrl || found.remuxUrl);
     let startRuntime = 0;
     if (!rel) {
@@ -3939,7 +3960,7 @@ async function handleKind(kind, ctx) {
       // The id has to be the one the TV sent, or that second press crashes too.
       Id: sentId || String(playedBody.id),
       Protocol: desktop ? 'Http' : 'File',
-      Container: direct ? sourceContainer(probe, playedBody.name) : 'mp4',
+      Container: direct ? (sourceContainer(probe, playedBody.name) || 'mkv') : 'mp4',
       Name: (playedBody.candidate && playedBody.candidate.name) || (spec && spec.q) || '',
       SupportsDirectPlay: direct,
       SupportsDirectStream: false,
@@ -4097,6 +4118,21 @@ async function handleKind(kind, ctx) {
       years = Array.from({ length: now - 1979 }, (_, i) => now - i);
     }
     return send(ctx.res, 200, { Genres: genres, Tags: [], OfficialRatings: [], Years: years }, cors);
+  }
+  if (kind === 'getUserData') {
+    if (ctx.m && ctx.m[1] && !owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
+    const itemId = ctx.m[2];
+    if (isLiveChannelUuid(itemId) || isLiveProgramUuid(itemId)) {
+      const ch = await findLiveChannelForItem(ctx, itemId);
+      if (!ch) return send(ctx.res, 404, { error: 'not found' }, cors);
+      return send(ctx.res, 200, {
+        PlaybackPositionTicks: 0, PlayCount: 0, IsFavorite: !!ch.fav, Played: false,
+        Key: String(ch.id), ItemId: liveChannelItemId(ch.id),
+      }, cors);
+    }
+    const key = watchKeyFromId(itemId);
+    const prev = (key && typeof deps.jellyfinWatchGet === 'function' && deps.jellyfinWatchGet(ctx, key)) || {};
+    return send(ctx.res, 200, userDataFromRow(prev, Number(prev.duration) || 0, itemId), cors);
   }
   if (kind === 'favorite' || kind === 'unfavorite' || kind === 'played' || kind === 'unplayed' || kind === 'userdata') {
     if (ctx.m && ctx.m[1] && !owns(ctx, ctx.m[1])) return send(ctx.res, 403, { error: 'not your shelf' }, cors);
@@ -4449,6 +4485,8 @@ const JELLYFIN_ROUTES = [
   { m: 'DELETE', re: /^\/()userfavoriteitems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'unfavorite', h: serveJellyfin },
   { m: 'POST', re: /^\/()userplayeditems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'played', h: serveJellyfin },
   { m: 'DELETE', re: /^\/()userplayeditems\/([a-z0-9-]{1,64})$/, auth: 'user', kind: 'unplayed', h: serveJellyfin },
+  { m: 'GET', re: /^\/()useritems\/([a-z0-9-]{1,64})\/userdata$/, auth: 'user', kind: 'getUserData', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/userdata$/, auth: 'user', kind: 'getUserData', h: serveJellyfin },
   { m: 'POST', re: /^\/()useritems\/([a-z0-9-]{1,64})\/userdata$/, auth: 'user', kind: 'userdata', h: serveJellyfin },
   { m: 'POST', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/userdata$/, auth: 'user', kind: 'userdata', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/latest$/, auth: 'user', kind: 'latest', h: serveJellyfin },
@@ -4458,6 +4496,8 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/views\/?$/, auth: 'user', kind: 'views', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})$/, auth: 'user', kind: 'userById', h: serveJellyfin },
   { m: 'GET', re: /^\/userviews$/, auth: 'user', kind: 'views', h: serveJellyfin },
+  { m: 'GET', re: /^\/userviews\/groupingoptions$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/groupingoptions$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/counts$/, auth: 'user', kind: 'counts', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/filters2$/, auth: 'user', kind: 'filters', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/filters$/, auth: 'user', kind: 'filters', h: serveJellyfin },
@@ -4476,11 +4516,15 @@ const JELLYFIN_ROUTES = [
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/images\/(primary|backdrop|thumb|logo)(?:\/\d+)?$/, auth: 'public', kind: 'image', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/thememedia$/, auth: 'user', kind: 'theme', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/thememedia$/, auth: 'user', kind: 'theme', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/theme(?:songs|videos)$/, auth: 'user', kind: 'emptyItemPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/theme(?:songs|videos)$/, auth: 'user', kind: 'emptyItemPage', h: serveJellyfin },
+  { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/ancestors$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
+  { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/ancestors$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/images$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/localtrailers$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/localtrailers$/, auth: 'user', kind: 'emptyList', h: serveJellyfin },
   { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/additionalparts$/, auth: 'user', kind: 'emptyItemPage', h: serveJellyfin },
-  { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/([a-z0-9-]{1,64})\/subtitles\/(\d+)\/stream(?:\.([a-z0-9-]{1,64}))?$/, auth: 'user', kind: 'subtitle', h: serveJellyfin },
+  { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/([a-z0-9-]{1,64})\/subtitles\/(\d+)(?:\/\d+)?\/stream(?:\.([a-z0-9-]{1,64}))?$/, auth: 'user', kind: 'subtitle', h: serveJellyfin },
   { m: 'GET', re: /^\/videos\/([a-z0-9-]{1,64})\/stream(?:\.[a-z0-9]+)?$/, auth: 'user', kind: 'video', h: serveJellyfin },
   { m: 'GET', re: /^\/items\/([a-z0-9-]{1,64})\/similar$/, auth: 'user', kind: 'similar', h: serveJellyfin },
   { m: 'GET', re: /^\/users\/([a-z0-9-]{4,64})\/items\/([a-z0-9-]{1,64})\/similar$/, auth: 'user', kind: 'similar', h: serveJellyfin },

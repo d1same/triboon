@@ -29,8 +29,9 @@ const {
 } = require('./jellyfin-api');
 const { Pipeline, mountHasActivePlayback, streamIsUhd, foldDiacritics: pipelineFoldDiacritics, runtimeMismatch: pipelineRuntimeMismatch, articleFlipQuery, collectArticleSiblings, sizingMbpsPerConn } = require('./pipeline');
 const {
-  isCamCandidate, camScoringEnabled, sourceDrawerCandidates,
+  isCamCandidate, isCamKeywordTerm, camScoringEnabled, sourceDrawerCandidates,
   DEFAULT_TRUSTED_GROUPS, DEFAULT_AVOID_GROUPS, DEFAULT_SCORING_KEYWORDS,
+  BUILTIN_SCORING_RULES, VALID_BUILTIN_RULE_IDS,
 } = require('./scoring');
 const { TmdbProxy } = require('./tmdb');
 const episodeOrder = require('./episode-order');
@@ -1222,33 +1223,68 @@ function sameScoringKeywords(a, b) {
 function scoringIsFactory(s) {
   return s.scoringCustom !== true;
 }
+function effectiveSavedScoringLists(s) {
+  // Legacy settings stored `[]` to mean "same as factory default" when only another field changed.
+  // New saves store `scoringExactLists: true` so intentionally removing defaults (even down to `[]`)
+  // is preserved faithfully across restarts and UI reloads.
+  const exact = s.scoringExactLists === true;
+  const trusted = Array.isArray(s.scoringGroupsTrusted)
+    ? ((exact || s.scoringGroupsTrusted.length) ? s.scoringGroupsTrusted : DEFAULT_TRUSTED_GROUPS.slice())
+    : DEFAULT_TRUSTED_GROUPS.slice();
+  const avoid = Array.isArray(s.scoringGroupsAvoid)
+    ? ((exact || s.scoringGroupsAvoid.length) ? s.scoringGroupsAvoid : DEFAULT_AVOID_GROUPS.slice())
+    : DEFAULT_AVOID_GROUPS.slice();
+  const keywords = Array.isArray(s.scoringKeywords) ? s.scoringKeywords : [];
+  const disabled = Array.isArray(s.scoringDisabledRules)
+    ? s.scoringDisabledRules.filter((id) => VALID_BUILTIN_RULE_IDS.has(String(id)))
+    : [];
+  // Keep the CAM toggle and CAM keyword row in sync so there is never a split brain.
+  const hasCamKw = keywords.some((k) => isCamKeywordTerm(k && k.term));
+  const disabledSet = new Set(disabled);
+  if (!hasCamKw) disabledSet.add('cam');
+  return { trusted, avoid, keywords, disabledRules: [...disabledSet] };
+}
 function scoringPrefs() {
   const s = settings.get();
   if (scoringIsFactory(s)) return {};
+  const { trusted, avoid, keywords, disabledRules } = effectiveSavedScoringLists(s);
   return {
     customScoring: {
-      groupsTrusted: s.scoringGroupsTrusted || [],
-      groupsAvoid: s.scoringGroupsAvoid || [],
-      keywords: s.scoringKeywords || [],
+      replaceDefaultGroups: s.scoringExactLists === true,
+      groupsTrusted: trusted,
+      groupsAvoid: avoid,
+      keywords,
+      disabledRules,
     },
   };
 }
 function scoringForUi(s) {
+  const meta = {
+    scoringBuiltinRules: BUILTIN_SCORING_RULES,
+    scoringDefaults: {
+      trusted: DEFAULT_TRUSTED_GROUPS.slice(),
+      avoid: DEFAULT_AVOID_GROUPS.slice(),
+      keywords: DEFAULT_SCORING_KEYWORDS.map((k) => ({ ...k })),
+    },
+  };
   if (scoringIsFactory(s)) {
     return {
+      ...meta,
       scoringCustom: false,
       scoringGroupsTrusted: DEFAULT_TRUSTED_GROUPS.slice(),
       scoringGroupsAvoid: DEFAULT_AVOID_GROUPS.slice(),
       scoringKeywords: DEFAULT_SCORING_KEYWORDS.map((k) => ({ ...k })),
+      scoringDisabledRules: [],
     };
   }
+  const { trusted, avoid, keywords, disabledRules } = effectiveSavedScoringLists(s);
   return {
+    ...meta,
     scoringCustom: true,
-    scoringGroupsTrusted: (s.scoringGroupsTrusted && s.scoringGroupsTrusted.length)
-      ? s.scoringGroupsTrusted : DEFAULT_TRUSTED_GROUPS.slice(),
-    scoringGroupsAvoid: (s.scoringGroupsAvoid && s.scoringGroupsAvoid.length)
-      ? s.scoringGroupsAvoid : DEFAULT_AVOID_GROUPS.slice(),
-    scoringKeywords: Array.isArray(s.scoringKeywords) ? s.scoringKeywords : [],
+    scoringGroupsTrusted: trusted,
+    scoringGroupsAvoid: avoid,
+    scoringKeywords: keywords,
+    scoringDisabledRules: disabledRules,
   };
 }
 
@@ -4693,8 +4729,17 @@ function mediaCorsHeaders(req) {
 function withMediaCors(req, headers = {}) { return Object.assign(headers, mediaCorsHeaders(req)); }
 
 // Brute-force throttles (login / 4-digit PIN / invites / Quick Connect codes).
+// Behind a trusted reverse proxy (TRIBOON_TRUST_PROXY=1), use the proxy-appended final
+// x-forwarded-for hop so one abusive client cannot lock out the entire server.
 const limiter = new RateLimiter();
-const clientIp = (ctx) => ctx.req.socket.remoteAddress || '?';
+const clientIp = (ctx) => {
+  if (envFlag('TRIBOON_TRUST_PROXY')) {
+    const h = (ctx && ctx.req && ctx.req.headers) || {};
+    const forwarded = String(h['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean).pop();
+    if (forwarded) return forwarded;
+  }
+  return (ctx && ctx.req && ctx.req.socket && ctx.req.socket.remoteAddress) || '?';
+};
 function throttled(ctx, key, opts) {
   const r = limiter.check(key, opts);
   if (r.ok) return false;
@@ -7299,6 +7344,7 @@ async function appLatestVersion() {
 const H = {
   server: async (ctx) => send(ctx.res, 200, {
     app: 'triboon', version: APP_VERSION, phase: 4, needsSetup: !auth.hasUsers() && !auth.usersUnreadable(),
+    setupTokenRequired: !!String(process.env.TRIBOON_SETUP_TOKEN || '').trim(),
     tmdb: !!settings.get().tmdbKey, ffmpeg: !!detectFfmpeg(),
     // Wyzie only needs the server-side API key; no account login is required.
     opensubs: !!effectiveOpenSubsKey(),
@@ -7362,16 +7408,29 @@ const H = {
   setup: async (ctx) => {
     if (auth.usersUnreadable()) return send(ctx.res, 503, { error: 'user data could not be read' });
     if (auth.hasUsers()) return send(ctx.res, 403, { error: 'already set up' });
-    const { name, password } = await readJson(ctx.req);
+    const body = await readJson(ctx.req);
+    const { name, password } = body || {};
     // Again now the body is in: a request held open across the owner's setup must not make a second admin.
     if (auth.hasUsers()) return send(ctx.res, 403, { error: 'already set up' });
-    if (!name || !password || String(password).length < 4) return send(ctx.res, 400, { error: 'name and password (4+ chars) required' });
-    try { auth.createUser({ name, password, role: 'admin' }); }
+    // Optional cloud/ElfHosted deployment guard: when TRIBOON_SETUP_TOKEN is set, the caller must
+    // supply the matching token so scanners cannot claim a newly booted public container first.
+    const requiredSetupToken = String(process.env.TRIBOON_SETUP_TOKEN || '').trim();
+    if (requiredSetupToken) {
+      const provided = String((body && body.setupToken) || (ctx.req.headers && ctx.req.headers['x-triboon-setup-token']) || '').trim();
+      const a = Buffer.from(requiredSetupToken);
+      const b = Buffer.from(provided);
+      if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+        return send(ctx.res, 403, { error: 'setup token required' });
+      }
+    }
+    const cleanName = String(name || '').trim();
+    if (!cleanName || !password || String(password).length < 4) return send(ctx.res, 400, { error: 'name and password (4+ chars) required' });
+    try { auth.createUser({ name: cleanName, password, role: 'admin' }); }
     catch (e) {
       if (e && e.code === 'NAME_TOO_LONG') return send(ctx.res, 400, { error: e.message });
       throw e;
     }
-    const r = auth.login(name, password);
+    const r = auth.login(cleanName, password);
     send(ctx.res, 200, r);
   },
 
@@ -7386,7 +7445,7 @@ const H = {
       return send(ctx.res, 400, { error: 'invalid credentials' });
     }
     const uname = String(name || '').toLowerCase();
-    const pass = String(password || '').trim();
+    const pass = String(password == null ? '' : password);
     const key = `login:${uname}:${clientIp(ctx)}`;
     const acctKey = `login-acct:${uname}`;
     if (loginIpLocked(ctx)) return;
@@ -7394,7 +7453,16 @@ const H = {
     // account is still bounded across IPs. Both clear on a successful login.
     if (throttled(ctx, key, { max: 10, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
     if (uname && throttled(ctx, acctKey, { max: 40, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
-    try { const r = auth.login(name, pass); limiter.clear(key); limiter.clear(acctKey); send(ctx.res, 200, r); }
+    try {
+      let r;
+      try { r = auth.login(name, pass); }
+      catch (e) {
+        const trimmed = pass.trim();
+        if (trimmed && trimmed !== pass) r = auth.login(name, trimmed);
+        else throw e;
+      }
+      limiter.clear(key); limiter.clear(acctKey); send(ctx.res, 200, r);
+    }
     catch { noteLoginFailure(ctx); send(ctx.res, 401, { error: 'invalid credentials' }); }
   },
 
@@ -8092,12 +8160,14 @@ const H = {
     } catch (e) { send(ctx.res, e.status || 500, { error: e.message }); }
   },
   audibleBook: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
     try {
       const book = await audible.book(ctx.m[1], ctx.url.searchParams.get('region') || undefined);
       send(ctx.res, 200, book, { 'cache-control': 'private, max-age=3600' });
     } catch (e) { send(ctx.res, e.status || 500, { error: e.message }); }
   },
   audibleChapters: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
     try {
       const chaps = await audible.chapters(ctx.m[1], ctx.url.searchParams.get('region') || undefined);
       if (!chaps) return send(ctx.res, 404, { error: 'no chapter data' });
@@ -8133,6 +8203,7 @@ const H = {
   },
   // Cheap, 24h-cached "is this book on usenet?" probe so discovery can hide dead-end titles.
   audiobookAvailable: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
     const title = ctx.url.searchParams.get('title');
     if (!title) return send(ctx.res, 400, { error: 'title required' });
     const author = ctx.url.searchParams.get('author') || '';
@@ -8155,14 +8226,85 @@ const H = {
     send(ctx.res, 200, transient ? { available: false, transient: true } : { available });
   },
   pubaudioTracks: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
     const source = ctx.url.searchParams.get('source');
     const id = ctx.url.searchParams.get('id');
     if (!source || !id) return send(ctx.res, 400, { error: 'source and id required' });
     try {
-      const tracks = await pubaudio.tracks(source, id);
-      if (!tracks.length) return send(ctx.res, 404, { error: 'no audio tracks' });
-      send(ctx.res, 200, { tracks }, { 'cache-control': 'private, max-age=3600' });
+      const raw = await pubaudio.tracks(source, id);
+      if (!raw.length) return send(ctx.res, 404, { error: 'no audio tracks' });
+      // Proxy allowlisted public-domain MP3s same-origin so strict `media-src 'self' blob:` CSP
+      // works cleanly on every browser, PWA, and WebView without opening external media origins.
+      const tracks = raw.map((t) => {
+        const sub = `pubaudio:${crypto.createHash('sha256').update(String(t.url)).digest('hex').slice(0, 24)}`;
+        const tok = auth.streamToken(ctx.user.id, sub);
+        return { ...t, url: `/api/pubaudio/stream?u=${encodeURIComponent(t.url)}&t=${encodeURIComponent(tok)}` };
+      });
+      send(ctx.res, 200, { tracks }, { 'cache-control': 'private, max-age=1800' });
     } catch (e) { send(ctx.res, e.status || 502, { error: e.message }); }
+  },
+  pubaudioStream: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
+    const target = String(ctx.url.searchParams.get('u') || '').trim();
+    if (!target || !pubaudio.isAllowedPubUrl(target)) return send(ctx.res, 400, { error: 'invalid audio url' });
+    const expectedSub = `pubaudio:${crypto.createHash('sha256').update(target).digest('hex').slice(0, 24)}`;
+    if (ctx.claims.scope === 'stream' && ctx.claims.sub !== expectedSub) {
+      return send(ctx.res, 401, { error: 'token not valid for this audio track' });
+    }
+    try { ctx.req.setTimeout(0); ctx.res.setTimeout(0); if (ctx.req.socket) ctx.req.socket.setTimeout(0); } catch {}
+    const isHead = ctx.req.method === 'HEAD';
+    const range = ctx.req.headers.range || null;
+    let activeUpstream = null;
+    let closed = false;
+    ctx.res.once('close', () => {
+      if (!ctx.res.writableEnded) {
+        closed = true;
+        if (activeUpstream) { try { activeUpstream.destroy(); } catch {} activeUpstream = null; }
+      }
+    });
+    const pipeHop = (rawUrl, hops = 0) => {
+      if (closed || ctx.res.destroyed) return;
+      if (hops > 5 || !pubaudio.isAllowedPubUrl(rawUrl)) {
+        if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'blocked audio redirect' });
+        return;
+      }
+      let u;
+      try { u = new URL(rawUrl); } catch { if (!ctx.res.headersSent) send(ctx.res, 400, { error: 'bad url' }); return; }
+      const headers = { 'user-agent': 'Triboon/1.0' };
+      if (range) headers.range = range;
+      const client = u.protocol === 'http:' ? http : https;
+      const upstream = client.request(u, { method: isHead ? 'HEAD' : 'GET', headers }, (up) => {
+        if ([301, 302, 303, 307, 308].includes(up.statusCode) && up.headers.location) {
+          up.resume();
+          let nextUrl = '';
+          try { nextUrl = new URL(up.headers.location, u).toString(); } catch { nextUrl = ''; }
+          return pipeHop(nextUrl, hops + 1);
+        }
+        try { upstream.setTimeout(0); } catch {}
+        if (up.statusCode >= 400) {
+          up.resume();
+          if (!ctx.res.headersSent) send(ctx.res, 502, { error: `upstream ${up.statusCode}` });
+          return;
+        }
+        const h = {
+          'content-type': up.headers['content-type'] || 'audio/mpeg',
+          'accept-ranges': 'bytes',
+          'cache-control': 'private, max-age=3600',
+        };
+        for (const k of ['content-length', 'content-range']) if (up.headers[k]) h[k] = up.headers[k];
+        ctx.res.writeHead(up.statusCode === 206 ? 206 : 200, h);
+        if (isHead) { up.resume(); ctx.res.end(); return; }
+        up.pipe(ctx.res);
+      });
+      activeUpstream = upstream;
+      upstream.setTimeout(20000, () => { try { upstream.destroy(new Error('upstream timeout')); } catch {} });
+      upstream.on('error', () => {
+        if (!ctx.res.headersSent && !closed && !ctx.res.destroyed) send(ctx.res, 502, { error: 'audio upstream failed' });
+        else { try { ctx.res.destroy(); } catch {} }
+      });
+      upstream.end();
+    };
+    pipeHop(target, 0);
   },
 
   // Audiobook Sources drawer: search usenet for a book by title+author (Audio>Audiobook category),
@@ -8728,6 +8870,7 @@ const H = {
       const sess = liveHlsSessions.get(key);
       if (!sess || sess.closed) return send(ctx.res, 404, { error: 'live session expired' });
       sess.lastAccess = Date.now();
+    if (sess.viewers) sess.viewers.set(user.id, sess.lastAccess);
       const full = path.join(sess.dir, fileReq);
       if (!full.startsWith(sess.dir)) return send(ctx.res, 403, { error: 'forbidden' });
       let stat;
@@ -8752,9 +8895,18 @@ const H = {
         fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
         sess = raced;
       } else {
-        // Close any previous live HLS channel owned by this viewer so 1-connection IPTV retunes cleanly.
+        // Release this viewer from any previous live HLS channel; only tear down the shared ffmpeg
+        // session if no other active viewer is still watching it.
+        const nowTs = Date.now();
         for (const prev of [...liveHlsSessions.values()]) {
-          if (prev && prev.uid === user.id && prev.key !== key) closeLiveHlsSession(prev);
+          if (!prev || prev.key === key) continue;
+          if (prev.viewers) {
+            prev.viewers.delete(user.id);
+            for (const [vUid, ts] of prev.viewers) if (nowTs - ts > 25000) prev.viewers.delete(vUid);
+            if (prev.viewers.size === 0) closeLiveHlsSession(prev);
+          } else if (prev.uid === user.id) {
+            closeLiveHlsSession(prev);
+          }
         }
         const channelScope = `iptv:${ch.idx}:${ch.id}`;
         const localToken = auth.streamToken(user.id, channelScope);
@@ -8765,7 +8917,7 @@ const H = {
           fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
           return send(ctx.res, 503, { error: e.message });
         }
-        sess = { key, uid: user.id, dir, ff, createdAt: Date.now(), lastAccess: Date.now(), closed: false, exitCode: null };
+        sess = { key, uid: user.id, viewers: new Map([[user.id, Date.now()]]), dir, ff, createdAt: Date.now(), lastAccess: Date.now(), closed: false, exitCode: null };
         let err = '';
         ff.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
         ff.on('error', () => { sess.exitCode = 1; closeLiveHlsSession(sess); });
@@ -8787,6 +8939,7 @@ const H = {
       }
     }
     sess.lastAccess = Date.now();
+    if (sess.viewers) sess.viewers.set(user.id, sess.lastAccess);
     const playlistPath = path.join(sess.dir, 'index.m3u8');
     let raw = '';
     for (let i = 0; i < 65; i += 1) {
@@ -10699,7 +10852,7 @@ Object.assign(H, {
     if (range) {
       if (range[1] !== '') { start = parseInt(range[1], 10); if (range[2] !== '') end = parseInt(range[2], 10) + 1; }
       else if (range[2] !== '') { start = Math.max(0, total - parseInt(range[2], 10)); }
-      if (start >= total) return send(ctx.res, 416, '', { 'content-range': `bytes */${total}` });
+      if (start >= total || start >= end) return send(ctx.res, 416, '', { 'content-range': `bytes */${total}` });
       end = Math.min(end, total); code = 206;
       headers['content-range'] = `bytes ${start}-${end - 1}/${total}`;
     }
@@ -11248,12 +11401,52 @@ Object.assign(H, {
     send(ctx.res, 200, recommendStreamingPerformance(b, settings.get()));
   },
 
-  // Connection tests for SAVED entries (creds stay server-side, never round-trip to the UI).
-  // Failures answer 200 {ok:false} — a broken provider is a result, not an HTTP error.
+  // Connection tests for SAVED entries (by index, creds stay server-side) or UNSAVED onboarding/form
+  // entries (admin-only pre-save probe). Failures answer 200 {ok:false} — a broken source is a result, not an HTTP error.
+  testTmdb: async (ctx) => {
+    const b = await readJson(ctx.req).catch(() => ({}));
+    const rawKey = (b.tmdbKey !== undefined ? String(b.tmdbKey) : String(settings.get().tmdbKey || '')).trim();
+    if (!rawKey) return send(ctx.res, 200, { ok: false, error: 'Enter a TMDB v3 API key first.' });
+    if (rawKey.length > 64 && rawKey.includes('.')) {
+      return send(ctx.res, 200, {
+        ok: false,
+        error: 'That looks like a v4 Read Access Token. Paste the shorter 32-character API Key (v3 auth) instead.',
+      });
+    }
+    const t0 = Date.now();
+    try {
+      const base = process.env.TMDB_BASE || 'https://api.themoviedb.org/3';
+      const r = await fetchUrlExt(`${base}/configuration?api_key=${encodeURIComponent(rawKey)}`, { timeoutMs: 8000 });
+      const ms = Date.now() - t0;
+      if (r.status === 200) return send(ctx.res, 200, { ok: true, ms });
+      if (r.status === 401 || r.status === 403) {
+        return send(ctx.res, 200, { ok: false, status: r.status, error: 'TMDB rejected that key (401). Double-check your 32-character v3 API key.' });
+      }
+      return send(ctx.res, 200, { ok: false, status: r.status, error: `TMDB returned HTTP ${r.status}` });
+    } catch (e) {
+      return send(ctx.res, 200, { ok: false, error: e.message || 'Could not reach TMDB' });
+    }
+  },
+
   testProvider: async (ctx) => {
-    const b = await readJson(ctx.req);
-    const p = providerList()[b.index];
-    if (!p) return send(ctx.res, 400, { error: 'no provider at that index' });
+    const b = await readJson(ctx.req).catch(() => ({}));
+    let p = null;
+    if (b.provider && typeof b.provider === 'object') {
+      const host = String(b.provider.host || '').trim();
+      const port = parseInt(b.provider.port, 10) || 563;
+      if (!host) return send(ctx.res, 200, { ok: false, error: 'Enter a Usenet host first.' });
+      if (port < 1 || port > 65535) return send(ctx.res, 200, { ok: false, error: 'Port must be between 1 and 65535.' });
+      p = {
+        host,
+        port,
+        tls: b.provider.tls !== false,
+        user: String(b.provider.user || ''),
+        pass: String(b.provider.pass || ''),
+      };
+    } else {
+      p = providerList()[b.index];
+      if (!p) return send(ctx.res, 400, { error: 'no provider at that index' });
+    }
     const t0 = Date.now();
     const c = new NntpConnection({ ...p, connectTimeoutMs: 8000, commandTimeoutMs: 8000 });
     try {
@@ -11318,12 +11511,24 @@ Object.assign(H, {
   },
 
   testIndexer: async (ctx) => {
-    const b = await readJson(ctx.req);
-    const ix = (settings.get().indexers || [])[b.index];
-    if (!ix) return send(ctx.res, 400, { error: 'no indexer at that index' });
+    const b = await readJson(ctx.req).catch(() => ({}));
+    let ix = null;
+    let isSaved = false;
+    if (b.indexer && typeof b.indexer === 'object') {
+      const url = String(b.indexer.url || '').trim();
+      const apikey = String(b.indexer.apikey ?? b.indexer.apiKey ?? '').trim();
+      const name = String(b.indexer.name || 'Indexer').trim().slice(0, 30) || 'Indexer';
+      if (!url || !/^https?:\/\//i.test(url)) return send(ctx.res, 200, { ok: false, error: 'Enter a valid http:// or https:// indexer URL.' });
+      if (!apikey) return send(ctx.res, 200, { ok: false, error: 'Enter the indexer API key first.' });
+      ix = { name, url, apikey };
+    } else {
+      ix = (settings.get().indexers || [])[b.index];
+      if (!ix) return send(ctx.res, 400, { error: 'no indexer at that index' });
+      isSaved = true;
+    }
     const t0 = Date.now();
     try {
-      bumpIxUsage(ix.name, 'api'); // a test search is a real API hit — count it honestly
+      if (isSaved) bumpIxUsage(ix.name, 'api'); // a test search is a real API hit — count it honestly
       const items = await searchIndexer(ix, { q: 'test', limit: 5 }, { timeoutMs: 8000 });
       send(ctx.res, 200, { ok: true, ms: Date.now() - t0, items: items.length, name: ix.name });
     } catch (e) {
@@ -11345,6 +11550,9 @@ Object.assign(H, {
           return send(ctx.res, 400, { error: 'TMDB rejected that API key — copy the "API Key" (v3 auth) value from themoviedb.org → Settings → API' });
         }
       } catch { /* network hiccup — save anyway */ }
+    }
+    if (b.osApiKey !== undefined || b.openSubsUser !== undefined || b.openSubsPass !== undefined) {
+      _osTokenCache = null;
     }
     const iptvSourceChanged = ['iptvUrl', 'iptvMode', 'xtHost', 'xtUser', 'xtPass', 'epgUrl']
       .some((k) => b[k] !== undefined);
@@ -11463,50 +11671,110 @@ Object.assign(H, {
         streamingPerformance: b.streamingPerformance !== undefined
           ? normalizeStreamingPerformance(b.streamingPerformance || {})
           : normalizeStreamingPerformance(s.streamingPerformance || {}),
-        // Scoring tweaks: the Settings form shows the built-in defaults. Saving the exact
-        // default lists stays on factory scoring. Reset clears custom. Deleting CAM from
-        // keywords turns off the theater-rip penalty and lists those files in Sources.
+        // Scoring tweaks: the Settings UI shows all built-in TRaSH defaults so the owner can
+        // remove any default group/rule one by one, add custom groups/keywords, filter rules,
+        // or reset to factory defaults. Deleting CAM (or toggling the CAM rule off) allows
+        // theater rips in Sources.
         ...(() => {
-          const cleanGroups = (arr) => (Array.isArray(arr) ? arr.map((g) => String(g).trim().slice(0, 30)).filter(Boolean).slice(0, 100) : []);
+          const cleanGroups = (arr) => {
+            if (!Array.isArray(arr)) return [];
+            const seen = new Set();
+            const out = [];
+            for (const raw of arr) {
+              const g = String(raw || '').trim().slice(0, 30);
+              const k = g.toLowerCase();
+              if (!g || seen.has(k)) continue;
+              seen.add(k);
+              out.push(g);
+              if (out.length >= 100) break;
+            }
+            return out;
+          };
           const cleanKw = (arr) => (Array.isArray(arr)
             ? arr.filter((k) => k && String(k.term || '').trim() && Number.isFinite(+k.score))
               .map((k) => {
                 const term = String(k.term).trim().slice(0, 40);
-                const cap = /^(cam|hdcam|hdts|telesync|telecine|ts|hc\.?v\d+)$/i.test(term) ? 8000 : 5000;
+                const cap = isCamKeywordTerm(term) ? 8000 : 5000;
                 return { term, score: Math.max(-cap, Math.min(cap, Math.round(+k.score))) };
               }).slice(0, 100)
             : []);
-          if (b.scoringReset === true || b.scoringCustom === false
-              || (b.scoringGroupsTrusted !== undefined && b.scoringGroupsAvoid !== undefined && b.scoringKeywords !== undefined
-                && !cleanGroups(b.scoringGroupsTrusted).length
-                && !cleanGroups(b.scoringGroupsAvoid).length
-                && !cleanKw(b.scoringKeywords).length)) {
-            return { scoringCustom: false, scoringGroupsTrusted: [], scoringGroupsAvoid: [], scoringKeywords: [] };
+          const cleanDisabled = (arr) => (Array.isArray(arr)
+            ? [...new Set(arr.map((id) => String(id || '').trim().toLowerCase()).filter((id) => VALID_BUILTIN_RULE_IDS.has(id)))]
+            : []);
+          const anyScoringField = b.scoringGroupsTrusted !== undefined
+            || b.scoringGroupsAvoid !== undefined
+            || b.scoringKeywords !== undefined
+            || b.scoringDisabledRules !== undefined;
+          const legacyClearAll = b.scoringGroupsTrusted !== undefined
+            && b.scoringGroupsAvoid !== undefined
+            && b.scoringKeywords !== undefined
+            && b.scoringDisabledRules === undefined
+            && b.scoringCustom !== true
+            && !cleanGroups(b.scoringGroupsTrusted).length
+            && !cleanGroups(b.scoringGroupsAvoid).length
+            && !cleanKw(b.scoringKeywords).length;
+          if (b.scoringReset === true || b.scoringCustom === false || legacyClearAll) {
+            return {
+              scoringCustom: false,
+              scoringExactLists: false,
+              scoringGroupsTrusted: [],
+              scoringGroupsAvoid: [],
+              scoringKeywords: [],
+              scoringDisabledRules: [],
+            };
           }
-          if (b.scoringGroupsTrusted === undefined && b.scoringGroupsAvoid === undefined && b.scoringKeywords === undefined) {
+          if (!anyScoringField) {
             return {
               scoringCustom: s.scoringCustom === true,
+              scoringExactLists: s.scoringExactLists === true,
               scoringGroupsTrusted: s.scoringGroupsTrusted || [],
               scoringGroupsAvoid: s.scoringGroupsAvoid || [],
               scoringKeywords: s.scoringKeywords || [],
+              scoringDisabledRules: s.scoringDisabledRules || [],
             };
           }
-          const t = b.scoringGroupsTrusted !== undefined ? cleanGroups(b.scoringGroupsTrusted) : (s.scoringGroupsTrusted || []);
-          const av = b.scoringGroupsAvoid !== undefined ? cleanGroups(b.scoringGroupsAvoid) : (s.scoringGroupsAvoid || []);
-          const kw = b.scoringKeywords !== undefined
-            ? cleanKw(b.scoringKeywords)
-            : (scoringIsFactory(s) ? DEFAULT_SCORING_KEYWORDS.map((k) => ({ ...k })) : (s.scoringKeywords || []));
+          const prev = scoringIsFactory(s)
+            ? {
+              trusted: DEFAULT_TRUSTED_GROUPS.slice(),
+              avoid: DEFAULT_AVOID_GROUPS.slice(),
+              keywords: DEFAULT_SCORING_KEYWORDS.map((k) => ({ ...k })),
+              disabledRules: [],
+            }
+            : effectiveSavedScoringLists(s);
+          const t = b.scoringGroupsTrusted !== undefined ? cleanGroups(b.scoringGroupsTrusted) : prev.trusted;
+          const av = b.scoringGroupsAvoid !== undefined ? cleanGroups(b.scoringGroupsAvoid) : prev.avoid;
+          let kw = b.scoringKeywords !== undefined ? cleanKw(b.scoringKeywords) : prev.keywords;
+          let disabled = b.scoringDisabledRules !== undefined ? cleanDisabled(b.scoringDisabledRules) : prev.disabledRules;
+          // Sync CAM keyword <-> 'cam' disabled rule cleanly.
+          if (b.scoringDisabledRules !== undefined && b.scoringKeywords === undefined) {
+            if (disabled.includes('cam')) kw = kw.filter((k) => !isCamKeywordTerm(k.term));
+            else if (!kw.some((k) => isCamKeywordTerm(k.term))) kw = [{ term: 'CAM', score: -8000 }, ...kw];
+          } else if (b.scoringKeywords !== undefined) {
+            const hasCam = kw.some((k) => isCamKeywordTerm(k.term));
+            if (!hasCam && !disabled.includes('cam')) disabled = [...disabled, 'cam'];
+            if (hasCam && disabled.includes('cam')) disabled = disabled.filter((id) => id !== 'cam');
+          }
           const factory = sameScoringGroups(t, DEFAULT_TRUSTED_GROUPS)
             && sameScoringGroups(av, DEFAULT_AVOID_GROUPS)
-            && sameScoringKeywords(kw, DEFAULT_SCORING_KEYWORDS);
-          if (factory) return { scoringCustom: false, scoringGroupsTrusted: [], scoringGroupsAvoid: [], scoringKeywords: [] };
+            && sameScoringKeywords(kw, DEFAULT_SCORING_KEYWORDS)
+            && disabled.length === 0;
+          if (factory) {
+            return {
+              scoringCustom: false,
+              scoringExactLists: false,
+              scoringGroupsTrusted: [],
+              scoringGroupsAvoid: [],
+              scoringKeywords: [],
+              scoringDisabledRules: [],
+            };
+          }
           return {
             scoringCustom: true,
-            scoringGroupsTrusted: sameScoringGroups(t, DEFAULT_TRUSTED_GROUPS) ? [] : t,
-            scoringGroupsAvoid: sameScoringGroups(av, DEFAULT_AVOID_GROUPS) ? [] : av,
-            scoringKeywords: sameScoringKeywords(kw, DEFAULT_SCORING_KEYWORDS)
-              ? DEFAULT_SCORING_KEYWORDS.map((k) => ({ ...k }))
-              : kw,
+            scoringExactLists: true,
+            scoringGroupsTrusted: t,
+            scoringGroupsAvoid: av,
+            scoringKeywords: kw,
+            scoringDisabledRules: disabled,
           };
         })(),
       };
@@ -11986,7 +12254,10 @@ Object.assign(H, {
     }
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     if (!detectEncoder()) return send(ctx.res, 503, { error: 'no H.264 encoder available on this server' });
-    if (/\b(2160p|4k|uhd)\b/i.test(String(vf.name || '')) && !canTranscode4k()) {
+    const is4kMount = /\b(2160p|4k|uhd)\b/i.test(`${vf.name || ''} ${vf._releaseName || ''}`)
+      || ((vf._tracks && vf._tracks.video && vf._tracks.video[0])
+        && ((vf._tracks.video[0].height || 0) >= 1600 || (vf._tracks.video[0].width || 0) >= 3200));
+    if (is4kMount && !canTranscode4k()) {
       return send(ctx.res, 403, { error: '4K transcode needs a GPU encoder on this server' });
     }
     vf._touched = Date.now();
@@ -12055,7 +12326,10 @@ Object.assign(H, {
       if (ctx.user && ctx.user.policy && ctx.user.policy.allowTranscode === false) {
         return send(ctx.res, 403, { error: 'transcoding is disabled for this account' });
       }
-      if (/\b(2160p|4k|uhd)\b/i.test(String(vf.name || '')) && !canTranscode4k()) {
+      const is4kHls = /\b(2160p|4k|uhd)\b/i.test(`${vf.name || ''} ${vf._releaseName || ''}`)
+        || ((vf._tracks && vf._tracks.video && vf._tracks.video[0])
+          && ((vf._tracks.video[0].height || 0) >= 1600 || (vf._tracks.video[0].width || 0) >= 3200));
+      if (is4kHls && !canTranscode4k()) {
         return send(ctx.res, 403, { error: '4K transcode needs a GPU encoder on this server' });
       }
       if (!detectEncoder()) return send(ctx.res, 503, { error: 'no H.264 encoder available' });
@@ -12347,6 +12621,7 @@ Object.assign(H, {
   // Embedded audiobook chapters from a live mount (M4B/M4A carry them). The client prefers Audnexus
   // chapters (richer, by ASIN) and calls this only as a fallback when the book has no Audnexus data.
   audiobookChapters: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
@@ -12990,6 +13265,7 @@ Object.assign(H, {
     if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     if (!detectFfmpeg()) return send(ctx.res, 404, { error: 'ffmpeg not available' });
     const at = Math.max(0, parseFloat(ctx.url.searchParams.get('at') || '0') || 0);
     const bucket = Math.floor(at / 10) * 10;
@@ -13002,16 +13278,19 @@ Object.assign(H, {
     else {
       let job = global.__thumbJobs.get(key);
       if (!job) {
+        if (global.__thumbJobs.size >= 4) return send(ctx.res, 404, { error: 'thumbnail busy' });
         job = (async () => {
-          const out = path.join(require('os').tmpdir(), `triboon-thumb-${key.replace(/[^a-z0-9]/gi, '_')}.jpg`);
-          const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}&priority=background`;
-          const ok = await makeThumb(selfUrl, out, bucket);
-          if (!ok) return null;
-          const b = fs.readFileSync(out);
-          try { fs.unlinkSync(out); } catch {}
-          while (cache.size >= 200) cache.delete(cache.keys().next().value); // ~200 thumbs ≈ a few MB
-          cache.set(key, b);
-          return b;
+          const out = path.join(require('os').tmpdir(), `triboon-thumb-${key.replace(/[^a-z0-9]/gi, '_')}-${process.pid}.jpg`);
+          try {
+            const selfUrl = localMediaInput(vf) || `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}&priority=background`;
+            const ok = await makeThumb(selfUrl, out, bucket);
+            if (!ok) return null;
+            const b = fs.readFileSync(out);
+            while (cache.size >= 200) cache.delete(cache.keys().next().value); // ~200 thumbs ≈ a few MB
+            cache.set(key, b);
+            return b;
+          } catch { return null; }
+          finally { try { fs.unlinkSync(out); } catch {} }
         })().finally(() => global.__thumbJobs.delete(key));
         global.__thumbJobs.set(key, job);
       }
@@ -13199,7 +13478,7 @@ Object.assign(H, {
   // Range-proxy Music audio or a TMDB trailer: resolve (cached) the googlevideo URL, then pipe
   // its bytes with the client's Range header. googlevideo URLs are IP-locked + expire, so a
   // 403/410 means "stale" — we re-resolve and retry rather than failing the scrub.
-  proxyResolvedYoutube(ctx, id, resolveFn, failLabel) {
+  proxyResolvedYoutube(ctx, id, resolveFn, failLabel, { rejectHls = false } = {}) {
     // Disable HTTP idle timeout so pausing Music/trailers >30s never severs the socket.
     try { ctx.req.setTimeout(0); ctx.res.setTimeout(0); if (ctx.req.socket) ctx.req.socket.setTimeout(0); } catch {}
     const isHead = ctx.req.method === 'HEAD';
@@ -13227,36 +13506,79 @@ Object.assign(H, {
         return;
       }
       if (closed || ctx.res.destroyed) return;
-      const u = new URL(rec.url);
-      const upstreamHeaders = {};
-      for (const [k, v] of Object.entries(rec.headers || {})) {
-        if (v !== undefined && v !== null && !/^host$/i.test(k)) upstreamHeaders[k] = String(v);
+      // Never serve raw .m3u8 text to an <audio> element (Chrome/Edge/Firefox/Android WebView
+      // reject application/vnd.apple.mpegurl and cascade-skip the entire music queue).
+      if (rejectHls && rec.mime === 'application/vnd.apple.mpegurl') {
+        if (attempt + 1 < MAX_STREAM_ATTEMPTS && !ctx.res.headersSent) return void retryLater(attempt);
+        if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'no progressive audio stream available' });
+        return;
       }
-      if (range) upstreamHeaders.range = range;
-      const client = u.protocol === 'http:' ? http : https;
-      const upstream = client.request(u, { method: isHead ? 'HEAD' : 'GET', headers: upstreamHeaders }, (up) => {
-        if ((up.statusCode === 403 || up.statusCode === 410) && attempt + 1 < MAX_STREAM_ATTEMPTS && !ctx.res.headersSent) {
-          up.resume(); return void retryLater(attempt);
+      const baseHeaders = {};
+      for (const [k, v] of Object.entries(rec.headers || {})) {
+        if (v !== undefined && v !== null && !/^host$/i.test(k)) baseHeaders[k] = String(v);
+      }
+      if (range) baseHeaders.range = range;
+      const requestHop = (rawUrl, hops = 0) => {
+        if (closed || ctx.res.destroyed) return;
+        if (hops > 5) {
+          if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'too many upstream redirects' });
+          return;
         }
-        if (up.statusCode >= 400) { up.resume(); if (!ctx.res.headersSent) send(ctx.res, 502, { error: `upstream ${up.statusCode}` }); return; }
-        const h = { 'content-type': rec.mime, 'accept-ranges': 'bytes', 'cache-control': 'private, no-store' };
-        for (const k of ['content-length', 'content-range']) if (up.headers[k]) h[k] = up.headers[k];
-        ctx.res.writeHead(up.statusCode === 206 ? 206 : 200, h);
-        if (isHead) { up.resume(); ctx.res.end(); return; }
-        up.pipe(ctx.res);
-      });
-      activeUpstream = upstream;
-      upstream.setTimeout(25000, () => { try { upstream.destroy(new Error('upstream timeout')); } catch {} });
-      upstream.on('error', () => { try { ctx.res.destroy(); } catch {} });
-      upstream.end();
+        let u;
+        try {
+          u = new URL(rawUrl);
+          if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad protocol');
+        } catch {
+          if (!ctx.res.headersSent) send(ctx.res, 502, { error: `invalid ${failLabel} url` });
+          return;
+        }
+        const client = u.protocol === 'http:' ? http : https;
+        // Pin IPv4 to match yt-dlp --force-ipv4 so IP-locked googlevideo URLs never 403 on dual-stack hosts.
+        const reqOpts = { method: isHead ? 'HEAD' : 'GET', headers: baseHeaders, family: 4 };
+        const upstream = client.request(u, reqOpts, (up) => {
+          // Follow 301/302/303/307/308 redirects (googlevideo load-balances via 302) instead of
+          // serving a 0-byte 200 OK that makes <audio> fire ended and skip the whole queue.
+          if ([301, 302, 303, 307, 308].includes(up.statusCode) && up.headers.location) {
+            up.resume();
+            let nextUrl = '';
+            try { nextUrl = new URL(up.headers.location, u).toString(); } catch { nextUrl = ''; }
+            return requestHop(nextUrl, hops + 1);
+          }
+          // Disable idle timeout once headers arrive so pausing a song >25s never tears down the stream.
+          try { upstream.setTimeout(0); } catch {}
+          if ((up.statusCode === 403 || up.statusCode === 410) && attempt + 1 < MAX_STREAM_ATTEMPTS && !ctx.res.headersSent) {
+            up.resume(); return void retryLater(attempt);
+          }
+          if (up.statusCode >= 400) { up.resume(); if (!ctx.res.headersSent) send(ctx.res, 502, { error: `upstream ${up.statusCode}` }); return; }
+          const h = { 'content-type': rec.mime, 'accept-ranges': 'bytes', 'cache-control': 'private, no-store' };
+          for (const k of ['content-length', 'content-range']) if (up.headers[k]) h[k] = up.headers[k];
+          ctx.res.writeHead(up.statusCode === 206 ? 206 : 200, h);
+          if (isHead) { up.resume(); ctx.res.end(); return; }
+          up.pipe(ctx.res);
+        });
+        activeUpstream = upstream;
+        upstream.setTimeout(20000, () => { try { upstream.destroy(new Error('upstream timeout')); } catch {} });
+        upstream.on('error', () => {
+          if (closed || ctx.res.destroyed) return;
+          if (!ctx.res.headersSent && attempt + 1 < MAX_STREAM_ATTEMPTS) return void retryLater(attempt);
+          if (!ctx.res.headersSent) send(ctx.res, 502, { error: `upstream ${failLabel} error` });
+          else { try { ctx.res.destroy(); } catch {} }
+        });
+        upstream.end();
+      };
+      requestHop(rec.url, 0);
     };
     pipeFrom(0);
+  },
+  musicToken: async (ctx) => {
+    const id = ctx.m[1];
+    send(ctx.res, 200, { streamUrl: `/api/music/stream/${id}?t=${auth.streamToken(ctx.user.id, `music:${id}`)}` });
   },
   musicStream: async (ctx) => {
     const id = ctx.m[1];
     if (ctx.claims.scope !== 'stream' || ctx.claims.sub !== `music:${id}`) return send(ctx.res, 401, { error: 'token not valid for this track' });
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp not available' });
-    H.proxyResolvedYoutube(ctx, id, (trackId, opts) => ytmusic.resolveStream(trackId, opts), 'track');
+    H.proxyResolvedYoutube(ctx, id, (trackId, opts) => ytmusic.resolveStream(trackId, opts), 'track', { rejectHls: true });
   },
   // Mint the URL immediately and start yt-dlp in the background so Trailer is already warm
   // by the time the <video> hits /stream. That is the "Loading trailer" wait.
@@ -13629,6 +13951,7 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/pubaudio\/search$/, auth: 'user', h: H.pubaudioSearch },
   { m: 'GET', re: /^\/api\/pubaudio\/browse$/, auth: 'user', h: H.pubaudioBrowse },
   { m: 'GET', re: /^\/api\/pubaudio\/tracks$/, auth: 'user', h: H.pubaudioTracks },
+  { m: 'GET', re: /^\/api\/pubaudio\/stream$/, auth: 'stream', h: H.pubaudioStream },
   { m: 'GET', re: /^\/api\/audiobook\/available$/, auth: 'user', h: H.audiobookAvailable },
   { m: 'GET', re: /^\/api\/audiobook\/search$/, auth: 'user', h: H.audiobookSearch },
   { m: 'POST', re: /^\/api\/audiobook\/play$/, auth: 'user', h: H.audiobookPlay },
@@ -13687,6 +14010,7 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/music\/radio\/([\w-]{11})$/, auth: 'user', h: H.musicRadio },
   { m: 'GET', re: /^\/api\/music\/lyrics\/([\w-]{11})$/, auth: 'user', h: H.musicLyrics },
   { m: 'POST', re: /^\/api\/music\/like$/, auth: 'user', h: H.musicLike },
+  { m: 'GET', re: /^\/api\/music\/token\/([\w-]{11})$/, auth: 'user', h: H.musicToken },
   { m: 'GET', re: /^\/api\/music\/stream\/([\w-]{11})$/, auth: 'stream', h: H.musicStream },
   { m: 'GET', re: /^\/api\/trailer\/stream\/vimeo\/(\d{6,12})$/, auth: 'stream', h: H.trailerStreamVimeo },
   { m: 'GET', re: /^\/api\/trailer\/vimeo\/(\d{6,12})$/, auth: 'user', h: H.trailerResolveVimeo },
@@ -13708,6 +14032,7 @@ const ROUTES = [
   { m: 'DELETE', re: /^\/api\/settings\/jellyfin-cover\/([a-z-]+)$/, auth: 'admin', h: H.jellyfinCoverClear },
   { m: 'POST', re: /^\/api\/segment-cache\/clear$/, auth: 'admin', h: H.segmentCacheClear },
   { m: 'POST', re: /^\/api\/streaming\/recommend$/, auth: 'admin', h: H.streamingRecommend },
+  { m: 'POST', re: /^\/api\/test\/tmdb$/, auth: 'admin', h: H.testTmdb },
   { m: 'POST', re: /^\/api\/test\/provider$/, auth: 'admin', h: H.testProvider },
   { m: 'POST', re: /^\/api\/test\/provider-speed$/, auth: 'admin', h: H.testProviderSpeed },
   { m: 'POST', re: /^\/api\/test\/indexer$/, auth: 'admin', h: H.testIndexer },
@@ -14423,7 +14748,14 @@ function jellyfinLocalFacets(ctx, libId) {
 function jellyfinStopPlayback(ctx, mountId) {
   const uid = ctx && ctx.user && ctx.user.id;
   if (!uid) return;
-  const targets = mountId && mounts.has(String(mountId)) ? [mounts.get(String(mountId))] : [...mounts.values()];
+  let targets;
+  if (mountId) {
+    const found = mounts.get(String(mountId));
+    if (!found) return; // unknown/item-UUID id must never tear down other devices' active HLS streams
+    targets = [found];
+  } else {
+    targets = [...mounts.values()];
+  }
   for (const vf of targets) {
     if (!vf || !vf._hls || !vf._hls.size) continue;
     for (const [k, sess] of [...vf._hls.entries()]) {

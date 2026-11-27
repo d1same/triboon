@@ -49,6 +49,7 @@
     versionCode: Math.max(0, Number(bootstrapVersion.versionCode) || 0),
     tv: false,
     platform: 'windows',
+    ...(bootstrapVersion.distribution ? { distribution: String(bootstrapVersion.distribution) } : {}),
   });
 
   function invokeNative(command, args) {
@@ -314,12 +315,19 @@
   });
 
   Object.freeze(bridge);
+  window.__triboonWindowsBridge = true;
   Object.defineProperty(window, 'TriboonTV', {
     configurable: false,
     enumerable: true,
     writable: false,
     value: bridge,
   });
+  try {
+    if (document.body) document.body.classList.add('windowsDesktop');
+    else document.addEventListener('DOMContentLoaded', () => {
+      try { if (document.body) document.body.classList.add('windowsDesktop'); } catch {}
+    }, { once: true });
+  } catch {}
   // Diagnostic alias retained for the old PX8 preview page.  It contains no Tauri transport.
   Object.defineProperty(window, 'TriboonPX8', {
     configurable: false,

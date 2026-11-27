@@ -128,6 +128,33 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-11-26, v3.6.0 — Host Onboarding with live source tests, TRaSH press-play scoring manager, Music/Audiobooks reliability, cross-platform Live TV surfing & TV D-pad hardening, and multi-store client packaging:
+- What changed:
+  - **Host Onboarding & Live Source Testing (`web/index.html`, `server/index.js`):**
+    - Added 3-step first-run Host Onboarding wizard (`#gateOnboard`) with stepper, TMDB v3 live verify/test (`POST /api/test/tmdb`), Usenet & Indexer presets, pre-save and post-save `Test` buttons (`POST /api/test/provider`, `POST /api/test/indexer`), removable added-source chips, and Settings → Status re-open (`#openOnboardBtn`).
+    - Added pre-save `Test connection` / `Test indexer` buttons in Settings → Providers, fixed Chromium 135+ `<select>` double-arrow (`select::picker-icon { display: none !important; }`) and Settings select chevron/clipping/truncation, and made `#gateOnboard` + `.sc*` theme-agnostic across all themes.
+  - **TRaSH-Guides Source Finding & Scoring Manager (`server/scoring.js`, `server/index.js`, `web/index.html`):**
+    - Fixed group-removal persistence (`scoringExactLists`, `replaceDefaultGroups`), added `3d-format` (`-8000`) split-screen protection, curated 19 Trusted & 16 Avoid defaults, exposed 8 individually toggleable built-in TRaSH rules (`BUILTIN_SCORING_RULES`, `scoringDisabledRules`), and precompiled policy Sets/RegExps (`compileScoringPolicy`) + O(1) `GROUP_TIER_MAP`.
+    - Built Settings → Catalog → Scoring interactive manager with live search filter, rule toggles, 1-by-1 removable Trusted/Avoid chips, keyword score rows, collapsible raw editor, and D-pad focus preservation.
+  - **Music, Audiobooks & Sell-Readiness Hardening (`server/ytmusic.js`, `server/index.js`, `server/newznab.js`, `server/nntp.js`, `server/nzb.js`, `server/opensubs.js`, `server/trakt.js`, `Dockerfile`, `docker-compose.yml`, `docker/entrypoint.sh`):**
+    - Fixed YouTube Music `yt-dlp` JS runtime/IPv4/non-HLS resolution, 302 redirect handling, stream-token refresh, and Free Classics `/api/pubaudio/stream` CSP proxy.
+    - Hardened Docker/ElfHosted readiness, NNTP/Newznab/NZB/OpenSubtitles/Trakt edge cases, and Jellyfin 10.9+/Roku/Infuse compatibility.
+  - **Cross-Platform Live TV Channel Surfing & TV D-Pad (`web/index.html`, `android/.../MainActivity.java`, `clients/windows-px8/`, `clients/apple/`, `clients/roku/`, `clients/webos/`):**
+    - Added Live TV `Ch-`/`Ch+` surfing and TV remote/D-pad support across Web/Android TV/Fire TV/LG webOS (`#gateOnboard`, `#gatePin` 2D grid, Scoring Manager focus preservation, Android `nativeChPrevBtn`/`nativeChNextBtn` + `CHANNEL_UP/DOWN`/`GUIDE`/`TV` keys), Apple iOS/tvOS (Siri Remote `.onMoveCommand` + auto-hiding `@FocusState` bar), Windows native libmpv, and Roku SceneGraph (`up`/`down`/`channelup`/`channeldown`).
+    - Included Amazon Fire TV, Roku, and LG webOS store packaging workflows and tests.
+- Automated verification:
+  - **Full Node test suite (`npm.cmd test`, 62 suites):** 1446/1446 tests passing, 0 failures (1445/1446 on initial run; isolated `TMDB_BASE` in `test/security.test.js` and re-ran full `test/security.test.js` 176/176 passing).
+  - **Release contract & store/platform suites (`GITHUB_REF_NAME=v3.6.0`):** 28/28 passing (`release-contract`, `apple-client`, `amazon-firetv`, `roku-client`, `webos-client`, `ms-store`, `play-store`).
+  - **Syntax & diff checks:** all tracked `.js` files pass `node --check`; `web/index.html` inline script parse clean (`WEB_INLINE_JS_OK 3`); `git diff --check` clean.
+  - **Android (`3.6.0` / `versionCode 460`):** `gradlew.bat --no-daemon lintDebug testDebugUnitTest assembleDebug` — `BUILD SUCCESSFUL in 33s`.
+  - **Windows client (`triboon-px8` `3.6.0`):** `cargo test --no-default-features` 47/47 passed; `cargo check --features player` compiled with 0 errors.
+- Live verification:
+  - **Android TV Emulator ExoPlayer Stress (`emulator-5554` / `Triboon_TV_API_36` → local `v3.6.0` server on `:7788` with real data copy):** `bench/android-tv-stress.ps1` **PASS** (`ok: true`, 0 failures, 0 warnings) — boot (`127` cards, `v3.6.0`), D-pad page churn, Live TV start + 20/20 channel zaps, multi-native handoff, 2/2 PiP guide loops, VOD start (`The Super Mario Galaxy Movie 2026`, `6065s`) + 10/10 seeks, Sources, Subtitles/CC, Continue Watching, and clean log scan.
+  - **Live Browser Visual QA (`http://localhost:7787`, Desktop & Mobile `390×844`):** verified Onboarding Step 1/2/3, live TMDB/Usenet/Indexer test flows, TRaSH Scoring Manager, single-chevron `<select>` rendering across Onboarding & Settings, unclipped saved Indexer/Provider rows, and mobile layout.
+- Not run locally on this commit:
+  - Physical hardware QA on Windows GPU (`hwdec-current`) / ARM64, Roku hardware, Apple tvOS hardware, and Docker image build (CI builds and publishes release artifacts on tag `v3.6.0`).
+- Version contract: `package.json` 3.6.0; Android `versionName` 3.6.0 / `versionCode` 460; Apple `project.yml` `MARKETING_VERSION` 3.6.0 / `CURRENT_PROJECT_VERSION` 460; Roku `manifest` `3.6.0`; webOS `appinfo.json` 3.6.0; Windows client `package.json` / `package-lock.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` 3.6.0.
+
 2026-11-26, v3.5.14 — Jellyfin Android TV 0.20.0 & Roku 2.2.5 compatibility fixes:
 - What changed:
   - **Jellyfin Android TV 0.20.0 (`server/jellyfin-api.js`):**

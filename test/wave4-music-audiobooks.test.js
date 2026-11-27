@@ -91,3 +91,24 @@ test('wave4: playAudiobook marks session.audiobook so advance() preserves audiob
   assert.equal(seenAdvanceOpts.length, 2);
   assert.equal(seenAdvanceOpts[1].audiobook, true, 'advance() preserves audiobook: true');
 });
+
+test('wave4 audit: ytmusic ytArgs pins IPv4, enables Node JS runtime on 2026+ yt-dlp, and server/client guard 302/HLS/pubaudio CSP', () => {
+  const ytSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'ytmusic.js'), 'utf8');
+  const srvSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const webSrc = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+
+  assert.match(ytSrc, /--force-ipv4/, 'yt-dlp pins IPv4 to match Node proxy family:4');
+  assert.match(ytSrc, /--js-runtimes', 'node'/, 'yt-dlp 2025.11+ enables Node JS runtime');
+  assert.match(ytSrc, /protocol!\*=m3u8/, 'music format selector prefers progressive HTTP audio over HLS');
+  assert.match(srvSrc, /\[301, 302, 303, 307, 308\]\.includes\(up\.statusCode\)/, 'proxyResolvedYoutube follows 302 redirects instead of emitting 0-byte 200');
+  assert.match(srvSrc, /family: 4/, 'proxyResolvedYoutube pins IPv4');
+  assert.match(srvSrc, /\/api\/pubaudio\/stream\?u=/, 'pubaudioTracks rewrites external archive.org URLs to same-origin proxy');
+  assert.match(srvSrc, /api\\\/music\\\/token\\\/|musicToken:\s*async/, 'music token refresh route is registered');
+  assert.match(webSrc, /id="pinPad"/, 'PIN gate includes touch & D-pad 0-9 keypad');
+  assert.match(webSrc, /openGate === \$\('gatePin'\) && \$\('pinPad'\)/, 'PIN keypad supports 2D 3-column TV D-pad navigation');
+  assert.match(webSrc, /id="gateOnboard"/, 'First-run host onboarding checklist is present');
+  assert.match(webSrc, /function focusHostOnboardingStep\(\)/, 'Host onboarding focuses active step for TV D-pad');
+  assert.match(webSrc, /function renderScoringManager\(restoreFocus = null\)/, 'Scoring manager preserves TV D-pad focus when toggling rules or removing chips');
+  assert.match(webSrc, /id="pgCloseBtn"/, 'In-player Live TV guide includes Close button');
+  assert.match(webSrc, /id="pgSearch"/, 'In-player Live TV guide includes channel filter input');
+});

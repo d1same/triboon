@@ -158,6 +158,11 @@ struct TriboonWebView: UIViewRepresentable {
                     let action = payloadDict["action"] as? String ?? ""
                     let args = payloadDict["payload"] as? [String: Any] ?? [:]
                     session.handleControl(action: action, payload: args)
+                case "player_toast":
+                    let msg = payloadDict["message"] as? String ?? ""
+                    session.showPlayerToast(msg)
+                case "live_fav":
+                    session.liveFavorite = (payloadDict["on"] as? Bool) ?? false
                 default:
                     break
                 }

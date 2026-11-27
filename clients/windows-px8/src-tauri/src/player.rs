@@ -2564,26 +2564,41 @@ fn actor_loop(
 
 #[cfg(all(feature = "player", target_os = "windows"))]
 fn create_mpv(surface: i64) -> Result<libmpv2::Mpv, String> {
-    libmpv2::Mpv::with_initializer(|init| {
-        init.set_option("wid", surface)?;
-        init.set_option("vo", "gpu-next")?;
-        init.set_option("gpu-api", "d3d11")?;
-        init.set_option("hwdec", "auto-safe")?;
-        init.set_option("hwdec-codecs", "all")?;
-        init.set_option("target-colorspace-hint", "yes")?;
-        init.set_option("keep-open", "yes")?;
-        init.set_option("keep-open-pause", "no")?;
-        init.set_option("osc", "no")?;
-        init.set_option("input-default-bindings", "no")?;
-        init.set_option("input-vo-keyboard", "no")?;
-        init.set_option("input-cursor-passthrough", "yes")?;
-        init.set_option("terminal", "no")?;
-        init.set_option("msg-level", "all=no")?;
-        init.set_option("cache", "yes")?;
-        init.set_option("audio-client-name", "Triboon")?;
-        Ok(())
-    })
-    .map_err(|e| format!("libmpv initialization: {e}"))
+    let attempts: &[(&str, Option<&str>)] = &[
+        ("gpu-next", Some("d3d11")),
+        ("gpu", Some("d3d11")),
+        ("gpu", Some("auto")),
+        ("direct3d", None),
+    ];
+    let mut last_err = String::new();
+    for (vo, gpu_api) in attempts {
+        let res = libmpv2::Mpv::with_initializer(|init| {
+            init.set_option("wid", surface)?;
+            init.set_option("vo", *vo)?;
+            if let Some(api) = gpu_api {
+                init.set_option("gpu-api", *api)?;
+            }
+            init.set_option("hwdec", "auto-safe")?;
+            init.set_option("hwdec-codecs", "all")?;
+            init.set_option("target-colorspace-hint", "auto")?;
+            init.set_option("keep-open", "yes")?;
+            init.set_option("keep-open-pause", "no")?;
+            init.set_option("osc", "no")?;
+            init.set_option("input-default-bindings", "no")?;
+            init.set_option("input-vo-keyboard", "no")?;
+            init.set_option("input-cursor-passthrough", "yes")?;
+            init.set_option("terminal", "no")?;
+            init.set_option("msg-level", "all=no")?;
+            init.set_option("cache", "yes")?;
+            init.set_option("audio-client-name", "Triboon")?;
+            Ok(())
+        });
+        match res {
+            Ok(mpv) => return Ok(mpv),
+            Err(e) => last_err = format!("libmpv initialization ({vo}): {e}"),
+        }
+    }
+    Err(last_err)
 }
 
 #[cfg(all(feature = "player", target_os = "windows"))]
@@ -3936,7 +3951,10 @@ fn handle_control(
         }
         ControlAction::Volume(volume) => {
             let _ = mpv.set_property("volume", volume);
+            let muted = volume <= 0.0;
+            let _ = mpv.set_property("mute", muted);
             active.ui.volume = volume;
+            active.ui.muted = muted;
         }
         ControlAction::Mute(muted) => {
             let _ = mpv.set_property("mute", muted);
