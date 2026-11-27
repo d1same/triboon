@@ -56,12 +56,12 @@ jobs:
           $ver = node -p "require('./package.json').version"
           $msix = "dist/ms-store/Triboon-Windows-Store-v$ver.msix"
           if (-not (Test-Path $msix)) { throw "Missing $msix" }
-          $listing = & 7z l $msix
+          $listing = (& 7z l $msix) -join "`n"
           if ($LASTEXITCODE -ne 0) { throw "7z list failed" }
           foreach ($entry in @('AppxManifest.xml', 'triboon-px8.exe', 'libmpv-2.dll', 'LIBMPV-LICENSE.LGPL', 'Assets\StoreLogo.png')) {
-            if (-not ($listing -match [regex]::Escape($entry))) { throw "Missing $entry inside $msix" }
+            if ($listing -notmatch [regex]::Escape($entry)) { throw "Missing $entry inside $msix" }
           }
-          $xml = & 7z e -so $msix AppxManifest.xml
+          $xml = (& 7z e -so $msix AppxManifest.xml) -join "`n"
           if ($xml -notmatch 'Name="Disame\.Triboon"') { throw "Unexpected Package Identity Name in AppxManifest.xml" }
           if ($xml -notmatch 'Publisher="CN=CC350014-1964-4C3C-BCF7-6D4262F0EC93"') { throw "Unexpected Publisher in AppxManifest.xml" }
           if ($xml -notmatch "Version=`"$ver\.0`"") { throw "Unexpected Version in AppxManifest.xml" }
