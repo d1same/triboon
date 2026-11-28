@@ -34,7 +34,7 @@ Triboon for Roku (`clients/roku/`) is a **100% native BrightScript + SceneGraph*
 - **Included Channel Artwork** (`clients/roku/images/`):
   - Store Poster HD (540×405 PNG): `clients/roku/images/icon-store-540x405.png`
   - Channel Focus Icon HD (290×218 PNG): `clients/roku/images/icon-focus-hd.png`
-  - Channel Focus Icon SD (214×144 PNG): `clients/roku/images/icon-focus-sd.png`
+  - Channel Focus Icon SD (246×140 PNG): `clients/roku/images/icon-focus-sd.png`
   - Splash Screen FHD (1920×1080 PNG): `clients/roku/images/splash-fhd.png`
   - Splash Screen HD (1280×720 PNG): `clients/roku/images/splash-hd.png`
   - Splash Screen SD (720×480 PNG): `clients/roku/images/splash-sd.png`

@@ -22,10 +22,12 @@ test('Roku channel: manifest versions align with package.json and artwork matche
   assert.match(manifest, new RegExp(`^minor_version=${min}$`, 'm'));
   assert.match(manifest, new RegExp(`^build_version=${patch}$`, 'm'));
   assert.match(manifest, /^ui_resolutions=fhd$/m);
+  assert.match(manifest, /^rsg_version=1\.3$/m);
+  assert.match(manifest, /^supports_input_launch=1$/m);
   assert.match(manifest, /^splash_color=#0b0b0f$/m);
 
   assert.deepStrictEqual(pngSize('clients/roku/images/icon-focus-hd.png'), { width: 290, height: 218 });
-  assert.deepStrictEqual(pngSize('clients/roku/images/icon-focus-sd.png'), { width: 214, height: 144 });
+  assert.deepStrictEqual(pngSize('clients/roku/images/icon-focus-sd.png'), { width: 246, height: 140 });
   assert.deepStrictEqual(pngSize('clients/roku/images/icon-store-540x405.png'), { width: 540, height: 405 });
   assert.deepStrictEqual(pngSize('clients/roku/images/splash-fhd.png'), { width: 1920, height: 1080 });
   assert.deepStrictEqual(pngSize('clients/roku/images/splash-hd.png'), { width: 1280, height: 720 });
@@ -35,6 +37,8 @@ test('Roku channel: manifest versions align with package.json and artwork matche
 test('Roku channel: native SceneGraph components, background Task networking, and core TV flows are complete', () => {
   const mainBrs = read('clients/roku/source/main.brs');
   assert.match(mainBrs, /CreateScene\("MainScene"\)/);
+  assert.match(mainBrs, /CreateObject\("roInput"\)/);
+  assert.match(mainBrs, /roInputEvent/);
 
   const utils = read('clients/roku/source/TriboonUtils.brs');
   assert.match(utils, /function TriboonNormalizeServerUrl\(/);
@@ -56,7 +60,12 @@ test('Roku channel: native SceneGraph components, background Task networking, an
   assert.match(sceneXml, /<component name="MainScene" extends="Scene">/);
   assert.match(sceneXml, /<RowList id="browseRows"/);
   assert.match(sceneXml, /<Video id="videoPlayer"/);
+  assert.match(sceneXml, /<ChannelStore id="channelStore"/);
   assert.match(sceneBrs, /signalBeacon\("AppLaunchComplete"\)/);
+  assert.match(sceneBrs, /signalBeacon\("AppDialogInitiate"\)/);
+  assert.match(sceneBrs, /signalBeacon\("AppDialogComplete"\)/);
+  assert.match(sceneBrs, /StandardKeyboardDialog/);
+  assert.match(sceneBrs, /getUserData/);
   assert.match(sceneBrs, /\/api\/quickconnect/);
   assert.match(sceneBrs, /\/api\/login\/2fa/);
   assert.match(sceneBrs, /\/api\/watch\?profile=/);

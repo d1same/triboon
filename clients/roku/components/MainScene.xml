@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <component name="MainScene" extends="Scene">
     <interface>
-        <field id="launchArgs" type="assocarray" />
+        <field id="launchArgs" type="assocarray" onChange="onDeepLinkArgs" />
+        <field id="inputArgs" type="assocarray" onChange="onDeepLinkArgs" />
     </interface>
 
     <children>
@@ -107,9 +108,10 @@
             </Rectangle>
         </Group>
 
-        <!-- TIMERS -->
+        <!-- TIMERS & ROKU CHANNEL STORE (RFI) -->
         <Timer id="qcPollTimer" repeat="true" duration="2.5" />
         <Timer id="watchSaveTimer" repeat="true" duration="15" />
+        <ChannelStore id="channelStore" />
     </children>
 
     <script type="text/brightscript" uri="pkg:/source/TriboonUtils.brs" />

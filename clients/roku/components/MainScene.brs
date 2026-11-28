@@ -76,6 +76,10 @@ sub bindNodes()
 
     m.qcPollTimer = m.top.findNode("qcPollTimer")
     m.watchSaveTimer = m.top.findNode("watchSaveTimer")
+    m.channelStore = m.top.findNode("channelStore")
+    m.rfiEmail = ""
+    m.dialogBeaconOpen = false
+    m.pendingDeepLink = invalid
 end sub
 
 sub setupControls()
@@ -105,6 +109,58 @@ sub setupControls()
     m.videoPlayer.observeField("state", "onVideoStateChanged")
     m.qcPollTimer.observeField("fire", "onQuickConnectPollTick")
     m.watchSaveTimer.observeField("fire", "onWatchSaveTick")
+    if m.channelStore <> invalid
+        m.channelStore.observeField("userData", "onRokuUserData")
+    end if
+end sub
+
+sub requestRokuUserEmail()
+    if m.channelStore = invalid then return
+    m.channelStore.requestedUserData = "email"
+    m.channelStore.command = "getUserData"
+end sub
+
+sub onRokuUserData()
+    if m.channelStore = invalid then return
+    ud = m.channelStore.userData
+    if ud <> invalid and ud.email <> invalid and ud.email <> ""
+        m.rfiEmail = ud.email.ToStr()
+    end if
+end sub
+
+sub onDeepLinkArgs(event as Object)
+    args = event.getData()
+    if args = invalid or args.contentId = invalid or args.contentId.ToStr() = "" then return
+    m.pendingDeepLink = {
+        contentId: args.contentId.ToStr(),
+        mediaType: ""
+    }
+    if args.mediaType <> invalid then m.pendingDeepLink.mediaType = LCase(args.mediaType.ToStr())
+    if m.activeView = "browse" and m.authToken <> ""
+        handlePendingDeepLink()
+    end if
+end sub
+
+sub handlePendingDeepLink()
+    if m.pendingDeepLink = invalid then return
+    dl = m.pendingDeepLink
+    m.pendingDeepLink = invalid
+    mType = dl.mediaType
+    if mType = "" or mType = "episode" or mType = "series" or mType = "season" then mType = "tv"
+    if mType <> "movie" and mType <> "tv" then mType = "movie"
+    cid = Val(dl.contentId)
+    if cid > 0
+        key = "tmdb:" + mType + ":" + Int(cid).ToStr()
+        sVal = invalid
+        eValNum = invalid
+        if mType = "tv"
+            sVal = 1
+            eValNum = 1
+            key = key + ":s1e1"
+        end if
+        meta = { title: "Triboon", type: mType, tmdbId: Int(cid) }
+        startCatalogPlayback("Triboon", mType, invalid, Int(cid), sVal, eValNum, key, 0, meta)
+    end if
 end sub
 
 sub showView(name as String)
@@ -121,6 +177,18 @@ sub showView(name as String)
     end if
     if name <> "player"
         m.watchSaveTimer.control = "stop"
+    end if
+
+    if name = "connect" or name = "login" or name = "profiles"
+        if not m.dialogBeaconOpen
+            m.top.signalBeacon("AppDialogInitiate")
+            m.dialogBeaconOpen = true
+        end if
+    else if name = "browse"
+        if m.dialogBeaconOpen
+            m.top.signalBeacon("AppDialogComplete")
+            m.dialogBeaconOpen = false
+        end if
     end if
 
     if name = "connect"
@@ -297,7 +365,8 @@ sub onLoginButton()
     if idx = 0
         startQuickConnect()
     else if idx = 1
-        openKeyboardDialog("login_user", "Username", "Enter Triboon username", "", false)
+        requestRokuUserEmail()
+        openKeyboardDialog("login_user", "Username", "Enter Triboon username", m.rfiEmail, false)
     else if idx = 2
         showView("connect")
     end if
@@ -371,6 +440,7 @@ sub afterUserLoaded()
     end if
     showView("browse")
     loadTab("home")
+    handlePendingDeepLink()
 end sub
 
 sub openProfilePicker(profiles as Object)
@@ -400,6 +470,7 @@ sub onProfileSelected()
     m.pickedProfileThisSession = true
     showView("browse")
     loadTab("home")
+    handlePendingDeepLink()
 end sub
 
 ' =============================================================================
@@ -1187,12 +1258,19 @@ end sub
 
 sub openKeyboardDialog(purpose as String, title as String, hint as String, initialText as String, secure as Boolean)
     m.keyboardPurpose = purpose
-    dlg = CreateObject("roSGNode", "KeyboardDialog")
+    dlg = CreateObject("roSGNode", "StandardKeyboardDialog")
     dlg.title = title
     dlg.message = [hint]
     dlg.buttons = ["OK", "Cancel"]
     if initialText <> invalid and initialText <> "" then dlg.text = initialText
-    if secure then dlg.keyboard.textEditBox.secureMode = true
+    if secure
+        dlg.textEditBox.secureMode = true
+        dlg.keyboardDomain = "password"
+    else if purpose = "login_user"
+        dlg.keyboardDomain = "email"
+    else if purpose = "login_2fa"
+        dlg.keyboardDomain = "pin"
+    end if
     dlg.observeField("buttonSelected", "onKeyboardDialogButton")
     m.top.dialog = dlg
 end sub
