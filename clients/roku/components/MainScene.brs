@@ -54,6 +54,10 @@ sub bindNodes()
     m.profileList = m.top.findNode("profileList")
 
     m.browseView = m.top.findNode("browseView")
+    m.browseBackdrop = m.top.findNode("browseBackdrop")
+    m.browseHeroTitle = m.top.findNode("browseHeroTitle")
+    m.browseHeroMeta = m.top.findNode("browseHeroMeta")
+    m.browseHeroOverview = m.top.findNode("browseHeroOverview")
     m.navTabs = m.top.findNode("navTabs")
     m.browseStatus = m.top.findNode("browseStatus")
     m.browseRows = m.top.findNode("browseRows")
@@ -103,6 +107,7 @@ sub setupControls()
     m.navTabs.observeField("itemSelected", "onNavTabSelected")
 
     m.browseRows.observeField("rowItemSelected", "onBrowseItemSelected")
+    m.browseRows.observeField("rowItemFocused", "onBrowseItemFocused")
     m.detailButtons.observeField("buttonSelected", "onDetailButton")
     m.episodeRows.observeField("rowItemSelected", "onEpisodeItemSelected")
 
@@ -882,6 +887,46 @@ end sub
 ' SELECTION, DETAIL VIEW & PLAYBACK
 ' =============================================================================
 
+sub onBrowseItemFocused()
+    if m.browseRows = invalid or m.browseRows.content = invalid then return
+    foc = m.browseRows.rowItemFocused
+    if foc = invalid or foc.Count() < 2 then return
+    row = m.browseRows.content.getChild(foc[0])
+    if row = invalid then return
+    item = row.getChild(foc[1])
+    if item = invalid then return
+
+    m.browseHeroTitle.text = item.title
+    metaParts = []
+    if item.HasField("voteAverage") and item.voteAverage <> invalid and item.voteAverage > 0
+        metaParts.Push("★ " + Left(item.voteAverage.ToStr(), 3))
+    end if
+    if item.HasField("year") and item.year <> invalid and item.year.ToStr() <> "" and item.year.ToStr() <> "0"
+        metaParts.Push(item.year.ToStr())
+    end if
+    if row.title <> invalid and row.title <> ""
+        metaParts.Push(row.title)
+    end if
+    metaStr = ""
+    for each part in metaParts
+        if metaStr <> "" then metaStr = metaStr + "  •  "
+        metaStr = metaStr + part
+    end for
+    m.browseHeroMeta.text = metaStr
+
+    ov = ""
+    if item.HasField("overview") and item.overview <> invalid then ov = item.overview.ToStr()
+    m.browseHeroOverview.text = ov
+
+    bgUrl = ""
+    if item.HasField("backdropUrl") and item.backdropUrl <> invalid and item.backdropUrl <> ""
+        bgUrl = item.backdropUrl.ToStr()
+    else if item.HDPosterUrl <> invalid and item.HDPosterUrl <> ""
+        bgUrl = item.HDPosterUrl.ToStr()
+    end if
+    if m.browseBackdrop <> invalid then m.browseBackdrop.uri = bgUrl
+end sub
+
 sub onBrowseItemSelected()
     sel = m.browseRows.rowItemSelected
     if sel = invalid or sel.Count() < 2 then return
@@ -1156,24 +1201,27 @@ end sub
 
 sub startCatalogPlayback(title as String, mType as String, yearVal as Dynamic, tmdbId as Integer, seasonVal as Dynamic, epVal as Dynamic, watchKey as String, startSec as Integer, meta as Object)
     m.detailStatus.text = "Finding best healthy stream..."
+    if m.activeView = "browse" then m.browseStatus.text = "Finding best healthy stream..."
     m.playContext = { kind: "vod", title: title, watchKey: watchKey, startSec: startSec, meta: meta }
     body = {
-        title: title,
-        type: mType,
+        q: title,
+        mediaType: mType,
         tmdbId: tmdbId,
         profileId: m.profileId,
+        client: "roku",
         caps: TriboonRokuCaps()
     }
     if yearVal <> invalid and yearVal > 0 then body.year = yearVal
     if seasonVal <> invalid then body.season = seasonVal
-    if epVal <> invalid then body.episode = epVal
+    if epVal <> invalid then body.ep = epVal
     apiRequest("play_vod", "POST", "/api/play", body, true, 60)
 end sub
 
 sub startLocalPlayback(libId as String, localIdx as Integer, title as String, watchKey as String, startSec as Integer, meta as Object)
     m.detailStatus.text = "Starting playback..."
+    if m.activeView = "browse" then m.browseStatus.text = "Starting playback..."
     m.playContext = { kind: "vod", title: title, watchKey: watchKey, startSec: startSec, meta: meta }
-    body = { profileId: m.profileId, caps: TriboonRokuCaps() }
+    body = { profileId: m.profileId, client: "roku", caps: TriboonRokuCaps() }
     apiRequest("play_vod", "POST", "/api/local/" + libId + "/" + localIdx.ToStr() + "/play", body, true, 30)
 end sub
 
@@ -1197,7 +1245,9 @@ end function
 
 sub handlePlayVodResponse(res as Object)
     if not res.ok or res.data = invalid
-        m.detailStatus.text = friendlyRokuError(res.error, "Playback could not start.")
+        errMsg = friendlyRokuError(res.error, "Playback could not start.")
+        m.detailStatus.text = errMsg
+        if m.activeView = "browse" then m.browseStatus.text = errMsg
         return
     end if
     startSec = 0
@@ -1205,9 +1255,11 @@ sub handlePlayVodResponse(res as Object)
     stream = TriboonPreferredVodStream(m.serverUrl, res.data, startSec)
     if stream.url = ""
         m.detailStatus.text = "This title isn't playable right now."
+        if m.activeView = "browse" then m.browseStatus.text = "This title isn't playable right now."
         return
     end if
     m.detailStatus.text = ""
+    m.browseStatus.text = ""
     startNativeVideo(stream.url, stream.streamFormat, m.playContext.title, false, startSec)
 end sub
 
@@ -1257,6 +1309,7 @@ sub startNativeVideo(url as String, streamFormat as String, title as String, isL
     content.streamFormat = streamFormat
     content.title = title
     content.live = isLive
+    content.HttpCertificatesFile = "common:/certs/ca-bundle.crt"
     if not isLive and startSec > 1 and streamFormat = "mp4"
         content.playStart = startSec
     end if

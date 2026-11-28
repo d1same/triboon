@@ -51,23 +51,35 @@
 
         <!-- BROWSE VIEW -->
         <Group id="browseView" visible="false">
-            <Rectangle width="1920" height="96" color="0x111118FF" />
-            <Label text="TRIBOON" translation="[64, 28]" font="font:MediumBoldSystemFont" color="0xE11D74FF" />
-            <LabelList id="navTabs" translation="[280, 22]" itemSize="[190, 54]" numRows="1"
+            <Poster id="browseBackdrop" width="1920" height="1080" loadDisplayMode="scaleToFill" />
+            <Rectangle width="1920" height="1080" color="0x0B0B0FCC" />
+            <Rectangle width="1920" height="96" color="0x0E0E15EE" />
+            <Rectangle width="1920" height="2" translation="[0, 96]" color="0xE11D7466" />
+            <Poster uri="pkg:/images/icon-focus-hd.png" width="148" height="72" translation="[48, 12]" loadDisplayMode="scaleToFit" />
+            <LabelList id="navTabs" translation="[240, 22]" itemSize="[210, 54]" numRows="1"
                        vertFocusAnimationStyle="floatingFocus" color="0x9DA0AEFF" focusedColor="0xFFFFFFFF" />
-            <Label id="navHint" text="Press UP for tabs  •  OK to select  •  * for Search" translation="[64, 110]"
-                   width="1792" font="font:SmallestSystemFont" color="0x7D8090FF" />
-            <Label id="browseStatus" text="" translation="[64, 152]" width="1792"
-                   font="font:SmallSystemFont" color="0x9DA0AEFF" />
-            <RowList id="browseRows" translation="[64, 198]"
+            <Label id="navHint" text="UP for menu  •  OK to open  •  * for Search" translation="[1240, 34]"
+                   width="620" horizAlign="right" font="font:SmallestSystemFont" color="0x9DA0AEFF" />
+
+            <!-- Focused title hero banner -->
+            <Label id="browseHeroTitle" text="Triboon" translation="[64, 118]" width="1280"
+                   font="font:LargeBoldSystemFont" color="0xF5F5F7FF" ellipsizeOnBoundary="true" />
+            <Label id="browseHeroMeta" text="" translation="[64, 184]" width="1280"
+                   font="font:SmallBoldSystemFont" color="0xE11D74FF" />
+            <Label id="browseHeroOverview" text="" translation="[64, 220]" width="1220" height="74"
+                   wrap="true" maxLines="2" font="font:SmallSystemFont" color="0xD4D6E0FF" ellipsizeOnBoundary="true" />
+            <Label id="browseStatus" text="" translation="[64, 298]" width="1792"
+                   font="font:SmallSystemFont" color="0xFB7185FF" />
+
+            <RowList id="browseRows" translation="[64, 336]"
                      itemComponentName="PosterItem"
                      numRows="2"
-                     itemSize="[1792, 392]"
-                     rowItemSize="[[228, 338]]"
-                     rowItemSpacing="[[28, 0]]"
+                     itemSize="[1792, 360]"
+                     rowItemSize="[[228, 326]]"
+                     rowItemSpacing="[[26, 0]]"
                      showRowLabel="[true]"
                      showRowCounter="[true]"
-                     rowLabelOffset="[[0, 14]]"
+                     rowLabelOffset="[[0, 12]]"
                      rowFocusAnimationStyle="floatingFocus"
                      vertFocusAnimationStyle="floatingFocus" />
         </Group>

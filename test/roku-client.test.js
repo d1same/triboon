@@ -68,6 +68,11 @@ test('Roku channel: native SceneGraph components, background Task networking, an
   assert.match(sceneBrs, /getUserData/);
   assert.match(sceneBrs, /Left\(LCase\(rawCid\), 6\) = "local:"/);
   assert.match(sceneBrs, /handleHomeLibrariesList/);
+  assert.match(sceneBrs, /q:\s*title/);
+  assert.match(sceneBrs, /mediaType:\s*mType/);
+  assert.match(sceneBrs, /body\.ep\s*=\s*epVal/);
+  assert.match(sceneBrs, /onBrowseItemFocused/);
+  assert.match(utils, /vod=1/);
   assert.match(sceneBrs, /\/api\/quickconnect/);
   assert.match(sceneBrs, /\/api\/login\/2fa/);
   assert.match(sceneBrs, /\/api\/watch\?profile=/);

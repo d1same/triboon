@@ -76,9 +76,9 @@ function TriboonPreferredVodStream(baseOrigin as String, playRes as Object, star
         sep = "?"
         if Instr(1, hls, "?") > 0 then sep = "&"
         if startSec > 1
-            hls = hls + sep + "start=" + startSec.ToStr() + "&audioSafe=1"
+            hls = hls + sep + "vod=1&start=" + startSec.ToStr() + "&audioSafe=1"
         else
-            hls = hls + sep + "audioSafe=1"
+            hls = hls + sep + "vod=1&audioSafe=1"
         end if
         result.url = hls
         result.streamFormat = "hls"
