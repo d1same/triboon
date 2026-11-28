@@ -12512,10 +12512,11 @@ Object.assign(H, {
     // movie. Swapping piece 0 for the movie is the desktop "loading failed" dialog.
     // Android TV opens a black picture while the first movie piece buffers.
     // Put the Loading card in front even when those pieces are already named.
-    if (jellyfinPlaylist && sessionStart < 1 && !sess.loadHold && realPieces > 0 && await ensureResumePad()) {
+    const skipLoadingPad = ctx.url.searchParams.get('noPad') === '1';
+    if (jellyfinPlaylist && !skipLoadingPad && sessionStart < 1 && !sess.loadHold && realPieces > 0 && await ensureResumePad()) {
       sess.loadHold = 2;
     }
-    if (jellyfinPlaylist && sessionStart < 1 && sess.loadHold && /seg\d+\.m4s/.test(raw)) raw = pictureAfterLoadingCard(sess.loadHold, raw);
+    if (jellyfinPlaylist && !skipLoadingPad && sessionStart < 1 && sess.loadHold && /seg\d+\.m4s/.test(raw)) raw = pictureAfterLoadingCard(sess.loadHold, raw);
     // A growing list with no end is a live channel to the phone. It then sits
     // a few seconds from the newest piece and spins whenever that piece is
     // late. TIME-OFFSET=0 starts at the beginning, so the phone can keep a

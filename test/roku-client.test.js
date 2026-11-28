@@ -44,6 +44,9 @@ test('Roku channel: native SceneGraph components, background Task networking, an
   assert.match(utils, /function TriboonNormalizeServerUrl\(/);
   assert.match(utils, /function TriboonRokuCaps\(/);
   assert.match(utils, /mkv:\s*false/);
+  assert.match(utils, /ac3:\s*false/);
+  assert.match(utils, /eac3:\s*false/);
+  assert.match(utils, /playRes\.playback\.method/);
   assert.match(utils, /hls:\s*true/);
   assert.match(utils, /function TriboonPreferredVodStream\(/);
   assert.match(utils, /function TriboonOrderedLiveStreams\(/);

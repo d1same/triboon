@@ -336,14 +336,16 @@ function TriboonResolveUrl(baseOrigin as String, rawPath as Dynamic) as String
 end function
 
 function TriboonRokuCaps() as Object
+    ' Report ac3/eac3/dts false so Triboon always remuxes Dolby/DTS tracks to Roku-universal stereo AAC
+    ' instead of sending silent AC-3/E-AC-3 direct MP4s to stereo TVs without an AVR/soundbar.
     return {
         mkv: false,
         mp4: true,
         h264: true,
         hevc: true,
         aac: true,
-        ac3: true,
-        eac3: true,
+        ac3: false,
+        eac3: false,
         dts: false,
         hls: true
     }
@@ -362,38 +364,57 @@ function TriboonOrderedVodStreams(baseOrigin as String, playRes as Object, start
     fileName = ""
     if playRes.name <> invalid then fileName = LCase(playRes.name.ToStr())
     directMp4 = (Right(fileName, 4) = ".mp4" or Right(fileName, 4) = ".m4v" or Right(fileName, 4) = ".mov")
-    playMode = ""
-    if playRes.playback <> invalid and type(playRes.playback) = "roAssociativeArray" and playRes.playback.mode <> invalid
-        playMode = LCase(playRes.playback.mode.ToStr())
+    playMethod = ""
+    if playRes.playback <> invalid and type(playRes.playback) = "roAssociativeArray"
+        if playRes.playback.method <> invalid
+            playMethod = LCase(playRes.playback.method.ToStr())
+        else if playRes.playback.mode <> invalid
+            playMethod = LCase(playRes.playback.mode.ToStr())
+        end if
     end if
 
-    ' 1. Direct MP4 only when container is MP4/M4V/MOV, starting near 0, and server says direct (not transcode)
-    if directMp4 and startSec <= 0 and playMode <> "transcode" and playRes.streamUrl <> invalid and playRes.streamUrl <> ""
+    ' 1. Direct MP4 ONLY when container is MP4/M4V/MOV, starting near 0, and server confirmed method="direct"
+    '    (guarantees AAC/MP3 audio instead of silent AC-3/E-AC-3 on stereo Roku TVs).
+    if directMp4 and startSec <= 0 and playMethod = "direct" and playRes.streamUrl <> invalid and playRes.streamUrl <> ""
         TriboonAppendLiveCandidate(list, baseOrigin, playRes.streamUrl, "mp4")
     end if
 
-    ' 2. HLS VOD (vod=1 holds all segments for full scrubbing & transcodes to Roku-safe H.264/AAC)
+    ' 2. HLS with forced stereo 48kHz AAC (audioSafe=1) and NO padinit.mp4 discontinuity
+    '    (Roku's fMP4 player can drop audio across vod=1's silent loading-card discontinuity).
     if playRes.hlsUrl <> invalid and playRes.hlsUrl <> ""
         hlsBase = TriboonResolveUrl(baseOrigin, playRes.hlsUrl)
         sep = "?"
         if Instr(1, hlsBase, "?") > 0 then sep = "&"
         startQ = ""
         if startSec > 1 then startQ = "&start=" + startSec.ToStr()
-        TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "vod=1&audioSafe=1" + startQ, "hls")
-        ' 3. HLS 1080p H.264/AAC transcode fallback
-        TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "transcode=1&height=1080&audioSafe=1" + startQ, "hls")
-        ' 4. HLS video-copy + stereo AAC fallback (handles 4K when GPU transcode is disabled)
-        TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "audioSafe=1" + startQ, "hls")
+        if playMethod = "transcode"
+            TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "transcode=1&height=1080&audioSafe=1" + startQ, "hls")
+            TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "audioSafe=1" + startQ, "hls")
+        else
+            ' Original video quality + guaranteed stereo AAC audio (works on existing & new servers)
+            TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "audioSafe=1" + startQ, "hls")
+            ' 1080p H.264/AAC transcode fallback (handles Persian/local Xvid, MPEG-4, High10, exotic codecs)
+            TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "transcode=1&height=1080&audioSafe=1" + startQ, "hls")
+        end if
+        ' VOD fallback with noPad=1 (skips loading-card discontinuity on updated servers)
+        TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "vod=1&noPad=1&audioSafe=1" + startQ, "hls")
     end if
 
-    ' 5. Direct streamUrl / remuxUrl last-resort fallback
+    ' 3. Remux MP4 with forced stereo AAC fallback
+    if playRes.remuxUrl <> invalid and playRes.remuxUrl <> ""
+        remuxBase = TriboonResolveUrl(baseOrigin, playRes.remuxUrl)
+        rSep = "?"
+        if Instr(1, remuxBase, "?") > 0 then rSep = "&"
+        rStartQ = ""
+        if startSec > 1 then rStartQ = "&start=" + startSec.ToStr()
+        TriboonAppendLiveCandidate(list, baseOrigin, remuxBase + rSep + "audioSafe=1" + rStartQ, "mp4")
+    end if
+
+    ' 4. Direct streamUrl last-resort fallback
     if playRes.streamUrl <> invalid and playRes.streamUrl <> ""
         fmt = "hls"
         if directMp4 then fmt = "mp4"
         TriboonAppendLiveCandidate(list, baseOrigin, playRes.streamUrl, fmt)
-    end if
-    if playRes.remuxUrl <> invalid and playRes.remuxUrl <> ""
-        TriboonAppendLiveCandidate(list, baseOrigin, playRes.remuxUrl, "mp4")
     end if
 
     return list
