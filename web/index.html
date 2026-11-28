@@ -31264,6 +31264,24 @@ async function renderAppUpdateBox() {
       }
     }
   } catch {}
+  const playAndroid = isPlayStoreAndroidShell();
+  const amazonAndroid = isAmazonStoreAndroidShell();
+  const webosTv = isWebOSTVShell();
+  const tizenTv = isTizenTVShell();
+  const msStoreWin = isMicrosoftStoreWindowsShell();
+  const apple = isAppleAppShell();
+  const managedStore = apple || playAndroid || amazonAndroid || webosTv || tizenTv || msStoreWin;
+  if (managedStore) {
+    status.classList.remove('updateAvail');
+    const storeName = apple ? 'App Store / TestFlight'
+      : playAndroid ? 'Google Play'
+      : amazonAndroid ? 'Amazon Appstore'
+      : webosTv ? 'LG Content Store'
+      : tizenTv ? 'Samsung Apps'
+      : 'Microsoft Store';
+    status.textContent = `${current ? 'Current: ' + current + '. ' : ''}Updates are delivered automatically through the ${storeName}.`;
+    return;
+  }
   let latest = '', latestVer = '';
   latestVer = await fetchLatestAppVersion(); // server-cached (falls back to GitHub) — no per-device rate limit
   if (latestVer) latest = ` Latest release: ${latestVer}.`;
@@ -31284,7 +31302,7 @@ function openWindowsUpdate(url) {
   try {
     if (isWindowsDesktopClient() && window.TriboonTV && typeof TriboonTV.installAppUpdate === 'function') {
       TriboonTV.installAppUpdate(url);
-      toast('Downloading update…');
+      toast(isMicrosoftStoreWindowsShell() ? 'Opening Microsoft Store…' : 'Downloading update…');
       return;
     }
   } catch {}
