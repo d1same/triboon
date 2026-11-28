@@ -37,12 +37,13 @@ jobs:
         run: |
           ver=$(node -p "require('./package.json').version")
           mkdir -p dist/roku
-          (cd clients/roku && zip -r "../../dist/roku/Triboon-Roku-v${ver}.zip" manifest source components images -x "images/icon-store-540x405.png")
+          (cd clients/roku && zip -r "../../dist/roku/Triboon-Roku-v${ver}.zip" manifest source components images fonts -x "images/icon-store-540x405.png")
           zip_path="dist/roku/Triboon-Roku-v${ver}.zip"
           test -s "$zip_path" || { echo "Expected Roku channel zip at $zip_path"; exit 1; }
           unzip -l "$zip_path" | grep -q "manifest"
           unzip -l "$zip_path" | grep -q "source/main.brs"
           unzip -l "$zip_path" | grep -q "components/MainScene.xml"
+          unzip -l "$zip_path" | grep -q "fonts/Vazirmatn-Regular.ttf"
           sha256sum "$zip_path" > "${zip_path}.sha256"
           ls -lh dist/roku/
       - name: Upload Roku channel zip artifact
