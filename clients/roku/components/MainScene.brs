@@ -136,7 +136,7 @@ sub onDeepLinkArgs(event as Object)
         mediaType: ""
     }
     if args.mediaType <> invalid then m.pendingDeepLink.mediaType = LCase(args.mediaType.ToStr())
-    if m.activeView = "browse" and m.authToken <> ""
+    if m.authToken <> "" and (m.activeView = "browse" or m.activeView = "detail" or m.activeView = "player")
         handlePendingDeepLink()
     end if
 end sub
@@ -145,21 +145,32 @@ sub handlePendingDeepLink()
     if m.pendingDeepLink = invalid then return
     dl = m.pendingDeepLink
     m.pendingDeepLink = invalid
+    rawCid = dl.contentId.Trim()
+    if Left(LCase(rawCid), 6) = "local:"
+        parts = rawCid.Split(":")
+        if parts.Count() >= 3
+            libId = parts[1]
+            idxVal = Int(Val(parts[2]))
+            meta = { title: "Triboon", type: "movie", libId: libId, idx: idxVal }
+            startLocalPlayback(libId, idxVal, "Triboon", rawCid, 0, meta)
+            return
+        end if
+    end if
     mType = dl.mediaType
     if mType = "" or mType = "episode" or mType = "series" or mType = "season" then mType = "tv"
     if mType <> "movie" and mType <> "tv" then mType = "movie"
-    cid = Val(dl.contentId)
+    cid = Val(rawCid)
     if cid > 0
         key = "tmdb:" + mType + ":" + Int(cid).ToStr()
-        sVal = invalid
-        eValNum = invalid
+        seasonNum = invalid
+        episodeNum = invalid
         if mType = "tv"
-            sVal = 1
-            eValNum = 1
+            seasonNum = 1
+            episodeNum = 1
             key = key + ":s1e1"
         end if
         meta = { title: "Triboon", type: mType, tmdbId: Int(cid) }
-        startCatalogPlayback("Triboon", mType, invalid, Int(cid), sVal, eValNum, key, 0, meta)
+        startCatalogPlayback("Triboon", mType, invalid, Int(cid), seasonNum, episodeNum, key, 0, meta)
     end if
 end sub
 
@@ -257,7 +268,11 @@ sub onApiResponse(event as Object)
     else if tag = "me"
         handleMeResponse(res)
     else if Left(tag, 5) = "home_"
-        handleHomeRowResponse(tag, res)
+        if tag = "home_libs"
+            handleHomeLibrariesList(res)
+        else
+            handleHomeRowResponse(tag, res)
+        end if
     else if Left(tag, 7) = "movies_"
         handleCatalogRowResponse("movies", tag, res)
     else if Left(tag, 3) = "tv_"
@@ -491,7 +506,9 @@ sub loadTab(tabKey as String)
 
     if tabKey = "home"
         m.browseStatus.text = "Loading Home..."
+        m.homeLibsMeta = []
         apiRequest("home_watch", "GET", "/api/watch?profile=" + m.profileId, invalid, true, 12)
+        apiRequest("home_libs", "GET", "/api/libraries", invalid, true, 12)
         apiRequest("home_trending", "GET", "/api/tmdb/trending/all/day", invalid, true, 12)
         apiRequest("home_movies", "GET", "/api/tmdb/movie/popular", invalid, true, 12)
         apiRequest("home_tv", "GET", "/api/tmdb/tv/popular", invalid, true, 12)
@@ -541,6 +558,17 @@ sub renderAccountTab()
     m.browseRows.setFocus(true)
 end sub
 
+sub handleHomeLibrariesList(res as Object)
+    if m.activeTab <> "home" then return
+    if not res.ok or res.data = invalid or res.data.libraries = invalid then return
+    m.homeLibsMeta = res.data.libraries
+    for each lib in m.homeLibsMeta
+        if lib.id <> invalid
+            apiRequest("home_lib_" + lib.id.ToStr(), "GET", "/api/libraries/" + lib.id.ToStr() + "/items?offset=0&limit=30", invalid, true, 15)
+        end if
+    end for
+end sub
+
 sub handleHomeRowResponse(tag as String, res as Object)
     if m.activeTab <> "home" then return
     if res.ok and res.data <> invalid
@@ -550,6 +578,16 @@ sub handleHomeRowResponse(tag as String, res as Object)
     root = CreateObject("roSGNode", "ContentNode")
     if m.homeRowsCache.DoesExist("home_watch")
         addWatchRow(root, "Continue Watching", m.homeRowsCache["home_watch"])
+    end if
+    if m.homeLibsMeta <> invalid and type(m.homeLibsMeta) = "roArray"
+        for each lib in m.homeLibsMeta
+            if lib.id <> invalid
+                lk = "home_lib_" + lib.id.ToStr()
+                if m.homeRowsCache.DoesExist(lk)
+                    addLocalItemsRow(root, lib, m.homeRowsCache[lk].items)
+                end if
+            end if
+        end for
     end if
     if m.homeRowsCache.DoesExist("home_trending")
         addTmdbRow(root, "Trending Today", m.homeRowsCache["home_trending"], "")
@@ -563,6 +601,33 @@ sub handleHomeRowResponse(tag as String, res as Object)
     m.browseRows.content = root
     m.browseStatus.text = ""
     if m.activeView = "browse" then m.browseRows.setFocus(true)
+end sub
+
+sub addLocalItemsRow(root as Object, lib as Object, items as Dynamic)
+    if items = invalid or type(items) <> "roArray" or items.Count() = 0 then return
+    row = root.createChild("ContentNode")
+    row.title = lib.name
+    for each it in items
+        node = row.createChild("ContentNode")
+        node.title = it.title
+        poster = ""
+        if it.artUrl <> invalid and it.artUrl <> ""
+            poster = TriboonResolveUrl(m.serverUrl, it.artUrl)
+        else if it.poster <> invalid and it.poster <> ""
+            poster = TriboonResolveUrl(m.serverUrl, TriboonTmdbImage(it.poster, "w342"))
+        end if
+        node.HDPosterUrl = poster
+        node.addFields({
+            itemKind: "local",
+            libId: lib.id.ToStr(),
+            localIdx: it.idx,
+            localKind: it.kind,
+            year: it.year,
+            overview: it.overview,
+            backdropUrl: TriboonResolveUrl(m.serverUrl, TriboonTmdbImage(it.backdrop, "w1280")),
+            progress: 0.0
+        })
+    end for
 end sub
 
 sub handleCatalogRowResponse(tabKey as String, tag as String, res as Object)

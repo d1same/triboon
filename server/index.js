@@ -15417,6 +15417,10 @@ if (require.main === module) {
     // the heavy network refresh can begin after login/playback/TV navigation have settled.
     scheduleIptvWarmSoon('startup', IPTV_STARTUP_WARM_DELAY_MS, { skipGuide: true });
     scheduleNextIptvWarm();
+    if (process.env.TRIBOON_STORE_DEMO === '1') {
+      require('./demo-seed').seedStoreDemo({ dataDir: DATA_DIR, auth, store, performScan, scanStates })
+        .catch((e) => console.error('[demo-seed] failed:', e && e.message));
+    }
     // Stable resume keys (3.4.16): libraries stored by an older version get their keys, and saved
     // progress moves to its title once (with a backup first), from the stored items, with no disk
     // walk, so the pages never wait for the first scan, which can wait 2 h behind playback.

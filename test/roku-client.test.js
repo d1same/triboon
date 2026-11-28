@@ -66,6 +66,8 @@ test('Roku channel: native SceneGraph components, background Task networking, an
   assert.match(sceneBrs, /signalBeacon\("AppDialogComplete"\)/);
   assert.match(sceneBrs, /StandardKeyboardDialog/);
   assert.match(sceneBrs, /getUserData/);
+  assert.match(sceneBrs, /Left\(LCase\(rawCid\), 6\) = "local:"/);
+  assert.match(sceneBrs, /handleHomeLibrariesList/);
   assert.match(sceneBrs, /\/api\/quickconnect/);
   assert.match(sceneBrs, /\/api\/login\/2fa/);
   assert.match(sceneBrs, /\/api\/watch\?profile=/);
