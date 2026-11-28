@@ -68,128 +68,130 @@
 
         <!-- BROWSE VIEW -->
         <Group id="browseView" visible="false">
-            <Poster id="browseBackdrop" width="1920" height="1080" loadDisplayMode="scaleToFill" />
-            <Rectangle width="1920" height="1080" color="0x0B0B0FC2" />
-            <Rectangle width="1920" height="420" translation="[0, 0]" color="0x0B0B0F88" />
-            <Rectangle width="1920" height="92" color="0x0D0D14EE" />
-            <Rectangle width="1920" height="2" translation="[0, 92]" color="0xE11D7455" />
+            <Poster id="browseBackdrop" width="1920" height="1080" loadDisplayMode="scaleToZoom" />
+            <Rectangle width="1920" height="1080" color="0x0B0B0FC8" />
+            <Rectangle width="1920" height="360" translation="[0, 0]" color="0x0B0B0F88" />
+            <Rectangle width="1920" height="88" color="0x0D0D14F2" />
+            <Rectangle width="1920" height="2" translation="[0, 88]" color="0xE11D7455" />
 
             <!-- Brand Logo -->
-            <Poster uri="pkg:/images/icon-focus-hd.png" width="142" height="68" translation="[48, 12]" loadDisplayMode="scaleToFit" />
+            <Poster uri="pkg:/images/icon-focus-hd.png" width="136" height="64" translation="[48, 12]" loadDisplayMode="scaleToFit" />
 
             <!-- Modern Horizontal Top Navigation Bar -->
-            <Group id="navBar" translation="[232, 18]" focusable="true">
+            <Group id="navBar" translation="[228, 16]" focusable="true">
                 <Group id="navTab0" translation="[0, 0]">
-                    <Rectangle id="navBg0" width="136" height="56" color="0xFFFFFF00" />
-                    <Label id="navLbl0" text="Home" width="136" height="50" horizAlign="center" vertAlign="center" color="0xFFFFFFFF">
-                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="24" />
+                    <Rectangle id="navBg0" width="136" height="54" color="0xFFFFFF00" />
+                    <Label id="navLbl0" text="Home" width="136" height="48" horizAlign="center" vertAlign="center" color="0xFFFFFFFF">
+                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="23" />
                     </Label>
-                    <Rectangle id="navBar0" width="96" height="4" translation="[20, 52]" color="0xE11D74FF" />
+                    <Rectangle id="navBar0" width="96" height="4" translation="[20, 50]" color="0xE11D74FF" />
                 </Group>
                 <Group id="navTab1" translation="[148, 0]">
-                    <Rectangle id="navBg1" width="146" height="56" color="0xFFFFFF00" />
-                    <Label id="navLbl1" text="Movies" width="146" height="50" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
-                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="24" />
+                    <Rectangle id="navBg1" width="146" height="54" color="0xFFFFFF00" />
+                    <Label id="navLbl1" text="Movies" width="146" height="48" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
+                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="23" />
                     </Label>
-                    <Rectangle id="navBar1" width="106" height="4" translation="[20, 52]" color="0xE11D7400" />
+                    <Rectangle id="navBar1" width="106" height="4" translation="[20, 50]" color="0xE11D7400" />
                 </Group>
                 <Group id="navTab2" translation="[306, 0]">
-                    <Rectangle id="navBg2" width="174" height="56" color="0xFFFFFF00" />
-                    <Label id="navLbl2" text="TV Shows" width="174" height="50" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
-                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="24" />
+                    <Rectangle id="navBg2" width="174" height="54" color="0xFFFFFF00" />
+                    <Label id="navLbl2" text="TV Shows" width="174" height="48" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
+                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="23" />
                     </Label>
-                    <Rectangle id="navBar2" width="134" height="4" translation="[20, 52]" color="0xE11D7400" />
+                    <Rectangle id="navBar2" width="134" height="4" translation="[20, 50]" color="0xE11D7400" />
                 </Group>
                 <Group id="navTab3" translation="[492, 0]">
-                    <Rectangle id="navBg3" width="166" height="56" color="0xFFFFFF00" />
-                    <Label id="navLbl3" text="Libraries" width="166" height="50" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
-                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="24" />
+                    <Rectangle id="navBg3" width="166" height="54" color="0xFFFFFF00" />
+                    <Label id="navLbl3" text="Libraries" width="166" height="48" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
+                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="23" />
                     </Label>
-                    <Rectangle id="navBar3" width="126" height="4" translation="[20, 52]" color="0xE11D7400" />
+                    <Rectangle id="navBar3" width="126" height="4" translation="[20, 50]" color="0xE11D7400" />
                 </Group>
                 <Group id="navTab4" translation="[670, 0]">
-                    <Rectangle id="navBg4" width="150" height="56" color="0xFFFFFF00" />
-                    <Label id="navLbl4" text="Live TV" width="150" height="50" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
-                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="24" />
+                    <Rectangle id="navBg4" width="150" height="54" color="0xFFFFFF00" />
+                    <Label id="navLbl4" text="Live TV" width="150" height="48" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
+                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="23" />
                     </Label>
-                    <Rectangle id="navBar4" width="110" height="4" translation="[20, 52]" color="0xE11D7400" />
+                    <Rectangle id="navBar4" width="110" height="4" translation="[20, 50]" color="0xE11D7400" />
                 </Group>
                 <Group id="navTab5" translation="[832, 0]">
-                    <Rectangle id="navBg5" width="144" height="56" color="0xFFFFFF00" />
-                    <Label id="navLbl5" text="Search" width="144" height="50" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
-                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="24" />
+                    <Rectangle id="navBg5" width="144" height="54" color="0xFFFFFF00" />
+                    <Label id="navLbl5" text="Search" width="144" height="48" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
+                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="23" />
                     </Label>
-                    <Rectangle id="navBar5" width="104" height="4" translation="[20, 52]" color="0xE11D7400" />
+                    <Rectangle id="navBar5" width="104" height="4" translation="[20, 50]" color="0xE11D7400" />
                 </Group>
                 <Group id="navTab6" translation="[988, 0]">
-                    <Rectangle id="navBg6" width="154" height="56" color="0xFFFFFF00" />
-                    <Label id="navLbl6" text="Account" width="154" height="50" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
-                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="24" />
+                    <Rectangle id="navBg6" width="154" height="54" color="0xFFFFFF00" />
+                    <Label id="navLbl6" text="Account" width="154" height="48" horizAlign="center" vertAlign="center" color="0x9DA0AEFF">
+                        <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="23" />
                     </Label>
-                    <Rectangle id="navBar6" width="114" height="4" translation="[20, 52]" color="0xE11D7400" />
+                    <Rectangle id="navBar6" width="114" height="4" translation="[20, 50]" color="0xE11D7400" />
                 </Group>
             </Group>
 
-            <Label id="navHint" text="* Search   •   UP Menu" translation="[1520, 32]"
+            <Label id="navHint" text="* Search   •   UP Menu" translation="[1520, 30]"
                    width="340" horizAlign="right" color="0x9DA0AEFF">
-                <Font role="font" uri="pkg:/fonts/Vazirmatn-Regular.ttf" size="21" />
+                <Font role="font" uri="pkg:/fonts/Vazirmatn-Regular.ttf" size="20" />
             </Label>
 
             <!-- Focused title hero banner -->
-            <Label id="browseHeroTitle" text="Triboon" translation="[64, 114]" width="1380"
+            <Label id="browseHeroTitle" text="Triboon" translation="[64, 102]" width="1380"
                    color="0xF5F5F7FF" ellipsizeOnBoundary="true">
-                <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="46" />
+                <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="42" />
             </Label>
-            <Label id="browseHeroMeta" text="" translation="[64, 180]" width="1380" color="0xE11D74FF">
-                <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="23" />
+            <Label id="browseHeroMeta" text="" translation="[64, 160]" width="1380" color="0xE11D74FF">
+                <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="22" />
             </Label>
-            <Label id="browseHeroOverview" text="" translation="[64, 216]" width="1280" height="72"
+            <Label id="browseHeroOverview" text="" translation="[64, 194]" width="1280" height="66"
                    wrap="true" maxLines="2" color="0xD4D6E0FF" ellipsizeOnBoundary="true">
-                <Font role="font" uri="pkg:/fonts/Vazirmatn-Regular.ttf" size="22" />
+                <Font role="font" uri="pkg:/fonts/Vazirmatn-Regular.ttf" size="21" />
             </Label>
-            <Label id="browseStatus" text="" translation="[64, 294]" width="1792" color="0xFB7185FF">
-                <Font role="font" uri="pkg:/fonts/Vazirmatn-Regular.ttf" size="22" />
+            <Label id="browseStatus" text="" translation="[64, 266]" width="1792" color="0xFB7185FF">
+                <Font role="font" uri="pkg:/fonts/Vazirmatn-Regular.ttf" size="21" />
             </Label>
 
-            <RowList id="browseRows" translation="[64, 334]"
+            <RowList id="browseRows" translation="[64, 304]"
                      itemComponentName="PosterItem"
                      numRows="2"
-                     itemSize="[1792, 362]"
-                     rowItemSize="[[228, 326]]"
-                     rowItemSpacing="[[26, 0]]"
+                     itemSize="[1792, 404]"
+                     rowItemSize="[[204, 344]]"
+                     rowItemSpacing="[[28, 0]]"
                      showRowLabel="[true]"
                      showRowCounter="[true]"
-                     rowLabelOffset="[[0, 12]]"
+                     rowLabelOffset="[[0, 10]]"
                      rowFocusAnimationStyle="floatingFocus"
                      vertFocusAnimationStyle="floatingFocus" />
         </Group>
 
         <!-- DETAIL VIEW -->
         <Group id="detailView" visible="false">
-            <Poster id="detailBackdrop" width="1920" height="1080" loadDisplayMode="scaleToFill" />
-            <Rectangle width="1920" height="1080" color="0x0B0B0FD9" />
-            <Poster id="detailPoster" width="280" height="420" translation="[80, 86]" loadDisplayMode="scaleToFill" />
-            <Label id="detailTitle" text="" translation="[400, 90]" width="1420"
+            <Poster id="detailBackdrop" width="1920" height="1080" loadDisplayMode="scaleToZoom" />
+            <Rectangle width="1920" height="1080" color="0x0B0B0FDB" />
+            <Rectangle width="286" height="426" translation="[77, 83]" color="0x1B1B28FF" />
+            <Poster id="detailPoster" width="280" height="420" translation="[80, 86]" loadDisplayMode="scaleToZoom"
+                    failedBitmapUri="pkg:/images/icon-focus-hd.png" />
+            <Label id="detailTitle" text="" translation="[404, 86]" width="1420"
                    color="0xF5F5F7FF" ellipsizeOnBoundary="true">
-                <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="46" />
+                <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="44" />
             </Label>
-            <Label id="detailMeta" text="" translation="[400, 162]" width="1420" color="0xE11D74FF">
-                <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="24" />
+            <Label id="detailMeta" text="" translation="[404, 152]" width="1420" color="0xE11D74FF">
+                <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="23" />
             </Label>
-            <Label id="detailOverview" text="" translation="[400, 208]" width="1400" height="170"
-                   wrap="true" maxLines="5" color="0xD4D6E0FF" ellipsizeOnBoundary="true">
-                <Font role="font" uri="pkg:/fonts/Vazirmatn-Regular.ttf" size="23" />
-            </Label>
-            <ButtonGroup id="detailButtons" translation="[400, 392]" minWidth="320" maxWidth="640" />
-            <Label id="detailStatus" text="" translation="[400, 562]" width="1420" color="0x9DA0AEFF">
+            <Label id="detailOverview" text="" translation="[404, 194]" width="1400" height="148"
+                   wrap="true" maxLines="4" color="0xD4D6E0FF" ellipsizeOnBoundary="true">
                 <Font role="font" uri="pkg:/fonts/Vazirmatn-Regular.ttf" size="22" />
             </Label>
-            <RowList id="episodeRows" translation="[80, 616]" visible="false"
-                     itemComponentName="PosterItem"
+            <ButtonGroup id="detailButtons" translation="[404, 358]" minWidth="320" maxWidth="640" />
+            <Label id="detailStatus" text="" translation="[404, 554]" width="1420" color="0x9DA0AEFF">
+                <Font role="font" uri="pkg:/fonts/Vazirmatn-Regular.ttf" size="22" />
+            </Label>
+            <RowList id="episodeRows" translation="[80, 604]" visible="false"
+                     itemComponentName="EpisodeItem"
                      numRows="1"
-                     itemSize="[1760, 380]"
-                     rowItemSize="[[228, 326]]"
-                     rowItemSpacing="[[24, 0]]"
+                     itemSize="[1760, 326]"
+                     rowItemSize="[[340, 252]]"
+                     rowItemSpacing="[[28, 0]]"
                      showRowLabel="[true]"
                      showRowCounter="[true]"
                      rowLabelOffset="[[0, 12]]"

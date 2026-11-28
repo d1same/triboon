@@ -11,9 +11,29 @@ sub onItemContentChanged()
     if item = invalid then return
 
     m.titleLabel.text = item.title
+
+    ' Live TV channel logos and account cards should fit cleanly without cropping
+    kind = ""
+    if item.HasField("itemKind") and item.itemKind <> invalid then kind = item.itemKind.ToStr()
+    if kind = "livetv" or kind = "account_action"
+        m.poster.loadDisplayMode = "scaleToFit"
+        m.poster.width = 164
+        m.poster.height = 258
+        m.poster.translation = [20, 20]
+    else
+        m.poster.loadDisplayMode = "scaleToZoom"
+        m.poster.width = 204
+        m.poster.height = 298
+        m.poster.translation = [0, 0]
+    end if
+
     if item.HDPosterUrl <> invalid and item.HDPosterUrl <> ""
         m.poster.uri = item.HDPosterUrl
     else
+        m.poster.loadDisplayMode = "scaleToFit"
+        m.poster.width = 156
+        m.poster.height = 240
+        m.poster.translation = [24, 28]
         m.poster.uri = "pkg:/images/icon-focus-hd.png"
     end if
 
@@ -22,7 +42,7 @@ sub onItemContentChanged()
     if prog > 0.01 and prog < 0.99
         m.progressTrack.visible = true
         m.progressFill.visible = true
-        m.progressFill.width = Int(228 * prog)
+        m.progressFill.width = Int(204 * prog)
     else
         m.progressTrack.visible = false
         m.progressFill.visible = false

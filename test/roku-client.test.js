@@ -105,8 +105,15 @@ test('Roku channel: native SceneGraph components, background Task networking, an
 
   const posterXml = read('clients/roku/components/PosterItem.xml');
   const posterBrs = read('clients/roku/components/PosterItem.brs');
+  const epXml = read('clients/roku/components/EpisodeItem.xml');
+  const epBrs = read('clients/roku/components/EpisodeItem.brs');
   assert.match(posterXml, /<component name="PosterItem" extends="Group">/);
+  assert.match(posterXml, /scaleToZoom/);
   assert.match(posterBrs, /onItemContentChanged/);
+  assert.match(epXml, /<component name="EpisodeItem" extends="Group">/);
+  assert.match(epXml, /scaleToZoom/);
+  assert.match(epBrs, /onItemContentChanged/);
+  assert.match(sceneXml, /itemComponentName="EpisodeItem"/);
 });
 
 test('Roku channel: store guide and pinned GitHub Actions packaging workflow exist', () => {
@@ -127,6 +134,7 @@ test('Roku BrightScript: no reserved builtin identifiers (pos, eval, val, etc.) 
     'clients/roku/source/TriboonUtils.brs',
     'clients/roku/components/MainScene.brs',
     'clients/roku/components/PosterItem.brs',
+    'clients/roku/components/EpisodeItem.brs',
     'clients/roku/components/TriboonApiTask.brs',
   ];
   const reservedAssign = /^\s*(pos|eval|val|tab|rnd|stop|step|rem|dim|run)\s*=/im;

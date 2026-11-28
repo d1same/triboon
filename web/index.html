@@ -7033,6 +7033,51 @@ if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('and
     }
   }, true);
 })();
+// Samsung Tizen Smart TV shell: detect packaged launcher param, tizen object, or Tizen UA.
+(function initTizenShell() {
+  try {
+    const qs = new URLSearchParams(location.search || '');
+    if (qs.get('triboon_client') === 'tizen') sessionStorage.setItem('triboon.tizen', '1');
+  } catch {}
+  const ua = navigator.userAgent || '';
+  const isTizen = /\bTizen\b/i.test(ua)
+    || (typeof window.tizen === 'object' && window.tizen !== null)
+    || (() => { try { return sessionStorage.getItem('triboon.tizen') === '1'; } catch { return false; } })();
+  if (!isTizen) return;
+  window.__triboonTizen = true;
+  document.body.classList.add('tv');
+  document.body.classList.add('tizenApp');
+  try {
+    if (window.tizen && window.tizen.tvinputdevice) {
+      const keys = ['MediaPlay', 'MediaPause', 'MediaPlayPause', 'MediaStop', 'MediaFastForward', 'MediaRewind', 'ChannelUp', 'ChannelDown'];
+      if (typeof window.tizen.tvinputdevice.registerKeyBatch === 'function') window.tizen.tvinputdevice.registerKeyBatch(keys);
+      else if (typeof window.tizen.tvinputdevice.registerKey === 'function') keys.forEach((k) => { try { window.tizen.tvinputdevice.registerKey(k); } catch {} });
+    }
+  } catch {}
+  document.addEventListener('keydown', (e) => {
+    const code = e.keyCode || e.which;
+    if (code === 10009) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const res = typeof window.__tvBack === 'function' ? window.__tvBack() : 'exit';
+      if (res === 'exit') {
+        try {
+          if (window.tizen && window.tizen.application && typeof window.tizen.application.getCurrentApplication === 'function') {
+            window.tizen.application.getCurrentApplication().exit();
+          } else window.close();
+        } catch {}
+      }
+      return;
+    }
+    const mediaMap = { 415: 'MediaPlay', 19: 'MediaPause', 10252: 'MediaPlayPause', 413: 'MediaStop', 412: 'MediaTrackPrevious', 417: 'MediaTrackNext', 427: 'ChannelUp', 428: 'ChannelDown' };
+    const mapped = mediaMap[code];
+    if (mapped && e.key !== mapped) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: mapped, bubbles: true, cancelable: true }));
+    }
+  }, true);
+})();
 // One APK: phones, tablets, and Android Chrome use the compact catalog.
 // Android TV (TriboonTV / body.tv) never gets this class — couch layout stays.
 if (!document.body.classList.contains('tv') && !/TriboonTV/i.test(navigator.userAgent)
@@ -11657,6 +11702,7 @@ function clientCaps() {
   const ok = (t) => !!v.canPlayType(t);
   const iosSafari = typeof iosWebkitVideo === 'function' && iosWebkitVideo();
   const webosTv = window.__triboonWebOS === true;
+  const tizenTv = window.__triboonTizen === true;
   const webCaps = {
     mkv: ok('video/x-matroska; codecs="avc1.640029"'),
     hevc: ok('video/mp4; codecs="hvc1.1.6.L123.B0"') || ok('video/mp4; codecs="hev1.1.6.L123.B0"'),
@@ -11664,8 +11710,8 @@ function clientCaps() {
     // decodes AAC/MP3 only. Report false here so decidePlayback() routes straight to stereo-AAC HLS.
     ac3: iosSafari ? false : ok('audio/mp4; codecs="ac-3"'),
     eac3: iosSafari ? false : ok('audio/mp4; codecs="ec-3"'),
-    // Many LG webOS TVs (2020-2025+) dropped native DTS decode; report false so audio remuxes cleanly.
-    dts: (iosSafari || webosTv) ? false : ok('audio/mp4; codecs="dtsc"'),
+    // Many LG webOS (2020+) and Samsung Tizen (2018+) TVs dropped native DTS decode; report false so audio remuxes cleanly.
+    dts: (iosSafari || webosTv || tizenTv) ? false : ok('audio/mp4; codecs="dtsc"'),
   };
   const nativeCaps = nativePlaybackCaps();
   S._caps = nativeCaps ? { ...webCaps, ...nativeCaps, web: webCaps } : webCaps;
@@ -31146,6 +31192,9 @@ function isAmazonStoreAndroidShell() {
 function isWebOSTVShell() {
   return window.__triboonWebOS === true;
 }
+function isTizenTVShell() {
+  return window.__triboonTizen === true;
+}
 function isMicrosoftStoreWindowsShell() {
   try {
     if (!isWindowsDesktopClient() || !(window.TriboonTV && typeof TriboonTV.appVersion === 'function')) return false;
@@ -31167,11 +31216,12 @@ function syncAppUpdateButtons() {
   const playAndroid = isPlayStoreAndroidShell();
   const amazonAndroid = isAmazonStoreAndroidShell();
   const webosTv = isWebOSTVShell();
+  const tizenTv = isTizenTVShell();
   const msStoreWin = isMicrosoftStoreWindowsShell();
   const apple = isAppleAppShell();
   const windows = isWindowsHost();
   const admin = !!(S.user && S.user.role === 'admin');
-  const managedStore = apple || playAndroid || amazonAndroid || webosTv || msStoreWin;
+  const managedStore = apple || playAndroid || amazonAndroid || webosTv || tizenTv || msStoreWin;
   const showApk = !managedStore && (android || !windows);
   const showWin = !managedStore && windows && !android;
   if ($('apkUpdate')) $('apkUpdate').style.display = showApk ? '' : 'none';
@@ -31183,6 +31233,7 @@ function syncAppUpdateButtons() {
     else if (playAndroid) copy.textContent = 'Triboon updates automatically through Google Play.';
     else if (amazonAndroid) copy.textContent = 'Triboon updates automatically through the Amazon Appstore.';
     else if (webosTv) copy.textContent = 'Triboon for LG TV updates through the LG Content Store.';
+    else if (tizenTv) copy.textContent = 'Triboon for Samsung TV updates through Samsung Apps.';
     else if (msStoreWin) copy.textContent = 'Triboon updates automatically through the Microsoft Store.';
     else if (android) copy.textContent = 'Install the latest Triboon app — one build runs on both Android TV and phone.';
     else if (showWin) copy.textContent = 'Install the latest Windows app or server from the same GitHub release.';

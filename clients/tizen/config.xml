@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://triboon.tv/TriboonTizen" version="3.6.1" viewmodes="maximized">
+  <access origin="*" subdomains="true"/>
+  <tizen:application id="appTriboon.Triboon" package="appTriboon" required_version="5.0"/>
+  <author href="https://github.com/d1same/triboon">Disame</author>
+  <content src="index.html"/>
+  <description>Connect to your self-hosted Triboon media server on Samsung Smart TVs.</description>
+  <feature name="http://tizen.org/feature/screen.size.normal.1080.1920"/>
+  <icon src="icon-512.png"/>
+  <name>Triboon</name>
+  <tizen:privilege name="http://tizen.org/privilege/internet"/>
+  <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+  <tizen:profile name="tv-samsung"/>
+  <tizen:setting screen-orientation="landscape" context-menu="enable" background-support="disable" encryption="disable" install-location="auto" hwkey-event="enable"/>
+</widget>

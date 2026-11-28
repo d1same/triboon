@@ -5,15 +5,17 @@
         <field id="focusPercent" type="float" onChange="onFocusChanged" />
     </interface>
     <children>
-        <Rectangle id="focusRing" width="236" height="334" translation="[-4, -4]" color="0xE11D7400" />
-        <Rectangle id="cardBg" width="228" height="326" color="0x13131BFF" />
-        <Poster id="poster" width="228" height="284" loadDisplayMode="scaleToFill" />
-        <Rectangle width="228" height="42" translation="[0, 284]" color="0x111119FF" />
-        <Rectangle id="progressTrack" width="228" height="5" translation="[0, 279]" color="0xFFFFFF33" visible="false" />
-        <Rectangle id="progressFill" width="0" height="5" translation="[0, 279]" color="0xE11D74FF" visible="false" />
-        <Label id="titleLabel" width="210" height="34" translation="[9, 289]"
+        <Rectangle id="focusRing" width="212" height="352" translation="[-4, -4]" color="0xE11D7400" />
+        <Rectangle id="cardBg" width="204" height="344" color="0x13131BFF" />
+        <Rectangle width="204" height="298" color="0x1B1B28FF" />
+        <Poster id="poster" width="204" height="298" loadDisplayMode="scaleToZoom"
+                failedBitmapUri="pkg:/images/icon-focus-hd.png" />
+        <Rectangle width="204" height="46" translation="[0, 298]" color="0x111119FF" />
+        <Rectangle id="progressTrack" width="204" height="5" translation="[0, 293]" color="0xFFFFFF33" visible="false" />
+        <Rectangle id="progressFill" width="0" height="5" translation="[0, 293]" color="0xE11D74FF" visible="false" />
+        <Label id="titleLabel" width="186" height="36" translation="[9, 303]"
                color="0xE5E7F0FF" ellipsizeOnBoundary="true">
-            <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="21" />
+            <Font role="font" uri="pkg:/fonts/Vazirmatn-Bold.ttf" size="20" />
         </Label>
     </children>
     <script type="text/brightscript" uri="pkg:/components/PosterItem.brs" />

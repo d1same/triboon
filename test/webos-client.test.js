@@ -52,7 +52,7 @@ test('LG webOS client: web/index.html wires TV mode, LG Back/media keys, DTS cap
   assert.match(html, /triboon_client.*webos/);
   assert.match(html, /code === 461/);
   assert.match(html, /window\.webOS\.platformBack/);
-  assert.match(html, /dts:\s*\(iosSafari \|\| webosTv\) \? false/);
+  assert.match(html, /dts:\s*\(iosSafari \|\| webosTv(?:\s*\|\|\s*tizenTv)?\) \? false/);
   assert.match(html, /function isWebOSTVShell\(\)/);
   assert.match(html, /Triboon for LG TV updates through the LG Content Store\./);
 
