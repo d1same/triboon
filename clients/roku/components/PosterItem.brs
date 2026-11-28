@@ -32,8 +32,8 @@ end sub
 sub onFocusChanged()
     fp = m.top.focusPercent
     if fp > 0.2
-        m.focusRing.color = "0xFFFFFFFF"
+        m.focusRing.color = "0xE11D74FF"
     else
-        m.focusRing.color = "0xFFFFFF00"
+        m.focusRing.color = "0xE11D7400"
     end if
 end sub

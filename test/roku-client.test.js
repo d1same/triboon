@@ -73,6 +73,9 @@ test('Roku channel: native SceneGraph components, background Task networking, an
   assert.match(sceneBrs, /body\.ep\s*=\s*epVal/);
   assert.match(sceneBrs, /onBrowseItemFocused/);
   assert.match(utils, /vod=1/);
+  assert.match(utils, /function TriboonOrderedVodStreams\(/);
+  assert.match(utils, /transcode=1&height=1080/);
+  assert.match(sceneBrs, /m\.vodCandidateIdx/);
   assert.match(sceneBrs, /\/api\/quickconnect/);
   assert.match(sceneBrs, /\/api\/login\/2fa/);
   assert.match(sceneBrs, /\/api\/watch\?profile=/);

@@ -58,50 +58,56 @@ function TriboonRokuCaps() as Object
 end function
 
 function TriboonPreferredVodStream(baseOrigin as String, playRes as Object, startSec as Integer) as Object
-    result = { url: "", streamFormat: "hls" }
-    if playRes = invalid then return result
+    list = TriboonOrderedVodStreams(baseOrigin, playRes, startSec)
+    if list.Count() > 0 then return list[0]
+    return { url: "", streamFormat: "hls" }
+end function
+
+function TriboonOrderedVodStreams(baseOrigin as String, playRes as Object, startSec as Integer) as Object
+    list = []
+    if playRes = invalid then return list
 
     fileName = ""
     if playRes.name <> invalid then fileName = LCase(playRes.name.ToStr())
     directMp4 = (Right(fileName, 4) = ".mp4" or Right(fileName, 4) = ".m4v" or Right(fileName, 4) = ".mov")
-
-    if directMp4 and startSec <= 0 and playRes.streamUrl <> invalid and playRes.streamUrl <> ""
-        result.url = TriboonResolveUrl(baseOrigin, playRes.streamUrl)
-        result.streamFormat = "mp4"
-        return result
+    playMode = ""
+    if playRes.playback <> invalid and type(playRes.playback) = "roAssociativeArray" and playRes.playback.mode <> invalid
+        playMode = LCase(playRes.playback.mode.ToStr())
     end if
 
+    ' 1. Direct MP4 only when container is MP4/M4V/MOV, starting near 0, and server says direct (not transcode)
+    if directMp4 and startSec <= 0 and playMode <> "transcode" and playRes.streamUrl <> invalid and playRes.streamUrl <> ""
+        TriboonAppendLiveCandidate(list, baseOrigin, playRes.streamUrl, "mp4")
+    end if
+
+    ' 2. HLS VOD remux (audioSafe=1 converts AC3/DTS/MP3/etc. to Roku-safe AAC; vod=1 gives full scrub bar)
     if playRes.hlsUrl <> invalid and playRes.hlsUrl <> ""
-        hls = TriboonResolveUrl(baseOrigin, playRes.hlsUrl)
+        hlsBase = TriboonResolveUrl(baseOrigin, playRes.hlsUrl)
         sep = "?"
-        if Instr(1, hls, "?") > 0 then sep = "&"
-        if startSec > 1
-            hls = hls + sep + "vod=1&start=" + startSec.ToStr() + "&audioSafe=1"
-        else
-            hls = hls + sep + "vod=1&audioSafe=1"
+        if Instr(1, hlsBase, "?") > 0 then sep = "&"
+        startQ = ""
+        if startSec > 1 then startQ = "&start=" + startSec.ToStr()
+        if playMode <> "transcode"
+            TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "vod=1&audioSafe=1" + startQ, "hls")
         end if
-        result.url = hls
-        result.streamFormat = "hls"
-        return result
+        ' 3. HLS H.264/AAC transcode fallback (handles MPEG-4, Xvid, High10, exotic codecs in Persian/local MKV/MP4)
+        TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "transcode=1&height=1080&audioSafe=1" + startQ, "hls")
+        if playMode = "transcode"
+            TriboonAppendLiveCandidate(list, baseOrigin, hlsBase + sep + "vod=1&audioSafe=1" + startQ, "hls")
+        end if
     end if
 
+    ' 4. Direct streamUrl / remuxUrl last-resort fallback
     if playRes.streamUrl <> invalid and playRes.streamUrl <> ""
-        result.url = TriboonResolveUrl(baseOrigin, playRes.streamUrl)
-        if directMp4
-            result.streamFormat = "mp4"
-        else
-            result.streamFormat = "hls"
-        end if
-        return result
+        fmt = "hls"
+        if directMp4 then fmt = "mp4"
+        TriboonAppendLiveCandidate(list, baseOrigin, playRes.streamUrl, fmt)
     end if
-
     if playRes.remuxUrl <> invalid and playRes.remuxUrl <> ""
-        result.url = TriboonResolveUrl(baseOrigin, playRes.remuxUrl)
-        result.streamFormat = "mp4"
-        return result
+        TriboonAppendLiveCandidate(list, baseOrigin, playRes.remuxUrl, "mp4")
     end if
 
-    return result
+    return list
 end function
 
 function TriboonOrderedLiveStreams(baseOrigin as String, playRes as Object) as Object

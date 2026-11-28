@@ -15,6 +15,8 @@ sub init()
     m.playContext = invalid
     m.liveCandidates = []
     m.liveCandidateIdx = 0
+    m.vodCandidates = []
+    m.vodCandidateIdx = 0
     m.liveChannels = []
     m.liveChannelPos = -1
     m.pendingTasks = {}
@@ -975,14 +977,70 @@ sub onBrowseItemSelected()
 
     if kind = "watch"
         meta = ParseJson(item.metaJson)
-        if meta <> invalid
-            if meta.libId <> invalid and meta.idx <> invalid
-                startLocalPlayback(meta.libId.ToStr(), meta.idx, item.title, item.watchKey, item.resumePos, meta)
-            else if meta.tmdbId <> invalid
-                mType = "movie"
-                if meta.type <> invalid then mType = meta.type.ToStr()
-                startCatalogPlayback(meta.title, mType, meta.year, meta.tmdbId, meta.season, meta.episode, item.watchKey, item.resumePos, meta)
+        if meta = invalid then meta = {}
+        wKey = ""
+        if item.watchKey <> invalid then wKey = item.watchKey.ToStr()
+        resumeSec = 0
+        if item.resumePos <> invalid then resumeSec = Int(Val(item.resumePos.ToStr()))
+
+        ' Case 1: Local library resume (meta.libId + meta.idx OR key "local:<libId>:<idx>")
+        locLib = ""
+        locIdx = -1
+        if meta.libId <> invalid then locLib = meta.libId.ToStr()
+        if meta.idx <> invalid then locIdx = Int(Val(meta.idx.ToStr()))
+        if locLib = "" and Left(LCase(wKey), 6) = "local:"
+            parts = wKey.Split(":")
+            if parts.Count() >= 3
+                locLib = parts[1]
+                if parts[2] = "0" or Val(parts[2]) > 0 then locIdx = Int(Val(parts[2]))
             end if
+        end if
+        if locLib <> "" and locIdx >= 0
+            startLocalPlayback(locLib, locIdx, item.title, wKey, resumeSec, meta)
+            return
+        end if
+
+        ' Case 2: Catalog / TMDB resume (meta.tmdbId OR key "tmdb:movie:<id>" / "tmdb:tv:<id>:s<S>e<E>")
+        mType = "movie"
+        if meta.type <> invalid
+            rawT = LCase(meta.type.ToStr())
+            if rawT = "tv" or rawT = "episode" or rawT = "show" or rawT = "series" then mType = "tv"
+        end if
+        tmdbNum = 0
+        if meta.tmdbId <> invalid then tmdbNum = Int(Val(meta.tmdbId.ToStr()))
+        seaNum = invalid
+        epNum = invalid
+        if meta.season <> invalid then seaNum = Int(Val(meta.season.ToStr()))
+        if meta.episode <> invalid then epNum = Int(Val(meta.episode.ToStr()))
+        if Left(LCase(wKey), 5) = "tmdb:"
+            parts = wKey.Split(":")
+            if parts.Count() >= 3
+                if LCase(parts[1]) = "tv" then mType = "tv"
+                if tmdbNum <= 0 then tmdbNum = Int(Val(parts[2]))
+            end if
+            if parts.Count() >= 4
+                se = LCase(parts[3])
+                ePos = Instr(1, se, "e")
+                if Left(se, 1) = "s" and ePos > 2
+                    if seaNum = invalid then seaNum = Int(Val(Mid(se, 2, ePos - 2)))
+                    if epNum = invalid then epNum = Int(Val(Mid(se, ePos + 1)))
+                end if
+            end if
+        end if
+        qTitle = item.title
+        if meta.showTitle <> invalid and meta.showTitle.ToStr() <> ""
+            qTitle = meta.showTitle.ToStr()
+        else if meta.title <> invalid and meta.title.ToStr() <> ""
+            qTitle = meta.title.ToStr()
+        end if
+        dashIdx = Instr(1, qTitle, " — S")
+        if dashIdx > 1 then qTitle = Left(qTitle, dashIdx - 1)
+        yearNum = invalid
+        if meta.year <> invalid and Val(meta.year.ToStr()) > 0 then yearNum = Int(Val(meta.year.ToStr()))
+        if tmdbNum > 0
+            startCatalogPlayback(qTitle, mType, yearNum, tmdbNum, seaNum, epNum, wKey, resumeSec, meta)
+        else
+            m.browseStatus.text = "Open this item from its library to resume."
         end if
         return
     end if
@@ -1252,15 +1310,17 @@ sub handlePlayVodResponse(res as Object)
     end if
     startSec = 0
     if m.playContext <> invalid then startSec = m.playContext.startSec
-    stream = TriboonPreferredVodStream(m.serverUrl, res.data, startSec)
-    if stream.url = ""
+    m.vodCandidates = TriboonOrderedVodStreams(m.serverUrl, res.data, startSec)
+    m.vodCandidateIdx = 0
+    if m.vodCandidates.Count() = 0
         m.detailStatus.text = "This title isn't playable right now."
         if m.activeView = "browse" then m.browseStatus.text = "This title isn't playable right now."
         return
     end if
     m.detailStatus.text = ""
     m.browseStatus.text = ""
-    startNativeVideo(stream.url, stream.streamFormat, m.playContext.title, false, startSec)
+    cand = m.vodCandidates[0]
+    startNativeVideo(cand.url, cand.streamFormat, m.playContext.title, false, startSec)
 end sub
 
 sub handleIptvPlay(res as Object)
@@ -1343,8 +1403,20 @@ sub onVideoStateChanged()
                 startNativeVideo(cand.url, cand.streamFormat, m.playContext.title, true, 0)
                 return
             end if
+        else if m.playContext <> invalid and m.playContext.kind = "vod"
+            m.vodCandidateIdx = m.vodCandidateIdx + 1
+            if m.vodCandidateIdx < m.vodCandidates.Count()
+                cand = m.vodCandidates[m.vodCandidateIdx]
+                m.playerStatus.text = "Optimizing stream for Roku..."
+                startNativeVideo(cand.url, cand.streamFormat, m.playContext.title, false, m.playContext.startSec)
+                return
+            end if
         end if
-        m.playerStatus.text = "Playback could not continue. Press Back to return."
+        errDetail = ""
+        if m.videoPlayer.errorMsg <> invalid and m.videoPlayer.errorMsg <> ""
+            errDetail = " (" + m.videoPlayer.errorMsg.ToStr() + ")"
+        end if
+        m.playerStatus.text = "Playback could not continue" + errDetail + ". Press Back to return."
         m.playerOverlay.visible = true
     end if
 end sub

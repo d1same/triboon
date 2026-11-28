@@ -5,13 +5,14 @@
         <field id="focusPercent" type="float" onChange="onFocusChanged" />
     </interface>
     <children>
-        <Rectangle id="focusRing" width="236" height="346" translation="[-4, -4]" color="0xFFFFFF00" />
-        <Rectangle id="cardBg" width="228" height="338" color="0x16161FFF" />
-        <Poster id="poster" width="228" height="290" loadDisplayMode="scaleToFill" />
-        <Rectangle id="progressTrack" width="228" height="5" translation="[0, 285]" color="0xFFFFFF33" visible="false" />
-        <Rectangle id="progressFill" width="0" height="5" translation="[0, 285]" color="0xE11D74FF" visible="false" />
-        <Label id="titleLabel" width="212" height="36" translation="[8, 296]"
-               font="font:SmallestBoldSystemFont" color="0xF5F5F7FF" ellipsizeOnBoundary="true" />
+        <Rectangle id="focusRing" width="234" height="332" translation="[-3, -3]" color="0xE11D7400" />
+        <Rectangle id="cardBg" width="228" height="326" color="0x13131BFF" />
+        <Poster id="poster" width="228" height="288" loadDisplayMode="scaleToFill" />
+        <Rectangle width="228" height="38" translation="[0, 288]" color="0x111119FF" />
+        <Rectangle id="progressTrack" width="228" height="5" translation="[0, 283]" color="0xFFFFFF33" visible="false" />
+        <Rectangle id="progressFill" width="0" height="5" translation="[0, 283]" color="0xE11D74FF" visible="false" />
+        <Label id="titleLabel" width="210" height="30" translation="[9, 293]"
+               font="font:SmallestBoldSystemFont" color="0xE5E7F0FF" ellipsizeOnBoundary="true" />
     </children>
     <script type="text/brightscript" uri="pkg:/components/PosterItem.brs" />
 </component>
