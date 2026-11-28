@@ -560,8 +560,15 @@ end sub
 
 sub handleHomeLibrariesList(res as Object)
     if m.activeTab <> "home" then return
-    if not res.ok or res.data = invalid or res.data.libraries = invalid then return
-    m.homeLibsMeta = res.data.libraries
+    if not res.ok or res.data = invalid then return
+    libs = invalid
+    if type(res.data) = "roArray"
+        libs = res.data
+    else if type(res.data) = "roAssociativeArray" and res.data.libraries <> invalid
+        libs = res.data.libraries
+    end if
+    if libs = invalid or type(libs) <> "roArray" then return
+    m.homeLibsMeta = libs
     for each lib in m.homeLibsMeta
         if lib.id <> invalid
             apiRequest("home_lib_" + lib.id.ToStr(), "GET", "/api/libraries/" + lib.id.ToStr() + "/items?offset=0&limit=30", invalid, true, 15)
@@ -739,11 +746,19 @@ end sub
 
 sub handleLibrariesList(res as Object)
     if m.activeTab <> "libraries" then return
-    if not res.ok or res.data = invalid or res.data.libraries = invalid or res.data.libraries.Count() = 0
+    libs = invalid
+    if res.ok and res.data <> invalid
+        if type(res.data) = "roArray"
+            libs = res.data
+        else if type(res.data) = "roAssociativeArray" and res.data.libraries <> invalid
+            libs = res.data.libraries
+        end if
+    end if
+    if libs = invalid or type(libs) <> "roArray" or libs.Count() = 0
         m.browseStatus.text = "No local libraries configured on this Triboon server."
         return
     end if
-    m.librariesMeta = res.data.libraries
+    m.librariesMeta = libs
     m.homeRowsCache = {}
     for each lib in m.librariesMeta
         if lib.id <> invalid
